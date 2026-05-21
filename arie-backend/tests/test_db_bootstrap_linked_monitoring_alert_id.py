@@ -49,6 +49,16 @@ def _index_names(conn):
 def _create_legacy_lifecycle_tables(conn):
     conn.execute(
         """
+        CREATE TABLE applications (
+            id TEXT PRIMARY KEY,
+            client_id TEXT,
+            status TEXT,
+            assigned_to TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE edd_cases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             application_id TEXT NOT NULL REFERENCES applications(id),
@@ -60,13 +70,6 @@ def _create_legacy_lifecycle_tables(conn):
             senior_reviewer TEXT REFERENCES users(id),
             trigger_source TEXT DEFAULT 'officer_decision',
             trigger_notes TEXT,
-            origin_context TEXT,
-            linked_periodic_review_id INTEGER,
-            assigned_at TEXT,
-            escalated_at TEXT,
-            closed_at TEXT,
-            sla_due_at TEXT,
-            priority TEXT,
             edd_notes TEXT DEFAULT '[]',
             decision TEXT,
             decision_reason TEXT,
@@ -88,9 +91,6 @@ def _create_legacy_lifecycle_tables(conn):
             next_review_date TEXT,
             trigger_type TEXT,
             trigger_reason TEXT,
-            trigger_source TEXT,
-            linked_edd_case_id INTEGER,
-            review_reason TEXT,
             previous_risk_level TEXT,
             new_risk_level TEXT,
             review_memo TEXT,
@@ -100,11 +100,7 @@ def _create_legacy_lifecycle_tables(conn):
             completed_at TEXT,
             assigned_officer TEXT REFERENCES users(id),
             assigned_by TEXT REFERENCES users(id),
-            assigned_at TEXT,
             reassigned_reason TEXT,
-            closed_at TEXT,
-            sla_due_at TEXT,
-            priority TEXT,
             decision TEXT,
             decision_reason TEXT,
             outcome TEXT,
@@ -141,7 +137,63 @@ def _create_legacy_lifecycle_tables(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE monitoring_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+            client_name TEXT,
+            alert_type TEXT,
+            severity TEXT,
+            status TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
     conn.commit()
+
+
+_MIGRATION_008_EXPECTED_COLUMNS = {
+    "edd_cases": {
+        "origin_context",
+        "linked_monitoring_alert_id",
+        "linked_periodic_review_id",
+        "assigned_at",
+        "escalated_at",
+        "closed_at",
+        "sla_due_at",
+        "priority",
+    },
+    "periodic_reviews": {
+        "trigger_source",
+        "linked_monitoring_alert_id",
+        "linked_edd_case_id",
+        "review_reason",
+        "assigned_at",
+        "closed_at",
+        "sla_due_at",
+        "priority",
+    },
+    "monitoring_alerts": {
+        "linked_periodic_review_id",
+        "linked_edd_case_id",
+        "triaged_at",
+        "assigned_at",
+        "resolved_at",
+    },
+}
+
+
+_MIGRATION_008_EXPECTED_INDEXES = {
+    "idx_edd_cases_linked_alert",
+    "idx_edd_cases_linked_review",
+    "idx_edd_cases_origin_context",
+    "idx_periodic_reviews_linked_alert",
+    "idx_periodic_reviews_linked_edd",
+    "idx_periodic_reviews_trigger_source",
+    "idx_monitoring_alerts_linked_edd",
+    "idx_monitoring_alerts_linked_review",
+}
 
 
 def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
@@ -157,12 +209,11 @@ def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
 
     conn = _open_sqlite(db_path)
     try:
-        assert "linked_monitoring_alert_id" in _column_names(conn, "edd_cases")
-        assert "linked_monitoring_alert_id" in _column_names(conn, "periodic_reviews")
+        for table, expected_columns in _MIGRATION_008_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
 
         index_names = _index_names(conn)
-        assert "idx_edd_cases_linked_alert" in index_names
-        assert "idx_periodic_reviews_linked_alert" in index_names
+        assert _MIGRATION_008_EXPECTED_INDEXES.issubset(index_names)
     finally:
         conn.close()
 
@@ -176,7 +227,7 @@ def test_init_db_fresh_install_is_idempotent_for_sqlite_preflight(tmp_path, monk
 
     conn = _open_sqlite(db_path)
     try:
-        assert "linked_monitoring_alert_id" in _column_names(conn, "edd_cases")
-        assert "linked_monitoring_alert_id" in _column_names(conn, "periodic_reviews")
+        for table, expected_columns in _MIGRATION_008_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
     finally:
         conn.close()

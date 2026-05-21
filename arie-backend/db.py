@@ -2313,8 +2313,27 @@ def log_agent_execution(
 
 
 _SQLITE_PREFLIGHT_COLUMN_REPAIRS = (
+    ("edd_cases", "origin_context", "TEXT"),
     ("edd_cases", "linked_monitoring_alert_id", "INTEGER"),
+    ("edd_cases", "linked_periodic_review_id", "INTEGER"),
+    ("edd_cases", "assigned_at", "TIMESTAMP"),
+    ("edd_cases", "escalated_at", "TIMESTAMP"),
+    ("edd_cases", "closed_at", "TIMESTAMP"),
+    ("edd_cases", "sla_due_at", "TIMESTAMP"),
+    ("edd_cases", "priority", "TEXT"),
+    ("periodic_reviews", "trigger_source", "TEXT"),
     ("periodic_reviews", "linked_monitoring_alert_id", "INTEGER"),
+    ("periodic_reviews", "linked_edd_case_id", "INTEGER"),
+    ("periodic_reviews", "review_reason", "TEXT"),
+    ("periodic_reviews", "assigned_at", "TIMESTAMP"),
+    ("periodic_reviews", "closed_at", "TIMESTAMP"),
+    ("periodic_reviews", "sla_due_at", "TIMESTAMP"),
+    ("periodic_reviews", "priority", "TEXT"),
+    ("monitoring_alerts", "linked_periodic_review_id", "INTEGER"),
+    ("monitoring_alerts", "linked_edd_case_id", "INTEGER"),
+    ("monitoring_alerts", "triaged_at", "TIMESTAMP"),
+    ("monitoring_alerts", "assigned_at", "TIMESTAMP"),
+    ("monitoring_alerts", "resolved_at", "TIMESTAMP"),
 )
 
 
