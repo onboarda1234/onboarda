@@ -103,9 +103,6 @@ def _create_legacy_lifecycle_tables(conn):
             reassigned_reason TEXT,
             decision TEXT,
             decision_reason TEXT,
-            outcome TEXT,
-            outcome_reason TEXT,
-            outcome_recorded_at TEXT,
             review_cycle_number INTEGER DEFAULT 1,
             review_type TEXT,
             policy_version TEXT,
@@ -129,9 +126,6 @@ def _create_legacy_lifecycle_tables(conn):
             officer_rationale TEXT,
             memo_status TEXT,
             periodic_review_memo_id INTEGER,
-            required_items TEXT,
-            required_items_generated_at TEXT,
-            state_changed_at TEXT,
             decided_by TEXT REFERENCES users(id),
             created_at TEXT DEFAULT (datetime('now'))
         )
@@ -184,6 +178,18 @@ _MIGRATION_008_EXPECTED_COLUMNS = {
 }
 
 
+_MIGRATION_009_EXPECTED_COLUMNS = {
+    "periodic_reviews": {
+        "outcome",
+        "outcome_reason",
+        "outcome_recorded_at",
+        "required_items",
+        "required_items_generated_at",
+        "state_changed_at",
+    },
+}
+
+
 _MIGRATION_008_EXPECTED_INDEXES = {
     "idx_edd_cases_linked_alert",
     "idx_edd_cases_linked_review",
@@ -193,6 +199,12 @@ _MIGRATION_008_EXPECTED_INDEXES = {
     "idx_periodic_reviews_trigger_source",
     "idx_monitoring_alerts_linked_edd",
     "idx_monitoring_alerts_linked_review",
+}
+
+
+_MIGRATION_009_EXPECTED_INDEXES = {
+    "idx_periodic_reviews_status",
+    "idx_periodic_reviews_outcome",
 }
 
 
@@ -211,9 +223,12 @@ def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
     try:
         for table, expected_columns in _MIGRATION_008_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
+        for table, expected_columns in _MIGRATION_009_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
 
         index_names = _index_names(conn)
         assert _MIGRATION_008_EXPECTED_INDEXES.issubset(index_names)
+        assert _MIGRATION_009_EXPECTED_INDEXES.issubset(index_names)
     finally:
         conn.close()
 
@@ -228,6 +243,8 @@ def test_init_db_fresh_install_is_idempotent_for_sqlite_preflight(tmp_path, monk
     conn = _open_sqlite(db_path)
     try:
         for table, expected_columns in _MIGRATION_008_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
+        for table, expected_columns in _MIGRATION_009_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
     finally:
         conn.close()
