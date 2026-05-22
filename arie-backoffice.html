@@ -3645,6 +3645,7 @@ function mapApplicationFromApi(a) {
       verification_status_label: d.verification_status_label,
       verification_status_tone: d.verification_status_tone,
       verification_success: d.verification_success === true,
+      verification_terminal: d.verification_terminal === true,
       verification_results: d.verification_results,
       verified_at: d.verified_at,
       person_id: d.person_id
@@ -4046,6 +4047,11 @@ var _applicationsRefreshInterval = null; // setInterval handle
 var _applicationsRefreshMs = 30000;      // default; server config may slow this
 var _stalenessTickInterval = null;       // 1-second UI tick for freshness display
 var _STALE_THRESHOLD_S = 60;             // default; server config may slow this
+var _verificationDetailPollTimer = null;
+var _verificationDetailPollRef = '';
+var _verificationDetailPollStartedAt = 0;
+var _VERIFICATION_DETAIL_POLL_INTERVAL_MS = 5000;
+var _VERIFICATION_DETAIL_POLL_MAX_MS = 120000;
 
 function _updateFreshnessIndicator() {
   var textEl = document.getElementById('applications-freshness-text');
@@ -4128,6 +4134,75 @@ function _stopApplicationsAutoRefresh() {
     clearInterval(_stalenessTickInterval);
     _stalenessTickInterval = null;
   }
+}
+
+function normalizeVerificationDetailState(doc) {
+  return String((doc && (doc.verification_state || doc.verification_status || doc.status)) || 'pending').toLowerCase();
+}
+
+function isVerificationDetailTerminal(doc) {
+  if (!doc) return true;
+  if (doc.verification_terminal === true) return true;
+  var state = normalizeVerificationDetailState(doc);
+  return state === 'verified' || state === 'flagged' || state === 'failed';
+}
+
+function appHasActiveVerificationDocuments(app) {
+  var docs = Array.isArray(app && app._documents) ? app._documents : [];
+  return docs.some(function(doc) { return !isVerificationDetailTerminal(doc); });
+}
+
+function stopBackofficeVerificationDetailPolling() {
+  if (_verificationDetailPollTimer) {
+    clearTimeout(_verificationDetailPollTimer);
+    _verificationDetailPollTimer = null;
+  }
+  _verificationDetailPollRef = '';
+  _verificationDetailPollStartedAt = 0;
+}
+
+function activeDetailTabName() {
+  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'activity'];
+  for (var i = 0; i < tabs.length; i++) {
+    var panel = document.getElementById('detail-tab-' + tabs[i]);
+    if (panel && panel.style.display !== 'none') return tabs[i];
+  }
+  return 'overview';
+}
+
+function startBackofficeVerificationDetailPolling(app) {
+  if (!app || !app.ref || !appHasActiveVerificationDocuments(app)) {
+    stopBackofficeVerificationDetailPolling();
+    return;
+  }
+  var ref = String(app.ref);
+  if (_verificationDetailPollTimer && _verificationDetailPollRef === ref) return;
+  stopBackofficeVerificationDetailPolling();
+  _verificationDetailPollRef = ref;
+  _verificationDetailPollStartedAt = Date.now();
+
+  async function pollDetailOnce() {
+    _verificationDetailPollTimer = null;
+    if (!currentApp || String(currentApp.ref) !== ref) {
+      stopBackofficeVerificationDetailPolling();
+      return;
+    }
+    if (Date.now() - _verificationDetailPollStartedAt >= _VERIFICATION_DETAIL_POLL_MAX_MS) {
+      stopBackofficeVerificationDetailPolling();
+      showToast('Verification is still pending for one or more documents. Refresh the application detail to check again.', 'warning');
+      return;
+    }
+    try {
+      await refreshCurrentAppDetail({ preserveDetailTab: true });
+    } catch (err) {
+      console.warn('Back-office verification detail refresh failed:', err);
+      if (!_verificationDetailPollTimer && _verificationDetailPollRef === ref) {
+        _verificationDetailPollTimer = setTimeout(pollDetailOnce, _VERIFICATION_DETAIL_POLL_INTERVAL_MS);
+      }
+    }
+  }
+
+  _verificationDetailPollTimer = setTimeout(pollDetailOnce, _VERIFICATION_DETAIL_POLL_INTERVAL_MS);
 }
 
 /* ── REMOVED: 9 hardcoded demo applications (TechPay Global, Africom Remittances, Nordic Payments,
@@ -4318,6 +4393,7 @@ function showView(name, navItem) {
   document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
   var view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
+  if (name !== 'app-detail') stopBackofficeVerificationDetailPolling();
 
   if (!navItem) {
     navItem = document.querySelector('.snav-item[data-view="' + name + '"]');
@@ -5878,6 +5954,7 @@ async function fetchApplicationDetail(ref) {
       verification_status_label: doc.verification_status_label || '',
       verification_status_tone: doc.verification_status_tone || 'pending',
       verification_success: doc.verification_success === true,
+      verification_terminal: doc.verification_terminal === true,
       verification_results: doc.verification_results || {},
       verified_at: doc.verified_at || '',
       uploaded_at: doc.uploaded_at || '',
@@ -6350,6 +6427,7 @@ function renderAuthoritativeAppDetail(app, options) {
   // for this application. Soft-fails if endpoint is unavailable.
   window._detailLifecycleTabCache = null;
   try { loadLifecycleApplicationSummary(app.id); } catch (e) { console.warn('Lifecycle summary call failed:', e); }
+  startBackofficeVerificationDetailPolling(app);
 }
 
 async function openAppDetail(ref, options) {
@@ -12996,14 +13074,16 @@ function collectRMIItems() {
   });
 }
 
-async function refreshCurrentAppDetail() {
+async function refreshCurrentAppDetail(options) {
+  options = options || {};
+  var initialTab = options.initialTab || (options.preserveDetailTab ? activeDetailTabName() : 'overview');
   await loadFromAPI();
   populateOfficerDropdowns();
   renderDashboardRecent();
   var refreshed = APPLICATIONS.find(function(a) { return currentApp && a.ref === currentApp.ref; });
   if (refreshed) {
     currentApp = refreshed;
-    openAppDetail(refreshed.ref);
+    await openAppDetail(refreshed.ref, { initialTab: initialTab });
   }
 }
 
@@ -15728,6 +15808,7 @@ async function signOut() {
 
   // EX-13: Stop auto-refresh on logout
   _stopApplicationsAutoRefresh();
+  stopBackofficeVerificationDetailPolling();
 
   // ── EX-12: Clear auth/session keys from browser storage on logout ──
   try {
