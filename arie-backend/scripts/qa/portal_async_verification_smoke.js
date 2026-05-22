@@ -137,25 +137,40 @@ async function screenshot(page, name) {
 
 async function signIn(page) {
   await page.goto(`${baseUrl}/portal`, { waitUntil: "domcontentloaded" });
+  const loginView = page.locator("#view-login");
+  if (!(await loginView.isVisible())) {
+    const signInButton = page.locator("button[onclick=\"showView('login')\"]");
+    if ((await signInButton.count()) !== 1) {
+      throw new Error("Unable to find the portal Sign In button.");
+    }
+    await signInButton.click();
+    await loginView.waitFor({ state: "visible", timeout: 30000 });
+  }
   await page.locator("#l-email").fill(email);
   await page.locator("#l-password").fill(password);
   await Promise.all([
     page.waitForResponse((resp) => resp.url().includes("/api/auth/client/login") && resp.status() < 500),
     page.locator("#login-form button[type=submit], #login-form .btn-submit").first().click(),
   ]);
-  await page.waitForFunction(() => !!window.AUTH_TOKEN, { timeout: 30000 });
+  await page.waitForSelector("#view-my-apps:not(.hidden)", { timeout: 30000 });
   report.checks.login = true;
 }
 
 async function openApplication(page) {
   if (appRef) {
-    await page.evaluate((ref) => window.resumeApplication && window.resumeApplication(ref, "onboarding"), appRef);
+    await page.evaluate((ref) => {
+      if (typeof resumeApplication !== "function") {
+        throw new Error("resumeApplication is unavailable");
+      }
+      return resumeApplication(ref, "onboarding");
+    }, appRef);
   } else {
     await page.waitForSelector("#my-apps-tbody tr", { timeout: 30000 });
     await page.locator("#my-apps-tbody tr").first().click();
   }
-  await page.waitForFunction(() => !!window.currentApplicationId, { timeout: 30000 });
-  await page.evaluate(() => window.showView && window.showView("onboarding"));
+  await page.evaluate(() => {
+    if (typeof showView === "function") showView("onboarding");
+  });
   await page.waitForSelector("#view-onboarding:not(.hidden)", { timeout: 30000 });
   report.checks.applicationOpened = true;
 }

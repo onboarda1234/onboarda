@@ -152,6 +152,10 @@ def test_portal_async_browser_smoke_uses_real_login_and_checks_pending_to_termin
     assert "localStorage.setItem" not in src
     assert "sessionStorage.setItem" not in src
     assert "Authorization: Bearer" not in src
+    assert "button[onclick=\\\"showView('login')\\\"]" in src
+    assert "await loginView.waitFor({ state: \"visible\", timeout: 30000 });" in src
+    assert "#view-my-apps:not(.hidden)" in src
+    assert "resumeApplication is unavailable" in src
     assert "#l-email" in src
     assert "#l-password" in src
     assert "#login-form" in src
