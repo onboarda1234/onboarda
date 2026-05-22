@@ -53,14 +53,15 @@ def _create_legacy_lifecycle_tables(conn):
             id TEXT PRIMARY KEY,
             client_id TEXT,
             status TEXT,
-            assigned_to TEXT
+            assigned_to TEXT,
+            updated_at TEXT
         )
         """
     )
     conn.execute(
         """
-        INSERT INTO applications (id, client_id, status, assigned_to)
-        VALUES ('APP-LEGACY-001', 'CLIENT-001', 'in_review', 'admin001')
+        INSERT INTO applications (id, client_id, status, assigned_to, updated_at)
+        VALUES ('APP-LEGACY-001', 'CLIENT-001', 'in_review', 'admin001', '2026-05-20 10:11:12')
         """
     )
     conn.execute(
@@ -219,6 +220,13 @@ _MIGRATION_019_EXPECTED_COLUMNS = {
 }
 
 
+_APPLICATION_EXPECTED_COLUMNS = {
+    "applications": {
+        "inputs_updated_at",
+    },
+}
+
+
 _MIGRATION_008_EXPECTED_INDEXES = {
     "idx_edd_cases_linked_alert",
     "idx_edd_cases_linked_review",
@@ -256,6 +264,8 @@ def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
             assert expected_columns.issubset(_column_names(conn, table))
         for table, expected_columns in _MIGRATION_019_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
+        for table, expected_columns in _APPLICATION_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
 
         index_names = _index_names(conn)
         assert _MIGRATION_008_EXPECTED_INDEXES.issubset(index_names)
@@ -268,6 +278,11 @@ def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
         assert rows[0]["discovered_via"] == "webhook_live"
         assert rows[0]["discovered_at"] == "2026-05-20 11:22:33"
         assert rows[0]["backfill_run_id"] is None
+        application_row = conn.execute(
+            "SELECT updated_at, inputs_updated_at FROM applications WHERE id = ?",
+            ("APP-LEGACY-001",),
+        ).fetchone()
+        assert application_row["inputs_updated_at"] == "2026-05-20 10:11:12"
     finally:
         conn.close()
 
@@ -286,6 +301,8 @@ def test_init_db_fresh_install_is_idempotent_for_sqlite_preflight(tmp_path, monk
         for table, expected_columns in _MIGRATION_009_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
         for table, expected_columns in _MIGRATION_019_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
+        for table, expected_columns in _APPLICATION_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
     finally:
         conn.close()

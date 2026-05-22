@@ -2313,6 +2313,7 @@ def log_agent_execution(
 
 
 _SQLITE_PREFLIGHT_COLUMN_REPAIRS = (
+    ("applications", "inputs_updated_at", "TEXT"),
     ("edd_cases", "origin_context", "TEXT"),
     ("edd_cases", "linked_monitoring_alert_id", "INTEGER"),
     ("edd_cases", "linked_periodic_review_id", "INTEGER"),
@@ -2414,6 +2415,22 @@ def _preflight_sqlite_column_repair(db: DBConnection) -> None:
                 UPDATE monitoring_alerts
                 SET discovered_via = COALESCE(discovered_via, 'webhook_live')
                 WHERE discovered_via IS NULL
+                """
+            )
+            if db.conn.total_changes > before:
+                mutated = True
+
+    if _sqlite_table_exists(db, "applications"):
+        application_columns = _sqlite_column_names(db, "applications")
+        updated_at_expr = "updated_at" if "updated_at" in application_columns else "datetime('now')"
+
+        if "inputs_updated_at" in application_columns:
+            before = db.conn.total_changes
+            db.conn.execute(
+                f"""
+                UPDATE applications
+                SET inputs_updated_at = COALESCE(inputs_updated_at, {updated_at_expr}, datetime('now'))
+                WHERE inputs_updated_at IS NULL
                 """
             )
             if db.conn.total_changes > before:
