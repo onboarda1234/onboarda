@@ -744,6 +744,11 @@ class ClaudeClient:
     - Structured JSON responses from all agents
     """
 
+    DOCUMENT_FIELD_EXTRACTION_MAX_TOKENS = 1200
+    DOCUMENT_VERIFICATION_MIN_TOKENS = 900
+    DOCUMENT_VERIFICATION_MAX_TOKENS = 1800
+    DOCUMENT_VERIFICATION_TOKENS_PER_CHECK = 180
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -825,6 +830,15 @@ class ClaudeClient:
         self.max_retries = 3
         self.timeout_seconds = 30
         self.last_provider_failure = None
+        self.last_call_timing_ms = {}
+        self.last_field_extraction_timing_ms = {}
+        self.last_document_verification_timing_ms = {}
+
+    def _document_verification_max_tokens(self, check_count: int) -> int:
+        requested = self.DOCUMENT_VERIFICATION_MIN_TOKENS + (
+            max(0, int(check_count or 0)) * self.DOCUMENT_VERIFICATION_TOKENS_PER_CHECK
+        )
+        return min(self.DOCUMENT_VERIFICATION_MAX_TOKENS, max(self.DOCUMENT_VERIFICATION_MIN_TOKENS, requested))
 
     def _check_fail_closed(self, method_name: str) -> Optional[Dict[str, Any]]:
         """Return an error result if the client is in fail-closed state (regulated env, no AI service).
@@ -1659,6 +1673,9 @@ CRITICAL REQUIREMENTS:
         Returns a flat dict of field_name → extracted_value (strings/lists).
         On failure, returns {} — caller must handle gracefully.
         """
+        timing_started = time.perf_counter()
+        timing = {}
+        self.last_field_extraction_timing_ms = {}
         fail_closed = self._check_fail_closed("extract_document_fields")
         if fail_closed is not None:
             return {}
@@ -1691,15 +1708,22 @@ CRITICAL REQUIREMENTS:
         )
 
         try:
+            read_started = time.perf_counter()
             file_blocks = self._read_file_for_vision(file_path)
+            timing["vision_read_ms"] = int(round((time.perf_counter() - read_started) * 1000))
             content_blocks = file_blocks + [{"type": "text", "text": user_prompt}]
             raw = self._call_claude(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 model="claude-sonnet-4-6",
                 content_blocks=content_blocks if file_blocks else None,
+                max_tokens=self.DOCUMENT_FIELD_EXTRACTION_MAX_TOKENS,
             )
+            timing["provider_round_trip_ms"] = self.last_call_timing_ms.get("provider_round_trip_ms")
+            timing["max_tokens"] = self.DOCUMENT_FIELD_EXTRACTION_MAX_TOKENS
+            parse_started = time.perf_counter()
             parsed = self._parse_json_response(raw, "extract_document_fields")
+            timing["response_parse_ms"] = int(round((time.perf_counter() - parse_started) * 1000))
             if isinstance(parsed, dict):
                 return {k: v for k, v in parsed.items() if v is not None}
             return {}
@@ -1718,6 +1742,11 @@ CRITICAL REQUIREMENTS:
                 failure.get("reason_code"),
             )
             return {}
+        finally:
+            timing["total_ms"] = int(round((time.perf_counter() - timing_started) * 1000))
+            self.last_field_extraction_timing_ms = {
+                k: v for k, v in timing.items() if isinstance(v, int)
+            }
 
     def verify_document(
         self,
@@ -1766,6 +1795,9 @@ CRITICAL REQUIREMENTS:
                 "ai_source": "claude-sonnet-4-6"
             }
         """
+        timing_started = time.perf_counter()
+        timing = {}
+        self.last_document_verification_timing_ms = {}
         fail_result = self._check_fail_closed("verify_document")
         if fail_result:
             return fail_result
@@ -1781,13 +1813,16 @@ CRITICAL REQUIREMENTS:
 
         # Read file for vision if available
         file_content_blocks = []
+        read_started = time.perf_counter()
         if file_path:
             file_content_blocks = self._read_file_for_vision(file_path)
             if file_content_blocks:
                 logger.info(f"Document vision enabled for {doc_type}: {file_name}")
             else:
                 logger.warning(f"Could not read file for vision, falling back to metadata: {file_path}")
+        timing["vision_read_ms"] = int(round((time.perf_counter() - read_started) * 1000))
 
+        prompt_build_started = time.perf_counter()
         # Get deterministic check definitions for this doc type.
         # Priority order:
         #   1. check_overrides — provided by caller from ai_checks DB table (canonical, seeded from matrix)
@@ -1893,6 +1928,8 @@ Associated Person/Entity: {sanitized_person_name if sanitized_person_name else "
 
 {"Analyze the attached document image/file carefully." if has_vision else "No file attached — verify based on metadata and flag that manual review is recommended."}
 Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Return results for each one."""
+        timing["prompt_build_ms"] = int(round((time.perf_counter() - prompt_build_started) * 1000))
+        max_tokens = self._document_verification_max_tokens(len(check_defs))
 
         try:
             # Build multimodal content blocks if file is available
@@ -1906,8 +1943,13 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                 model="claude-sonnet-4-6",
                 timeout=45,  # Increased for vision processing
                 content_blocks=content_blocks,
+                max_tokens=max_tokens,
             )
+            timing["provider_round_trip_ms"] = self.last_call_timing_ms.get("provider_round_trip_ms")
+            timing["max_tokens"] = max_tokens
+            parse_started = time.perf_counter()
             result = self._parse_json_response(response, agent_method="verify_document")
+            timing["response_parse_ms"] = int(round((time.perf_counter() - parse_started) * 1000))
             result["ai_source"] = "claude-sonnet-4-6"
             result["vision_enabled"] = has_vision
             return result
@@ -1927,6 +1969,11 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             )
             result["vision_enabled"] = has_vision
             return result
+        finally:
+            timing["total_ms"] = int(round((time.perf_counter() - timing_started) * 1000))
+            self.last_document_verification_timing_ms = {
+                k: v for k, v in timing.items() if isinstance(v, int)
+            }
 
     # ── Internal Helper Methods ─────────────────────────────────
 
@@ -2042,6 +2089,7 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
         model: str = None,
         timeout: int = 30,
         content_blocks: list = None,
+        max_tokens: int = 4096,
     ) -> str:
         """
         Make a call to Claude API with retry logic and timeout handling.
@@ -2053,6 +2101,7 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             timeout: Timeout in seconds
             content_blocks: Optional multimodal content blocks (images/documents + text).
                             When provided, replaces user_prompt in the message.
+            max_tokens: Maximum response tokens to request.
 
         Returns:
             Raw response text from Claude
@@ -2074,6 +2123,7 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
         # Build message content — multimodal if content_blocks provided, else plain text
         message_content = content_blocks if content_blocks else user_prompt
         chosen_model = model or self.ROUTING_MODELS["fast"]
+        self.last_call_timing_ms = {}
 
         for attempt in range(self.max_retries):
             try:
@@ -2081,14 +2131,22 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                     f"Calling Claude {chosen_model} (attempt {attempt + 1}/{self.max_retries})"
                 )
 
+                provider_started = time.perf_counter()
                 response = self.client.messages.create(
                     model=chosen_model,
-                    max_tokens=4096,
+                    max_tokens=max_tokens,
                     temperature=0,
                     system=system_prompt,
                     messages=[{"role": "user", "content": message_content}],
                     timeout=timeout,
                 )
+                provider_round_trip_ms = int(round((time.perf_counter() - provider_started) * 1000))
+                self.last_call_timing_ms = {
+                    "provider_round_trip_ms": provider_round_trip_ms,
+                    "attempts": attempt + 1,
+                    "max_tokens": max_tokens,
+                    "timeout_s": timeout,
+                }
 
                 # Extract text content and track usage (in-memory + persistent)
                 text_content = response.content[0].text
@@ -2102,7 +2160,12 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                     response.usage.output_tokens, method="_call_claude"
                 )
 
-                logger.debug(f"Claude {chosen_model} request succeeded")
+                logger.debug(
+                    "Claude %s request succeeded provider_round_trip_ms=%s max_tokens=%s",
+                    chosen_model,
+                    provider_round_trip_ms,
+                    max_tokens,
+                )
                 return text_content
 
             except APITimeoutError as e:

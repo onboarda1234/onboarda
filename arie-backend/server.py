@@ -6664,6 +6664,21 @@ def _mark_document_verification_failed(handler, doc_id, user, error_message):
             pass
 
 
+def _execution_timing_ms(started: float) -> int:
+    return int(round((time.perf_counter() - started) * 1000))
+
+
+def _format_execution_timing_log_fields(timing):
+    if not isinstance(timing, dict):
+        return ""
+    fields = []
+    for key in sorted(timing):
+        value = timing.get(key)
+        if isinstance(value, int):
+            fields.append(f"{key}={value}")
+    return " ".join(fields)
+
+
 class DocumentVerifyHandler(BaseHandler):
     """POST /api/documents/:id/verify — trigger AI verification"""
     def post(self, doc_id):
@@ -6704,6 +6719,9 @@ class DocumentVerifyHandler(BaseHandler):
         audit_detail_extra=None,
         close_db: bool = True,
     ):
+        execution_started = time.perf_counter()
+        execution_timing = {}
+        load_started = time.perf_counter()
 
         # P0-3: Check if Agent 1 (document verification) is enabled before executing
         agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
@@ -6731,6 +6749,7 @@ class DocumentVerifyHandler(BaseHandler):
             if close_db:
                 db.close()
             return self.error("Application not found for document", 404)
+        execution_timing["load_doc_app_ms"] = _execution_timing_ms(load_started)
 
         if flags.is_enabled("FF_ASYNC_VERIFY") and not force_sync:
             job_result = enqueue_verification_job(
@@ -6757,6 +6776,7 @@ class DocumentVerifyHandler(BaseHandler):
             return self.success(payload, 202)
 
         # PR5: Synchronous verification has an explicit, auditable in-progress state.
+        transition_started = time.perf_counter()
         _initial_before = _document_verification_transition_state(doc)
         if _initial_before["verification_status"] != STATE_IN_PROGRESS:
             _in_progress_after = _document_verification_transition_state(doc, STATE_IN_PROGRESS)
@@ -6778,6 +6798,7 @@ class DocumentVerifyHandler(BaseHandler):
             )
             db.commit()
             doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        execution_timing["transition_in_progress_ms"] = _execution_timing_ms(transition_started)
 
         # EX-05: Capture before-state for final audit trail.
         _doc_before = _document_verification_transition_state(doc)
@@ -6787,6 +6808,7 @@ class DocumentVerifyHandler(BaseHandler):
         all_passed = True
 
         # Resolve file path — prefer local, fallback to S3 download
+        fetch_started = time.perf_counter()
         file_path = doc.get("file_path", "")
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
@@ -6812,7 +6834,9 @@ class DocumentVerifyHandler(BaseHandler):
                     logger.warning(f"[verify] doc={doc_id} S3 download failed: {s3_data}")
             except Exception as s3_err:
                 logger.error(f"[verify] doc={doc_id} S3 fallback error: {s3_err}")
+        execution_timing["document_fetch_ms"] = _execution_timing_ms(fetch_started)
 
+        context_started = time.perf_counter()
         verification_context = build_document_verification_context(db, app, doc)
         person_record = verification_context["person_record"]
         raw_doc_type = verification_context["raw_doc_type"]
@@ -6823,6 +6847,7 @@ class DocumentVerifyHandler(BaseHandler):
         directors_list = verification_context["directors_list"]
         ubos_list = verification_context["ubos_list"]
         verify_name = entity_name if doc_category == "company" else person_name
+        execution_timing["context_build_ms"] = _execution_timing_ms(context_started)
 
         # Diagnostic logging for verification context
         logger.info(
@@ -6834,6 +6859,7 @@ class DocumentVerifyHandler(BaseHandler):
         )
 
         # Load check overrides from ai_checks table (hybrid/AI checks only)
+        check_load_started = time.perf_counter()
         check_overrides = None
         try:
             check_category = "entity" if doc_category == "company" else "person"
@@ -6849,6 +6875,7 @@ class DocumentVerifyHandler(BaseHandler):
                 logger.warning(f"No DB checks found for doc_type={base_doc_type}, category={check_category}. Using matrix fallback.")
         except Exception as e:
             logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using matrix fallback.")
+        execution_timing["ai_checks_load_ms"] = _execution_timing_ms(check_load_started)
 
         # Build effective declared-data context from stored application data + save/resume overlay
         prescreening_data = verification_context["prescreening_data"]
@@ -6856,6 +6883,7 @@ class DocumentVerifyHandler(BaseHandler):
 
         # Compute SHA-256 hashes of other documents already uploaded for this application
         # Used by GATE-03 duplicate detection
+        existing_hashes_started = time.perf_counter()
         existing_hashes = []
         if app:
             try:
@@ -6875,8 +6903,10 @@ class DocumentVerifyHandler(BaseHandler):
                             pass
             except Exception as e:
                 logger.debug(f"Could not compute existing hashes: {e}")
+        execution_timing["existing_hashes_ms"] = _execution_timing_ms(existing_hashes_started)
 
         ai_result = None
+        verification_engine_started = time.perf_counter()
         try:
             if HAS_DOC_VERIFICATION:
                 _claude = ClaudeClient(
@@ -6968,8 +6998,10 @@ class DocumentVerifyHandler(BaseHandler):
             )
             checks = ai_result.get("checks", [])
             all_passed = False
+        execution_timing["verification_engine_ms"] = _execution_timing_ms(verification_engine_started)
 
         # If it's an identity document, run sanctions/PEP screening
+        screening_started = time.perf_counter()
         sanctions_result = None
         id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
         if doc["doc_type"] in id_doc_types and doc["person_id"]:
@@ -7018,6 +7050,7 @@ class DocumentVerifyHandler(BaseHandler):
                     "message": "Screening temporarily unavailable. Manual review required."
                 })
                 all_passed = False
+        execution_timing["screening_ms"] = _execution_timing_ms(screening_started)
 
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
@@ -7087,6 +7120,27 @@ class DocumentVerifyHandler(BaseHandler):
             )
         elif status == STATE_FLAGGED:
             layered_results["verification_failure_classification"] = FAILURE_REVIEW_REQUIRED_BUSINESS
+        engine_timing = normalized_ai_result.get("execution_timing_ms") if isinstance(normalized_ai_result, dict) else {}
+        if isinstance(engine_timing, dict):
+            for key, value in engine_timing.items():
+                if isinstance(value, int):
+                    execution_timing[f"engine_{key}"] = value
+            for key in (
+                "duplicate_check_ms",
+                "field_extraction_ms",
+                "field_extraction_provider_round_trip_ms",
+                "rule_checks_ms",
+                "ai_verification_ms",
+                "ai_verification_provider_round_trip_ms",
+                "provider_round_trip_ms",
+            ):
+                value = engine_timing.get(key)
+                if isinstance(value, int):
+                    execution_timing[key] = value
+        execution_timing["pre_persist_total_ms"] = _execution_timing_ms(execution_started)
+        layered_results["execution_timing_ms"] = {
+            key: value for key, value in execution_timing.items() if isinstance(value, int)
+        }
         results = json.dumps(layered_results, default=str)
         extracted_fields = {}
         if isinstance(normalized_ai_result, dict):
@@ -7115,6 +7169,7 @@ class DocumentVerifyHandler(BaseHandler):
         )
 
         # EX-05/PR5: Log final document verification with before/after state.
+        persist_started = time.perf_counter()
         _doc_after = _document_verification_transition_state(doc, status, checks_count=len(checks))
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
@@ -7162,6 +7217,16 @@ class DocumentVerifyHandler(BaseHandler):
                 after_state=_doc_after,
             )
         db.commit()
+        execution_timing["persist_audit_ms"] = _execution_timing_ms(persist_started)
+        execution_timing["total_handler_ms"] = _execution_timing_ms(execution_started)
+        logger.info(
+            "document_verification_execution_timing document_id=%s application_id=%s doc_type=%s status=%s %s",
+            doc_id,
+            doc.get("application_id", ""),
+            base_doc_type,
+            status,
+            _format_execution_timing_log_fields(execution_timing),
+        )
         if close_db:
             db.close()
 

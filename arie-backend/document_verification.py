@@ -32,6 +32,7 @@ import re
 import json
 import hashlib
 import logging
+import time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -56,6 +57,20 @@ from verification_failure_taxonomy import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _elapsed_ms(started: float) -> int:
+    return int(round((time.perf_counter() - started) * 1000))
+
+
+def _copy_int_timings(timing: Dict[str, Any]) -> Dict[str, int]:
+    return {k: int(v) for k, v in timing.items() if isinstance(v, int)}
+
+
+def _attach_execution_timing(result: dict, timing: Dict[str, Any], started: float) -> dict:
+    timing["total_engine_ms"] = _elapsed_ms(started)
+    result["execution_timing_ms"] = _copy_int_timings(timing)
+    return result
 
 # ── Constants ──────────────────────────────────────────────────────
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024   # 25MB
@@ -674,14 +689,17 @@ def _check_not_expired(id_, label, expiry_date_str,
 # ── Gate checks ────────────────────────────────────────────────────
 
 def run_gate_checks(file_path: str, file_size: int, mime_type: str,
-                   existing_hashes: List[str]) -> List[dict]:
+                   existing_hashes: List[str],
+                   timing: Optional[Dict[str, Any]] = None) -> List[dict]:
     """
     Layer 0: Gate checks. Run before any OCR/AI processing.
     Return list of check result dicts.
     """
+    gate_started = time.perf_counter()
     results = []
 
     # GATE-01: File format
+    format_started = time.perf_counter()
     file_exists = bool(file_path and os.path.isfile(file_path))
     ext = os.path.splitext(file_path)[1].lower() if file_path else ""
     magic_ok = False
@@ -712,8 +730,11 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
             results.append(_fail("GATE-01", "File Format", CheckClassification.RULE,
                                  f"File format not accepted: {mime_type} / {ext}. "
                                  "Only PDF, JPEG, PNG are allowed.", rule_type="enum"))
+    if timing is not None:
+        timing["file_format_check_ms"] = _elapsed_ms(format_started)
 
     # GATE-02: File size
+    size_started = time.perf_counter()
     if file_size and file_size > MAX_FILE_SIZE_BYTES:
         results.append(_fail("GATE-02", "File Size", CheckClassification.RULE,
                              f"File size {file_size // (1024*1024)}MB exceeds 25MB limit",
@@ -722,8 +743,11 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
         results.append(_pass("GATE-02", "File Size", CheckClassification.RULE,
                              f"File size within limit ({file_size // 1024 if file_size else '?'}KB)",
                              rule_type="numeric"))
+    if timing is not None:
+        timing["file_size_check_ms"] = _elapsed_ms(size_started)
 
     # GATE-03: Duplicate detection
+    duplicate_started = time.perf_counter()
     if file_exists:
         try:
             h = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
@@ -741,6 +765,9 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
         results.append(_warn("GATE-03", "Duplicate Detection", CheckClassification.RULE,
                              "Duplicate check skipped — file not accessible (system issue)",
                              rule_type="hash"))
+    if timing is not None:
+        timing["duplicate_check_ms"] = _elapsed_ms(duplicate_started)
+        timing["gate_checks_ms"] = _elapsed_ms(gate_started)
 
     return results
 
@@ -1322,24 +1349,52 @@ def verify_document_layered(
 
     Returns: aggregated result dict (backward-compatible with existing verify_document output)
     """
+    engine_started = time.perf_counter()
+    timing = {
+        "file_format_check_ms": 0,
+        "file_size_check_ms": 0,
+        "duplicate_check_ms": 0,
+        "gate_checks_ms": 0,
+        "field_extraction_ms": 0,
+        "field_extraction_vision_read_ms": 0,
+        "field_extraction_provider_round_trip_ms": 0,
+        "field_extraction_response_parse_ms": 0,
+        "rule_checks_ms": 0,
+        "ai_check_selection_ms": 0,
+        "ai_verification_ms": 0,
+        "ai_verification_vision_read_ms": 0,
+        "ai_verification_prompt_build_ms": 0,
+        "ai_verification_provider_round_trip_ms": 0,
+        "ai_verification_response_parse_ms": 0,
+        "provider_round_trip_ms": 0,
+        "aggregation_ms": 0,
+    }
     all_results = []
     provider_failure = None
 
     # ── Conditional gate: licence applicability ──────────────────
     if doc_type == "licence":
         if not is_licence_applicable(prescreening_data):
-            return _aggregate([_skip("LIC-GATE", "Licence Applicability Gate",
-                                     CheckClassification.RULE,
-                                     "Regulatory licence checks skipped — client declared no licence",
-                                     ps_field=PSField.HOLDS_LICENCE)])
+            return _attach_execution_timing(
+                _aggregate([_skip("LIC-GATE", "Licence Applicability Gate",
+                                  CheckClassification.RULE,
+                                  "Regulatory licence checks skipped — client declared no licence",
+                                  ps_field=PSField.HOLDS_LICENCE)]),
+                timing,
+                engine_started,
+            )
 
     # ── Retired document type ────────────────────────────────────
     entry = ALL_DOC_CHECKS.get(doc_type, {})
     if entry.get("retired"):
-        return _aggregate([_skip("RETIRED", doc_type.upper(),
-                                 CheckClassification.RULE,
-                                 f"Verification checks for '{doc_type}' have been retired. "
-                                 "Historical records preserved.")])
+        return _attach_execution_timing(
+            _aggregate([_skip("RETIRED", doc_type.upper(),
+                              CheckClassification.RULE,
+                              f"Verification checks for '{doc_type}' have been retired. "
+                              "Historical records preserved.")]),
+            timing,
+            engine_started,
+        )
 
     # ── Pre-check: file accessibility ────────────────────────────
     file_accessible = bool(file_path and os.path.isfile(file_path))
@@ -1347,7 +1402,7 @@ def verify_document_layered(
         logger.warning(f"[verify-layered] File not accessible for {doc_type}: file_path={file_path!r}")
 
     # ── Layer 0: Gate checks ──────���───────────────────────────────
-    gate_results = run_gate_checks(file_path or "", file_size, mime_type, existing_hashes)
+    gate_results = run_gate_checks(file_path or "", file_size, mime_type, existing_hashes, timing=timing)
     all_results.extend(gate_results)
 
     gate_hard_fail = any(r["result"] == CheckStatus.FAIL and r["id"].startswith("GATE")
@@ -1355,12 +1410,13 @@ def verify_document_layered(
     if gate_hard_fail:
         result = _aggregate(all_results)
         result["extracted_fields"] = {}
-        return result
+        return _attach_execution_timing(result, timing, engine_started)
 
     # ── Extract document fields via Claude vision ──────────────���──
     # Claude extracts structured fields; rule engine then evaluates deterministically
     extracted_fields = {}
     if claude_client and file_path and file_accessible:
+        extraction_started = time.perf_counter()
         try:
             extracted_fields = claude_client.extract_document_fields(
                 doc_type=doc_type,
@@ -1389,9 +1445,21 @@ def verify_document_layered(
                 provider_failure.get("classification") if provider_failure else "unknown",
                 provider_failure.get("reason_code") if provider_failure else "unknown",
             )
+        finally:
+            timing["field_extraction_ms"] = _elapsed_ms(extraction_started)
+            extraction_timing = getattr(claude_client, "last_field_extraction_timing_ms", {}) or {}
+            timing["field_extraction_vision_read_ms"] = int(extraction_timing.get("vision_read_ms") or 0)
+            timing["field_extraction_provider_round_trip_ms"] = int(
+                extraction_timing.get("provider_round_trip_ms") or 0
+            )
+            timing["field_extraction_response_parse_ms"] = int(
+                extraction_timing.get("response_parse_ms") or 0
+            )
 
     # ── Layer 1: Rule-based checks ────────────────────────────────
+    rule_started = time.perf_counter()
     rule_results = run_rule_checks(doc_type, category, extracted_fields, prescreening_data, risk_level)
+    timing["rule_checks_ms"] = _elapsed_ms(rule_started)
     all_results.extend(rule_results)
 
     # ── Layers 2+3: Hybrid and AI checks via Claude ────��──────────
@@ -1409,6 +1477,7 @@ def verify_document_layered(
                                  source="system"))
     elif claude_client:
         # Determine which checks go to Claude
+        ai_selection_started = time.perf_counter()
         if check_overrides:
             # DB overrides take priority — only send checks explicitly classified as hybrid or AI.
             # Checks without classification are NOT sent to Claude (safe default).
@@ -1425,6 +1494,7 @@ def verify_document_layered(
                 )
         else:
             ai_hybrid_checks = get_ai_checks_for_doc_type(doc_type, category)
+        timing["ai_check_selection_ms"] = _elapsed_ms(ai_selection_started)
 
         if ai_hybrid_checks:
             # Build pre-screening context for AI: extract declared values for each check's ps_field
@@ -1436,6 +1506,7 @@ def verify_document_layered(
                         val = prescreening_data.get(pf)
                         if val not in (None, "", [], {}):
                             ps_context[pf] = val
+            ai_started = time.perf_counter()
             try:
                 ai_result = claude_client.verify_document(
                     doc_type=doc_type,
@@ -1486,6 +1557,21 @@ def verify_document_layered(
                     provider_failure.get("reason_code") if provider_failure else "unknown",
                 )
                 all_results.extend(failure_result.get("checks", []))
+            finally:
+                timing["ai_verification_ms"] = _elapsed_ms(ai_started)
+                ai_timing = getattr(claude_client, "last_document_verification_timing_ms", {}) or {}
+                timing["ai_verification_vision_read_ms"] = int(ai_timing.get("vision_read_ms") or 0)
+                timing["ai_verification_prompt_build_ms"] = int(ai_timing.get("prompt_build_ms") or 0)
+                timing["ai_verification_provider_round_trip_ms"] = int(
+                    ai_timing.get("provider_round_trip_ms") or 0
+                )
+                timing["ai_verification_response_parse_ms"] = int(
+                    ai_timing.get("response_parse_ms") or 0
+                )
+                timing["provider_round_trip_ms"] = (
+                    int(timing.get("field_extraction_provider_round_trip_ms") or 0)
+                    + int(timing.get("ai_verification_provider_round_trip_ms") or 0)
+                )
     else:
         # No AI client — add warn for hybrid/AI checks
         ai_hybrid = get_ai_checks_for_doc_type(doc_type, category)
@@ -1503,7 +1589,13 @@ def verify_document_layered(
         except Exception:
             pass
 
+    timing["provider_round_trip_ms"] = (
+        int(timing.get("field_extraction_provider_round_trip_ms") or 0)
+        + int(timing.get("ai_verification_provider_round_trip_ms") or 0)
+    )
+    aggregate_started = time.perf_counter()
     result = _aggregate(all_results, confidence=ai_confidence)
+    timing["aggregation_ms"] = _elapsed_ms(aggregate_started)
     if provider_failure:
         result["overall"] = "failed"
         result["verification_failure"] = provider_failure
@@ -1511,7 +1603,7 @@ def verify_document_layered(
         result["provider_failure"] = True
         result["retryable"] = bool(provider_failure.get("retryable"))
     result["extracted_fields"] = extracted_fields or {}
-    return result
+    return _attach_execution_timing(result, timing, engine_started)
 
 
 # ── Public helper: format result for backward compatibility ────────
@@ -1539,4 +1631,5 @@ def to_legacy_result(layered_result: dict) -> dict:
         "provider_failure": layered_result.get("provider_failure", False),
         "retryable": layered_result.get("retryable", False),
         "extracted_fields": layered_result.get("extracted_fields", {}),
+        "execution_timing_ms": layered_result.get("execution_timing_ms", {}),
     }
