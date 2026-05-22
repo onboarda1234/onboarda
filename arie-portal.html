@@ -4753,6 +4753,7 @@ function updateUserDisplay() {
 function clearAuth() {
   AUTH_TOKEN = '';
   AUTH_USER = null;
+  stopAllVerificationStatusPolling();
   resetPortalApplicationState();
   // httpOnly session cookie cleared by server on logout; no JS cookie to expire
 
@@ -7355,6 +7356,83 @@ function renderPersonVerification(personId, docType, verificationResponse) {
   });
 }
 
+var ASYNC_VERIFICATION_POLL_INTERVAL_MS = 2000;
+var ASYNC_VERIFICATION_POLL_MAX_MS = 120000;
+var _verificationStatusPollTimers = {};
+
+function normalizeVerificationRecordState(record) {
+  return String((record && (record.verification_state || record.verification_status || record.status)) || 'pending').toLowerCase();
+}
+
+function verificationRecordIsTerminal(record) {
+  if (!record) return false;
+  if (record.verification_terminal === true) return true;
+  var state = normalizeVerificationRecordState(record);
+  return state === 'verified' || state === 'flagged' || state === 'failed';
+}
+
+function mergeVerificationStatusRecord(baseRecord, statusRecord) {
+  var merged = Object.assign({}, baseRecord || {});
+  Object.keys(statusRecord || {}).forEach(function(key) {
+    if (statusRecord[key] !== undefined && statusRecord[key] !== null) merged[key] = statusRecord[key];
+  });
+  merged.doc_id = merged.doc_id || merged.id;
+  merged.id = merged.id || merged.doc_id;
+  merged.doc_name = merged.doc_name || (baseRecord && baseRecord.doc_name);
+  merged.doc_type = merged.doc_type || (baseRecord && baseRecord.doc_type);
+  merged.person_id = merged.person_id || (baseRecord && baseRecord.person_id);
+  merged.person_type = merged.person_type || (baseRecord && baseRecord.person_type);
+  merged.slot_key = merged.slot_key || (baseRecord && baseRecord.slot_key);
+  merged.verification_results = merged.verification_results || (baseRecord && baseRecord.verification_results) || {};
+  return merged;
+}
+
+function stopVerificationStatusPolling(docId) {
+  var key = String(docId || '');
+  if (!key || !_verificationStatusPollTimers[key]) return;
+  clearTimeout(_verificationStatusPollTimers[key]);
+  delete _verificationStatusPollTimers[key];
+}
+
+function stopAllVerificationStatusPolling() {
+  Object.keys(_verificationStatusPollTimers).forEach(function(docId) {
+    stopVerificationStatusPolling(docId);
+  });
+}
+
+function startVerificationStatusPolling(options) {
+  if (!options || !options.docId || typeof options.onUpdate !== 'function') return;
+  var docId = String(options.docId);
+  var startedAt = Date.now();
+  var latestRecord = options.initialRecord || { doc_id: docId };
+  stopVerificationStatusPolling(docId);
+  if (verificationRecordIsTerminal(latestRecord)) return;
+
+  async function pollOnce() {
+    try {
+      var statusRecord = await apiCall('GET', '/documents/' + encodeURIComponent(docId) + '/verification-status');
+      latestRecord = mergeVerificationStatusRecord(latestRecord, statusRecord);
+      options.onUpdate(latestRecord);
+      if (verificationRecordIsTerminal(latestRecord)) {
+        stopVerificationStatusPolling(docId);
+        if (typeof options.onTerminal === 'function') options.onTerminal(latestRecord);
+        return;
+      }
+    } catch (err) {
+      console.warn('verification status refresh failed for doc', docId, err);
+    }
+
+    if (Date.now() - startedAt >= ASYNC_VERIFICATION_POLL_MAX_MS) {
+      stopVerificationStatusPolling(docId);
+      if (typeof options.onTimeout === 'function') options.onTimeout(latestRecord);
+      return;
+    }
+    _verificationStatusPollTimers[docId] = setTimeout(pollOnce, ASYNC_VERIFICATION_POLL_INTERVAL_MS);
+  }
+
+  _verificationStatusPollTimers[docId] = setTimeout(pollOnce, ASYNC_VERIFICATION_POLL_INTERVAL_MS);
+}
+
 
 // ─── Consent checkbox → button enable logic ──────────────
 document.addEventListener('change', function(e) {
@@ -8513,6 +8591,8 @@ function clearUploadedDocument(docId) {
   var item = document.getElementById(docId);
   var label = document.getElementById(docId + '-label');
   var fileInput = item ? item.querySelector('.file-input') : null;
+  var existingBackendIds = uploadedDocIds[docId] || [];
+  existingBackendIds.forEach(function(existingDocId) { stopVerificationStatusPolling(existingDocId); });
 
   // Remove clear button
   var clearBtn = document.getElementById('clear-' + docId);
@@ -8533,7 +8613,7 @@ function clearUploadedDocument(docId) {
   updateProgress();
 
   // Delete from backend if we have the doc ID
-  var backendIds = uploadedDocIds[docId];
+  var backendIds = existingBackendIds;
   if (backendIds && AUTH_TOKEN && currentApplicationId) {
     Promise.all(backendIds.map(function(bid) {
       return apiCall('DELETE', '/applications/' + currentApplicationId + '/documents/' + bid);
@@ -8621,7 +8701,21 @@ function handleUpload(docId, input) {
 
       uploadedDocIds[docId] = latest && latest.doc_id ? [latest.doc_id] : [];
       addClearButton(docId);
-      if (latest) renderCompanyVerification(docId, latest);
+      if (latest) {
+        renderCompanyVerification(docId, latest);
+        startVerificationStatusPolling({
+          docId: latest.doc_id,
+          initialRecord: latest,
+          onUpdate: function(updatedRecord) {
+            renderCompanyVerification(docId, updatedRecord);
+            updateProgress();
+          },
+          onTimeout: function(lastRecord) {
+            var stateLabel = lastRecord && lastRecord.verification_status_label ? lastRecord.verification_status_label : 'Pending verification';
+            showToast('warn', 'Verification Still Pending', 'Document stored. Current status: ' + stateLabel + '.');
+          }
+        });
+      }
       if (failures.length) {
         showToast('warn', 'Partial Upload', successes.length + ' document(s) stored, ' + failures.length + ' failed.');
       } else if (successes.some(function(result) { return result.verify_error || result.verification_success !== true; })) {
@@ -9916,6 +10010,18 @@ function handleKYCUpload(personId, docType, input, personType) {
         updateKYCBadge(personId);
         clearVerificationForSlot(area ? area.parentElement : null, verification.slot_key);
         renderPersonVerification(personId, docType, verification);
+        startVerificationStatusPolling({
+          docId: verification.doc_id,
+          initialRecord: verification,
+          onUpdate: function(updatedRecord) {
+            renderPersonVerification(personId, docType, updatedRecord);
+            updateKYCBadge(personId);
+          },
+          onTimeout: function(lastRecord) {
+            var personStateLabel = lastRecord && lastRecord.verification_status_label ? lastRecord.verification_status_label : 'Pending verification';
+            showToast('warn', 'Verification Still Pending', 'Document stored. Current status: ' + personStateLabel + '.');
+          }
+        });
         if (verification.verify_error || verification.verification_success !== true) {
           var personStateLabel = verification.verification_status_label || 'Pending verification';
           showToast('warn', 'Verification Required', 'Document stored. Current status: ' + personStateLabel + '.');
@@ -10262,6 +10368,7 @@ function getApplicationView(status) {
 }
 
 function resetPortalDocumentState() {
+  stopAllVerificationStatusPolling();
   uploadedDocIds = {};
   uploadedDocs.clear();
   document.querySelectorAll('.doc-item').forEach(function(item) {
@@ -10319,6 +10426,14 @@ function syncPersistedApplicationDocuments(app) {
       if (lbl) lbl.textContent = doc.doc_name || 'Previously uploaded';
       if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
       renderPersistedVerification(area ? area.parentElement : null, doc);
+      startVerificationStatusPolling({
+        docId: doc.id,
+        initialRecord: doc,
+        onUpdate: function(updatedRecord) {
+          renderPersonVerification(personId, doc.doc_type, updatedRecord);
+          updateKYCBadge(personId);
+        }
+      });
     } else {
       var slotId = findPortalDocumentSlot(doc.doc_type);
       if (!slotId) return;
@@ -10330,6 +10445,14 @@ function syncPersistedApplicationDocuments(app) {
       uploadedDocIds[slotId] = [doc.id];
       addClearButton(slotId);
       renderPersistedVerification(item, doc);
+      startVerificationStatusPolling({
+        docId: doc.id,
+        initialRecord: doc,
+        onUpdate: function(updatedRecord) {
+          renderCompanyVerification(slotId, updatedRecord);
+          updateProgress();
+        }
+      });
     }
   });
 

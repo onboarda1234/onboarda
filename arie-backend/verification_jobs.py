@@ -116,6 +116,17 @@ def async_verify_sla_config() -> Dict[str, Any]:
     }
 
 
+def _safe_json_loads(value: Any, default: Any = None) -> Any:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
 def serialize_verification_job(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not row:
         return None
@@ -715,8 +726,17 @@ def verification_status_for_document(db, document_id: str) -> Optional[Dict[str,
     job = _latest_job_for_document(db, document_id)
     return {
         "doc_id": doc["id"],
+        "id": doc["id"],
+        "application_id": doc.get("application_id"),
+        "doc_name": doc.get("doc_name"),
+        "doc_type": doc.get("doc_type"),
+        "person_id": doc.get("person_id"),
+        "slot_key": doc.get("slot_key"),
+        "is_current": doc.get("is_current"),
+        "version": doc.get("version"),
         "verification_status": status,
         **verification_state_payload(status),
+        "verification_results": _safe_json_loads(doc.get("verification_results"), {}),
         "verified_at": doc.get("verified_at"),
         "verification_job": job,
         "async_sla": async_verify_sla_config(),
