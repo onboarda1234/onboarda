@@ -58,6 +58,51 @@ def db_timestamp(value: Optional[datetime] = None) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_job_timestamp(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    parsed = datetime.strptime(raw, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _duration_ms(start: Any, end: Any) -> Optional[int]:
+    start_ts = _parse_job_timestamp(start)
+    end_ts = _parse_job_timestamp(end)
+    if not start_ts or not end_ts:
+        return None
+    return max(int(round((end_ts - start_ts).total_seconds() * 1000)), 0)
+
+
+def verification_job_timing_ms(job: Optional[Dict[str, Any]]) -> Dict[str, Optional[int]]:
+    """Return derived PR7B timing metrics from persisted job timestamps."""
+    job = job or {}
+    return {
+        "queue_wait_ms": _duration_ms(job.get("created_at"), job.get("locked_at")),
+        "execution_ms": _duration_ms(job.get("locked_at"), job.get("completed_at")),
+        "end_to_end_job_ms": _duration_ms(job.get("created_at"), job.get("completed_at")),
+    }
+
+
 def async_verify_sla_config() -> Dict[str, Any]:
     """Return the numeric PR6 SLA/stuck-job contract."""
     return {
@@ -83,7 +128,18 @@ def serialize_verification_job(row: Optional[Dict[str, Any]]) -> Optional[Dict[s
             job["job_metadata"] = {}
     elif metadata is None:
         job["job_metadata"] = {}
+    job["timing_ms"] = verification_job_timing_ms(job)
     return job
+
+
+def format_verification_job_timing_log_fields(job: Optional[Dict[str, Any]]) -> str:
+    """PII-safe timing fields for worker and CloudWatch log queries."""
+    timing = verification_job_timing_ms(job)
+    return (
+        f"queue_wait_ms={timing.get('queue_wait_ms')} "
+        f"execution_ms={timing.get('execution_ms')} "
+        f"end_to_end_job_ms={timing.get('end_to_end_job_ms')}"
+    )
 
 
 def _actor_from_user(user: Optional[Dict[str, Any]], *, worker_id: str = "") -> Dict[str, str]:

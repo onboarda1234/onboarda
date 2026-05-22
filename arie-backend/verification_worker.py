@@ -19,6 +19,7 @@ from base_handler import _safe_json
 from db import get_db
 from verification_jobs import (
     format_async_job_health_log_line,
+    format_verification_job_timing_log_fields,
     claim_next_verification_job,
     mark_verification_job_failed,
     mark_verification_job_succeeded,
@@ -34,6 +35,7 @@ from verification_state import (
 logger = logging.getLogger(__name__)
 
 TERMINAL_DOCUMENT_STATES = (STATE_VERIFIED, STATE_FLAGGED, STATE_FAILED)
+DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 SYSTEM_USER = {
     "sub": "system:verification-worker",
     "name": "Verification Worker",
@@ -224,11 +226,12 @@ def process_claimed_job(
         )
         db.commit()
         logger.info(
-            "verification_worker_job_completed job_id=%s document_id=%s status=%s worker_id=%s",
+            "verification_worker_job_completed job_id=%s document_id=%s status=%s worker_id=%s %s",
             job["id"],
             job.get("document_id"),
             status,
             worker_id,
+            format_verification_job_timing_log_fields(updated),
         )
         return {
             "processed": True,
@@ -251,11 +254,12 @@ def process_claimed_job(
         )
         db.commit()
         logger.warning(
-            "verification_worker_job_failed job_id=%s document_id=%s retryable=%s error_type=%s",
+            "verification_worker_job_failed job_id=%s document_id=%s retryable=%s error_type=%s %s",
             job["id"],
             job.get("document_id"),
             retryable,
             type(exc).__name__,
+            format_verification_job_timing_log_fields(failed),
         )
         return {
             "processed": True,
@@ -288,6 +292,14 @@ def run_once(
                 "worker_id": worker_id,
                 "stuck_jobs_failed": int(health.get("failed_jobs") or 0),
             }
+        logger.info(
+            "verification_worker_job_claimed job_id=%s document_id=%s worker_id=%s attempt_count=%s %s",
+            job["id"],
+            job.get("document_id"),
+            worker_id,
+            job.get("attempt_count"),
+            format_verification_job_timing_log_fields(job),
+        )
         result = process_claimed_job(
             db,
             job,
@@ -311,7 +323,7 @@ def run_once(
                 pass
 
 
-def run_forever(*, worker_id: Optional[str] = None, poll_interval: float = 5.0) -> None:
+def run_forever(*, worker_id: Optional[str] = None, poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS) -> None:
     worker_id = worker_id or build_worker_id()
     logger.info("verification_worker_started worker_id=%s", worker_id)
     while True:
@@ -324,7 +336,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Run async verification worker")
     parser.add_argument("--once", action="store_true", help="Process at most one queued job")
     parser.add_argument("--worker-id", default=None)
-    parser.add_argument("--poll-interval", type=float, default=5.0)
+    parser.add_argument("--poll-interval", type=float, default=DEFAULT_POLL_INTERVAL_SECONDS)
     args = parser.parse_args(argv)
 
     logging.basicConfig(
