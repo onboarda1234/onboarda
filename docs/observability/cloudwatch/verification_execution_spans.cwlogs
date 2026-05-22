@@ -1,0 +1,28 @@
+fields @timestamp, @message
+| filter @message like /document_verification_execution_timing/
+| parse @message /document_id=(?<document_id>\S+)/
+| parse @message /application_id=(?<application_id>\S+)/
+| parse @message /doc_type=(?<doc_type>\S+)/
+| parse @message /status=(?<status>\S+)/
+| parse @message /document_fetch_ms=(?<document_fetch_ms>\d+)/
+| parse @message /existing_hashes_ms=(?<existing_hashes_ms>\d+)/
+| parse @message /duplicate_check_ms=(?<duplicate_check_ms>\d+)/
+| parse @message /field_extraction_ms=(?<field_extraction_ms>\d+)/
+| parse @message /field_extraction_provider_round_trip_ms=(?<field_extraction_provider_round_trip_ms>\d+)/
+| parse @message /ai_verification_ms=(?<ai_verification_ms>\d+)/
+| parse @message /ai_verification_provider_round_trip_ms=(?<ai_verification_provider_round_trip_ms>\d+)/
+| parse @message /provider_round_trip_ms=(?<provider_round_trip_ms>\d+)/
+| parse @message /verification_engine_ms=(?<verification_engine_ms>\d+)/
+| parse @message /persist_audit_ms=(?<persist_audit_ms>\d+)/
+| parse @message /total_handler_ms=(?<total_handler_ms>\d+)/
+| stats count(*) as jobs,
+        pct(total_handler_ms, 50) as handler_p50_ms,
+        pct(total_handler_ms, 95) as handler_p95_ms,
+        pct(provider_round_trip_ms, 95) as provider_p95_ms,
+        pct(field_extraction_provider_round_trip_ms, 95) as extraction_provider_p95_ms,
+        pct(ai_verification_provider_round_trip_ms, 95) as ai_provider_p95_ms,
+        pct(existing_hashes_ms, 95) as existing_hashes_p95_ms,
+        pct(duplicate_check_ms, 95) as duplicate_check_p95_ms,
+        pct(persist_audit_ms, 95) as persist_audit_p95_ms
+  by bin(5m) as window, doc_type, status
+| sort window desc
