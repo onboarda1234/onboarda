@@ -19,7 +19,7 @@ def _seed_doc(db, *, app_id="app_pr7a_worker", doc_id="doc_pr7a_worker", status=
         """,
         (
             app_id,
-            "ARF-2026-PR7A",
+            f"ARF-2026-{app_id[-8:]}",
             "PR7A Worker Ltd",
             "Mauritius",
             "draft",
@@ -127,6 +127,104 @@ def test_worker_claims_queued_job_and_completes_verified_with_system_audit(tmp_p
         ]
         assert {detail["actor_type"] for detail in details} == {"system"}
         assert {detail["worker_id"] for detail in details} == {"worker-pr7a-success"}
+
+
+def test_verification_job_timing_metrics_are_internally_consistent(tmp_path, monkeypatch):
+    from verification_jobs import (
+        enqueue_verification_job,
+        format_verification_job_timing_log_fields,
+        serialize_verification_job,
+        verification_job_timing_ms,
+        verification_status_for_document,
+    )
+
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        app, doc = _seed_doc(db)
+        job = enqueue_verification_job(
+            db,
+            doc,
+            app,
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        )["job"]
+        db.execute(
+            """
+            UPDATE verification_jobs
+               SET created_at=?, locked_at=?, completed_at=?
+             WHERE id=?
+            """,
+            (
+                "2026-01-01 00:00:00.000000",
+                "2026-01-01 00:00:02.500000",
+                "2026-01-01 00:00:08.000000",
+                job["id"],
+            ),
+        )
+        db.commit()
+
+        stored = serialize_verification_job(
+            db.execute("SELECT * FROM verification_jobs WHERE id=?", (job["id"],)).fetchone()
+        )
+
+        assert verification_job_timing_ms(stored) == {
+            "queue_wait_ms": 2500,
+            "execution_ms": 5500,
+            "end_to_end_job_ms": 8000,
+        }
+        assert stored["timing_ms"] == {
+            "queue_wait_ms": 2500,
+            "execution_ms": 5500,
+            "end_to_end_job_ms": 8000,
+        }
+        assert verification_status_for_document(db, doc["id"])["verification_job"]["timing_ms"] == {
+            "queue_wait_ms": 2500,
+            "execution_ms": 5500,
+            "end_to_end_job_ms": 8000,
+        }
+        assert format_verification_job_timing_log_fields(stored) == (
+            "queue_wait_ms=2500 execution_ms=5500 end_to_end_job_ms=8000"
+        )
+
+
+def test_two_workers_claim_distinct_jobs_safely(tmp_path, monkeypatch):
+    from verification_jobs import claim_next_verification_job, enqueue_verification_job
+
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        app_a, doc_a = _seed_doc(
+            db,
+            app_id="app_pr7a_worker_a",
+            doc_id="doc_pr7a_worker_a",
+        )
+        app_b, doc_b = _seed_doc(
+            db,
+            app_id="app_pr7a_worker_b",
+            doc_id="doc_pr7a_worker_b",
+        )
+        enqueue_verification_job(
+            db,
+            doc_a,
+            app_a,
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        )
+        enqueue_verification_job(
+            db,
+            doc_b,
+            app_b,
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        )
+
+        first = claim_next_verification_job(db, "worker-pr7b-1")
+        second = claim_next_verification_job(db, "worker-pr7b-2")
+        db.commit()
+
+        assert first is not None
+        assert second is not None
+        assert first["id"] != second["id"]
+        assert {first["locked_by"], second["locked_by"]} == {
+            "worker-pr7b-1",
+            "worker-pr7b-2",
+        }
+        assert first["status"] == "in_progress"
+        assert second["status"] == "in_progress"
 
 
 def test_worker_completes_flagged_path(tmp_path, monkeypatch):
