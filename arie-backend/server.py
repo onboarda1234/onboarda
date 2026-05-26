@@ -1257,25 +1257,70 @@ def _draft_value_is_meaningful(value) -> bool:
     return True
 
 
+def _draft_party_row_is_meaningful(row) -> bool:
+    """Ignore synthetic/default party-row values when classifying draft content."""
+    if not isinstance(row, dict):
+        return _draft_value_is_meaningful(row)
+    interesting_keys = (
+        "first_name",
+        "last_name",
+        "nationality",
+        "date_of_birth",
+        "ownership_pct",
+        "entity_name",
+        "jurisdiction",
+    )
+    if any(_draft_value_is_meaningful(row.get(key)) for key in interesting_keys):
+        return True
+    if str(row.get("is_pep") or "").strip().lower() == "yes":
+        return True
+    pep_declaration = row.get("pep_declaration")
+    if isinstance(pep_declaration, dict):
+        for key, value in pep_declaration.items():
+            if key in ("person_key", "person_type", "is_pep"):
+                continue
+            if _draft_value_is_meaningful(value):
+                return True
+        return False
+    return _draft_value_is_meaningful(pep_declaration)
+
+
+def _draft_uploaded_doc_is_meaningful(value) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in ("id", "slot_id", "slot_key"):
+                continue
+            if _draft_value_is_meaningful(nested):
+                return True
+        return False
+    return _draft_value_is_meaningful(value)
+
+
 def _draft_payload_is_meaningful(payload) -> bool:
     """Reject completely empty drafts (no form fields, no party rows)."""
     if not isinstance(payload, dict) or not payload:
         return False
     # Metadata-only payloads must not count as real draft content.
+    list_predicates = {
+        "directors": _draft_party_row_is_meaningful,
+        "ubos": _draft_party_row_is_meaningful,
+        "intermediaries": _draft_party_row_is_meaningful,
+        "intermediary_shareholders": _draft_party_row_is_meaningful,
+        "uploadedDocs": _draft_uploaded_doc_is_meaningful,
+    }
+    for key, predicate in list_predicates.items():
+        value = payload.get(key)
+        if isinstance(value, (list, tuple, set)) and any(predicate(item) for item in value):
+            return True
     interesting_keys = (
         "prescreening",
         "prescreening_data",
-        "directors",
-        "ubos",
-        "intermediaries",
-        "intermediary_shareholders",
         "servicesRequired",
         "accountPurposes",
         "currencies",
         "countriesOfOperation",
         "targetMarkets",
         "kycPersons",
-        "uploadedDocs",
         "company_name",
         "entity_name",
         "registered_entity_name",
