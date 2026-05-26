@@ -9221,6 +9221,11 @@ _REPORT_EDD_ROUTED_STATUSES = (
     "edd_required",
 )
 
+_DASHBOARD_REJECTED_DECISION_STATUSES = (
+    "rejected",
+    "declined",
+)
+
 _REPORT_ALLOWED_FIELDS = {
     "id", "ref", "company_name", "status", "status_label", "risk_level",
     "risk_score", "risk_lane", "country", "sector", "entity_type",
@@ -9314,6 +9319,250 @@ def _report_scope_from_request(handler, user):
         "show_fixtures": show_fixtures,
         "pending_statuses": list(_REPORT_PENDING_STATUSES),
         "edd_routed_statuses": list(_REPORT_EDD_ROUTED_STATUSES),
+    }
+
+
+def _canonical_dashboard_lane(value):
+    key = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if key in ("fast_lane", "fast"):
+        return "fast_lane"
+    if key in ("standard_review", "standard"):
+        return "standard_review"
+    if key == "edd":
+        return "enhanced_due_diligence"
+    return "unknown"
+
+
+def _dashboard_processing_hours_expression():
+    if USE_POSTGRES:
+        return "EXTRACT(EPOCH FROM (a.decided_at - COALESCE(a.submitted_at, a.created_at))) / 3600.0"
+    return "(julianday(a.decided_at) - julianday(COALESCE(a.submitted_at, a.created_at))) * 24.0"
+
+
+def _dashboard_month_floor():
+    now = datetime.now(timezone.utc)
+    month_floor = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return month_floor.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_dashboard_processing_metric(avg_hours, sample_size):
+    if avg_hours is None:
+        return {
+            "available": False,
+            "display": "—",
+            "hours": None,
+            "days": None,
+            "sample_size": int(sample_size or 0),
+            "basis": "approved_rejected_declined_from_submitted_or_created_to_decided",
+        }
+
+    hours = round(float(avg_hours), 2)
+    days = round(hours / 24.0, 2)
+    if hours < 1:
+        minutes = int(round(hours * 60))
+        display = f"{minutes} min"
+    elif hours < 48:
+        display = f"{hours:.1f} h"
+    else:
+        display = f"{days:.1f} d"
+    return {
+        "available": True,
+        "display": display,
+        "hours": hours,
+        "days": days,
+        "sample_size": int(sample_size or 0),
+        "basis": "approved_rejected_declined_from_submitted_or_created_to_decided",
+    }
+
+
+def _dashboard_application_scope(user, *, show_fixtures=False):
+    from fixture_filter import fixture_app_exclude_clause
+
+    where = ["1=1"]
+    params = []
+    if user.get("type") == "client":
+        where.append("a.client_id = ?")
+        params.append(user["sub"])
+    if not show_fixtures:
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="a")
+        where.append(fx_excl)
+        params.extend(fx_params)
+    return " AND ".join(where), params
+
+
+def _canonical_dashboard_stats(db, user, *, show_fixtures=False):
+    app_where, app_params = _dashboard_application_scope(user, show_fixtures=show_fixtures)
+    pending_statuses = [str(status).strip().lower() for status in _REPORT_PENDING_STATUSES]
+    edd_routed_statuses = [str(status).strip().lower() for status in _REPORT_EDD_ROUTED_STATUSES]
+    rejected_statuses = [str(status).strip().lower() for status in _DASHBOARD_REJECTED_DECISION_STATUSES]
+    decision_statuses = ["approved", *rejected_statuses]
+    processing_expr = _dashboard_processing_hours_expression()
+    month_floor = _dashboard_month_floor()
+
+    def _placeholders(values):
+        return ",".join(["?"] * len(values))
+
+    pending_placeholders = _placeholders(pending_statuses)
+    edd_placeholders = _placeholders(edd_routed_statuses)
+    rejected_placeholders = _placeholders(rejected_statuses)
+    decision_placeholders = _placeholders(decision_statuses)
+
+    aggregate_row = db.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) IN ({pending_placeholders}) THEN 1 ELSE 0 END) AS in_progress,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) = 'approved' THEN 1 ELSE 0 END) AS approved_total,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) = 'approved' AND a.decided_at IS NOT NULL AND a.decided_at >= ? THEN 1 ELSE 0 END) AS approved_this_month,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) IN ({rejected_placeholders}) THEN 1 ELSE 0 END) AS rejected_declined_total,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) IN ({edd_placeholders}) THEN 1 ELSE 0 END) AS edd_routed_applications,
+            AVG(CASE
+                WHEN LOWER(COALESCE(a.status, '')) IN ({decision_placeholders})
+                 AND a.decided_at IS NOT NULL
+                 AND COALESCE(a.submitted_at, a.created_at) IS NOT NULL
+                THEN {processing_expr}
+                ELSE NULL
+            END) AS avg_processing_hours,
+            SUM(CASE
+                WHEN LOWER(COALESCE(a.status, '')) IN ({decision_placeholders})
+                 AND a.decided_at IS NOT NULL
+                 AND COALESCE(a.submitted_at, a.created_at) IS NOT NULL
+                THEN 1 ELSE 0
+            END) AS avg_processing_sample_size
+        FROM applications a
+        WHERE {app_where}
+        """,
+        (
+            *pending_statuses,
+            month_floor,
+            *rejected_statuses,
+            *edd_routed_statuses,
+            *decision_statuses,
+            *decision_statuses,
+            *app_params,
+        ),
+    ).fetchone()
+
+    risk_rows = db.execute(
+        f"""
+        SELECT COALESCE(a.final_risk_level, a.risk_level) AS level, COUNT(*) AS count
+        FROM applications a
+        WHERE {app_where}
+        GROUP BY COALESCE(a.final_risk_level, a.risk_level)
+        """,
+        tuple(app_params),
+    ).fetchall()
+    risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "UNKNOWN": 0}
+    for row in risk_rows:
+        bucket = _canonical_risk_level(row["level"]) or "UNKNOWN"
+        risk_distribution[bucket] += int(row["count"] or 0)
+
+    lane_rows = db.execute(
+        f"""
+        SELECT a.onboarding_lane AS lane, COUNT(*) AS count
+        FROM applications a
+        WHERE {app_where}
+        GROUP BY a.onboarding_lane
+        """,
+        tuple(app_params),
+    ).fetchall()
+    lane_distribution = {
+        "fast_lane": 0,
+        "standard_review": 0,
+        "enhanced_due_diligence": 0,
+        "unknown": 0,
+    }
+    for row in lane_rows:
+        lane_distribution[_canonical_dashboard_lane(row["lane"])] += int(row["count"] or 0)
+
+    recent = db.execute(
+        f"""
+        SELECT a.*, u.full_name AS assigned_name
+        FROM applications a
+        LEFT JOIN users u ON a.assigned_to = u.id
+        WHERE {app_where}
+        ORDER BY a.created_at DESC
+        LIMIT 10
+        """,
+        tuple(app_params),
+    ).fetchall()
+
+    edd_case_row = db.execute(
+        f"""
+        SELECT
+            SUM(CASE WHEN ec.stage NOT IN ('edd_approved', 'edd_rejected') THEN 1 ELSE 0 END) AS active_cases,
+            SUM(CASE WHEN ec.stage = 'pending_senior_review' THEN 1 ELSE 0 END) AS pending_senior_review_cases
+        FROM edd_cases ec
+        JOIN applications a ON a.id = ec.application_id
+        WHERE {app_where}
+        """,
+        tuple(app_params),
+    ).fetchone()
+
+    total = int(aggregate_row["total"] or 0)
+    in_progress = int(aggregate_row["in_progress"] or 0)
+    approved_total = int(aggregate_row["approved_total"] or 0)
+    approved_this_month = int(aggregate_row["approved_this_month"] or 0)
+    rejected_declined = int(aggregate_row["rejected_declined_total"] or 0)
+    edd_routed_applications = int(aggregate_row["edd_routed_applications"] or 0)
+    edd_active_cases = int((edd_case_row["active_cases"] if edd_case_row else 0) or 0)
+    edd_pending_senior = int((edd_case_row["pending_senior_review_cases"] if edd_case_row else 0) or 0)
+    avg_processing = _format_dashboard_processing_metric(
+        aggregate_row["avg_processing_hours"],
+        aggregate_row["avg_processing_sample_size"],
+    )
+
+    return {
+        "total": total,
+        "early_stage_applications": in_progress,
+        "in_progress_applications": in_progress,
+        "approved": approved_total,
+        "approved_this_month": approved_this_month,
+        "rejected": rejected_declined,
+        "rejected_declined": rejected_declined,
+        "edd": edd_routed_applications,
+        "edd_in_progress_cases": edd_active_cases,
+        "recent": [dict(row) for row in recent],
+        "risk_low": risk_distribution["LOW"],
+        "risk_medium": risk_distribution["MEDIUM"],
+        "risk_high": risk_distribution["HIGH"],
+        "risk_very_high": risk_distribution["VERY_HIGH"],
+        "risk_unknown": risk_distribution["UNKNOWN"],
+        "risk_distribution": {
+            "LOW": risk_distribution["LOW"],
+            "MEDIUM": risk_distribution["MEDIUM"],
+            "HIGH": risk_distribution["HIGH"],
+            "VERY_HIGH": risk_distribution["VERY_HIGH"],
+            "UNKNOWN": risk_distribution["UNKNOWN"],
+            "total": total,
+        },
+        "lane_distribution": {
+            "fast_lane": lane_distribution["fast_lane"],
+            "standard_review": lane_distribution["standard_review"],
+            "enhanced_due_diligence": lane_distribution["enhanced_due_diligence"],
+            "unknown": lane_distribution["unknown"],
+            "total": total,
+        },
+        "metrics": {
+            "total_applications": {"value": total, "kind": "applications"},
+            "in_progress_applications": {"value": in_progress, "kind": "applications"},
+            "approved_this_month": {
+                "value": approved_this_month,
+                "kind": "applications",
+                "window": "month_to_date",
+                "timestamp_field": "decided_at",
+            },
+            "rejected_declined": {"value": rejected_declined, "kind": "applications"},
+            "edd_in_progress": {
+                "value": edd_active_cases,
+                "kind": "edd_cases",
+                "pending_senior_review": edd_pending_senior,
+            },
+            "avg_processing_time": avg_processing,
+        },
+        "pending_statuses": list(_REPORT_PENDING_STATUSES),
+        "edd_routed_statuses": list(_REPORT_EDD_ROUTED_STATUSES),
+        "canonical_view": "dashboard_metrics_v2",
     }
 
 
@@ -10582,117 +10831,12 @@ class DashboardHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import (
-            fixture_app_exclude_clause,
-            fixture_request_opt_in,
-            should_show_fixtures,
-        )
+        from fixture_filter import fixture_request_opt_in, should_show_fixtures
 
         db = get_db()
-        stats = {}
-
-        if user.get("type") == "client":
-            client_id = user["sub"]
-            client_fx_excl, client_fx_params = fixture_app_exclude_clause(table_alias="")
-            client_fx_clause = f" AND {client_fx_excl}"
-
-            def _client_params(*extra):
-                return tuple(extra) + (client_id, *client_fx_params)
-
-            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
-            stats["early_stage_applications"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}) AND client_id=?{client_fx_clause}",
-                _client_params(*_REPORT_PENDING_STATUSES),
-            ).fetchone()["c"]
-            stats["in_progress_applications"] = stats["early_stage_applications"]
-            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
-            stats["edd"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}) AND client_id=?{client_fx_clause}",
-                _client_params(*_REPORT_EDD_ROUTED_STATUSES),
-            ).fetchone()["c"]
-
-            # Risk distribution
-            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_unknown"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE client_id=? AND (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){client_fx_clause}",
-                _client_params()
-            ).fetchone()["c"]
-
-            # Recent applications
-            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
-            recent = db.execute("""
-                SELECT a.*, u.full_name as assigned_name FROM applications a
-                LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE a.client_id=? AND """ + recent_fx_excl + """
-                ORDER BY a.created_at DESC LIMIT 10
-            """, (client_id, *recent_fx_params)).fetchall()
-            stats["recent"] = [dict(r) for r in recent]
-            stats["show_fixtures"] = False
-            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
-            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
-            stats["canonical_view"] = "applications_report_v1"
-        else:
-            # Officer / admin branch: exclude fixtures by default.
-            # Pass show_fixtures=true (admin/sco only) to include them.
-            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
-            fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
-            fx_clause = "" if show_fx else f" AND {fx_excl}"
-            fp = [] if show_fx else fx_params
-
-            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE 1=1{fx_clause}", fp).fetchone()["c"]
-            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
-            pending_params = [*_REPORT_PENDING_STATUSES, *fp]
-            stats["early_stage_applications"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}){fx_clause}",
-                pending_params,
-            ).fetchone()["c"]
-            stats["in_progress_applications"] = stats["early_stage_applications"]
-            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review'{fx_clause}", fp).fetchone()["c"]
-            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'{fx_clause}", fp).fetchone()["c"]
-            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted'){fx_clause}", fp).fetchone()["c"]
-            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved'{fx_clause}", fp).fetchone()["c"]
-            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected'{fx_clause}", fp).fetchone()["c"]
-            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
-            edd_params = [*_REPORT_EDD_ROUTED_STATUSES, *fp]
-            stats["edd"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}){fx_clause}",
-                edd_params,
-            ).fetchone()["c"]
-
-            # Risk distribution
-            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_unknown"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){fx_clause}",
-                fp
-            ).fetchone()["c"]
-
-            # Recent applications
-            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
-            fx_where_clause = "" if show_fx else f" AND {recent_fx_excl}"
-            recent_fp = [] if show_fx else recent_fx_params
-            recent = db.execute(f"""
-                SELECT a.*, u.full_name as assigned_name FROM applications a
-                LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE 1=1{fx_where_clause}
-                ORDER BY a.created_at DESC LIMIT 10
-            """, recent_fp).fetchall()
-            stats["recent"] = [dict(r) for r in recent]
-            stats["show_fixtures"] = show_fx
-            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
-            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
-            stats["canonical_view"] = "applications_report_v1"
+        show_fx = False if user.get("type") == "client" else should_show_fixtures(user, fixture_request_opt_in(self))
+        stats = _canonical_dashboard_stats(db, user, show_fixtures=show_fx)
+        stats["show_fixtures"] = show_fx
 
         db.close()
         self.success(stats)
