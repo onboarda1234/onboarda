@@ -888,7 +888,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="stat-card-change" id="dash-stat-rejected-change"></div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-label">EDD In Progress</div>
+      <div class="stat-card-label">Active EDD Cases</div>
       <div class="stat-card-value" style="color:#7c3aed;" id="dash-stat-edd">0</div>
       <div class="stat-card-change" id="dash-stat-edd-change"></div>
     </div>
@@ -924,16 +924,20 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="card-header"><div class="card-title">Onboarding Lanes</div></div>
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review (Low Risk)</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Fast Lane</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
           <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-fast-bar" style="width:0%;height:100%;background:var(--green);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review (Medium)</span><span id="lane-standard-count" style="font-weight:700;color:var(--blue);">0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review</span><span id="lane-standard-count" style="font-weight:700;color:var(--blue);">0</span></div>
           <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-standard-bar" style="width:0%;height:100%;background:var(--blue);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Enhanced Due Diligence (High/Very High)</span><span id="lane-edd-count" style="font-weight:700;color:var(--amber);">0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Enhanced Due Diligence</span><span id="lane-edd-count" style="font-weight:700;color:var(--amber);">0</span></div>
           <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-edd-bar" style="width:0%;height:100%;background:var(--amber);border-radius:5px;transition:width 0.5s;"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Unset / Unknown</span><span id="lane-unknown-count" style="font-weight:700;color:#64748b;">0</span></div>
+          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-unknown-bar" style="width:0%;height:100%;background:#64748b;border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
       </div>
     </div>
@@ -3645,7 +3649,6 @@ function mapApplicationFromApi(a) {
       verification_status_label: d.verification_status_label,
       verification_status_tone: d.verification_status_tone,
       verification_success: d.verification_success === true,
-      verification_terminal: d.verification_terminal === true,
       verification_results: d.verification_results,
       verified_at: d.verified_at,
       person_id: d.person_id
@@ -3705,14 +3708,7 @@ async function loadFromAPI() {
       APPLICATIONS = appResp.applications.map(mapApplicationFromApi);
     }
 
-    // Load the backend-owned dashboard status contract. The UI uses this for
-    // local dashboard/KPI filtering so lifecycle bucket definitions do not drift.
-    try {
-      var dashboardResp = await boApiCall('GET', '/dashboard');
-      setDashboardStatusContract(dashboardResp);
-    } catch(e) {
-      console.warn('Could not load dashboard status contract:', e);
-    }
+    await refreshDashboardData();
 
     // EX-13: Mark data as freshly loaded and start auto-refresh
     _applicationsLastRefreshed = Date.now();
@@ -3937,6 +3933,17 @@ async function loadFromAPI() {
   }
 }
 
+async function refreshDashboardData() {
+  try {
+    var dashboardResp = await boApiCall('GET', '/dashboard');
+    setDashboardData(dashboardResp);
+    return true;
+  } catch(e) {
+    console.warn('Could not load canonical dashboard metrics:', e);
+    return false;
+  }
+}
+
 function formatStatus(s) {
   var map = { draft:'Application Started', submitted:'Application Submitted', prescreening_submitted:'Pre-Screening in Progress',
               pricing_review:'Pricing Under Review', pricing_accepted:'Pricing Accepted',
@@ -3954,6 +3961,7 @@ function normalizeStatusKey(status) {
 }
 
 var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], eddRoutedStatuses: [], canonicalView: '' };
+var DASHBOARD_DATA = null;
 
 function normalizeStatusList(statuses) {
   if (!Array.isArray(statuses)) return [];
@@ -3971,6 +3979,39 @@ function setDashboardStatusContract(source) {
   if (pending.length) DASHBOARD_STATUS_CONTRACT.pendingStatuses = pending;
   if (eddRouted.length) DASHBOARD_STATUS_CONTRACT.eddRoutedStatuses = eddRouted;
   if (source && source.canonical_view) DASHBOARD_STATUS_CONTRACT.canonicalView = source.canonical_view;
+}
+
+function setDashboardData(source) {
+  DASHBOARD_DATA = source || null;
+  setDashboardStatusContract(source || {});
+}
+
+function getDashboardMetric(name) {
+  if (!DASHBOARD_DATA || !DASHBOARD_DATA.metrics) return null;
+  return DASHBOARD_DATA.metrics[name] || null;
+}
+
+function formatDashboardBucket(count, total) {
+  if (count === null || count === undefined || total === null || total === undefined) return '—';
+  if (!total) return String(count);
+  return count + ' (' + Math.round(count / total * 100) + '%)';
+}
+
+function setDashboardStatValue(id, value) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function setDashboardStatNote(id, value) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = value || '';
+}
+
+function getDashboardRecentApplications() {
+  if (DASHBOARD_DATA && Array.isArray(DASHBOARD_DATA.recent)) {
+    return DASHBOARD_DATA.recent.map(mapApplicationFromApi);
+  }
+  return APPLICATIONS.slice();
 }
 
 function getDashboardPendingStatuses() {
@@ -4047,11 +4088,6 @@ var _applicationsRefreshInterval = null; // setInterval handle
 var _applicationsRefreshMs = 30000;      // default; server config may slow this
 var _stalenessTickInterval = null;       // 1-second UI tick for freshness display
 var _STALE_THRESHOLD_S = 60;             // default; server config may slow this
-var _verificationDetailPollTimer = null;
-var _verificationDetailPollRef = '';
-var _verificationDetailPollStartedAt = 0;
-var _VERIFICATION_DETAIL_POLL_INTERVAL_MS = 5000;
-var _VERIFICATION_DETAIL_POLL_MAX_MS = 120000;
 
 function _updateFreshnessIndicator() {
   var textEl = document.getElementById('applications-freshness-text');
@@ -4090,6 +4126,8 @@ async function _autoRefreshApplications() {
     var res = await fetch(BO_API_BASE + '/applications?limit=5000', opts);
     // ETag match — data unchanged, just update timestamp
     if (res.status === 304) {
+      await refreshDashboardData();
+      renderDashboardRecent();
       _applicationsLastRefreshed = Date.now();
       _updateFreshnessIndicator();
       return;
@@ -4107,9 +4145,9 @@ async function _autoRefreshApplications() {
       APPLICATIONS = data.applications.map(mapApplicationFromApi);
       // Re-render list if currently visible (preserves filter state)
       if (isOnList) renderApplications();
-      // Update dashboard counts
-      renderDashboardRecent();
     }
+    await refreshDashboardData();
+    renderDashboardRecent();
     _applicationsLastRefreshed = Date.now();
     _updateFreshnessIndicator();
   } catch(e) {
@@ -4134,75 +4172,6 @@ function _stopApplicationsAutoRefresh() {
     clearInterval(_stalenessTickInterval);
     _stalenessTickInterval = null;
   }
-}
-
-function normalizeVerificationDetailState(doc) {
-  return String((doc && (doc.verification_state || doc.verification_status || doc.status)) || 'pending').toLowerCase();
-}
-
-function isVerificationDetailTerminal(doc) {
-  if (!doc) return true;
-  if (doc.verification_terminal === true) return true;
-  var state = normalizeVerificationDetailState(doc);
-  return state === 'verified' || state === 'flagged' || state === 'failed';
-}
-
-function appHasActiveVerificationDocuments(app) {
-  var docs = Array.isArray(app && app._documents) ? app._documents : [];
-  return docs.some(function(doc) { return !isVerificationDetailTerminal(doc); });
-}
-
-function stopBackofficeVerificationDetailPolling() {
-  if (_verificationDetailPollTimer) {
-    clearTimeout(_verificationDetailPollTimer);
-    _verificationDetailPollTimer = null;
-  }
-  _verificationDetailPollRef = '';
-  _verificationDetailPollStartedAt = 0;
-}
-
-function activeDetailTabName() {
-  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'activity'];
-  for (var i = 0; i < tabs.length; i++) {
-    var panel = document.getElementById('detail-tab-' + tabs[i]);
-    if (panel && panel.style.display !== 'none') return tabs[i];
-  }
-  return 'overview';
-}
-
-function startBackofficeVerificationDetailPolling(app) {
-  if (!app || !app.ref || !appHasActiveVerificationDocuments(app)) {
-    stopBackofficeVerificationDetailPolling();
-    return;
-  }
-  var ref = String(app.ref);
-  if (_verificationDetailPollTimer && _verificationDetailPollRef === ref) return;
-  stopBackofficeVerificationDetailPolling();
-  _verificationDetailPollRef = ref;
-  _verificationDetailPollStartedAt = Date.now();
-
-  async function pollDetailOnce() {
-    _verificationDetailPollTimer = null;
-    if (!currentApp || String(currentApp.ref) !== ref) {
-      stopBackofficeVerificationDetailPolling();
-      return;
-    }
-    if (Date.now() - _verificationDetailPollStartedAt >= _VERIFICATION_DETAIL_POLL_MAX_MS) {
-      stopBackofficeVerificationDetailPolling();
-      showToast('Verification is still pending for one or more documents. Refresh the application detail to check again.', 'warning');
-      return;
-    }
-    try {
-      await refreshCurrentAppDetail({ preserveDetailTab: true });
-    } catch (err) {
-      console.warn('Back-office verification detail refresh failed:', err);
-      if (!_verificationDetailPollTimer && _verificationDetailPollRef === ref) {
-        _verificationDetailPollTimer = setTimeout(pollDetailOnce, _VERIFICATION_DETAIL_POLL_INTERVAL_MS);
-      }
-    }
-  }
-
-  _verificationDetailPollTimer = setTimeout(pollDetailOnce, _VERIFICATION_DETAIL_POLL_INTERVAL_MS);
 }
 
 /* ── REMOVED: 9 hardcoded demo applications (TechPay Global, Africom Remittances, Nordic Payments,
@@ -4393,7 +4362,6 @@ function showView(name, navItem) {
   document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
   var view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
-  if (name !== 'app-detail') stopBackofficeVerificationDetailPolling();
 
   if (!navItem) {
     navItem = document.querySelector('.snav-item[data-view="' + name + '"]');
@@ -4578,7 +4546,7 @@ function statusBadge(status) {
 function renderDashboardRecent() {
   var tbody = document.getElementById('dashboard-recent-body');
   tbody.innerHTML = '';
-  APPLICATIONS.slice(0, 6).forEach(function(app) {
+  getDashboardRecentApplications().slice(0, 6).forEach(function(app) {
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
     tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
@@ -4591,51 +4559,60 @@ function renderDashboardRecent() {
 }
 
 function updateDashboardStats() {
-  var total = APPLICATIONS.length;
-  var earlyStage = hasDashboardStatusContract() ? APPLICATIONS.filter(isDashboardPendingApplication).length : null;
-  // Approved This Month: only count applications approved with a date in the current calendar month
-  var now = new Date();
-  var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
-  var approved = APPLICATIONS.filter(function(a) {
-    return (a.status||'').toLowerCase() === 'approved' && (a.date || '').substring(0, 7) === currentMonth;
-  }).length;
-  var rejected = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'rejected' || s === 'declined'; }).length;
-  var edd = EDD_CASES.filter(function(c) { return c.stage !== 'edd_approved' && c.stage !== 'edd_rejected'; }).length;
+  var totalMetric = getDashboardMetric('total_applications');
+  var inProgressMetric = getDashboardMetric('in_progress_applications');
+  var approvedMetric = getDashboardMetric('approved_this_month');
+  var rejectedMetric = getDashboardMetric('rejected_declined');
+  var eddMetric = getDashboardMetric('edd_in_progress');
+  var avgMetric = getDashboardMetric('avg_processing_time');
+  var total = totalMetric ? Number(totalMetric.value || 0) : null;
+  var riskDist = DASHBOARD_DATA && DASHBOARD_DATA.risk_distribution ? DASHBOARD_DATA.risk_distribution : null;
 
-  var el;
-  el = document.getElementById('dash-stat-total'); if (el) el.textContent = total;
-  el = document.getElementById('dash-stat-early-stage'); if (el) el.textContent = earlyStage === null ? '—' : earlyStage;
-  el = document.getElementById('dash-stat-approved'); if (el) el.textContent = approved;
-  el = document.getElementById('dash-stat-rejected'); if (el) el.textContent = rejected;
-  el = document.getElementById('dash-stat-edd'); if (el) el.textContent = edd;
+  setDashboardStatValue('dash-stat-total', totalMetric ? String(totalMetric.value) : '—');
+  setDashboardStatValue('dash-stat-early-stage', inProgressMetric ? String(inProgressMetric.value) : '—');
+  setDashboardStatValue('dash-stat-approved', approvedMetric ? String(approvedMetric.value) : '—');
+  setDashboardStatValue('dash-stat-rejected', rejectedMetric ? String(rejectedMetric.value) : '—');
+  setDashboardStatValue('dash-stat-edd', eddMetric ? String(eddMetric.value) : '—');
+  setDashboardStatValue('dash-stat-avgtime', avgMetric ? String(avgMetric.display || '—') : '—');
+  setDashboardStatNote('dash-stat-total-change', totalMetric ? 'Non-fixture applications' : 'Canonical dashboard metrics unavailable');
+  setDashboardStatNote('dash-stat-early-stage-change', inProgressMetric ? 'Canonical pending status bucket' : 'Canonical dashboard metrics unavailable');
+  setDashboardStatNote('dash-stat-approved-change', approvedMetric ? 'Approved by decided date this month' : 'Canonical dashboard metrics unavailable');
+  setDashboardStatNote('dash-stat-rejected-change', rejectedMetric ? 'Terminal rejected / declined applications' : 'Canonical dashboard metrics unavailable');
+  setDashboardStatNote('dash-stat-edd-change', eddMetric ? 'Active EDD case count' : 'Canonical dashboard metrics unavailable');
+  if (avgMetric && avgMetric.available) {
+    setDashboardStatNote('dash-stat-avgtime-change', (avgMetric.sample_size || 0) + ' decided applications');
+  } else if (avgMetric) {
+    setDashboardStatNote('dash-stat-avgtime-change', 'Awaiting complete decision timestamps');
+  } else {
+    setDashboardStatNote('dash-stat-avgtime-change', 'Canonical dashboard metrics unavailable');
+  }
   updateDashboardMonitoringStats();
 
   // Risk distribution donut
-  var low = 0, med = 0, high = 0, vhigh = 0, unknown = 0;
-  APPLICATIONS.forEach(function(a) {
-    var r = normalizeRiskLevel(a.risk);
-    if (r === 'LOW') low++;
-    else if (r === 'MEDIUM') med++;
-    else if (r === 'HIGH') high++;
-    else if (r === 'VERY_HIGH' || r === 'VERY HIGH') vhigh++;
-    else unknown++;
-  });
-  var t = Math.max(total, 1);
-  var pLow = Math.round(low / t * 100), pMed = Math.round(med / t * 100), pHigh = Math.round(high / t * 100), pVHigh = Math.round(vhigh / t * 100), pUnknown = Math.round(unknown / t * 100);
-  el = document.getElementById('dash-donut');
+  var low = riskDist ? Number(riskDist.LOW || 0) : null;
+  var med = riskDist ? Number(riskDist.MEDIUM || 0) : null;
+  var high = riskDist ? Number(riskDist.HIGH || 0) : null;
+  var vhigh = riskDist ? Number(riskDist.VERY_HIGH || 0) : null;
+  var unknown = riskDist ? Number(riskDist.UNKNOWN || 0) : null;
+  var t = riskDist ? Math.max(Number(riskDist.total || 0), 1) : 1;
+  var pLow = low === null ? 0 : Math.round(low / t * 100);
+  var pMed = med === null ? 0 : Math.round(med / t * 100);
+  var pHigh = high === null ? 0 : Math.round(high / t * 100);
+  var pVHigh = vhigh === null ? 0 : Math.round(vhigh / t * 100);
+  var el = document.getElementById('dash-donut');
   if (el) {
-    if (total === 0) {
+    if (!riskDist || !total) {
       el.style.background = 'conic-gradient(var(--surface3) 0% 100%)';
     } else {
       el.style.background = 'conic-gradient(var(--green) 0% ' + pLow + '%, var(--blue) ' + pLow + '% ' + (pLow+pMed) + '%, var(--amber) ' + (pLow+pMed) + '% ' + (pLow+pMed+pHigh) + '%, var(--red) ' + (pLow+pMed+pHigh) + '% ' + (pLow+pMed+pHigh+pVHigh) + '%, #64748b ' + (pLow+pMed+pHigh+pVHigh) + '% 100%)';
     }
   }
-  el = document.getElementById('dash-donut-total'); if (el) el.textContent = total;
-  el = document.getElementById('dash-risk-low'); if (el) el.textContent = low + (total > 0 ? ' (' + pLow + '%)' : '');
-  el = document.getElementById('dash-risk-med'); if (el) el.textContent = med + (total > 0 ? ' (' + pMed + '%)' : '');
-  el = document.getElementById('dash-risk-high'); if (el) el.textContent = high + (total > 0 ? ' (' + pHigh + '%)' : '');
-  el = document.getElementById('dash-risk-vhigh'); if (el) el.textContent = vhigh + (total > 0 ? ' (' + pVHigh + '%)' : '');
-  el = document.getElementById('dash-risk-unknown'); if (el) el.textContent = unknown + (total > 0 ? ' (' + pUnknown + '%)' : '');
+  setDashboardStatValue('dash-donut-total', totalMetric ? String(totalMetric.value) : '—');
+  setDashboardStatValue('dash-risk-low', formatDashboardBucket(low, total));
+  setDashboardStatValue('dash-risk-med', formatDashboardBucket(med, total));
+  setDashboardStatValue('dash-risk-high', formatDashboardBucket(high, total));
+  setDashboardStatValue('dash-risk-vhigh', formatDashboardBucket(vhigh, total));
+  setDashboardStatValue('dash-risk-unknown', formatDashboardBucket(unknown, total));
 }
 
 function updateDashboardMonitoringStats() {
@@ -5248,22 +5225,21 @@ function exportReportsCSV() {
 }
 
 function updateOnboardingLanes() {
-  var fast = 0, standard = 0, edd = 0;
-  APPLICATIONS.forEach(function(app) {
-    var risk = (app.risk || '').toUpperCase();
-    if (risk === 'LOW') fast++;
-    else if (risk === 'MEDIUM') standard++;
-    else if (risk === 'HIGH' || risk === 'VERY_HIGH' || risk === 'VERY HIGH') edd++;
-    else standard++; // default to standard if unknown
-  });
-  var total = Math.max(fast + standard + edd, 1);
+  var laneDist = DASHBOARD_DATA && DASHBOARD_DATA.lane_distribution ? DASHBOARD_DATA.lane_distribution : null;
+  var fast = laneDist ? Number(laneDist.fast_lane || 0) : null;
+  var standard = laneDist ? Number(laneDist.standard_review || 0) : null;
+  var edd = laneDist ? Number(laneDist.enhanced_due_diligence || 0) : null;
+  var unknown = laneDist ? Number(laneDist.unknown || 0) : null;
+  var total = laneDist ? Math.max(Number(laneDist.total || 0), 1) : 1;
   var el;
-  el = document.getElementById('lane-fast-count'); if (el) el.textContent = fast;
-  el = document.getElementById('lane-fast-bar'); if (el) el.style.width = Math.round(fast / total * 100) + '%';
-  el = document.getElementById('lane-standard-count'); if (el) el.textContent = standard;
-  el = document.getElementById('lane-standard-bar'); if (el) el.style.width = Math.round(standard / total * 100) + '%';
-  el = document.getElementById('lane-edd-count'); if (el) el.textContent = edd;
-  el = document.getElementById('lane-edd-bar'); if (el) el.style.width = Math.round(edd / total * 100) + '%';
+  el = document.getElementById('lane-fast-count'); if (el) el.textContent = fast === null ? '—' : fast;
+  el = document.getElementById('lane-fast-bar'); if (el) el.style.width = fast === null ? '0%' : Math.round(fast / total * 100) + '%';
+  el = document.getElementById('lane-standard-count'); if (el) el.textContent = standard === null ? '—' : standard;
+  el = document.getElementById('lane-standard-bar'); if (el) el.style.width = standard === null ? '0%' : Math.round(standard / total * 100) + '%';
+  el = document.getElementById('lane-edd-count'); if (el) el.textContent = edd === null ? '—' : edd;
+  el = document.getElementById('lane-edd-bar'); if (el) el.style.width = edd === null ? '0%' : Math.round(edd / total * 100) + '%';
+  el = document.getElementById('lane-unknown-count'); if (el) el.textContent = unknown === null ? '—' : unknown;
+  el = document.getElementById('lane-unknown-bar'); if (el) el.style.width = unknown === null ? '0%' : Math.round(unknown / total * 100) + '%';
 }
 
 function getEnhancedReviewSummary(app) {
@@ -5954,7 +5930,6 @@ async function fetchApplicationDetail(ref) {
       verification_status_label: doc.verification_status_label || '',
       verification_status_tone: doc.verification_status_tone || 'pending',
       verification_success: doc.verification_success === true,
-      verification_terminal: doc.verification_terminal === true,
       verification_results: doc.verification_results || {},
       verified_at: doc.verified_at || '',
       uploaded_at: doc.uploaded_at || '',
@@ -6427,7 +6402,6 @@ function renderAuthoritativeAppDetail(app, options) {
   // for this application. Soft-fails if endpoint is unavailable.
   window._detailLifecycleTabCache = null;
   try { loadLifecycleApplicationSummary(app.id); } catch (e) { console.warn('Lifecycle summary call failed:', e); }
-  startBackofficeVerificationDetailPolling(app);
 }
 
 async function openAppDetail(ref, options) {
@@ -13074,16 +13048,14 @@ function collectRMIItems() {
   });
 }
 
-async function refreshCurrentAppDetail(options) {
-  options = options || {};
-  var initialTab = options.initialTab || (options.preserveDetailTab ? activeDetailTabName() : 'overview');
+async function refreshCurrentAppDetail() {
   await loadFromAPI();
   populateOfficerDropdowns();
   renderDashboardRecent();
   var refreshed = APPLICATIONS.find(function(a) { return currentApp && a.ref === currentApp.ref; });
   if (refreshed) {
     currentApp = refreshed;
-    await openAppDetail(refreshed.ref, { initialTab: initialTab });
+    openAppDetail(refreshed.ref);
   }
 }
 
@@ -15808,7 +15780,6 @@ async function signOut() {
 
   // EX-13: Stop auto-refresh on logout
   _stopApplicationsAutoRefresh();
-  stopBackofficeVerificationDetailPolling();
 
   // ── EX-12: Clear auth/session keys from browser storage on logout ──
   try {
