@@ -155,7 +155,51 @@ class TestFrontendResumeSubmitFlow(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 4. Integration — Duplicate check behaviour with database
+# 4. Frontend — Draft save/resume semantics
+# ═══════════════════════════════════════════════════════════════
+
+class TestFrontendDraftSaveResumeSemantics(unittest.TestCase):
+    """The portal must gate non-meaningful saves and resume from the authoritative draft feed."""
+
+    def setUp(self):
+        self.html = _read_portal()
+
+    def test_portal_defines_meaningful_draft_guard(self):
+        assert "function isDraftPayloadMeaningful(payload)" in self.html, \
+            "Portal must define a semantic draft guard before save/autosave"
+
+    def test_manual_save_checks_meaningful_payload_before_post(self):
+        assert re.search(
+            r"async function saveDraft\(\).*?var payload = buildSaveResumePayload\(\);\s*if\s*\(!isDraftPayloadMeaningful\(payload\.form_data\)\)",
+            self.html,
+            re.S,
+        ), "Manual save must gate non-meaningful payloads before POST /save-resume"
+
+    def test_autosave_checks_meaningful_payload_before_post(self):
+        assert re.search(
+            r"function startAutoSave\(\).*?var payload = buildSaveResumePayload\(\);\s*if\s*\(!isDraftPayloadMeaningful\(payload\.form_data\)\)",
+            self.html,
+            re.S,
+        ), "Autosave must gate non-meaningful payloads before POST /save-resume"
+
+    def test_dashboard_loads_authoritative_active_drafts_feed(self):
+        assert re.search(
+            r"apiCall\s*\(\s*'GET'\s*,\s*'/save-resume/active'\s*\)",
+            self.html,
+        ), "Dashboard must load the authoritative active-drafts feed"
+        assert "renderResumeCTA(apps, activeDrafts);" in self.html, \
+            "Resume CTA must use the active-drafts feed"
+
+    def test_resume_cta_prefers_last_saved_at(self):
+        assert re.search(
+            r"function renderResumeCTA\(apps,\s*activeDrafts\).*?last_saved_at",
+            self.html,
+            re.S,
+        ), "Resume CTA must prioritize the active draft by last_saved_at"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 5. Integration — Duplicate check behaviour with database
 # ═══════════════════════════════════════════════════════════════
 
 class TestDuplicateCheckIntegration(unittest.TestCase):

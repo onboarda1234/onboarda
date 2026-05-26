@@ -20,6 +20,7 @@ import inspect
 import os
 import socket
 import sqlite3
+import ast
 import tempfile
 import threading
 import time
@@ -137,6 +138,73 @@ def _meaningful_form_data(seed="Acme"):
             {"first_name": "Jane", "last_name": "Doe", "nationality": "Mauritius"}
         ],
     }
+
+
+def _placeholder_only_form_data():
+    return {
+        "prescreening": {},
+        "directors": [
+            {
+                "first_name": "",
+                "last_name": "",
+                "nationality": "",
+                "date_of_birth": "",
+                "is_pep": "No",
+                "person_key": "dir_1",
+                "pep_declaration": {
+                    "person_key": "dir_1",
+                    "person_type": "director",
+                    "is_pep": False,
+                },
+            }
+        ],
+        "ubos": [
+            {
+                "first_name": "",
+                "last_name": "",
+                "nationality": "",
+                "date_of_birth": "",
+                "ownership_pct": "",
+                "is_pep": "No",
+                "person_key": "ubo_1",
+                "pep_declaration": {
+                    "person_key": "ubo_1",
+                    "person_type": "ubo",
+                    "is_pep": False,
+                },
+            }
+        ],
+        "intermediaries": [
+            {
+                "entity_name": "",
+                "jurisdiction": "",
+                "ownership_pct": "",
+                "person_key": "int_1",
+            }
+        ],
+    }
+
+
+def _load_draft_meaningful_helpers():
+    server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
+    with open(server_path, encoding="utf-8") as f:
+        source = f.read()
+    tree = ast.parse(source, filename=server_path)
+    wanted = {
+        "_draft_value_is_meaningful",
+        "_draft_party_row_is_meaningful",
+        "_draft_uploaded_doc_is_meaningful",
+        "_draft_payload_is_meaningful",
+    }
+    body = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    module = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {}
+    exec(compile(module, server_path, "exec"), namespace)
+    return namespace
 
 
 def _insert_verified_base_docs(db, app_id, tmp_path):
@@ -742,6 +810,18 @@ def test_empty_draft_payload_is_rejected(api_server):
     assert rows == [], "Empty draft must not create a client_sessions row"
 
 
+def test_placeholder_only_party_rows_are_not_meaningful():
+    helpers = _load_draft_meaningful_helpers()
+    assert helpers["_draft_payload_is_meaningful"](_placeholder_only_form_data()) is False
+
+
+def test_party_rows_with_real_values_remain_meaningful():
+    helpers = _load_draft_meaningful_helpers()
+    payload = _placeholder_only_form_data()
+    payload["directors"][0]["first_name"] = "Jane"
+    assert helpers["_draft_payload_is_meaningful"](payload) is True
+
+
 def test_kyc_submit_clears_active_draft(api_server, tmp_path):
     from db import get_db
 
@@ -1044,8 +1124,11 @@ def test_portal_new_application_has_duplicate_draft_guard():
 
 def test_portal_resume_cta_prefers_active_pre_submit_draft():
     src = _portal_html()
-    assert "var drafts = inProgress.filter(function(a) { return (a.status || '') === 'draft'; });" in src
-    assert "var app = drafts.length ? drafts[0] : inProgress[0];" in src
+    assert "function renderResumeCTA(apps, activeDrafts) {" in src
+    assert "var authoritativeDrafts = (activeDrafts || []).slice().sort(function(a, b) {" in src
+    assert "return _asTime(b.last_saved_at || b.updated_at || b.created_at) - _asTime(a.last_saved_at || a.updated_at || a.created_at);" in src
+    assert "app = inProgress.find(function(item) {" in src
+    assert "app = drafts.length ? drafts[0] : inProgress[0];" in src
 
 
 def test_portal_restore_normalizes_key_dropdowns_and_nationality():

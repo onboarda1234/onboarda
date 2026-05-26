@@ -5250,6 +5250,13 @@ async function loadMyApplications() {
   try {
     var resp = await apiCall('GET', '/applications');
     var apps = resp.applications || [];
+    var activeDrafts = [];
+    try {
+      var draftResp = await apiCall('GET', '/save-resume/active');
+      activeDrafts = Array.isArray(draftResp && draftResp.drafts) ? draftResp.drafts : [];
+    } catch (draftErr) {
+      console.warn('Failed to load active drafts:', draftErr);
+    }
 
     // Update stats
     var total = apps.length;
@@ -5300,7 +5307,7 @@ async function loadMyApplications() {
 
     // Update sidebar, resume CTA, and recent activity from API data
     renderSidebarApps(apps);
-    renderResumeCTA(apps);
+    renderResumeCTA(apps, activeDrafts);
     renderRecentActivity(apps);
   } catch(e) {
     console.error('Failed to load applications:', e);
@@ -7641,6 +7648,112 @@ function collectFormData() {
   return data;
 }
 
+function isDraftValueMeaningful(value) {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.some(isDraftValueMeaningful);
+  if (typeof value === 'object') {
+    return Object.keys(value).some(function(key) {
+      return isDraftValueMeaningful(value[key]);
+    });
+  }
+  if (typeof value === 'boolean') return value === true;
+  if (typeof value === 'number') return value !== 0;
+  return true;
+}
+
+function isDraftPartyRowMeaningful(row) {
+  if (!row || typeof row !== 'object') return isDraftValueMeaningful(row);
+  var interestingKeys = [
+    'first_name',
+    'last_name',
+    'nationality',
+    'date_of_birth',
+    'ownership_pct',
+    'entity_name',
+    'jurisdiction'
+  ];
+  if (interestingKeys.some(function(key) { return isDraftValueMeaningful(row[key]); })) {
+    return true;
+  }
+  if (String(row.is_pep || '').trim().toLowerCase() === 'yes') {
+    return true;
+  }
+  var pepDeclaration = row.pep_declaration;
+  if (pepDeclaration && typeof pepDeclaration === 'object' && !Array.isArray(pepDeclaration)) {
+    return Object.keys(pepDeclaration).some(function(key) {
+      if (key === 'person_key' || key === 'person_type' || key === 'is_pep') return false;
+      return isDraftValueMeaningful(pepDeclaration[key]);
+    });
+  }
+  return isDraftValueMeaningful(pepDeclaration);
+}
+
+function isUploadedDraftValueMeaningful(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.keys(value).some(function(key) {
+      if (key === 'id' || key === 'slot_id' || key === 'slot_key') return false;
+      return isDraftValueMeaningful(value[key]);
+    });
+  }
+  return isDraftValueMeaningful(value);
+}
+
+function isDraftPayloadMeaningful(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  var listPredicates = {
+    directors: isDraftPartyRowMeaningful,
+    ubos: isDraftPartyRowMeaningful,
+    intermediaries: isDraftPartyRowMeaningful,
+    intermediary_shareholders: isDraftPartyRowMeaningful,
+    uploadedDocs: isUploadedDraftValueMeaningful
+  };
+  if (Object.keys(listPredicates).some(function(key) {
+    return Array.isArray(payload[key]) && payload[key].some(listPredicates[key]);
+  })) {
+    return true;
+  }
+  var interestingKeys = [
+    'prescreening',
+    'prescreening_data',
+    'servicesRequired',
+    'accountPurposes',
+    'currencies',
+    'countriesOfOperation',
+    'targetMarkets',
+    'kycPersons',
+    'company_name',
+    'entity_name',
+    'registered_entity_name',
+    'country',
+    'sector',
+    'entity_type',
+    'ownership_structure',
+    'brn'
+  ];
+  return interestingKeys.some(function(key) {
+    return isDraftValueMeaningful(payload[key]);
+  });
+}
+
+function handleSkippedDraftSave(isManual) {
+  var hasExistingDraft = !!currentApplicationId;
+  if (!hasExistingDraft) _draftDirty = false;
+  _setSaveStatus(
+    hasExistingDraft ? 'No meaningful changes to save' : 'Add application details before saving',
+    'var(--text3)'
+  );
+  if (isManual) {
+    showToast(
+      'info',
+      'Nothing Saved',
+      hasExistingDraft
+        ? 'There are no meaningful draft changes to save yet.'
+        : 'Add meaningful application details before saving your draft.'
+    );
+  }
+}
+
 function buildSaveResumePayload() {
   var payload = {
     form_data: collectFormData(),
@@ -7753,6 +7866,10 @@ async function saveDraft() {
   _setSaveStatus('Saving…', 'var(--text3)');
   try {
     var payload = buildSaveResumePayload();
+    if (!isDraftPayloadMeaningful(payload.form_data)) {
+      handleSkippedDraftSave(true);
+      return;
+    }
     var resp = await apiCall('POST', '/save-resume', payload);
     if (resp && resp.application_id) currentApplicationId = resp.application_id;
     if (resp && resp.application_ref) appRef = resp.application_ref;
@@ -8014,6 +8131,10 @@ function startAutoSave() {
     _autoSaveInFlight = true;
     try {
       var payload = buildSaveResumePayload();
+      if (!isDraftPayloadMeaningful(payload.form_data)) {
+        handleSkippedDraftSave(false);
+        return;
+      }
       var resp = await apiCall('POST', '/save-resume', payload);
       if (resp && resp.application_id) currentApplicationId = resp.application_id;
       if (resp && resp.application_ref) appRef = resp.application_ref;
@@ -10632,7 +10753,7 @@ function renderSidebarApps(apps) {
   container.innerHTML = html;
 }
 
-function renderResumeCTA(apps) {
+function renderResumeCTA(apps, activeDrafts) {
   var cta = document.getElementById('resume-cta');
   if (!cta) return;
   var inProgress = (apps || []).filter(function(a) { return a.status !== 'approved' && a.status !== 'rejected'; });
@@ -10647,8 +10768,19 @@ function renderResumeCTA(apps) {
   }
   drafts.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
   inProgress.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
-  var app = drafts.length ? drafts[0] : inProgress[0];
-  var ref = app.ref || app.id || '';
+  var authoritativeDrafts = (activeDrafts || []).slice().sort(function(a, b) {
+    return _asTime(b.last_saved_at || b.updated_at || b.created_at) - _asTime(a.last_saved_at || a.updated_at || a.created_at);
+  });
+  var app = null;
+  if (authoritativeDrafts.length) {
+    var draftRef = authoritativeDrafts[0].ref || authoritativeDrafts[0].application_id || '';
+    app = inProgress.find(function(item) {
+      return (item.ref || item.id || '') === draftRef;
+    }) || authoritativeDrafts[0];
+  } else {
+    app = drafts.length ? drafts[0] : inProgress[0];
+  }
+  var ref = app.ref || app.id || app.application_id || '';
   var stage = app.status || 'pending';
   var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
   var stageJs = JSON.stringify(stage).replace(/"/g, '&quot;');
@@ -10658,7 +10790,7 @@ function renderResumeCTA(apps) {
   var refEl = document.getElementById('resume-cta-ref');
   if (desc) desc.textContent = (app.company_name || 'Your application') + ' · Awaiting action';
   if (refEl) refEl.textContent = 'Ref: ' + ref;
-  cta.setAttribute('data-app-id', app.id || '');
+  cta.setAttribute('data-app-id', app.id || app.application_id || '');
   cta.setAttribute('data-app-ref', ref);
   cta.setAttribute('data-app-name', app.company_name || ref);
 
@@ -10670,7 +10802,7 @@ function renderResumeCTA(apps) {
   if (discardBtn) {
     if (app.status === 'draft') {
       discardBtn.style.display = 'inline-flex';
-      discardBtn.setAttribute('data-app-id', app.id || '');
+      discardBtn.setAttribute('data-app-id', app.id || app.application_id || '');
       discardBtn.setAttribute('data-app-ref', ref);
       discardBtn.setAttribute('data-app-name', app.company_name || ref);
     } else {
