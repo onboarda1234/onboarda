@@ -7682,7 +7682,15 @@ function isDraftPartyRowMeaningful(row) {
   var pepDeclaration = row.pep_declaration;
   if (pepDeclaration && typeof pepDeclaration === 'object' && !Array.isArray(pepDeclaration)) {
     return Object.keys(pepDeclaration).some(function(key) {
-      if (key === 'person_key' || key === 'person_type' || key === 'is_pep') return false;
+      if (
+        key === 'person_key' ||
+        key === 'person_type' ||
+        key === 'is_pep' ||
+        key === 'declared_pep' ||
+        key === 'client_declared_pep' ||
+        key === 'pep_status' ||
+        key === 'pep_schema_version'
+      ) return false;
       return isDraftValueMeaningful(pepDeclaration[key]);
     });
   }
@@ -7697,6 +7705,16 @@ function isUploadedDraftValueMeaningful(value) {
     });
   }
   return isDraftValueMeaningful(value);
+}
+
+function isDraftPrescreeningMeaningful(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return isDraftValueMeaningful(value);
+  }
+  return Object.keys(value).some(function(key) {
+    if (key === 'f-phone-code' || key === 'phone_code') return false;
+    return isDraftValueMeaningful(value[key]);
+  });
 }
 
 function isDraftPayloadMeaningful(payload) {
@@ -7714,8 +7732,6 @@ function isDraftPayloadMeaningful(payload) {
     return true;
   }
   var interestingKeys = [
-    'prescreening',
-    'prescreening_data',
     'servicesRequired',
     'accountPurposes',
     'currencies',
@@ -7731,6 +7747,8 @@ function isDraftPayloadMeaningful(payload) {
     'ownership_structure',
     'brn'
   ];
+  if (isDraftPrescreeningMeaningful(payload.prescreening)) return true;
+  if (isDraftPrescreeningMeaningful(payload.prescreening_data)) return true;
   return interestingKeys.some(function(key) {
     return isDraftValueMeaningful(payload[key]);
   });

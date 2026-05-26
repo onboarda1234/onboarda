@@ -142,7 +142,9 @@ def _meaningful_form_data(seed="Acme"):
 
 def _placeholder_only_form_data():
     return {
-        "prescreening": {},
+        "prescreening": {
+            "f-phone-code": "+230",
+        },
         "directors": [
             {
                 "first_name": "",
@@ -155,6 +157,10 @@ def _placeholder_only_form_data():
                     "person_key": "dir_1",
                     "person_type": "director",
                     "is_pep": False,
+                    "declared_pep": False,
+                    "client_declared_pep": False,
+                    "pep_status": "declared_no",
+                    "pep_schema_version": "portal_pep_v2",
                 },
             }
         ],
@@ -171,6 +177,10 @@ def _placeholder_only_form_data():
                     "person_key": "ubo_1",
                     "person_type": "ubo",
                     "is_pep": False,
+                    "declared_pep": False,
+                    "client_declared_pep": False,
+                    "pep_status": "declared_no",
+                    "pep_schema_version": "portal_pep_v2",
                 },
             }
         ],
@@ -194,6 +204,7 @@ def _load_draft_meaningful_helpers():
         "_draft_value_is_meaningful",
         "_draft_party_row_is_meaningful",
         "_draft_uploaded_doc_is_meaningful",
+        "_draft_prescreening_is_meaningful",
         "_draft_payload_is_meaningful",
     }
     body = [
@@ -813,6 +824,12 @@ def test_empty_draft_payload_is_rejected(api_server):
 def test_placeholder_only_party_rows_are_not_meaningful():
     helpers = _load_draft_meaningful_helpers()
     assert helpers["_draft_payload_is_meaningful"](_placeholder_only_form_data()) is False
+
+
+def test_phone_code_only_prescreening_is_not_meaningful():
+    helpers = _load_draft_meaningful_helpers()
+    payload = {"prescreening": {"f-phone-code": "+230"}}
+    assert helpers["_draft_payload_is_meaningful"](payload) is False
 
 
 def test_party_rows_with_real_values_remain_meaningful():
