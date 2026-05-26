@@ -114,16 +114,6 @@ from verification_state import (
     normalize_verification_state,
     verification_state_payload,
 )
-from verification_failure_taxonomy import (
-    FAILURE_REVIEW_REQUIRED_BUSINESS,
-    build_provider_failure_result,
-    format_verification_failure_log_line,
-    provider_failure_from_result,
-)
-from verification_jobs import (
-    enqueue_verification_job,
-    verification_status_for_document,
-)
 from screening_freshness_metadata import populate_screening_freshness_metadata
 
 # ── Sprint 2: Extracted modules ──────────────────────────
@@ -1277,15 +1267,7 @@ def _draft_party_row_is_meaningful(row) -> bool:
     pep_declaration = row.get("pep_declaration")
     if isinstance(pep_declaration, dict):
         for key, value in pep_declaration.items():
-            if key in (
-                "person_key",
-                "person_type",
-                "is_pep",
-                "declared_pep",
-                "client_declared_pep",
-                "pep_status",
-                "pep_schema_version",
-            ):
+            if key in ("person_key", "person_type", "is_pep"):
                 continue
             if _draft_value_is_meaningful(value):
                 return True
@@ -1304,17 +1286,6 @@ def _draft_uploaded_doc_is_meaningful(value) -> bool:
     return _draft_value_is_meaningful(value)
 
 
-def _draft_prescreening_is_meaningful(value) -> bool:
-    if not isinstance(value, dict):
-        return _draft_value_is_meaningful(value)
-    for key, nested in value.items():
-        if key in ("f-phone-code", "phone_code"):
-            continue
-        if _draft_value_is_meaningful(nested):
-            return True
-    return False
-
-
 def _draft_payload_is_meaningful(payload) -> bool:
     """Reject completely empty drafts (no form fields, no party rows)."""
     if not isinstance(payload, dict) or not payload:
@@ -1331,11 +1302,9 @@ def _draft_payload_is_meaningful(payload) -> bool:
         value = payload.get(key)
         if isinstance(value, (list, tuple, set)) and any(predicate(item) for item in value):
             return True
-    if _draft_prescreening_is_meaningful(payload.get("prescreening")):
-        return True
-    if _draft_prescreening_is_meaningful(payload.get("prescreening_data")):
-        return True
     interesting_keys = (
+        "prescreening",
+        "prescreening_data",
         "servicesRequired",
         "accountPurposes",
         "currencies",
@@ -6263,8 +6232,6 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return self.error(f"File rejected: {upload_error}", 400)
 
-        file_sha256 = _document_file_sha256(body)
-
         # Save file locally (as cache; S3 is the durable store in production)
         doc_id = uuid.uuid4().hex[:16]
         ext = os.path.splitext(filename)[1]
@@ -6380,12 +6347,12 @@ class DocumentUploadHandler(BaseHandler):
             db.execute("""
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
-                 file_size, mime_type, file_sha256, slot_key, is_current, version, verification_status,
+                 file_size, mime_type, slot_key, is_current, version, verification_status,
                  verification_results)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
-                len(body), content_type, file_sha256, replacement["slot_key"], True, replacement["version"],
+                len(body), content_type, replacement["slot_key"], True, replacement["version"],
                 STATE_PENDING, "{}",
             ))
             _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
@@ -6650,8 +6617,7 @@ def _document_verification_transition_state(doc, status=None, **extra):
 
 
 def _log_document_verification_transition(handler, db, user, app, doc, before_state,
-                                          after_state, *, actor_type, trigger,
-                                          audit_detail_extra=None):
+                                          after_state, *, actor_type, trigger):
     detail = {
         "event": "document_verification_state_transition",
         "actor_type": actor_type,
@@ -6662,8 +6628,6 @@ def _log_document_verification_transition(handler, db, user, app, doc, before_st
         "from": before_state.get("verification_status"),
         "to": after_state.get("verification_status"),
     }
-    if audit_detail_extra:
-        detail.update(audit_detail_extra)
     handler.log_audit(
         user,
         "Document Verification State Changed",
@@ -6732,21 +6696,6 @@ def _mark_document_verification_failed(handler, doc_id, user, error_message):
             pass
 
 
-def _execution_timing_ms(started: float) -> int:
-    return int(round((time.perf_counter() - started) * 1000))
-
-
-def _format_execution_timing_log_fields(timing):
-    if not isinstance(timing, dict):
-        return ""
-    fields = []
-    for key in sorted(timing):
-        value = timing.get(key)
-        if isinstance(value, int):
-            fields.append(f"{key}={value}")
-    return " ".join(fields)
-
-
 class DocumentVerifyHandler(BaseHandler):
     """POST /api/documents/:id/verify — trigger AI verification"""
     def post(self, doc_id):
@@ -6774,28 +6723,12 @@ class DocumentVerifyHandler(BaseHandler):
             except Exception:
                 pass
 
-    def _post_with_db(
-        self,
-        doc_id,
-        user,
-        db,
-        *,
-        force_sync: bool = False,
-        audit_actor_type: str = "user",
-        started_trigger: str = "verify_request_started",
-        completed_trigger: str = "verify_request_completed",
-        audit_detail_extra=None,
-        close_db: bool = True,
-    ):
-        execution_started = time.perf_counter()
-        execution_timing = {}
-        load_started = time.perf_counter()
+    def _post_with_db(self, doc_id, user, db):
 
         # P0-3: Check if Agent 1 (document verification) is enabled before executing
         agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
         if agent1 and not agent1["enabled"]:
-            if close_db:
-                db.close()
+            db.close()
             self.log_audit(user, "Agent Skipped", "Agent 1", "Document verification skipped — agent disabled")
             self.success({
                 "status": "skipped",
@@ -6807,44 +6740,16 @@ class DocumentVerifyHandler(BaseHandler):
 
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
-            if close_db:
-                db.close()
+            db.close()
             return self.error("Document not found", 404)
 
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
         if not app:
-            if close_db:
-                db.close()
+            db.close()
             return self.error("Application not found for document", 404)
-        execution_timing["load_doc_app_ms"] = _execution_timing_ms(load_started)
-
-        if flags.is_enabled("FF_ASYNC_VERIFY") and not force_sync:
-            job_result = enqueue_verification_job(
-                db,
-                doc,
-                app,
-                user,
-                request_id=self.request.headers.get("X-Request-ID", ""),
-                ip_address=self.get_client_ip(),
-            )
-            db.commit()
-            payload = verification_status_for_document(db, doc_id) or {
-                "doc_id": doc_id,
-                "verification_status": normalize_verification_state(doc.get("verification_status")),
-                **verification_state_payload(doc.get("verification_status")),
-                "verification_job": job_result["job"],
-            }
-            payload.update({
-                "status": "queued",
-                "async_verification": True,
-                "job_created": job_result["created"],
-                "verification_job": job_result["job"],
-            })
-            return self.success(payload, 202)
 
         # PR5: Synchronous verification has an explicit, auditable in-progress state.
-        transition_started = time.perf_counter()
         _initial_before = _document_verification_transition_state(doc)
         if _initial_before["verification_status"] != STATE_IN_PROGRESS:
             _in_progress_after = _document_verification_transition_state(doc, STATE_IN_PROGRESS)
@@ -6860,13 +6765,11 @@ class DocumentVerifyHandler(BaseHandler):
                 doc,
                 _initial_before,
                 _in_progress_after,
-                actor_type=audit_actor_type,
-                trigger=started_trigger,
-                audit_detail_extra=audit_detail_extra,
+                actor_type="user",
+                trigger="verify_request_started",
             )
             db.commit()
             doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
-        execution_timing["transition_in_progress_ms"] = _execution_timing_ms(transition_started)
 
         # EX-05: Capture before-state for final audit trail.
         _doc_before = _document_verification_transition_state(doc)
@@ -6876,7 +6779,6 @@ class DocumentVerifyHandler(BaseHandler):
         all_passed = True
 
         # Resolve file path — prefer local, fallback to S3 download
-        fetch_started = time.perf_counter()
         file_path = doc.get("file_path", "")
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
@@ -6902,9 +6804,7 @@ class DocumentVerifyHandler(BaseHandler):
                     logger.warning(f"[verify] doc={doc_id} S3 download failed: {s3_data}")
             except Exception as s3_err:
                 logger.error(f"[verify] doc={doc_id} S3 fallback error: {s3_err}")
-        execution_timing["document_fetch_ms"] = _execution_timing_ms(fetch_started)
 
-        context_started = time.perf_counter()
         verification_context = build_document_verification_context(db, app, doc)
         person_record = verification_context["person_record"]
         raw_doc_type = verification_context["raw_doc_type"]
@@ -6915,7 +6815,6 @@ class DocumentVerifyHandler(BaseHandler):
         directors_list = verification_context["directors_list"]
         ubos_list = verification_context["ubos_list"]
         verify_name = entity_name if doc_category == "company" else person_name
-        execution_timing["context_build_ms"] = _execution_timing_ms(context_started)
 
         # Diagnostic logging for verification context
         logger.info(
@@ -6927,7 +6826,6 @@ class DocumentVerifyHandler(BaseHandler):
         )
 
         # Load check overrides from ai_checks table (hybrid/AI checks only)
-        check_load_started = time.perf_counter()
         check_overrides = None
         try:
             check_category = "entity" if doc_category == "company" else "person"
@@ -6943,31 +6841,34 @@ class DocumentVerifyHandler(BaseHandler):
                 logger.warning(f"No DB checks found for doc_type={base_doc_type}, category={check_category}. Using matrix fallback.")
         except Exception as e:
             logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using matrix fallback.")
-        execution_timing["ai_checks_load_ms"] = _execution_timing_ms(check_load_started)
 
         # Build effective declared-data context from stored application data + save/resume overlay
         prescreening_data = verification_context["prescreening_data"]
         risk_level = (app.get("risk_level") or "MEDIUM") if app else "MEDIUM"
 
-        # GATE-03 duplicate detection now uses the stored document hash and
-        # `(application_id, file_sha256)` index for hashed rows. Legacy unhashed
-        # rows keep a bounded file-hash fallback until they are backfilled.
-        existing_hashes_started = time.perf_counter()
+        # Compute SHA-256 hashes of other documents already uploaded for this application
+        # Used by GATE-03 duplicate detection
         existing_hashes = []
         if app:
             try:
-                existing_hashes = _duplicate_hashes_for_document(
-                    db,
-                    application_id=app["id"],
-                    document_id=doc_id,
-                    file_sha256=doc.get("file_sha256"),
-                )
+                other_docs = db.execute(
+                    f"SELECT file_path FROM documents WHERE application_id=? AND id!=? AND {ACTIVE_DOCUMENT_SQL}",
+                    (app["id"], doc_id)
+                ).fetchall()
+                for od in other_docs:
+                    fp = od.get("file_path", "")
+                    if fp and not os.path.isabs(fp):
+                        fp = os.path.join(UPLOAD_DIR, os.path.basename(fp))
+                    if fp and os.path.isfile(fp):
+                        try:
+                            h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
+                            existing_hashes.append(h)
+                        except OSError:
+                            pass
             except Exception as e:
-                logger.debug(f"Could not resolve duplicate hashes: {e}")
-        execution_timing["existing_hashes_ms"] = _execution_timing_ms(existing_hashes_started)
+                logger.debug(f"Could not compute existing hashes: {e}")
 
         ai_result = None
-        verification_engine_started = time.perf_counter()
         try:
             if HAS_DOC_VERIFICATION:
                 _claude = ClaudeClient(
@@ -6992,7 +6893,6 @@ class DocumentVerifyHandler(BaseHandler):
                     ubos=ubos_list,
                     check_overrides=check_overrides,
                     file_name=doc.get("doc_name", ""),
-                    file_sha256=doc.get("file_sha256"),
                 )
                 ai_result = _normalize_verification_result_payload(ai_result)
 
@@ -7051,19 +6951,18 @@ class DocumentVerifyHandler(BaseHandler):
                 doc_id,
                 type(e).__name__,
             )
-            ai_result = _normalize_verification_result_payload(
-                build_provider_failure_result(
-                    e,
-                    provider="verification_engine",
-                    operation="document_verification",
-                )
-            )
-            checks = ai_result.get("checks", [])
+            ai_result = _normalize_verification_result_payload({
+                "overall": "flagged",
+                "_rejected": True,
+                "error": str(e)[:200],
+                "checks": [{"label": "AI Verification", "type": "validity", "result": "warn",
+                           "message": f"Verification error: {str(e)[:100]}. Manual review required."}],
+            })
+            checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                       "message": f"Verification error: {str(e)[:100]}. Manual review required."}]
             all_passed = False
-        execution_timing["verification_engine_ms"] = _execution_timing_ms(verification_engine_started)
 
         # If it's an identity document, run sanctions/PEP screening
-        screening_started = time.perf_counter()
         sanctions_result = None
         id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
         if doc["doc_type"] in id_doc_types and doc["person_id"]:
@@ -7112,7 +7011,8 @@ class DocumentVerifyHandler(BaseHandler):
                     "message": "Screening temporarily unavailable. Manual review required."
                 })
                 all_passed = False
-        execution_timing["screening_ms"] = _execution_timing_ms(screening_started)
+
+        status = STATE_VERIFIED if all_passed else STATE_FLAGGED
 
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
@@ -7130,12 +7030,7 @@ class DocumentVerifyHandler(BaseHandler):
         elif not verify_name and doc_category == "company":
             system_warning = "entity_context_missing"
 
-        normalized_ai_result = _normalize_verification_result_payload(ai_result or {"checks": checks})
-        verification_failure = provider_failure_from_result(normalized_ai_result)
-        if verification_failure and verification_failure.get("classification") != FAILURE_REVIEW_REQUIRED_BUSINESS:
-            status = STATE_FAILED
-        else:
-            status = STATE_VERIFIED if all_passed else STATE_FLAGGED
+        normalized_ai_result = _normalize_verification_result_payload(ai_result or {"checks": checks, "overall": status})
         try:
             layered_results = to_legacy_result(normalized_ai_result) if to_legacy_result else {
                 "checks": checks,
@@ -7163,46 +7058,6 @@ class DocumentVerifyHandler(BaseHandler):
             "subject_id": doc.get("person_id") or (app.get("id") if app else ""),
             "subject_type": verification_context["subject_type"],
         })
-        if verification_failure:
-            layered_results["verification_failure"] = verification_failure
-            layered_results["provider_failure"] = True
-            layered_results["retryable"] = bool(verification_failure.get("retryable"))
-            layered_results["verification_failure_classification"] = verification_failure.get("classification")
-            logger.warning(
-                format_verification_failure_log_line(
-                    verification_failure,
-                    environment=ENVIRONMENT,
-                    document_id=doc_id,
-                    application_id=doc.get("application_id", ""),
-                    doc_type=base_doc_type,
-                    mime_type=doc.get("mime_type") or "",
-                    file_size=doc.get("file_size") or 0,
-                    status=status,
-                )
-            )
-        elif status == STATE_FLAGGED:
-            layered_results["verification_failure_classification"] = FAILURE_REVIEW_REQUIRED_BUSINESS
-        engine_timing = normalized_ai_result.get("execution_timing_ms") if isinstance(normalized_ai_result, dict) else {}
-        if isinstance(engine_timing, dict):
-            for key, value in engine_timing.items():
-                if isinstance(value, int):
-                    execution_timing[f"engine_{key}"] = value
-            for key in (
-                "duplicate_check_ms",
-                "field_extraction_ms",
-                "field_extraction_provider_round_trip_ms",
-                "rule_checks_ms",
-                "ai_verification_ms",
-                "ai_verification_provider_round_trip_ms",
-                "provider_round_trip_ms",
-            ):
-                value = engine_timing.get(key)
-                if isinstance(value, int):
-                    execution_timing[key] = value
-        execution_timing["pre_persist_total_ms"] = _execution_timing_ms(execution_started)
-        layered_results["execution_timing_ms"] = {
-            key: value for key, value in execution_timing.items() if isinstance(value, int)
-        }
         results = json.dumps(layered_results, default=str)
         extracted_fields = {}
         if isinstance(normalized_ai_result, dict):
@@ -7231,7 +7086,6 @@ class DocumentVerifyHandler(BaseHandler):
         )
 
         # EX-05/PR5: Log final document verification with before/after state.
-        persist_started = time.perf_counter()
         _doc_after = _document_verification_transition_state(doc, status, checks_count=len(checks))
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
@@ -7252,9 +7106,8 @@ class DocumentVerifyHandler(BaseHandler):
             doc,
             _doc_before,
             _doc_after,
-            actor_type=audit_actor_type,
-            trigger=completed_trigger,
-            audit_detail_extra=audit_detail_extra,
+            actor_type="user",
+            trigger="verify_request_completed",
         )
         self.log_audit(
             user,
@@ -7279,18 +7132,7 @@ class DocumentVerifyHandler(BaseHandler):
                 after_state=_doc_after,
             )
         db.commit()
-        execution_timing["persist_audit_ms"] = _execution_timing_ms(persist_started)
-        execution_timing["total_handler_ms"] = _execution_timing_ms(execution_started)
-        logger.info(
-            "document_verification_execution_timing document_id=%s application_id=%s doc_type=%s status=%s %s",
-            doc_id,
-            doc.get("application_id", ""),
-            base_doc_type,
-            status,
-            _format_execution_timing_log_fields(execution_timing),
-        )
-        if close_db:
-            db.close()
+        db.close()
 
         # Improvement 8: Log agent execution for traceability
         try:
@@ -7317,34 +7159,6 @@ class DocumentVerifyHandler(BaseHandler):
             "verification_results": layered_results,
             "verified_at": layered_results.get("verified_at"),
         })
-
-
-class DocumentVerificationStatusHandler(BaseHandler):
-    """GET /api/documents/:id/verification-status — async/sync status view."""
-    def get(self, doc_id):
-        user = self.require_auth()
-        if not user:
-            return
-
-        db = get_db()
-        try:
-            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
-            if not doc:
-                return self.error("Document not found", 404)
-            app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
-            if not app:
-                return self.error("Application not found for document", 404)
-            if not self.check_app_ownership(user, app):
-                return
-            payload = verification_status_for_document(db, doc_id)
-            if not payload:
-                return self.error("Document not found", 404)
-            self.success(payload)
-        finally:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
 class DocumentReviewHandler(BaseHandler):
@@ -7646,25 +7460,18 @@ class DocumentAIVerifyHandler(BaseHandler):
                 prescreening_context=prescreening_context or None,
             )
 
-            failure = provider_failure_from_result(result)
-            if failure:
-                result["overall"] = "failed"
             # P0-2: Guard against rejected/invalid AI responses
-            elif result.get("_rejected") or result.get("_validated") is False:
+            if result.get("_rejected") or result.get("_validated") is False:
                 logger.warning(f"AI verify rejected for {doc_type}/{file_name}: {result.get('error', 'schema validation failed')}")
                 result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "fail",
                                      "message": "AI output failed validation — manual review required"}]
                 result["overall"] = "flagged"
 
             # P0-5: No pass without evidence — empty checks cannot be "verified"
-            if not failure and not result.get("checks"):
+            if not result.get("checks"):
                 result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "warn",
                                      "message": "No verification checks returned — manual review required"}]
                 result["overall"] = "flagged"
-            if failure:
-                result["verification_failure_classification"] = failure.get("classification")
-            elif result.get("overall") == "flagged":
-                result["verification_failure_classification"] = FAILURE_REVIEW_REQUIRED_BUSINESS
 
             # /api/documents/ai-verify is helper-only; persisted /api/documents/:id/verify stays authoritative.
             result["authoritative"] = False
@@ -9414,6 +9221,11 @@ _REPORT_EDD_ROUTED_STATUSES = (
     "edd_required",
 )
 
+_DASHBOARD_REJECTED_DECISION_STATUSES = (
+    "rejected",
+    "declined",
+)
+
 _REPORT_ALLOWED_FIELDS = {
     "id", "ref", "company_name", "status", "status_label", "risk_level",
     "risk_score", "risk_lane", "country", "sector", "entity_type",
@@ -9507,6 +9319,250 @@ def _report_scope_from_request(handler, user):
         "show_fixtures": show_fixtures,
         "pending_statuses": list(_REPORT_PENDING_STATUSES),
         "edd_routed_statuses": list(_REPORT_EDD_ROUTED_STATUSES),
+    }
+
+
+def _canonical_dashboard_lane(value):
+    key = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if key in ("fast_lane", "fast"):
+        return "fast_lane"
+    if key in ("standard_review", "standard"):
+        return "standard_review"
+    if key == "edd":
+        return "enhanced_due_diligence"
+    return "unknown"
+
+
+def _dashboard_processing_hours_expression():
+    if USE_POSTGRES:
+        return "EXTRACT(EPOCH FROM (a.decided_at - COALESCE(a.submitted_at, a.created_at))) / 3600.0"
+    return "(julianday(a.decided_at) - julianday(COALESCE(a.submitted_at, a.created_at))) * 24.0"
+
+
+def _dashboard_month_floor():
+    now = datetime.now(timezone.utc)
+    month_floor = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return month_floor.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_dashboard_processing_metric(avg_hours, sample_size):
+    if avg_hours is None:
+        return {
+            "available": False,
+            "display": "—",
+            "hours": None,
+            "days": None,
+            "sample_size": int(sample_size or 0),
+            "basis": "approved_rejected_declined_from_submitted_or_created_to_decided",
+        }
+
+    hours = round(float(avg_hours), 2)
+    days = round(hours / 24.0, 2)
+    if hours < 1:
+        minutes = int(round(hours * 60))
+        display = f"{minutes} min"
+    elif hours < 48:
+        display = f"{hours:.1f} h"
+    else:
+        display = f"{days:.1f} d"
+    return {
+        "available": True,
+        "display": display,
+        "hours": hours,
+        "days": days,
+        "sample_size": int(sample_size or 0),
+        "basis": "approved_rejected_declined_from_submitted_or_created_to_decided",
+    }
+
+
+def _dashboard_application_scope(user, *, show_fixtures=False):
+    from fixture_filter import fixture_app_exclude_clause
+
+    where = ["1=1"]
+    params = []
+    if user.get("type") == "client":
+        where.append("a.client_id = ?")
+        params.append(user["sub"])
+    if not show_fixtures:
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="a")
+        where.append(fx_excl)
+        params.extend(fx_params)
+    return " AND ".join(where), params
+
+
+def _canonical_dashboard_stats(db, user, *, show_fixtures=False):
+    app_where, app_params = _dashboard_application_scope(user, show_fixtures=show_fixtures)
+    pending_statuses = [str(status).strip().lower() for status in _REPORT_PENDING_STATUSES]
+    edd_routed_statuses = [str(status).strip().lower() for status in _REPORT_EDD_ROUTED_STATUSES]
+    rejected_statuses = [str(status).strip().lower() for status in _DASHBOARD_REJECTED_DECISION_STATUSES]
+    decision_statuses = ["approved", *rejected_statuses]
+    processing_expr = _dashboard_processing_hours_expression()
+    month_floor = _dashboard_month_floor()
+
+    def _placeholders(values):
+        return ",".join(["?"] * len(values))
+
+    pending_placeholders = _placeholders(pending_statuses)
+    edd_placeholders = _placeholders(edd_routed_statuses)
+    rejected_placeholders = _placeholders(rejected_statuses)
+    decision_placeholders = _placeholders(decision_statuses)
+
+    aggregate_row = db.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) IN ({pending_placeholders}) THEN 1 ELSE 0 END) AS in_progress,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) = 'approved' THEN 1 ELSE 0 END) AS approved_total,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) = 'approved' AND a.decided_at IS NOT NULL AND a.decided_at >= ? THEN 1 ELSE 0 END) AS approved_this_month,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) IN ({rejected_placeholders}) THEN 1 ELSE 0 END) AS rejected_declined_total,
+            SUM(CASE WHEN LOWER(COALESCE(a.status, '')) IN ({edd_placeholders}) THEN 1 ELSE 0 END) AS edd_routed_applications,
+            AVG(CASE
+                WHEN LOWER(COALESCE(a.status, '')) IN ({decision_placeholders})
+                 AND a.decided_at IS NOT NULL
+                 AND COALESCE(a.submitted_at, a.created_at) IS NOT NULL
+                THEN {processing_expr}
+                ELSE NULL
+            END) AS avg_processing_hours,
+            SUM(CASE
+                WHEN LOWER(COALESCE(a.status, '')) IN ({decision_placeholders})
+                 AND a.decided_at IS NOT NULL
+                 AND COALESCE(a.submitted_at, a.created_at) IS NOT NULL
+                THEN 1 ELSE 0
+            END) AS avg_processing_sample_size
+        FROM applications a
+        WHERE {app_where}
+        """,
+        (
+            *pending_statuses,
+            month_floor,
+            *rejected_statuses,
+            *edd_routed_statuses,
+            *decision_statuses,
+            *decision_statuses,
+            *app_params,
+        ),
+    ).fetchone()
+
+    risk_rows = db.execute(
+        f"""
+        SELECT COALESCE(a.final_risk_level, a.risk_level) AS level, COUNT(*) AS count
+        FROM applications a
+        WHERE {app_where}
+        GROUP BY COALESCE(a.final_risk_level, a.risk_level)
+        """,
+        tuple(app_params),
+    ).fetchall()
+    risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "UNKNOWN": 0}
+    for row in risk_rows:
+        bucket = _canonical_risk_level(row["level"]) or "UNKNOWN"
+        risk_distribution[bucket] += int(row["count"] or 0)
+
+    lane_rows = db.execute(
+        f"""
+        SELECT a.onboarding_lane AS lane, COUNT(*) AS count
+        FROM applications a
+        WHERE {app_where}
+        GROUP BY a.onboarding_lane
+        """,
+        tuple(app_params),
+    ).fetchall()
+    lane_distribution = {
+        "fast_lane": 0,
+        "standard_review": 0,
+        "enhanced_due_diligence": 0,
+        "unknown": 0,
+    }
+    for row in lane_rows:
+        lane_distribution[_canonical_dashboard_lane(row["lane"])] += int(row["count"] or 0)
+
+    recent = db.execute(
+        f"""
+        SELECT a.*, u.full_name AS assigned_name
+        FROM applications a
+        LEFT JOIN users u ON a.assigned_to = u.id
+        WHERE {app_where}
+        ORDER BY a.created_at DESC
+        LIMIT 10
+        """,
+        tuple(app_params),
+    ).fetchall()
+
+    edd_case_row = db.execute(
+        f"""
+        SELECT
+            SUM(CASE WHEN ec.stage NOT IN ('edd_approved', 'edd_rejected') THEN 1 ELSE 0 END) AS active_cases,
+            SUM(CASE WHEN ec.stage = 'pending_senior_review' THEN 1 ELSE 0 END) AS pending_senior_review_cases
+        FROM edd_cases ec
+        JOIN applications a ON a.id = ec.application_id
+        WHERE {app_where}
+        """,
+        tuple(app_params),
+    ).fetchone()
+
+    total = int(aggregate_row["total"] or 0)
+    in_progress = int(aggregate_row["in_progress"] or 0)
+    approved_total = int(aggregate_row["approved_total"] or 0)
+    approved_this_month = int(aggregate_row["approved_this_month"] or 0)
+    rejected_declined = int(aggregate_row["rejected_declined_total"] or 0)
+    edd_routed_applications = int(aggregate_row["edd_routed_applications"] or 0)
+    edd_active_cases = int((edd_case_row["active_cases"] if edd_case_row else 0) or 0)
+    edd_pending_senior = int((edd_case_row["pending_senior_review_cases"] if edd_case_row else 0) or 0)
+    avg_processing = _format_dashboard_processing_metric(
+        aggregate_row["avg_processing_hours"],
+        aggregate_row["avg_processing_sample_size"],
+    )
+
+    return {
+        "total": total,
+        "early_stage_applications": in_progress,
+        "in_progress_applications": in_progress,
+        "approved": approved_total,
+        "approved_this_month": approved_this_month,
+        "rejected": rejected_declined,
+        "rejected_declined": rejected_declined,
+        "edd": edd_routed_applications,
+        "edd_in_progress_cases": edd_active_cases,
+        "recent": [dict(row) for row in recent],
+        "risk_low": risk_distribution["LOW"],
+        "risk_medium": risk_distribution["MEDIUM"],
+        "risk_high": risk_distribution["HIGH"],
+        "risk_very_high": risk_distribution["VERY_HIGH"],
+        "risk_unknown": risk_distribution["UNKNOWN"],
+        "risk_distribution": {
+            "LOW": risk_distribution["LOW"],
+            "MEDIUM": risk_distribution["MEDIUM"],
+            "HIGH": risk_distribution["HIGH"],
+            "VERY_HIGH": risk_distribution["VERY_HIGH"],
+            "UNKNOWN": risk_distribution["UNKNOWN"],
+            "total": total,
+        },
+        "lane_distribution": {
+            "fast_lane": lane_distribution["fast_lane"],
+            "standard_review": lane_distribution["standard_review"],
+            "enhanced_due_diligence": lane_distribution["enhanced_due_diligence"],
+            "unknown": lane_distribution["unknown"],
+            "total": total,
+        },
+        "metrics": {
+            "total_applications": {"value": total, "kind": "applications"},
+            "in_progress_applications": {"value": in_progress, "kind": "applications"},
+            "approved_this_month": {
+                "value": approved_this_month,
+                "kind": "applications",
+                "window": "month_to_date",
+                "timestamp_field": "decided_at",
+            },
+            "rejected_declined": {"value": rejected_declined, "kind": "applications"},
+            "edd_in_progress": {
+                "value": edd_active_cases,
+                "kind": "edd_cases",
+                "pending_senior_review": edd_pending_senior,
+            },
+            "avg_processing_time": avg_processing,
+        },
+        "pending_statuses": list(_REPORT_PENDING_STATUSES),
+        "edd_routed_statuses": list(_REPORT_EDD_ROUTED_STATUSES),
+        "canonical_view": "dashboard_metrics_v2",
     }
 
 
@@ -10775,117 +10831,12 @@ class DashboardHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import (
-            fixture_app_exclude_clause,
-            fixture_request_opt_in,
-            should_show_fixtures,
-        )
+        from fixture_filter import fixture_request_opt_in, should_show_fixtures
 
         db = get_db()
-        stats = {}
-
-        if user.get("type") == "client":
-            client_id = user["sub"]
-            client_fx_excl, client_fx_params = fixture_app_exclude_clause(table_alias="")
-            client_fx_clause = f" AND {client_fx_excl}"
-
-            def _client_params(*extra):
-                return tuple(extra) + (client_id, *client_fx_params)
-
-            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
-            stats["early_stage_applications"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}) AND client_id=?{client_fx_clause}",
-                _client_params(*_REPORT_PENDING_STATUSES),
-            ).fetchone()["c"]
-            stats["in_progress_applications"] = stats["early_stage_applications"]
-            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
-            stats["edd"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}) AND client_id=?{client_fx_clause}",
-                _client_params(*_REPORT_EDD_ROUTED_STATUSES),
-            ).fetchone()["c"]
-
-            # Risk distribution
-            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["risk_unknown"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE client_id=? AND (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){client_fx_clause}",
-                _client_params()
-            ).fetchone()["c"]
-
-            # Recent applications
-            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
-            recent = db.execute("""
-                SELECT a.*, u.full_name as assigned_name FROM applications a
-                LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE a.client_id=? AND """ + recent_fx_excl + """
-                ORDER BY a.created_at DESC LIMIT 10
-            """, (client_id, *recent_fx_params)).fetchall()
-            stats["recent"] = [dict(r) for r in recent]
-            stats["show_fixtures"] = False
-            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
-            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
-            stats["canonical_view"] = "applications_report_v1"
-        else:
-            # Officer / admin branch: exclude fixtures by default.
-            # Pass show_fixtures=true (admin/sco only) to include them.
-            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
-            fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
-            fx_clause = "" if show_fx else f" AND {fx_excl}"
-            fp = [] if show_fx else fx_params
-
-            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE 1=1{fx_clause}", fp).fetchone()["c"]
-            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
-            pending_params = [*_REPORT_PENDING_STATUSES, *fp]
-            stats["early_stage_applications"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}){fx_clause}",
-                pending_params,
-            ).fetchone()["c"]
-            stats["in_progress_applications"] = stats["early_stage_applications"]
-            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review'{fx_clause}", fp).fetchone()["c"]
-            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'{fx_clause}", fp).fetchone()["c"]
-            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted'){fx_clause}", fp).fetchone()["c"]
-            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved'{fx_clause}", fp).fetchone()["c"]
-            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected'{fx_clause}", fp).fetchone()["c"]
-            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
-            edd_params = [*_REPORT_EDD_ROUTED_STATUSES, *fp]
-            stats["edd"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}){fx_clause}",
-                edd_params,
-            ).fetchone()["c"]
-
-            # Risk distribution
-            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'{fx_clause}", fp).fetchone()["c"]
-            stats["risk_unknown"] = db.execute(
-                f"SELECT COUNT(*) as c FROM applications WHERE (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){fx_clause}",
-                fp
-            ).fetchone()["c"]
-
-            # Recent applications
-            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
-            fx_where_clause = "" if show_fx else f" AND {recent_fx_excl}"
-            recent_fp = [] if show_fx else recent_fx_params
-            recent = db.execute(f"""
-                SELECT a.*, u.full_name as assigned_name FROM applications a
-                LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE 1=1{fx_where_clause}
-                ORDER BY a.created_at DESC LIMIT 10
-            """, recent_fp).fetchall()
-            stats["recent"] = [dict(r) for r in recent]
-            stats["show_fixtures"] = show_fx
-            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
-            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
-            stats["canonical_view"] = "applications_report_v1"
+        show_fx = False if user.get("type") == "client" else should_show_fixtures(user, fixture_request_opt_in(self))
+        stats = _canonical_dashboard_stats(db, user, show_fixtures=show_fx)
+        stats["show_fixtures"] = show_fx
 
         db.close()
         self.success(stats)
@@ -15375,103 +15326,6 @@ def _validate_document_type(value, *, allow_general=False):
 
 
 ACTIVE_DOCUMENT_SQL = "COALESCE(is_current, TRUE) = TRUE"
-
-
-_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def _normalize_file_sha256(value):
-    digest = str(value or "").strip().lower()
-    return digest if _SHA256_HEX_RE.match(digest) else None
-
-
-def _document_file_sha256(body):
-    return hashlib.sha256(body).hexdigest()
-
-
-def _hash_legacy_document_file(file_path):
-    resolved = _resolve_upload_document_path(file_path)
-    if not resolved or not os.path.isfile(resolved):
-        return None
-    try:
-        with open(resolved, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        return None
-
-
-def _duplicate_hashes_for_document(db, *, application_id, document_id, file_sha256):
-    """Return hashes that make GATE-03 warn, using indexed lookup when possible.
-
-    New uploads have documents.file_sha256 and use the `(application_id,
-    file_sha256)` index. Legacy rows without a stored hash are checked through a
-    bounded fallback until an operator backfill populates file_sha256.
-    """
-    current_hash = _normalize_file_sha256(file_sha256)
-    duplicate_hashes = set()
-
-    if current_hash:
-        duplicate = db.execute(
-            f"""
-            SELECT id FROM documents
-            WHERE application_id=?
-              AND id!=?
-              AND file_sha256=?
-              AND {ACTIVE_DOCUMENT_SQL}
-            LIMIT 1
-            """,
-            (application_id, document_id, current_hash),
-        ).fetchone()
-        if duplicate:
-            duplicate_hashes.add(current_hash)
-
-        legacy_rows = db.execute(
-            f"""
-            SELECT id, file_path FROM documents
-            WHERE application_id=?
-              AND id!=?
-              AND (file_sha256 IS NULL OR file_sha256='')
-              AND {ACTIVE_DOCUMENT_SQL}
-            """,
-            (application_id, document_id),
-        ).fetchall()
-        for row in legacy_rows:
-            if _hash_legacy_document_file(row.get("file_path")) == current_hash:
-                duplicate_hashes.add(current_hash)
-                break
-        return sorted(duplicate_hashes)
-
-    stored_rows = db.execute(
-        f"""
-        SELECT file_sha256 FROM documents
-        WHERE application_id=?
-          AND id!=?
-          AND file_sha256 IS NOT NULL
-          AND file_sha256!=''
-          AND {ACTIVE_DOCUMENT_SQL}
-        """,
-        (application_id, document_id),
-    ).fetchall()
-    for row in stored_rows:
-        digest = _normalize_file_sha256(row.get("file_sha256"))
-        if digest:
-            duplicate_hashes.add(digest)
-
-    legacy_rows = db.execute(
-        f"""
-        SELECT id, file_path FROM documents
-        WHERE application_id=?
-          AND id!=?
-          AND (file_sha256 IS NULL OR file_sha256='')
-          AND {ACTIVE_DOCUMENT_SQL}
-        """,
-        (application_id, document_id),
-    ).fetchall()
-    for row in legacy_rows:
-        digest = _hash_legacy_document_file(row.get("file_path"))
-        if digest:
-            duplicate_hashes.add(digest)
-    return sorted(duplicate_hashes)
 
 
 def _document_slot_key(doc_type, person_id=None, *, person_type=None, rmi_item_id=None, enhanced_requirement_id=None):
@@ -20383,8 +20237,6 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             if not is_valid:
                 return self.error(f"File rejected: {upload_error}", 400)
 
-            file_sha256 = _document_file_sha256(body)
-
             document_id = uuid.uuid4().hex[:16]
             ext = os.path.splitext(filename)[1].lower()
             safe_name = f"{app['id']}_{document_id}{ext}"
@@ -20447,9 +20299,9 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 """
                 INSERT INTO documents
                 (id, application_id, doc_type, doc_name, file_path, s3_key,
-                 file_size, mime_type, file_sha256, slot_key, is_current, version,
+                 file_size, mime_type, slot_key, is_current, version,
                  verification_status, verification_results, review_status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
@@ -20460,7 +20312,6 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     s3_key,
                     len(body),
                     content_type,
-                    file_sha256,
                     replacement["slot_key"],
                     True,
                     replacement["version"],
@@ -20835,7 +20686,6 @@ def make_app():
 
         # Documents
         (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
-        (r"/api/documents/([^/]+)/verification-status", DocumentVerificationStatusHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
