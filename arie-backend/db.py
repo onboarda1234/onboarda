@@ -470,6 +470,7 @@ def _get_postgres_schema() -> str:
         s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
+        file_sha256 TEXT,
         slot_key TEXT,
         is_current BOOLEAN DEFAULT TRUE,
         version INTEGER DEFAULT 1,
@@ -1453,6 +1454,7 @@ def _get_sqlite_schema() -> str:
         s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
+        file_sha256 TEXT,
         slot_key TEXT,
         is_current INTEGER DEFAULT 1,
         version INTEGER DEFAULT 1,
@@ -3440,6 +3442,16 @@ def _ensure_document_health_columns(db: DBConnection):
     for column, definition in columns:
         if not _safe_column_exists(db, "documents", column):
             db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
+
+
+def _ensure_document_file_hash_schema(db: DBConnection):
+    """Ensure documents can store upload-time SHA-256 hashes for duplicate lookup."""
+    if not _safe_column_exists(db, "documents", "file_sha256"):
+        db.execute("ALTER TABLE documents ADD COLUMN file_sha256 TEXT")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_documents_application_file_sha256 "
+        "ON documents(application_id, file_sha256)"
+    )
 
 
 def _ensure_document_current_slot_unique_index(db: DBConnection):
@@ -5699,6 +5711,20 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.38: Ensured async verification jobs schema")
     except Exception as e:
         logger.error("Migration v2.38 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.39: Store upload-time document hashes and index them for
+    # duplicate detection. Existing unhashed rows are handled by a controlled
+    # verification fallback until an operator backfill has populated hashes.
+    try:
+        _ensure_document_file_hash_schema(db)
+        db.commit()
+        logger.info("Migration v2.39: Ensured document file hash schema")
+    except Exception as e:
+        logger.error("Migration v2.39 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

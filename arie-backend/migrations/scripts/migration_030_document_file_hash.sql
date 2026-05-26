@@ -1,0 +1,11 @@
+-- PR9 document file hash duplicate lookup marker.
+--
+-- Fresh schemas include documents.file_sha256 directly in db.py. The
+-- idx_documents_application_file_sha256 lookup index is created by db.py inline
+-- migration v2.39 after it has repaired any long-lived documents table that
+-- predates file_sha256.
+--
+-- Legacy rows without file_sha256 are not silently skipped: verification keeps
+-- a controlled fallback that hashes only unhashed legacy rows until an operator
+-- backfill populates the new column.
+SELECT 1;

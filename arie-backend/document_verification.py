@@ -688,9 +688,18 @@ def _check_not_expired(id_, label, expiry_date_str,
 
 # ── Gate checks ────────────────────────────────────────────────────
 
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _normalize_sha256_hex(value: Optional[str]) -> Optional[str]:
+    digest = str(value or "").strip().lower()
+    return digest if _SHA256_HEX_RE.match(digest) else None
+
+
 def run_gate_checks(file_path: str, file_size: int, mime_type: str,
                    existing_hashes: List[str],
-                   timing: Optional[Dict[str, Any]] = None) -> List[dict]:
+                   timing: Optional[Dict[str, Any]] = None,
+                   file_sha256: Optional[str] = None) -> List[dict]:
     """
     Layer 0: Gate checks. Run before any OCR/AI processing.
     Return list of check result dicts.
@@ -748,10 +757,17 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
 
     # GATE-03: Duplicate detection
     duplicate_started = time.perf_counter()
-    if file_exists:
+    current_hash = _normalize_sha256_hex(file_sha256)
+    normalized_existing_hashes = {
+        digest for digest in (_normalize_sha256_hex(value) for value in (existing_hashes or []))
+        if digest
+    }
+    if file_exists or current_hash:
         try:
-            h = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
-            if existing_hashes and h in existing_hashes:
+            if not current_hash:
+                with open(file_path, "rb") as f:
+                    current_hash = hashlib.sha256(f.read()).hexdigest()
+            if normalized_existing_hashes and current_hash in normalized_existing_hashes:
                 results.append(_warn("GATE-03", "Duplicate Detection", CheckClassification.RULE,
                                      "This file has already been uploaded for this application — "
                                      "please confirm this is intentional", rule_type="hash"))
@@ -1319,6 +1335,7 @@ def verify_document_layered(
     ubos: List[str] = None,
     check_overrides: Optional[List[dict]] = None,
     file_name: str = "",
+    file_sha256: Optional[str] = None,
 ) -> dict:
     """
     Main verification entry point for Agent 1.
@@ -1346,6 +1363,7 @@ def verify_document_layered(
         ubos:              List of declared UBO names
         check_overrides:   Optional override check list from ai_checks DB table
         file_name:         Original upload filename
+        file_sha256:       Upload-time SHA-256 digest for duplicate checks when stored
 
     Returns: aggregated result dict (backward-compatible with existing verify_document output)
     """
@@ -1402,7 +1420,14 @@ def verify_document_layered(
         logger.warning(f"[verify-layered] File not accessible for {doc_type}: file_path={file_path!r}")
 
     # ── Layer 0: Gate checks ──────���───────────────────────────────
-    gate_results = run_gate_checks(file_path or "", file_size, mime_type, existing_hashes, timing=timing)
+    gate_results = run_gate_checks(
+        file_path or "",
+        file_size,
+        mime_type,
+        existing_hashes,
+        timing=timing,
+        file_sha256=file_sha256,
+    )
     all_results.extend(gate_results)
 
     gate_hard_fail = any(r["result"] == CheckStatus.FAIL and r["id"].startswith("GATE")
