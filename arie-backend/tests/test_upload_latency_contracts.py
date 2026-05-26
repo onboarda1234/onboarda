@@ -179,7 +179,7 @@ def test_upload_201_response_document_row_and_audit_shape(
     doc = conn.execute(
         """
         SELECT id, application_id, doc_type, doc_name, file_size, mime_type,
-               verification_status, review_status
+               file_sha256, verification_status, review_status
         FROM documents
         WHERE id = ?
         """,
@@ -192,6 +192,7 @@ def test_upload_201_response_document_row_and_audit_shape(
         "doc_name": "passport.pdf",
         "file_size": len(PDF_BYTES),
         "mime_type": "application/pdf",
+        "file_sha256": hashlib.sha256(PDF_BYTES).hexdigest(),
         "verification_status": "pending",
         "review_status": "pending",
     }

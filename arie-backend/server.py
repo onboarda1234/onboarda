@@ -6197,6 +6197,8 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return self.error(f"File rejected: {upload_error}", 400)
 
+        file_sha256 = _document_file_sha256(body)
+
         # Save file locally (as cache; S3 is the durable store in production)
         doc_id = uuid.uuid4().hex[:16]
         ext = os.path.splitext(filename)[1]
@@ -6312,12 +6314,12 @@ class DocumentUploadHandler(BaseHandler):
             db.execute("""
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
-                 file_size, mime_type, slot_key, is_current, version, verification_status,
+                 file_size, mime_type, file_sha256, slot_key, is_current, version, verification_status,
                  verification_results)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
-                len(body), content_type, replacement["slot_key"], True, replacement["version"],
+                len(body), content_type, file_sha256, replacement["slot_key"], True, replacement["version"],
                 STATE_PENDING, "{}",
             ))
             _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
@@ -6881,28 +6883,21 @@ class DocumentVerifyHandler(BaseHandler):
         prescreening_data = verification_context["prescreening_data"]
         risk_level = (app.get("risk_level") or "MEDIUM") if app else "MEDIUM"
 
-        # Compute SHA-256 hashes of other documents already uploaded for this application
-        # Used by GATE-03 duplicate detection
+        # GATE-03 duplicate detection now uses the stored document hash and
+        # `(application_id, file_sha256)` index for hashed rows. Legacy unhashed
+        # rows keep a bounded file-hash fallback until they are backfilled.
         existing_hashes_started = time.perf_counter()
         existing_hashes = []
         if app:
             try:
-                other_docs = db.execute(
-                    f"SELECT file_path FROM documents WHERE application_id=? AND id!=? AND {ACTIVE_DOCUMENT_SQL}",
-                    (app["id"], doc_id)
-                ).fetchall()
-                for od in other_docs:
-                    fp = od.get("file_path", "")
-                    if fp and not os.path.isabs(fp):
-                        fp = os.path.join(UPLOAD_DIR, os.path.basename(fp))
-                    if fp and os.path.isfile(fp):
-                        try:
-                            h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
-                            existing_hashes.append(h)
-                        except OSError:
-                            pass
+                existing_hashes = _duplicate_hashes_for_document(
+                    db,
+                    application_id=app["id"],
+                    document_id=doc_id,
+                    file_sha256=doc.get("file_sha256"),
+                )
             except Exception as e:
-                logger.debug(f"Could not compute existing hashes: {e}")
+                logger.debug(f"Could not resolve duplicate hashes: {e}")
         execution_timing["existing_hashes_ms"] = _execution_timing_ms(existing_hashes_started)
 
         ai_result = None
@@ -6931,6 +6926,7 @@ class DocumentVerifyHandler(BaseHandler):
                     ubos=ubos_list,
                     check_overrides=check_overrides,
                     file_name=doc.get("doc_name", ""),
+                    file_sha256=doc.get("file_sha256"),
                 )
                 ai_result = _normalize_verification_result_payload(ai_result)
 
@@ -15315,6 +15311,103 @@ def _validate_document_type(value, *, allow_general=False):
 ACTIVE_DOCUMENT_SQL = "COALESCE(is_current, TRUE) = TRUE"
 
 
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _normalize_file_sha256(value):
+    digest = str(value or "").strip().lower()
+    return digest if _SHA256_HEX_RE.match(digest) else None
+
+
+def _document_file_sha256(body):
+    return hashlib.sha256(body).hexdigest()
+
+
+def _hash_legacy_document_file(file_path):
+    resolved = _resolve_upload_document_path(file_path)
+    if not resolved or not os.path.isfile(resolved):
+        return None
+    try:
+        with open(resolved, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _duplicate_hashes_for_document(db, *, application_id, document_id, file_sha256):
+    """Return hashes that make GATE-03 warn, using indexed lookup when possible.
+
+    New uploads have documents.file_sha256 and use the `(application_id,
+    file_sha256)` index. Legacy rows without a stored hash are checked through a
+    bounded fallback until an operator backfill populates file_sha256.
+    """
+    current_hash = _normalize_file_sha256(file_sha256)
+    duplicate_hashes = set()
+
+    if current_hash:
+        duplicate = db.execute(
+            f"""
+            SELECT id FROM documents
+            WHERE application_id=?
+              AND id!=?
+              AND file_sha256=?
+              AND {ACTIVE_DOCUMENT_SQL}
+            LIMIT 1
+            """,
+            (application_id, document_id, current_hash),
+        ).fetchone()
+        if duplicate:
+            duplicate_hashes.add(current_hash)
+
+        legacy_rows = db.execute(
+            f"""
+            SELECT id, file_path FROM documents
+            WHERE application_id=?
+              AND id!=?
+              AND (file_sha256 IS NULL OR file_sha256='')
+              AND {ACTIVE_DOCUMENT_SQL}
+            """,
+            (application_id, document_id),
+        ).fetchall()
+        for row in legacy_rows:
+            if _hash_legacy_document_file(row.get("file_path")) == current_hash:
+                duplicate_hashes.add(current_hash)
+                break
+        return sorted(duplicate_hashes)
+
+    stored_rows = db.execute(
+        f"""
+        SELECT file_sha256 FROM documents
+        WHERE application_id=?
+          AND id!=?
+          AND file_sha256 IS NOT NULL
+          AND file_sha256!=''
+          AND {ACTIVE_DOCUMENT_SQL}
+        """,
+        (application_id, document_id),
+    ).fetchall()
+    for row in stored_rows:
+        digest = _normalize_file_sha256(row.get("file_sha256"))
+        if digest:
+            duplicate_hashes.add(digest)
+
+    legacy_rows = db.execute(
+        f"""
+        SELECT id, file_path FROM documents
+        WHERE application_id=?
+          AND id!=?
+          AND (file_sha256 IS NULL OR file_sha256='')
+          AND {ACTIVE_DOCUMENT_SQL}
+        """,
+        (application_id, document_id),
+    ).fetchall()
+    for row in legacy_rows:
+        digest = _hash_legacy_document_file(row.get("file_path"))
+        if digest:
+            duplicate_hashes.add(digest)
+    return sorted(duplicate_hashes)
+
+
 def _document_slot_key(doc_type, person_id=None, *, person_type=None, rmi_item_id=None, enhanced_requirement_id=None):
     """Stable logical key for a single current document upload slot."""
     if rmi_item_id:
@@ -20224,6 +20317,8 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             if not is_valid:
                 return self.error(f"File rejected: {upload_error}", 400)
 
+            file_sha256 = _document_file_sha256(body)
+
             document_id = uuid.uuid4().hex[:16]
             ext = os.path.splitext(filename)[1].lower()
             safe_name = f"{app['id']}_{document_id}{ext}"
@@ -20286,9 +20381,9 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 """
                 INSERT INTO documents
                 (id, application_id, doc_type, doc_name, file_path, s3_key,
-                 file_size, mime_type, slot_key, is_current, version,
+                 file_size, mime_type, file_sha256, slot_key, is_current, version,
                  verification_status, verification_results, review_status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
@@ -20299,6 +20394,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     s3_key,
                     len(body),
                     content_type,
+                    file_sha256,
                     replacement["slot_key"],
                     True,
                     replacement["version"],
