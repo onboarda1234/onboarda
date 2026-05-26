@@ -167,6 +167,8 @@ class TestFrontendDraftSaveResumeSemantics(unittest.TestCase):
     def test_portal_defines_meaningful_draft_guard(self):
         assert "function isDraftPayloadMeaningful(payload)" in self.html, \
             "Portal must define a semantic draft guard before save/autosave"
+        assert "function isDraftPrescreeningMeaningful(value)" in self.html, \
+            "Portal must special-case prescreening payloads so default-only metadata does not count"
 
     def test_manual_save_checks_meaningful_payload_before_post(self):
         assert re.search(
@@ -196,6 +198,12 @@ class TestFrontendDraftSaveResumeSemantics(unittest.TestCase):
             self.html,
             re.S,
         ), "Resume CTA must prioritize the active draft by last_saved_at"
+
+    def test_portal_ignores_default_phone_code_and_pep_metadata(self):
+        assert "if (key === 'f-phone-code' || key === 'phone_code') return false;" in self.html, \
+            "Default phone-code metadata must not make an empty draft saveable"
+        assert "key === 'pep_status'" in self.html and "key === 'pep_schema_version'" in self.html, \
+            "Placeholder PEP metadata must not make party rows meaningful"
 
 
 # ═══════════════════════════════════════════════════════════════
