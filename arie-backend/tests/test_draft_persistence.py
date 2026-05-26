@@ -1124,8 +1124,11 @@ def test_portal_new_application_has_duplicate_draft_guard():
 
 def test_portal_resume_cta_prefers_active_pre_submit_draft():
     src = _portal_html()
-    assert "var drafts = inProgress.filter(function(a) { return (a.status || '') === 'draft'; });" in src
-    assert "var app = drafts.length ? drafts[0] : inProgress[0];" in src
+    assert "function renderResumeCTA(apps, activeDrafts) {" in src
+    assert "var authoritativeDrafts = (activeDrafts || []).slice().sort(function(a, b) {" in src
+    assert "return _asTime(b.last_saved_at || b.updated_at || b.created_at) - _asTime(a.last_saved_at || a.updated_at || a.created_at);" in src
+    assert "app = inProgress.find(function(item) {" in src
+    assert "app = drafts.length ? drafts[0] : inProgress[0];" in src
 
 
 def test_portal_restore_normalizes_key_dropdowns_and_nationality():
