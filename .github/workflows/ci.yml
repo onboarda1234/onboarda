@@ -1,0 +1,285 @@
+name: Onboarda CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_call:  # Allow deploy-staging.yml to reuse this workflow
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: arie-backend
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: arie-backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 pytest-cov
+
+      - name: Enable SSL on PostgreSQL service container
+        run: |
+          # Generate a self-signed certificate on the runner (sslmode=require does not verify CA)
+          openssl req -new -x509 -days 365 -nodes \
+            -out /tmp/pg-server.crt \
+            -keyout /tmp/pg-server.key \
+            -subj '/CN=localhost' 2>/dev/null
+
+          # Locate the postgres service container
+          PG_CTR=$(docker ps -q --filter "ancestor=postgres:15" | head -1)
+          echo "PostgreSQL container: $PG_CTR"
+
+          # Copy cert files into the postgres data directory inside the container
+          docker cp /tmp/pg-server.crt "$PG_CTR:/var/lib/postgresql/data/server.crt"
+          docker cp /tmp/pg-server.key "$PG_CTR:/var/lib/postgresql/data/server.key"
+
+          # Set correct permissions and enable ssl=on in postgresql.conf
+          docker exec "$PG_CTR" bash -c "
+            chmod 600 /var/lib/postgresql/data/server.key &&
+            chown postgres:postgres /var/lib/postgresql/data/server.crt &&
+            chown postgres:postgres /var/lib/postgresql/data/server.key &&
+            echo 'ssl = on' >> /var/lib/postgresql/data/postgresql.conf
+          "
+
+          # ssl=on requires a server restart (not just reload) to take effect
+          docker restart "$PG_CTR"
+
+          # Wait for postgres to accept connections again (up to 30 s)
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U postgres 2>/dev/null; then
+              echo "PostgreSQL ready with SSL after ${i}s"
+              break
+            fi
+            [ "$i" -lt 30 ] || { echo "ERROR: PostgreSQL SSL restart timed out"; docker logs "$PG_CTR"; exit 1; }
+            sleep 1
+          done
+
+      - name: Create fresh PostgreSQL test database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          DB_NAME="onboarda_test_${{ github.run_id }}"
+          psql -h localhost -U postgres -c "CREATE DATABASE \"${DB_NAME}\";"
+          echo "TEST_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/${DB_NAME}" >> $GITHUB_ENV
+
+      - name: Syntax check (all Python files)
+        run: |
+          find . -name "*.py" -not -path "./tests/*" -not -path "./.venv/*" | while read f; do
+            python -c "import py_compile; py_compile.compile('$f', doraise=True)" || exit 1
+          done
+          echo "All Python files pass syntax check"
+
+      - name: Lint (flake8 — errors only)
+        run: |
+          find . -name "*.py" -not -path "./tests/*" -not -path "./.venv/*" | xargs flake8 --count --select=E9,F63,F7,F82 --show-source --statistics
+        continue-on-error: false
+
+      - name: Schema migration policy check
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: python scripts/check_schema_migration_policy.py
+
+      - name: Run tests with coverage
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: ci-test-secret-key
+          ADMIN_INITIAL_PASSWORD: CITestPassword123
+          COVERAGE_FILE: /tmp/.coverage
+        run: |
+          pytest tests/ -v --tb=short --ignore=tests/test_pdf_generator.py --cov=. --cov-config=.coveragerc --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Test count check (minimum 3800)
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: ci-test-secret-key
+          ADMIN_INITIAL_PASSWORD: CITestPassword123
+        run: |
+          COUNT=$(pytest tests/ --ignore=tests/test_pdf_generator.py --co -q 2>/dev/null | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+' | head -1)
+          echo "Test count: $COUNT"
+          if [ -z "$COUNT" ] || [ "$COUNT" -lt 3800 ]; then
+            echo "FAIL: Only ${COUNT:-0} tests found. Minimum 3800 required."
+            exit 1
+          fi
+          echo "PASS: $COUNT tests (>= 3800 minimum)"
+
+      - name: Coverage threshold check
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: ci-test-secret-key
+          ADMIN_INITIAL_PASSWORD: CITestPassword123
+          COVERAGE_FILE: /tmp/.coverage
+        run: |
+          COV=$(pytest tests/ --ignore=tests/test_pdf_generator.py --cov=. --cov-config=.coveragerc --cov-report=term -q 2>&1 | grep "^TOTAL" | awk '{print $NF}' | tr -d '%')
+          echo "Coverage: ${COV}%"
+          if [ -z "$COV" ]; then
+            echo "WARNING: Could not determine coverage percentage"
+            exit 0
+          fi
+          if [ "$COV" -lt 30 ]; then
+            echo "FAIL: Coverage ${COV}% is below 30% minimum"
+            exit 1
+          fi
+          echo "PASS: Coverage ${COV}% (>= 30% minimum)"
+
+  docker-validate:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    defaults:
+      run:
+        working-directory: arie-backend
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Copy HTML files into backend dir
+        run: |
+          cp ../arie-portal.html ./arie-portal.html 2>/dev/null || echo "arie-portal.html not in repo root, checking if already in backend dir"
+          cp ../arie-backoffice.html ./arie-backoffice.html 2>/dev/null || echo "arie-backoffice.html not in repo root, checking if already in backend dir"
+          ls -la arie-portal.html arie-backoffice.html
+
+      - name: Build Docker image
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg "GIT_SHA=${{ github.sha }}" \
+            --build-arg "BUILD_TIME=ci" \
+            --build-arg "IMAGE_TAG=ci-${{ github.sha }}" \
+            -t arie-backend:ci-test .
+          echo "Docker image built successfully"
+
+      - name: Verify image metadata
+        run: |
+          docker inspect arie-backend:ci-test --format='{{.Config.ExposedPorts}}' | grep -q 10000
+          echo "PASS: Port 10000 exposed"
+          docker inspect arie-backend:ci-test --format='{{.Config.User}}' | grep -q arie
+          echo "PASS: Non-root user configured"
+          docker inspect arie-backend:ci-test --format='{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^GIT_SHA=${{ github.sha }}$'
+          docker inspect arie-backend:ci-test --format='{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^BUILD_TIME=ci$'
+          docker inspect arie-backend:ci-test --format='{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^IMAGE_TAG=ci-${{ github.sha }}$'
+          echo "PASS: Build provenance env configured"
+
+      - name: Container smoke test — startup + health check
+        env:
+          SECRET_KEY: ci-smoke-test-key
+          ADMIN_INITIAL_PASSWORD: CISmokeTest123
+        run: |
+          # Start container in background
+          docker run -d --name arie-smoke \
+            -p 10000:10000 \
+            -e ENVIRONMENT=testing \
+            -e SECRET_KEY=$SECRET_KEY \
+            -e ADMIN_INITIAL_PASSWORD=$ADMIN_INITIAL_PASSWORD \
+            -e DB_PATH=/app/data/ci_test.db \
+            arie-backend:ci-test
+
+          # Wait for startup (max 15 seconds)
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:10000/api/health > /dev/null 2>&1; then
+              echo "PASS: Health check passed after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 15 ]; then
+              echo "FAIL: Health check did not pass within 15 seconds"
+              docker logs arie-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Verify health response is valid JSON
+          HEALTH=$(curl -sf http://localhost:10000/api/health)
+          echo "Health response: $HEALTH"
+          echo "$HEALTH" | python3 -c "import sys,json; json.load(sys.stdin); print('PASS: Valid JSON response')"
+
+          # Verify public liveness endpoint
+          LIVENESS=$(curl -sf http://localhost:10000/api/liveness)
+          echo "Liveness response: $LIVENESS"
+          echo "$LIVENESS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status') == 'ok', f'Liveness not ok: {d}'; print('PASS: Liveness endpoint ok')"
+
+          # Deep readiness is intentionally authenticated.
+          READINESS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:10000/api/readiness)
+          test "$READINESS_STATUS" = "401"
+          echo "PASS: Readiness endpoint requires authentication"
+
+          # Verify security headers present
+          HEADERS=$(curl -sI http://localhost:10000/api/health)
+          echo "$HEADERS" | grep -qi "X-Content-Type-Options" && echo "PASS: Security headers present"
+          echo "$HEADERS" | grep -qi "Content-Security-Policy" && echo "PASS: CSP header present"
+
+          # Cleanup
+          docker stop arie-smoke && docker rm arie-smoke
+          echo "Container smoke test PASSED"
+
+  pdf-tests:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    defaults:
+      run:
+        working-directory: arie-backend
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: arie-backend/requirements.txt
+
+      - name: Install WeasyPrint native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 \
+            libglib2.0-0 libcairo2 libcairo-gobject2 \
+            libharfbuzz0b libfontconfig1 libfreetype6 \
+            gir1.2-pango-1.0 gir1.2-gdkpixbuf-2.0 \
+            shared-mime-info
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: Run PDF tests
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: ci-test-secret-key
+          ADMIN_INITIAL_PASSWORD: CITestPassword123
+        run: |
+          pytest tests/test_pdf_generator.py -v --tb=short

@@ -36,7 +36,7 @@ class TestRiskScoring:
 
     def test_country_classification(self, temp_db):
         from server import classify_country
-        assert classify_country("Mauritius") == 1
+        assert classify_country("Mauritius") == 2  # Excel: Mauritius = standard risk (2)
         assert classify_country("Iran") == 4
         assert classify_country("Nigeria") == 3
         assert classify_country("Unknown Country") == 2
@@ -64,11 +64,13 @@ class TestRiskScoring:
 
 class TestScreening:
     def test_simulated_sanctions_screen(self, temp_db):
-        from server import _simulate_sanctions_screen
-        result = _simulate_sanctions_screen("John Smith")
+        from server import screen_sumsub_aml
+        result = screen_sumsub_aml("John Smith")
+        # Returns dict with standard keys regardless of API availability
+        assert isinstance(result, dict)
         assert "matched" in result
         assert "results" in result
-        assert result["source"] == "simulated"
+        assert isinstance(result["results"], list)
 
     def test_simulated_company_lookup(self, temp_db):
         from server import _simulate_company_lookup

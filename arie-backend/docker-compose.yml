@@ -1,0 +1,76 @@
+# ══════════════════════════════════════════════════════════
+# ARIE Finance — Docker Compose (Production Stack)
+# Sprint 3: Backend + PostgreSQL + volumes
+# ══════════════════════════════════════════════════════════
+#
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose logs -f backend    # Tail backend logs
+#   docker compose down               # Stop all services
+#   docker compose down -v            # Stop + remove volumes (DESTRUCTIVE)
+#
+
+services:
+  # ── ARIE Backend API ──
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arie-backend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-arie}:${POSTGRES_PASSWORD:-arie_secure_pw}@postgres:5432/${POSTGRES_DB:-arie_finance}
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-}
+      - PORT=8080
+      # External API keys (optional — falls back to simulation)
+      - SUMSUB_APP_TOKEN=${SUMSUB_APP_TOKEN:-}
+      - SUMSUB_SECRET_KEY=${SUMSUB_SECRET_KEY:-}
+      - OPENCORPORATES_API_KEY=${OPENCORPORATES_API_KEY:-}
+      - IP_GEOLOCATION_API_KEY=${IP_GEOLOCATION_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # GDPR
+      - DATA_RETENTION_AUTO_PURGE=${DATA_RETENTION_AUTO_PURGE:-false}
+    volumes:
+      - arie_uploads:/app/uploads
+      - arie_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; r=requests.get('http://localhost:8080/api/health', timeout=3); exit(0 if r.status_code==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── PostgreSQL Database ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: arie-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-arie}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arie_secure_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-arie_finance}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - arie_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arie} -d ${POSTGRES_DB:-arie_finance}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  arie_pgdata:
+    driver: local
+  arie_uploads:
+    driver: local
+  arie_logs:
+    driver: local

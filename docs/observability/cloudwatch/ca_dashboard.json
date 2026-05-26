@@ -1,0 +1,40 @@
+{
+  "name": "RegMind-CA-Screening-Observability",
+  "namespace": "RegMind/Screening/ComplyAdvantage",
+  "logGroups": {
+    "operational": "/regmind/ca/operational/",
+    "audit": "/regmind/ca/audit/"
+  },
+  "widgets": [
+    {
+      "title": "CA Webhook Intake",
+      "type": "log",
+      "queryFile": "ca_webhook_intake.cwlogs",
+      "metrics": ["WebhookDeliveries", "WebhookSignatureFailures", "WebhookMalformedPayloads", "WebhookUnknownEvents", "EnvModeDrift"]
+    },
+    {
+      "title": "Webhook Background Processing",
+      "type": "log",
+      "queryFile": "ca_processing_latency.cwlogs",
+      "metrics": ["WebhookProcessingLatencyMs", "WebhookStepLatencyMs", "WebhookAsyncProcessingFailures"]
+    },
+    {
+      "title": "CA API and OAuth Health",
+      "type": "log",
+      "queryFile": "ca_api_health.cwlogs",
+      "metrics": ["CaApiRequests", "CaApiLatencyMs", "CaAuthRequests", "CaAuthLatencyMs", "CaTokenCacheHits", "CaTokenCacheMisses"]
+    },
+    {
+      "title": "CA Webhook Fetch Health",
+      "type": "log",
+      "queryFile": "ca_webhook_fetch.cwlogs",
+      "metrics": ["WebhookFetchApiCalls", "WebhookFetchApiCallBudgetExhausted", "WebhookFetchPageCapReached", "WebhookFetchNestedPaginationDetected"]
+    },
+    {
+      "title": "Storage, Subscription, and Agent 7",
+      "type": "log",
+      "queryFile": "ca_storage_agent7.cwlogs",
+      "metrics": ["NormalizedWriteFailures", "NormalizedWriteSuccesses", "MonitoringAlertsWriteFailures", "MonitoringAlertsWriteSuccesses", "SubscriptionUpdateFailures", "SubscriptionUpdateSuccesses", "Agent7PushFailures", "Agent7PushSkipped"]
+    }
+  ]
+}

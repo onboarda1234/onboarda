@@ -1,0 +1,10 @@
+fields @timestamp, @message
+| filter @message like /upload_latency_telemetry/
+| parse @message /operation=(?<operation>\S+)/
+| parse @message /path_template=(?<path_template>\S+)/
+| parse @message /status=(?<status>\d+)/
+| parse @message /duration_ms=(?<duration_ms>[0-9.]+)/
+| parse @message /request_bytes=(?<request_bytes>\d+)/
+| filter duration_ms >= 3000
+| sort duration_ms desc
+| limit 50

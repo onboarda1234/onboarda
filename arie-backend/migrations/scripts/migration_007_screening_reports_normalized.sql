@@ -1,0 +1,60 @@
+-- Migration 007: Create screening_reports_normalized table  (NO-OP)
+-- =====================================================================
+-- WHY THIS FILE IS NOW A NO-OP
+-- ----------------------------
+-- The original DDL used PostgreSQL-only constructs:
+--
+--   * `id SERIAL PRIMARY KEY` -- SQLite has no SERIAL type;
+--   * `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')`
+--     for the created_at / updated_at defaults -- SQLite has neither
+--     `to_char` nor `AT TIME ZONE`.
+--
+-- On a fresh SQLite database the file aborted with
+-- `sqlite3.OperationalError: near "AT": syntax error`, breaking the
+-- docker-validate CI job and any first-client SQLite stand-up.
+--
+-- The original file header itself documented this as a knowingly
+-- "controlled exception" pending a dialect-aware migration runner
+-- (still tracked as a HIGH follow-up). Because:
+--
+--   * `ENABLE_SCREENING_ABSTRACTION` defaults to `false`,
+--   * no EX-validated control reads `screening_reports_normalized`,
+--   * no runtime code path consults the table when the abstraction
+--     is disabled,
+--
+-- the simplest safe fix is to neuter this file so the migration
+-- chain applies cleanly on every dialect, and to defer the
+-- (re)creation of `screening_reports_normalized` to a future
+-- dialect-aware migration once the runner gains per-dialect SQL
+-- support.
+--
+-- IMPACT ON EXISTING POSTGRES ENVIRONMENTS
+-- ----------------------------------------
+-- Unaffected. Production PG environments where this migration
+-- already ran successfully retain the existing
+-- `screening_reports_normalized` table; making the file a no-op
+-- does not drop anything.
+--
+-- IMPACT ON NEW FRESH POSTGRES STAND-UPS
+-- --------------------------------------
+-- The table will not be created. This matches the pre-existing
+-- known-gap: `ENABLE_SCREENING_ABSTRACTION` is `false` by default,
+-- and a dialect-aware re-introduction of the table is part of the
+-- broader screening-abstraction follow-up. If a future stand-up
+-- enables the abstraction before that follow-up lands, a one-off
+-- DDL invocation (or a new file-based migration) is required --
+-- but this is unchanged from the prior state of this PR-set, where
+-- the file would also have failed on a fresh SQLite environment.
+--
+-- RETAINED AS NO-OP FOR schema_version CONTINUITY
+-- -----------------------------------------------
+-- Existing production environments already have version "007"
+-- recorded in `schema_version`. Renumbering or deleting this file
+-- would either re-orphan that row or shift later versions, so the
+-- file is preserved with a no-op body. The `SELECT 1` statement is
+-- portable across SQLite and PostgreSQL and has no side effects.
+--
+-- DO NOT delete this file. DO NOT renumber migrations. The file
+-- remains part of the applied-migration history on production
+-- environments.
+SELECT 1;

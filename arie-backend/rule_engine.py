@@ -1,0 +1,1666 @@
+"""
+ARIE Finance — Rule Engine: Risk Scoring, Country/Sector Classification, Rules 4A-4E
+Extracted from server.py during Sprint 2 monolith decomposition.
+
+Provides:
+    - Country risk classification (FATF grey/black, sanctioned, low-risk)
+    - Sector risk scoring
+    - Composite risk score computation (D1-D5 dimensions)
+    - Rule 4A-4E constants for pre-generation enforcement
+    - Risk aggregation weights and ranks
+    - Reusable risk recomputation helper (EX-09)
+"""
+import json
+import logging
+from datetime import datetime, timezone
+
+logger = logging.getLogger("arie")
+
+
+def safe_json_loads(val):
+    """Safely parse JSON — handles PostgreSQL JSONB (already dict) and SQLite TEXT (string)."""
+    if val is None:
+        return {}
+    if isinstance(val, (dict, list)):
+        return val
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+# ══════════════════════════════════════════════════════════
+# COUNTRY RISK CLASSIFICATION
+# ══════════════════════════════════════════════════════════
+
+# v1.6: Country lists updated to match ARIE_Risk_Score_Sheet v1.6 (80 countries)
+# Grey list = score 3 (FATF monitored jurisdictions)
+FATF_GREY = {"algeria", "burkina faso", "cameroon", "democratic republic of congo",
+             "haiti", "kenya", "laos", "lebanon", "mali", "monaco", "mozambique",
+             "nigeria", "pakistan", "philippines", "senegal", "south africa", "south sudan",
+             "tanzania", "venezuela", "vietnam", "yemen",
+             # Offshore/secrecy jurisdictions scored 3 (not FATF grey but high risk)
+             "bermuda", "vanuatu", "samoa", "marshall islands", "iraq"}
+
+# Black list / score 4 = FATF blacklisted, sanctioned, or suspended
+FATF_BLACK = {"iran", "north korea", "myanmar", "russia", "syria", "belarus",
+              "cuba", "afghanistan", "somalia", "libya", "eritrea", "sudan"}
+
+# Sanctioned countries (comprehensive) — used for hard blocks
+SANCTIONED = {"iran", "north korea", "syria", "cuba", "crimea", "myanmar",
+              "russia", "belarus"}
+
+SANCTIONED_COUNTRIES_FULL = {"iran", "north korea", "syria", "cuba", "crimea", "myanmar", "russia", "belarus",
+                              "venezuela", "afghanistan", "somalia", "yemen", "libya", "iraq", "south sudan",
+                              "central african republic", "democratic republic of congo", "mali",
+                              "guinea-bissau", "lebanon", "eritrea", "sudan"}
+
+# Secrecy jurisdictions — score 4 for intermediary shareholder purposes
+SECRECY_JURISDICTIONS = {"bvi", "british virgin islands", "cayman islands", "panama",
+                          "seychelles", "bermuda", "jersey", "guernsey", "isle of man",
+                          "liechtenstein", "vanuatu", "samoa", "marshall islands"}
+
+ALLOWED_CURRENCIES = {"USD", "EUR", "GBP", "AED"}
+
+# v1.6: Low risk = score 1 (FATF members, strong AML frameworks)
+# Removed: portugal, spain, italy (now scored by country_risk_scores DB or default 2)
+# Added: south korea, israel
+LOW_RISK = {"united kingdom", "uk", "france", "germany", "sweden", "norway",
+            "denmark", "finland", "australia", "new zealand", "canada", "usa", "united states",
+            "japan", "singapore", "hong kong", "switzerland", "netherlands", "belgium", "luxembourg",
+            "ireland", "austria", "south korea", "israel",
+            # v1.6: EU members with strong AML
+            "portugal", "spain", "italy"}
+
+
+# ══════════════════════════════════════════════════════════
+# SECTOR RISK SCORING
+# ══════════════════════════════════════════════════════════
+
+# v1.6: Sector scores aligned with ARIE_Risk_Score_Sheet Score Reference
+SECTOR_SCORES = {
+    "regulated financial": 1, "government": 1, "bank": 1, "listed company": 1,
+    "healthcare": 2, "technology": 2, "software": 2, "saas": 2, "manufacturing": 2,
+    "retail": 2, "e-commerce": 2, "education": 2, "media": 2, "logistics": 2,
+    "hospitality": 2, "tourism": 2, "travel": 2,  # v1.6: added from Score Reference
+    "import": 3, "export": 3, "real estate": 3, "construction": 3, "mining": 3,
+    "oil": 3, "gas": 3, "money services": 3, "forex": 3, "precious": 3,
+    "non-profit": 3, "ngo": 3, "charity": 3, "advisory": 3,
+    "management consulting": 3, "consulting": 3, "financial / tax advisory": 3,
+    "legal": 3, "accounting": 3,  # v1.6: Legal/Accounting/Advisory
+    "private banking": 3, "wealth management": 3,  # v1.6: added from Score Reference
+    "remittance": 3, "money transfer": 3,  # v1.6: MSB/Remittance
+    "crypto": 4, "virtual asset": 4, "gambling": 4, "gaming": 4, "betting": 4,
+    "arms": 4, "defence": 4, "military": 4, "shell company": 4, "nominee": 4,
+    "adult": 4, "adult entertainment": 4,  # v1.6: added from Score Reference
+}
+
+
+# ══════════════════════════════════════════════════════════
+# RULE 4A-4E CONSTANTS (Pre-generation enforcement)
+# ══════════════════════════════════════════════════════════
+
+HIGH_RISK_SECTORS = ("Cryptocurrency", "Money Services", "Gaming", "Arms", "Precious Metals")
+
+# Sectors that score 4 (very-high risk) — used by elevation logic
+HIGH_RISK_SECTOR_KEYWORDS = {
+    "crypto", "virtual asset", "digital asset", "gambling", "gaming", "betting",
+    "arms", "defence", "military", "shell company", "nominee",
+    "adult", "adult entertainment",
+}
+
+# Keywords indicating opaque / shell-like / materially complex ownership
+OPAQUE_OWNERSHIP_KEYWORDS = {
+    "complex", "shell", "opaque", "nominee", "bearer", "multi-layered",
+    "layered", "trust", "3+", "undisclosed",
+}
+
+MINIMUM_MEDIUM_SECTORS = ("Remittance", "Money Transfer", "Payment Services", "E-Money", "Virtual Assets", "MVTS")
+
+MEDIUM_RISK_SECTORS = ("Financial Services", "Real Estate", "Legal Services", "Trust Services", "Art Dealing")
+
+HIGH_RISK_COUNTRIES = ("Iran", "North Korea", "Syria", "Myanmar", "Afghanistan", "Yemen", "Libya", "Somalia")
+
+OFFSHORE_COUNTRIES = ("Mauritius", "Seychelles", "Cayman Islands", "BVI", "Panama", "Jersey", "Guernsey", "Isle of Man", "Bermuda", "Luxembourg", "Liechtenstein")
+
+# Sprint 2.5: Unified keyword lists — canonical source of truth.
+# Union of both rule_engine and memo_handler versions. No keywords removed.
+ALWAYS_RISK_DECREASING = [
+    "all documents verified", "biometric match", "clean audit", "clean sanctions",
+    "clean screening", "clear source of funds", "compliant jurisdiction",
+    "consistent activity", "cooperative jurisdiction", "domestic entity", "domestic only",
+    "established business", "face-to-face", "face-to-face verified", "fatf compliant",
+    "fully verified", "licensed entity", "listed company", "long-standing relationship",
+    "low jurisdictional risk", "low risk jurisdiction", "low risk sector",
+    "no adverse findings", "no adverse media", "no bearer shares", "no money laundering",
+    "no nominee shareholders", "no outstanding documents", "no pep exposure",
+    "no regulatory action", "no risk factors identified", "no sanctions match",
+    "no shell companies", "no terrorism financing", "no unusual transactions",
+    "publicly listed", "regulated entity", "simple structure", "single jurisdiction",
+    "source of funds verified", "transparent ownership", "verified identity",
+]
+
+ALWAYS_RISK_INCREASING = [
+    "adverse media", "bearer shares", "cannot be determined", "cash intensive",
+    "cash-intensive", "complex ownership", "complex structure", "criminal record",
+    "cross-border high-risk", "data gap", "dormant company", "high risk jurisdiction",
+    "incomplete documents", "layering", "limited trading history", "missing data",
+    "multi-layered", "no financial statements", "no source of funds", "nominee director",
+    "nominee shareholder", "non-cooperative jurisdiction", "not provided", "offshore",
+    "ongoing investigation", "opacity score high", "opaque structure", "outstanding document",
+    "recently incorporated", "regulatory action", "round-tripping", "sanctioned country",
+    "sanctions match", "secrecy jurisdiction", "shell company", "structuring",
+    "suspicious transaction", "tax haven", "undisclosed ubo", "unexplained wealth",
+    "unusual transaction", "unverified source of funds", "virtual assets",
+]
+
+
+# ══════════════════════════════════════════════════════════
+# RISK AGGREGATION
+# ══════════════════════════════════════════════════════════
+
+RISK_WEIGHTS = {
+    "jurisdiction": 0.20,
+    "business": 0.15,
+    "transaction": 0.10,
+    "ownership": 0.25,
+    "fincrime": 0.10,
+    "documentation": 0.10,
+    "data_quality": 0.10,
+}
+
+RISK_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
+RISK_SCORE_FLOORS = {"LOW": 0.0, "MEDIUM": 40.0, "HIGH": 55.0, "VERY_HIGH": 70.0}
+RISK_LANE_MAP = {
+    "LOW": "Fast Lane",
+    "MEDIUM": "Standard Review",
+    "HIGH": "EDD",
+    "VERY_HIGH": "EDD",
+}
+
+
+def _append_unique(items, value):
+    if value and value not in items:
+        items.append(value)
+
+
+def _risk_tier_from_score(score):
+    try:
+        score = int(score)
+    except (TypeError, ValueError):
+        return ""
+    if score >= 4:
+        return "very_high"
+    if score >= 3:
+        return "elevated"
+    if score <= 1:
+        return "low"
+    return "standard"
+
+
+def _score_after_floor(current_score, minimum_level):
+    if minimum_level == "MEDIUM":
+        return current_score
+    return max(current_score, RISK_SCORE_FLOORS[minimum_level])
+
+
+def _ownership_transparency_tier(ownership_structure):
+    return "opaque" if _is_opaque_ownership(ownership_structure) else "clear"
+
+
+def apply_risk_floor(risk_dict, minimum_level, reason_code, reason_text):
+    """Mutate a risk result so the final displayed level cannot sit below a mandatory floor."""
+    if not isinstance(risk_dict, dict):
+        return risk_dict
+
+    minimum = str(minimum_level or "").strip().upper()
+    if minimum not in RISK_RANK:
+        return risk_dict
+
+    current = str(
+        risk_dict.get("final_risk_level")
+        or risk_dict.get("level")
+        or risk_dict.get("risk_level")
+        or ""
+    ).strip().upper()
+    if current not in RISK_RANK:
+        current = "LOW"
+
+    if RISK_RANK[current] >= RISK_RANK[minimum]:
+        return risk_dict
+
+    previous_score = risk_dict.get("score")
+    try:
+        previous_score_num = float(previous_score)
+    except (TypeError, ValueError):
+        previous_score_num = 0.0
+
+    risk_dict.setdefault("base_risk_score", previous_score_num)
+    risk_dict.setdefault("base_risk_level", current)
+    risk_dict["score"] = _score_after_floor(previous_score_num, minimum)
+    risk_dict["level"] = minimum
+    risk_dict["final_risk_level"] = minimum
+    risk_dict["lane"] = RISK_LANE_MAP.get(minimum, "Standard Review")
+
+    escalations = risk_dict.get("escalations")
+    if not isinstance(escalations, list):
+        escalations = []
+    _append_unique(escalations, reason_code)
+    risk_dict["escalations"] = escalations
+
+    existing = str(risk_dict.get("elevation_reason_text") or "").strip()
+    reason = str(reason_text or "").strip()
+    if reason and reason not in existing:
+        risk_dict["elevation_reason_text"] = f"{existing}; {reason}" if existing else reason
+    elif existing:
+        risk_dict["elevation_reason_text"] = existing
+    else:
+        risk_dict["elevation_reason_text"] = ""
+
+    return risk_dict
+
+
+# ══════════════════════════════════════════════════════════
+# RISK CONFIG SCHEMA VALIDATION
+# ══════════════════════════════════════════════════════════
+
+def _normalize_score_map(value):
+    """Attempt to normalize a malformed score map into a canonical dict.
+
+    Handles the known corruption pattern where a list-of-dicts was stored
+    instead of a flat dict.  E.g. [{"sme": 2}, {"shell": 4}] → {"sme": 2, "shell": 4}.
+
+    Returns the dict on success, or None if normalization is not possible.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        # Try to merge list-of-dicts into a single dict
+        merged = {}
+        for item in value:
+            if isinstance(item, dict):
+                merged.update(item)
+            else:
+                return None  # Cannot normalize: list contains non-dict items
+        if merged:
+            return merged
+    return None
+
+
+def validate_score_map(value, column_name):
+    """Validate that a score-mapping column is a dict {str → int/float}.
+
+    Returns (valid_dict, errors) where valid_dict is the validated/normalized
+    dict (or None if invalid) and errors is a list of error messages.
+    """
+    errors = []
+    if value is None:
+        return None, []
+
+    if not isinstance(value, dict):
+        # Attempt normalization (e.g. list-of-dicts → flat dict)
+        normalized = _normalize_score_map(value)
+        if normalized is not None:
+            logger.warning(
+                "risk_config %s: normalized %s to dict (%d entries)",
+                column_name, type(value).__name__, len(normalized),
+            )
+            value = normalized
+        else:
+            errors.append(
+                f"{column_name}: expected dict, got {type(value).__name__}"
+            )
+            return None, errors
+
+    # Validate entries: keys must be strings, values must be numeric
+    bad_entries = []
+    for k, v in value.items():
+        if not isinstance(k, str):
+            bad_entries.append(f"key {k!r} is not a string")
+        if not isinstance(v, (int, float)):
+            bad_entries.append(f"value for {k!r} is {type(v).__name__}, expected int/float")
+    if bad_entries:
+        errors.append(f"{column_name}: invalid entries: {'; '.join(bad_entries[:5])}")
+
+    return value, errors
+
+
+def validate_dimensions(value):
+    """Validate that dimensions is a list of objects with id, name, weight, subcriteria.
+
+    Returns (valid_list, errors).
+    """
+    errors = []
+    if value is None:
+        return None, []
+
+    if not isinstance(value, list):
+        errors.append(f"dimensions: expected list, got {type(value).__name__}")
+        return None, errors
+
+    for i, dim in enumerate(value):
+        if not isinstance(dim, dict):
+            errors.append(f"dimensions[{i}]: expected dict, got {type(dim).__name__}")
+            continue
+        for required_key in ("id", "name", "weight"):
+            if required_key not in dim:
+                errors.append(f"dimensions[{i}]: missing required key '{required_key}'")
+        if "weight" in dim and not isinstance(dim["weight"], (int, float)):
+            errors.append(f"dimensions[{i}].weight: expected number, got {type(dim['weight']).__name__}")
+        if "subcriteria" in dim:
+            if not isinstance(dim["subcriteria"], list):
+                errors.append(f"dimensions[{i}].subcriteria: expected list, got {type(dim['subcriteria']).__name__}")
+            else:
+                for j, sub in enumerate(dim["subcriteria"]):
+                    if not isinstance(sub, dict):
+                        errors.append(f"dimensions[{i}].subcriteria[{j}]: expected dict")
+                    elif "name" not in sub or "weight" not in sub:
+                        errors.append(f"dimensions[{i}].subcriteria[{j}]: missing name or weight")
+
+    return value, errors
+
+
+def validate_thresholds(value):
+    """Validate that thresholds is a list of {level, min, max} objects.
+
+    Returns (valid_list, errors).
+    """
+    errors = []
+    if value is None:
+        return None, []
+
+    if not isinstance(value, list):
+        errors.append(f"thresholds: expected list, got {type(value).__name__}")
+        return None, errors
+
+    required_levels = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+    found_levels = set()
+    for i, t in enumerate(value):
+        if not isinstance(t, dict):
+            errors.append(f"thresholds[{i}]: expected dict, got {type(t).__name__}")
+            continue
+        for required_key in ("level", "min", "max"):
+            if required_key not in t:
+                errors.append(f"thresholds[{i}]: missing required key '{required_key}'")
+        level = t.get("level")
+        if level:
+            found_levels.add(level)
+
+    missing = required_levels - found_levels
+    if missing and value:
+        errors.append(f"thresholds: missing levels: {sorted(missing)}")
+
+    return value, errors
+
+
+def validate_risk_config(config):
+    """Validate the full risk_config dict.
+
+    Returns (validated_config, all_errors) where validated_config has
+    malformed score maps normalized where possible and set to None where not.
+    """
+    all_errors = []
+    validated = dict(config) if config else {}
+
+    # Validate dimensions
+    dims, errs = validate_dimensions(validated.get("dimensions"))
+    validated["dimensions"] = dims
+    all_errors.extend(errs)
+
+    # Validate thresholds
+    thresh, errs = validate_thresholds(validated.get("thresholds"))
+    validated["thresholds"] = thresh
+    all_errors.extend(errs)
+
+    # Validate score maps
+    for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+        val, errs = validate_score_map(validated.get(col), col)
+        validated[col] = val
+        all_errors.extend(errs)
+
+    return validated, all_errors
+
+
+# ══════════════════════════════════════════════════════════
+# RISK CONFIG LOADING (DB is canonical, hardcoded = fallback)
+# ══════════════════════════════════════════════════════════
+
+def load_risk_config():
+    """Load live risk scoring configuration from DB. Falls back to None if DB unavailable.
+
+    Validates that score-mapping columns (country_risk_scores, sector_risk_scores,
+    entity_type_scores) are dicts after JSON parsing.  If any column is malformed
+    (e.g. stored as a list or scalar), it is logged and set to None so that the
+    hardcoded fallback in the scoring functions takes over.
+
+    Attempts normalization of list-of-dicts → flat dict before rejecting.
+    """
+    try:
+        from db import get_db
+        db = get_db()
+        config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
+        db.close()
+        if config:
+            result = {}
+            for key in ("dimensions", "thresholds", "country_risk_scores",
+                        "sector_risk_scores", "entity_type_scores"):
+                try:
+                    val = config[key]
+                    result[key] = safe_json_loads(val) if val else None
+                except (KeyError, IndexError):
+                    result[key] = None
+
+            # ── Full schema validation with normalization ──
+            validated, errors = validate_risk_config(result)
+            for err in errors:
+                logger.error("risk_config validation: %s", err)
+
+            return validated
+    except Exception as e:
+        logger.warning(f"Failed to load risk config from DB: {e}. Using hardcoded defaults.")
+    return None
+
+
+# ══════════════════════════════════════════════════════════
+# SCORING FUNCTIONS
+# ══════════════════════════════════════════════════════════
+
+def classify_country(country_name, config_country_scores=None):
+    """Return risk score 1-4 for a country. Uses DB config if provided, else hardcoded FATF lists.
+
+    Handles common prefixes like "Republic of Mauritius" → "mauritius",
+    and aliases like "England & Wales" → "united kingdom".
+    """
+    if not country_name:
+        return 2
+    c = country_name.lower().strip()
+
+    # Apply known aliases first
+    _ALIASES = {
+        "uk": "united kingdom", "gb": "united kingdom", "gbr": "united kingdom",
+        "great britain": "united kingdom", "britain": "united kingdom",
+        "england": "united kingdom", "scotland": "united kingdom",
+        "wales": "united kingdom", "northern ireland": "united kingdom",
+        "england and wales": "united kingdom", "england & wales": "united kingdom",
+        "us": "united states", "usa": "united states",
+        "united states of america": "united states",
+        "uae": "united arab emirates", "emirates": "united arab emirates",
+        "korea": "south korea", "republic of korea": "south korea",
+        "bvi": "british virgin islands",
+        "hk": "hong kong", "sg": "singapore",
+    }
+    c = _ALIASES.get(c, c)
+
+    # Type guard: if config is not a dict, discard it and log
+    if config_country_scores is not None and not isinstance(config_country_scores, dict):
+        logger.error(
+            "classify_country received non-dict config_country_scores: type=%s — using hardcoded FATF lists",
+            type(config_country_scores).__name__,
+        )
+        config_country_scores = None
+
+    def _lookup(name):
+        """Check name against all risk lists. Returns score or None."""
+        if config_country_scores:
+            score = config_country_scores.get(name)
+            if score is not None:
+                return int(score)
+        if name in SANCTIONED:
+            return 4
+        if name in FATF_BLACK:
+            return 4
+        if name in FATF_GREY:
+            return 3
+        if name in LOW_RISK:
+            return 1
+        return None
+
+    # Try exact match first (handles "democratic republic of congo" etc.)
+    result = _lookup(c)
+    if result is not None:
+        return result
+
+    # Strip common country prefixes and retry
+    for prefix in ("republic of ", "state of ", "the ", "federation of "):
+        if c.startswith(prefix) and len(c) > len(prefix):
+            stripped = c[len(prefix):].strip()
+            result = _lookup(stripped)
+            if result is not None:
+                return result
+
+    return 2  # standard
+
+
+def score_sector(sector_name, config_sector_scores=None):
+    """Return risk score 1-4 for a sector. Uses DB config if provided, else hardcoded."""
+    if not sector_name:
+        return 2
+    s = sector_name.lower()
+    # Type guard: if config is not a dict, discard it and log
+    if config_sector_scores is not None and not isinstance(config_sector_scores, dict):
+        logger.error(
+            "score_sector received non-dict config_sector_scores: type=%s — using hardcoded SECTOR_SCORES",
+            type(config_sector_scores).__name__,
+        )
+        config_sector_scores = None
+    # DB config lookup (canonical source)
+    scores = config_sector_scores if config_sector_scores else SECTOR_SCORES
+    for key, score in scores.items():
+        if key in s:
+            return int(score)
+    return 2
+
+
+def _score_entity_type(entity_type_str, config_entity_scores=None):
+    """Return risk score 1-4 for an entity type. Uses DB config if provided, else hardcoded."""
+    if not entity_type_str:
+        return 2
+    et = entity_type_str.lower()
+    # Hardcoded fallback entity map
+    _default_entity_map = {
+        "listed": 1, "regulated fi": 1, "regulated fund": 2, "regulated": 1,
+        "government": 1,
+        "large private": 2, "sme": 2,
+        "newly incorporated": 3, "trust": 3, "foundation": 3,
+        "ngo": 3, "non-profit": 3,
+        "unregulated fund": 4, "shell": 4,
+    }
+    # Type guard: if config is not a dict, discard it and log
+    if config_entity_scores is not None and not isinstance(config_entity_scores, dict):
+        logger.error(
+            "_score_entity_type received non-dict config_entity_scores: type=%s — using hardcoded entity_map",
+            type(config_entity_scores).__name__,
+        )
+        config_entity_scores = None
+    scores = config_entity_scores if config_entity_scores else _default_entity_map
+    for k, v in scores.items():
+        if k in et:
+            return int(v)
+    return 2
+
+
+# ══════════════════════════════════════════════════════════
+# CANONICAL RISK LEVEL CLASSIFICATION
+# Single source of truth for score-to-band mapping.
+# Aligned with Excel Risk Scoring Calculator v1.6:
+#   Low (0–39) | Medium (40–54) | High (55–69) | Very High (70–100)
+# No other code path may perform independent score-to-level mapping.
+# ══════════════════════════════════════════════════════════
+
+# Canonical hardcoded thresholds — must match DB seed and Excel
+CANONICAL_THRESHOLDS = [
+    {"level": "LOW", "min": 0, "max": 39.9},
+    {"level": "MEDIUM", "min": 40, "max": 54.9},
+    {"level": "HIGH", "min": 55, "max": 69.9},
+    {"level": "VERY_HIGH", "min": 70, "max": 100},
+]
+
+
+def _is_elevated_jurisdiction(country_name, country_scores=None):
+    """Return True if country is FATF grey-list or elevated (score >= 3)."""
+    if not country_name:
+        return False
+    c = country_name.lower().strip()
+    if c in FATF_GREY:
+        return True
+    # Also check score >= 3 from DB config
+    score = classify_country(c, country_scores)
+    return score >= 3
+
+
+def _is_high_risk_sector(sector_name, sector_scores=None):
+    """Return True if sector scores 4 (very-high risk) or matches high-risk keywords."""
+    if not sector_name:
+        return False
+    s = sector_name.lower()
+    # Check keywords
+    for kw in HIGH_RISK_SECTOR_KEYWORDS:
+        if kw in s:
+            return True
+    # Check scored value
+    actual_score = score_sector(sector_name, sector_scores)
+    return actual_score >= 4
+
+
+def _is_opaque_ownership(ownership_structure):
+    """Return True if ownership structure is opaque, shell-like, or materially complex."""
+    if not ownership_structure:
+        return False
+    os_val = ownership_structure.lower()
+    for kw in OPAQUE_OWNERSHIP_KEYWORDS:
+        if kw in os_val:
+            return True
+    return False
+
+
+def _has_material_screening_concern(app_data):
+    """Return True and a reason string if screening data indicates a material unresolved concern.
+
+    Material concerns: serious PEP hit, adverse media, sanctions-adjacent match,
+    or equivalent escalation signal requiring enhanced review.
+    """
+    reasons = []
+
+    # Check adverse media
+    adverse_media_data = app_data.get("adverse_media") or (
+        app_data.get("screening_results", {}).get("adverse_media") if isinstance(app_data.get("screening_results"), dict) else None
+    )
+    if adverse_media_data:
+        am_status = (adverse_media_data if isinstance(adverse_media_data, str) else
+                     adverse_media_data.get("status", "") if isinstance(adverse_media_data, dict) else "").lower()
+        if any(kw in am_status for kw in ("confirmed", "regulatory", "criminal", "serious", "material")):
+            reasons.append("adverse_media:" + am_status)
+
+    # Check screening results for sanctions-adjacent / unresolved PEP
+    screening = app_data.get("screening_results") or {}
+    if isinstance(screening, dict):
+        sanctions = screening.get("sanctions") or screening.get("sanctions_screening") or {}
+        if isinstance(sanctions, dict):
+            s_status = (sanctions.get("status") or sanctions.get("result") or "").lower()
+            if any(kw in s_status for kw in ("match", "hit", "positive", "adjacent", "unresolved")):
+                reasons.append("sanctions_concern:" + s_status)
+
+        pep = screening.get("pep") or screening.get("pep_screening") or {}
+        if isinstance(pep, dict):
+            p_status = (pep.get("status") or pep.get("result") or "").lower()
+            if any(kw in p_status for kw in ("confirmed", "material", "serious", "high", "unresolved")):
+                reasons.append("pep_concern:" + p_status)
+
+    # Check for explicit screening_concern flag
+    if app_data.get("screening_concern"):
+        concern = app_data["screening_concern"]
+        if isinstance(concern, str) and concern.lower() not in ("none", "clear", "no", "false", ""):
+            reasons.append("screening_concern:" + concern.lower())
+        elif isinstance(concern, bool) and concern:
+            reasons.append("screening_concern:flagged")
+
+    return (bool(reasons), reasons)
+
+
+def classify_risk_level(composite_score, config=None):
+    """
+    Canonical score-to-band mapping.  ONE function, called from ONE place.
+    Reads thresholds from DB config first; falls back to CANONICAL_THRESHOLDS.
+
+    Thresholds (aligned with Excel Risk Scoring Calculator v1.6):
+        LOW:       0  – 39.9
+        MEDIUM:   40  – 54.9
+        HIGH:     55  – 69.9
+        VERY_HIGH: 70 – 100
+    """
+    if config and config.get("thresholds"):
+        thresholds = sorted(config["thresholds"], key=lambda t: t.get("min", 0))
+    else:
+        thresholds = CANONICAL_THRESHOLDS
+
+    level = "LOW"
+    for t in thresholds:
+        if composite_score >= t.get("min", 0):
+            level = t.get("level", "LOW")
+    return level
+
+
+def compute_risk_score(app_data, config_override=None):
+    """
+    Compute composite risk score from application data.
+    Reads scoring configuration from DB (canonical). Falls back to hardcoded defaults.
+
+    Formula: composite = (weighted_avg - 1) / 3 × 100
+    Thresholds: LOW 0-39, MEDIUM 40-54, HIGH 55-69, VERY_HIGH 70-100
+
+    Returns: {
+        score: float (0-100),                               # raw/floor-adjusted score; MEDIUM floors preserve raw score
+        level: str (LOW|MEDIUM|HIGH|VERY_HIGH),          # final risk level (post-elevation)
+        base_risk_score: float,                             # score-based risk before floor/elevation
+        base_risk_level: str,                             # score-based level before elevation
+        final_risk_level: str,                            # same as level (explicit alias)
+        dimensions: {d1..d5},
+        lane: str,
+        escalations: list[str],
+        elevation_reason_text: str,                       # human-readable elevation reason
+        requires_compliance_approval: bool,
+    }
+    """
+    data = safe_json_loads(app_data) if not isinstance(app_data, dict) else app_data
+
+    # Load config from DB (or use override for testing)
+    config = config_override or load_risk_config()
+
+    # ── Extract dimension weights from config ──
+    if config and config.get("dimensions"):
+        dim_weights = {}
+        dim_subcriteria = {}
+        for dim in config["dimensions"]:
+            dim_id = dim.get("id", "").upper()
+            dim_weights[dim_id] = dim.get("weight", 0) / 100.0
+            dim_subcriteria[dim_id] = dim.get("subcriteria", [])
+        d1_weight = dim_weights.get("D1", 0.30)
+        d2_weight = dim_weights.get("D2", 0.25)
+        d3_weight = dim_weights.get("D3", 0.20)
+        d4_weight = dim_weights.get("D4", 0.15)
+        d5_weight = dim_weights.get("D5", 0.10)
+    else:
+        logger.warning("No dimension config from DB; using hardcoded weights.")
+        d1_weight, d2_weight, d3_weight, d4_weight, d5_weight = 0.30, 0.25, 0.20, 0.15, 0.10
+        dim_subcriteria = {}
+
+    # ── Extract scoring lookups from config ──
+    country_scores = (config.get("country_risk_scores") if config else None) or None
+    sector_scores = (config.get("sector_risk_scores") if config else None) or None
+    entity_scores = (config.get("entity_type_scores") if config else None) or None
+
+    if not country_scores:
+        logger.warning("No country_risk_scores from DB; using hardcoded FATF lists.")
+    if not sector_scores:
+        logger.warning("No sector_risk_scores from DB; using hardcoded SECTOR_SCORES.")
+    if not entity_scores:
+        logger.warning("No entity_type_scores from DB; using hardcoded entity_map.")
+
+    # ── Extract D1 sub-factor weights from config ──
+    d1_subs = dim_subcriteria.get("D1", [])
+    if len(d1_subs) >= 6:
+        d1_w = [s.get("weight", 0) / 100.0 for s in d1_subs]
+    else:
+        d1_w = [0.20, 0.20, 0.25, 0.15, 0.10, 0.10]
+
+    # D1: Customer / Entity Risk
+    owner_map = {"simple": 1, "1-2": 2, "3+": 3, "complex": 4}
+
+    d1_entity = _score_entity_type(data.get("entity_type"), entity_scores)
+
+    d1_owner = 2
+    os_val = (data.get("ownership_structure") or "").lower()
+    for k, v in owner_map.items():
+        if k in os_val:
+            d1_owner = v
+            break
+
+    # D1.3 PEP Status — 3-tier scoring (v1.6)
+    all_persons = data.get("directors", []) + data.get("ubos", [])
+    pep_scores = []
+    for p in all_persons:
+        if p.get("is_pep") == "Yes":
+            pep_type = (p.get("pep_type") or p.get("pep_category") or "").lower()
+            if "foreign" in pep_type or "international" in pep_type:
+                pep_scores.append(4)
+            else:
+                # Domestic PEP or close associate = 3
+                pep_scores.append(3)
+    d1_pep = max(pep_scores) if pep_scores else 1
+
+    # D1.4 Adverse Media / Negative News — scored from screening data (v1.6)
+    adverse_media_data = data.get("adverse_media") or data.get("screening_results", {}).get("adverse_media")
+    if adverse_media_data:
+        am_status = (adverse_media_data if isinstance(adverse_media_data, str) else
+                     adverse_media_data.get("status", "") if isinstance(adverse_media_data, dict) else "").lower()
+        if "confirmed" in am_status or "regulatory" in am_status or "criminal" in am_status:
+            d1_adverse = 4
+        elif "minor" in am_status or "unsubstantiated" in am_status:
+            d1_adverse = 2
+        elif am_status in ("clear", "none", "no"):
+            d1_adverse = 1
+        else:
+            d1_adverse = 1  # No data = assume clear
+    else:
+        d1_adverse = 1  # No screening data available = assume clear
+
+    # D1.5 Source of Wealth — scored from application data (v1.6)
+    _sow_map = {
+        "business revenue": 1, "trading profits": 1, "investment": 1, "dividends": 1,
+        "government funding": 1, "grants": 1,
+        "sale of assets": 2, "property": 2, "venture capital": 2, "investor funding": 2,
+        "inheritance": 3, "family wealth": 3, "loan": 3, "credit": 3, "other": 3,
+    }
+    sow_val = (data.get("source_of_wealth") or "").lower()
+    d1_sow = 2  # default medium if not declared
+    if not sow_val or sow_val in ("information not provided", "not provided", "unknown"):
+        d1_sow = 3  # Unknown source of wealth = high risk
+    else:
+        for k, v in _sow_map.items():
+            if k in sow_val:
+                d1_sow = v
+                break
+
+    # D1.6 Initial Source of Funds — scored from application data (v1.6)
+    _sof_map = {
+        "company bank": 1, "parent company": 1, "group entity": 1, "client payments": 1,
+        "receivables": 1, "revenue": 1, "business operations": 1,
+        "shareholder": 2, "director": 2, "capital injection": 2, "investment round": 2,
+        "fundraise": 2, "sale of assets": 2,
+        "loan": 3, "credit facility": 3, "other": 3,
+    }
+    sof_val = (data.get("source_of_funds") or "").lower()
+    d1_sof = 2  # default medium if not declared
+    if not sof_val or sof_val in ("information not provided", "not provided", "unknown"):
+        d1_sof = 3  # Unknown source of funds = high risk
+    else:
+        for k, v in _sof_map.items():
+            if k in sof_val:
+                d1_sof = v
+                break
+
+    d1 = (d1_entity * d1_w[0] + d1_owner * d1_w[1] + d1_pep * d1_w[2] +
+          d1_adverse * d1_w[3] + d1_sow * d1_w[4] + d1_sof * d1_w[5])
+
+    # ── Extract D2 sub-factor weights from config ──
+    d2_subs = dim_subcriteria.get("D2", [])
+    if len(d2_subs) >= 5:
+        d2_w = [s.get("weight", 0) / 100.0 for s in d2_subs]
+    else:
+        d2_w = [0.25, 0.20, 0.20, 0.20, 0.15]
+
+    # D2: Geographic Risk
+    d2_inc = classify_country(data.get("country"), country_scores)
+
+    # Intermediary shareholder jurisdictions
+    intermediaries = data.get("intermediary_shareholders", [])
+    if intermediaries:
+        inter_scores = []
+        for inter in intermediaries:
+            j = (inter.get("jurisdiction") or "").strip()
+            j_score = classify_country(j, country_scores)
+            # v1.6: Boost secrecy/opacity jurisdictions to score 4 (was 3)
+            if j.lower() in SECRECY_JURISDICTIONS:
+                j_score = max(j_score, 4)
+            inter_scores.append(j_score)
+        d2_inter = max(inter_scores) if inter_scores else 1
+    else:
+        d2_inter = 1  # No intermediaries = low risk
+
+    # UBO/Director nationalities
+    nat_demonym_map = {
+        "indian": "india", "singaporean": "singapore", "swedish": "sweden",
+        "emirati": "uae", "russian": "russia", "estonian": "estonia",
+        "senegalese": "senegal", "french": "france", "mauritian": "mauritius",
+        "chinese": "china", "moroccan": "morocco", "nigerian": "nigeria",
+        "british": "united kingdom", "american": "united states",
+        "german": "germany", "japanese": "japan", "australian": "australia",
+        "canadian": "canada", "lebanese": "lebanon", "iranian": "iran",
+        "syrian": "syria", "afghan": "afghanistan", "belarusian": "belarus",
+        "venezuelan": "venezuela", "cuban": "cuba", "north korean": "north korea",
+        "pakistani": "pakistan", "south african": "south africa",
+        "vietnamese": "vietnam", "filipino": "philippines",
+    }
+    all_persons = data.get("directors", []) + data.get("ubos", [])
+    nat_scores = []
+    for person in all_persons:
+        nat = (person.get("nationality") or "").strip().lower()
+        if nat:
+            mapped = nat_demonym_map.get(nat, nat)
+            nat_scores.append(classify_country(mapped, country_scores))
+    d2_ubo_nat = max(nat_scores) if nat_scores else 1
+
+    op_countries = data.get("operating_countries", [])
+    d2_op = max([classify_country(c, country_scores) for c in op_countries]) if op_countries else d2_inc
+    target_markets = data.get("target_markets", [])
+    d2_tgt = max([classify_country(c, country_scores) for c in target_markets]) if target_markets else d2_inc
+    d2 = d2_inc * d2_w[0] + d2_ubo_nat * d2_w[1] + d2_inter * d2_w[2] + d2_op * d2_w[3] + d2_tgt * d2_w[4]
+
+    # ── Extract D3 sub-factor weights from config ──
+    d3_subs = dim_subcriteria.get("D3", [])
+    if len(d3_subs) >= 3:
+        d3_w = [s.get("weight", 0) / 100.0 for s in d3_subs]
+    else:
+        d3_w = [0.40, 0.35, 0.25]
+
+    # D3: Product / Service Risk
+    # D3.1 Primary service
+    d3_svc = 2  # default
+    svc_val = (data.get("primary_service") or data.get("service_required") or "").lower()
+    if "domestic" in svc_val and "single" in svc_val:
+        d3_svc = 1
+    elif "multi-currency" in svc_val or "multi currency" in svc_val:
+        d3_svc = 2
+    elif "cross-border" in svc_val or "international" in svc_val or data.get("cross_border"):
+        d3_svc = 3
+    elif data.get("cross_border"):
+        d3_svc = 3
+
+    # D3.2 Monthly volume — ordered checks to avoid substring false matches
+    d3_vol = 2
+    vol = (data.get("monthly_volume") or data.get("expected_volume") or "").lower()
+    if "over" in vol or "5,000,000" in vol or "5000000" in vol or "> 5" in vol:
+        d3_vol = 4
+    elif "500,000" in vol or "500000" in vol:
+        d3_vol = 3
+    elif "50,000" in vol or "50000" in vol:
+        d3_vol = 2
+    elif "under" in vol or "< 50" in vol or "below" in vol:
+        d3_vol = 1
+
+    # D3.3 Transaction Complexity & Corridors — scored from data (v1.6)
+    d3_complexity = 2  # default
+    complexity_val = (data.get("transaction_complexity") or data.get("payment_corridors") or "").lower()
+    if "simple" in complexity_val or "single currency" in complexity_val or "domestic" in complexity_val:
+        d3_complexity = 1
+    elif "standard" in complexity_val or "multi-currency" in complexity_val:
+        d3_complexity = 2
+    elif "complex" in complexity_val or "multiple international" in complexity_val:
+        d3_complexity = 3
+    elif "very complex" in complexity_val or "high-risk corridor" in complexity_val:
+        d3_complexity = 4
+    elif data.get("cross_border") and data.get("target_markets"):
+        # Infer from other fields: cross-border with multiple markets = at least standard
+        tm = data.get("target_markets", [])
+        high_risk_markets = sum(1 for c in tm if classify_country(c, country_scores) >= 3)
+        if high_risk_markets > 0:
+            d3_complexity = 4
+        elif len(tm) > 2:
+            d3_complexity = 3
+        else:
+            d3_complexity = 2
+
+    d3 = d3_svc * d3_w[0] + d3_vol * d3_w[1] + d3_complexity * d3_w[2]
+
+    # D4: Industry / Sector Risk
+    d4 = score_sector(data.get("sector"), sector_scores)
+
+    # ── Extract D5 sub-factor weights from config ──
+    d5_subs = dim_subcriteria.get("D5", [])
+    if len(d5_subs) >= 2:
+        d5_w = [s.get("weight", 0) / 100.0 for s in d5_subs]
+    else:
+        d5_w = [0.50, 0.50]
+
+    # D5: Delivery Channel Risk
+    # D5.1 Introduction / Referral Method
+    intro_map = {"direct": 1, "regulated": 1, "non-regulated": 3, "unsolicited": 4}
+    d5_intro = 2
+    intro = (data.get("introduction_method") or "").lower()
+    for k, v in intro_map.items():
+        if k in intro:
+            d5_intro = v
+            break
+
+    # D5.2 Customer Interaction Type — scored from data (v1.6)
+    d5_interaction = 2  # default = non-face-to-face low risk
+    interaction_val = (data.get("customer_interaction") or data.get("interaction_type") or "").lower()
+    if "face-to-face" in interaction_val or "in-person" in interaction_val or "in person" in interaction_val:
+        d5_interaction = 1
+    elif "video" in interaction_val:
+        d5_interaction = 2
+    elif "non-face" in interaction_val or "remote" in interaction_val:
+        # Check if high-risk jurisdiction for non-face-to-face
+        inc_country = data.get("country", "")
+        if classify_country(inc_country, country_scores) >= 3:
+            d5_interaction = 3
+        else:
+            d5_interaction = 2
+    elif "anonymous" in interaction_val or "unverified" in interaction_val:
+        d5_interaction = 4
+
+    d5 = d5_intro * d5_w[0] + d5_interaction * d5_w[1]
+
+    # Composite: weighted average on 1-4 scale, then normalize to 0-100
+    weighted_avg = d1 * d1_weight + d2 * d2_weight + d3 * d3_weight + d4 * d4_weight + d5 * d5_weight
+    composite = round((weighted_avg - 1) / 3 * 100, 1)
+
+    # ── Classify risk level from score (single canonical mapping) ──
+    base_score = composite
+    base_level = classify_risk_level(composite, config)
+    level = base_level  # will be elevated below if conditions met
+
+    # ── Collect escalation flags ──
+    escalations = []
+    elevation_reasons = []
+
+    def apply_local_floor(minimum_level, reason_code, reason_text):
+        nonlocal composite, level
+        minimum = str(minimum_level or "").strip().upper()
+        if minimum not in RISK_RANK:
+            return
+        if RISK_RANK.get(level, 0) >= RISK_RANK[minimum]:
+            return
+        previous_level = level
+        level = minimum
+        composite = _score_after_floor(composite, minimum)
+        _append_unique(escalations, reason_code)
+        elevation_reasons.append(reason_text)
+        logger.info(
+            "RISK FLOOR: %s -> %s because %s (base_score=%s, final_score=%s)",
+            previous_level,
+            minimum,
+            reason_code,
+            base_score,
+            composite,
+        )
+
+    # ── FLOOR RULE 1: Sanctioned / FATF_BLACK incorporation country → force VERY_HIGH ──
+    # If the incorporation country is sanctioned or FATF blacklisted,
+    # the overall risk level MUST be VERY_HIGH regardless of composite score.
+    inc_country = (data.get("country") or "").lower().strip()
+    if inc_country and (inc_country in SANCTIONED or inc_country in FATF_BLACK):
+        if level != "VERY_HIGH":
+            logger.info(f"FLOOR RULE: Country '{inc_country}' is sanctioned/FATF_BLACK — forcing VERY_HIGH (was {level}, score {composite})")
+        level = "VERY_HIGH"
+        composite = max(composite, 70.0)
+        escalations.append(f"floor_rule_sanctioned_country:{inc_country}")
+        elevation_reasons.append(f"Sanctioned/FATF-blacklisted country: {inc_country}")
+
+    # ── FLOOR RULE 2: UBO/Director sanctioned nationality → force VERY_HIGH ──
+    # If any UBO or director holds nationality of a sanctioned/FATF_BLACK country,
+    # the overall risk level MUST be VERY_HIGH regardless of composite score.
+    sanctioned_set = SANCTIONED | FATF_BLACK
+    for person in data.get("directors", []) + data.get("ubos", []):
+        nat = (person.get("nationality") or "").strip().lower()
+        if nat:
+            mapped = nat_demonym_map.get(nat, nat)
+            if mapped in sanctioned_set:
+                person_name = person.get("full_name") or person.get("name") or "unknown"
+                if level != "VERY_HIGH":
+                    logger.info(f"FLOOR RULE: UBO/Director '{person_name}' nationality '{nat}' maps to sanctioned '{mapped}' — forcing VERY_HIGH (was {level}, score {composite})")
+                level = "VERY_HIGH"
+                composite = max(composite, 70.0)
+                escalations.append(f"floor_rule_sanctioned_nationality:{mapped}")
+                elevation_reasons.append(f"UBO/Director nationality sanctioned: {mapped}")
+                break  # One match is sufficient
+
+    # ── Extract scoring lookups for elevation checks ──
+    country_scores_cfg = (config.get("country_risk_scores") if config else None) or None
+    sector_scores_cfg = (config.get("sector_risk_scores") if config else None) or None
+
+    # ── ELEVATION RULE 1: FATF grey-list + high-risk sector + opaque structure → HIGH ──
+    # Narrow combination: all three conditions must be true simultaneously.
+    is_grey = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
+    is_hr_sector = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
+    is_opaque = _is_opaque_ownership(data.get("ownership_structure"))
+
+    if is_grey and is_hr_sector and is_opaque:
+        logger.info(
+            "ELEVATION RULE 1: FATF grey-list + high-risk sector + opaque structure → HIGH "
+            "(country=%s, sector=%s, ownership=%s, score=%s)",
+            data.get("country"), data.get("sector"), data.get("ownership_structure"), composite
+        )
+        if RISK_RANK.get(level, 0) < RISK_RANK.get("HIGH", 3):
+            level = "HIGH"
+            composite = max(composite, RISK_SCORE_FLOORS["HIGH"])
+        _append_unique(escalations, "elevation_grey_sector_opaque")
+        elevation_reasons.append(
+            f"Combination elevation: FATF grey-list jurisdiction ({data.get('country')}), "
+            f"high-risk sector ({data.get('sector')}), opaque ownership structure"
+        )
+
+    # ── ELEVATION RULE 2: Screening-driven elevation ──
+    # If screening identifies a material unresolved concern, elevate at least to HIGH.
+    has_screening_concern, screening_reasons = _has_material_screening_concern(data)
+    if has_screening_concern:
+        if RISK_RANK.get(level, 0) < RISK_RANK.get("HIGH", 3):
+            logger.info(
+                "ELEVATION RULE 2: Material screening concern → at least HIGH "
+                "(was %s, score=%s, reasons=%s)",
+                level, composite, screening_reasons
+            )
+            level = "HIGH"
+            composite = max(composite, RISK_SCORE_FLOORS["HIGH"])
+            escalations.append("elevation_screening_concern")
+            elevation_reasons.append(
+                f"Screening-driven elevation to HIGH: {', '.join(screening_reasons)}"
+            )
+
+        # ── ELEVATION RULE 3: Severe combination → VERY_HIGH ──
+        # High-risk sector + elevated jurisdiction + material screening concern,
+        # or multiple material escalation signals together.
+        is_hr_sector_severe = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
+        is_elevated_jur = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
+
+        if (is_hr_sector_severe and is_elevated_jur and has_screening_concern) or len(screening_reasons) >= 2:
+            if level != "VERY_HIGH":
+                logger.info(
+                    "ELEVATION RULE 3: Severe combination → VERY_HIGH "
+                    "(sector_hr=%s, jurisdiction_elevated=%s, screening_reasons=%s, was %s)",
+                    is_hr_sector_severe, is_elevated_jur, screening_reasons, level
+                )
+            level = "VERY_HIGH"
+            composite = max(composite, 70.0)
+            escalations.append("elevation_severe_combination")
+            elevation_reasons.append(
+                f"Severe-case elevation to VERY_HIGH: "
+                f"{'high-risk sector + elevated jurisdiction + ' if is_hr_sector_severe and is_elevated_jur else ''}"
+                f"screening concerns ({', '.join(screening_reasons)})"
+            )
+
+    # ── FLOOR RULE 3: EDD-policy trigger factors cannot remain final LOW ──
+    # The routing policy sends declared PEP, high-risk sector, elevated
+    # jurisdiction and opaque ownership cases into EDD. The regulator-facing
+    # final risk classification must therefore not persist/display LOW while
+    # those controls are required.
+    if pep_scores:
+        apply_local_floor(
+            "HIGH",
+            "floor_rule_declared_pep",
+            "Declared PEP floor: declared PEP exposure requires at least HIGH final risk",
+        )
+
+    if _is_high_risk_sector(data.get("sector"), sector_scores_cfg):
+        apply_local_floor(
+            "HIGH",
+            "floor_rule_high_risk_sector",
+            f"High-risk sector floor: {data.get('sector') or 'unspecified'} requires at least HIGH final risk",
+        )
+
+    if _is_elevated_jurisdiction(data.get("country"), country_scores_cfg):
+        apply_local_floor(
+            "HIGH",
+            "floor_rule_elevated_jurisdiction",
+            f"Elevated jurisdiction floor: {data.get('country') or 'unspecified'} requires at least HIGH final risk",
+        )
+
+    if _is_opaque_ownership(data.get("ownership_structure")):
+        apply_local_floor(
+            "HIGH",
+            "floor_rule_opaque_ownership",
+            "Opaque ownership floor: opaque/complex ownership requires at least HIGH final risk",
+        )
+
+    # ── ESCALATION RULE A: Any sub-factor scores 4 → mandatory compliance approval ──
+    # Per Excel Methodology: "Compliance approval is MANDATORY when any individual
+    # sub-factor scores 4 (Very High Risk)"
+    all_sub_scores = [
+        d1_entity, d1_owner, d1_pep, d1_adverse, d1_sow, d1_sof,
+        d2_inc, d2_ubo_nat, d2_inter, d2_op, d2_tgt,
+        d3_svc, d3_vol, d3_complexity,
+        d4,
+        d5_intro, d5_interaction
+    ]
+    if any(s >= 4 for s in all_sub_scores):
+        escalations.append("sub_factor_score_4")
+
+    # ── ESCALATION RULE B: Very High Risk sector → mandatory compliance approval ──
+    # Per Excel Methodology: "Business sector classified as Very High Risk"
+    if d4 >= 4:
+        escalations.append("very_high_risk_sector")
+
+    # ── ESCALATION RULE C: Composite score ≥ 85 → mandatory compliance approval ──
+    # Per Excel Methodology: "Overall composite score is 85 or above"
+    if composite >= 85:
+        escalations.append("composite_score_85_plus")
+
+    requires_compliance_approval = len(escalations) > 0
+
+    elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
+
+    return {
+        "score": composite,
+        "level": level,
+        "base_risk_score": base_score,
+        "base_risk_level": base_level,
+        "final_risk_level": level,
+        "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
+        "lane": RISK_LANE_MAP.get(level, "Standard Review"),
+        "escalations": escalations,
+        "elevation_reason_text": elevation_reason_text,
+        "requires_compliance_approval": requires_compliance_approval,
+        "declared_pep_present": bool(pep_scores),
+        "sector_label": data.get("sector") or "",
+        "sector_risk_tier": _risk_tier_from_score(d4),
+        "jurisdiction_risk_tier": _risk_tier_from_score(d2_inc),
+        "ownership_transparency_status": _ownership_transparency_tier(data.get("ownership_structure")),
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# EX-09: REUSABLE RISK RECOMPUTATION HELPER
+# ══════════════════════════════════════════════════════════
+
+def _get_risk_config_version(db):
+    """Return the risk_config updated_at timestamp as a version identifier."""
+    try:
+        row = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
+        if row and row["updated_at"]:
+            return str(row["updated_at"])
+    except Exception:
+        pass
+    return None
+
+
+def _apply_edd_routing_floor_for_recompute(db, app, risk):
+    """Apply the EDD routing floor before recomputed risk is persisted.
+
+    Prescreening submit already floors LOW cases when deterministic routing
+    sends them to EDD. Risk recomputation must do the same before writing DB
+    risk fields; otherwise a later KYC submit can persist final LOW while the
+    same facts still keep the application on the EDD lane.
+    """
+    if not isinstance(risk, dict):
+        return {}
+    try:
+        from edd_routing_policy import evaluate_edd_routing, minimum_risk_level_for_routing
+        from routing_actuator import (
+            _declared_pep_present_in_party_rows,
+            build_routing_facts,
+        )
+
+        facts = build_routing_facts(db=db, app_row=app, risk_dict=risk)
+        try:
+            app_id = dict(app or {}).get("id")
+        except Exception:
+            app_id = None
+        if (
+            not facts.get("declared_pep_present")
+            and _declared_pep_present_in_party_rows(db, app_id)
+        ):
+            facts["declared_pep_present"] = True
+
+        routing = dict(evaluate_edd_routing(facts) or {})
+        if str(routing.get("route") or "").lower() != "edd":
+            return routing
+
+        minimum_level = minimum_risk_level_for_routing(routing) or "MEDIUM"
+        triggers = ", ".join(str(t) for t in (routing.get("triggers") or []) if t)
+        reason = "EDD routing floor: deterministic routing required EDD"
+        if triggers:
+            reason += f" ({triggers})"
+        apply_risk_floor(
+            risk,
+            minimum_level,
+            "floor_rule_edd_routing",
+            reason,
+        )
+        risk["lane"] = "EDD"
+        return routing
+    except Exception as exc:
+        logger.warning("EDD routing risk floor failed during recompute: %s", exc)
+        return {}
+
+
+_SCREENING_DISPOSITION_FLOOR_CODES = {
+    "true_match",
+    "material_concern",
+    "escalated_to_edd",
+    "needs_more_information",
+}
+_SCREENING_DISPOSITION_EDD_CODES = {
+    "true_match",
+    "material_concern",
+    "needs_more_information",
+    "escalated_to_edd",
+}
+
+
+def _row_get(row, key, default=None):
+    try:
+        if hasattr(row, "get"):
+            return row.get(key, default)
+        return row[key]
+    except Exception:
+        return default
+
+
+def _truthy_db_flag(value):
+    if value is True:
+        return True
+    if value in (False, None):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _screening_review_is_complete_clearance(review):
+    if not review:
+        return False
+    code = str(_row_get(review, "disposition_code") or "").strip().lower()
+    if code != "false_positive_cleared":
+        return False
+    if _truthy_db_flag(_row_get(review, "requires_four_eyes")):
+        return bool(_row_get(review, "second_reviewer_id"))
+    return True
+
+
+def _screening_report_has_raw_completed_match(app, reviews=None):
+    prescreening = safe_json_loads(_row_get(app, "prescreening_data"))
+    report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+    if not isinstance(report, dict):
+        return False
+    try:
+        from screening_state import build_screening_terminality_summary
+
+        summary = build_screening_terminality_summary(
+            report,
+            prescreening,
+            screening_reviews=reviews or [],
+        )
+        return bool(summary.get("has_terminal_match"))
+    except Exception as exc:
+        logger.warning("Canonical screening terminality check failed during risk recompute: %s", exc)
+        return False
+
+
+def _latest_screening_reviews(db, app_id):
+    try:
+        return db.execute(
+            """
+            SELECT subject_type, subject_name, disposition, disposition_code,
+                   requires_four_eyes, second_reviewer_id, updated_at, created_at
+            FROM screening_reviews
+            WHERE application_id=?
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            """,
+            (app_id,),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning("Could not load screening reviews for risk recompute app_id=%s: %s", app_id, exc)
+        return []
+
+
+def _screening_disposition_floor_signal(db, app):
+    """Return the current screening-disposition floor signal for recompute.
+
+    Screening review rows are not part of the base prescreening score input.
+    This helper bridges that state so formal dispositions that create/preserve
+    EDD or unresolved match blocking cannot persist a final LOW classification.
+    """
+    app_id = _row_get(app, "id")
+    reviews = _latest_screening_reviews(db, app_id)
+
+    for review in reviews:
+        code = str(_row_get(review, "disposition_code") or "").strip().lower()
+        if code in _SCREENING_DISPOSITION_FLOOR_CODES:
+            if code == "needs_more_information":
+                return {
+                    "code": code,
+                    "minimum_level": "MEDIUM",
+                    "reason_code": "screening_needs_more_information_floor",
+                    "reason_text": (
+                        "Screening disposition floor: needs_more_information keeps the match unresolved "
+                        "and routes the case to EDD until formally resolved"
+                    ),
+                    "sets_edd_lane": True,
+                }
+            return {
+                "code": code,
+                "minimum_level": "HIGH",
+                "reason_code": "material_screening_disposition_floor",
+                "reason_text": (
+                    "Screening disposition floor: "
+                    + code
+                    + " creates or preserves material screening/EDD controls and requires at least HIGH final risk"
+                ),
+                "sets_edd_lane": code in _SCREENING_DISPOSITION_EDD_CODES,
+            }
+
+    if _screening_report_has_raw_completed_match(app, reviews=reviews):
+        cleared_reviews = [r for r in reviews if _screening_review_is_complete_clearance(r)]
+        if not cleared_reviews:
+            return {
+                "code": "raw_completed_match",
+                "minimum_level": "HIGH",
+                "reason_code": "material_screening_disposition_floor",
+                "reason_text": (
+                    "Screening disposition floor: unresolved raw completed_match remains a material "
+                    "screening concern requiring at least HIGH final risk until formally cleared"
+                ),
+                "sets_edd_lane": True,
+            }
+
+    return {}
+
+
+def _append_floor_reason(risk, reason_code, reason_text):
+    escalations = risk.get("escalations")
+    if not isinstance(escalations, list):
+        escalations = []
+    _append_unique(escalations, reason_code)
+    risk["escalations"] = escalations
+
+    existing = str(risk.get("elevation_reason_text") or "").strip()
+    reason = str(reason_text or "").strip()
+    if reason and reason not in existing:
+        risk["elevation_reason_text"] = f"{existing}; {reason}" if existing else reason
+    elif existing:
+        risk["elevation_reason_text"] = existing
+
+
+def _apply_screening_disposition_floor_for_recompute(db, app, risk):
+    signal = _screening_disposition_floor_signal(db, app)
+    if not signal:
+        return {}
+    apply_risk_floor(
+        risk,
+        signal["minimum_level"],
+        signal["reason_code"],
+        signal["reason_text"],
+    )
+    _append_floor_reason(risk, signal["reason_code"], signal["reason_text"])
+    if signal.get("sets_edd_lane"):
+        risk["lane"] = "EDD"
+    return signal
+
+
+def _screening_floor_edd_trigger_flags(signal):
+    if not isinstance(signal, dict) or not signal.get("sets_edd_lane"):
+        return []
+    code = str(signal.get("code") or "").strip().lower()
+    if code == "needs_more_information":
+        return ["screening_needs_more_information"]
+    return ["material_screening_concern"]
+
+
+def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
+    """Recompute risk score for a single application and persist the result.
+
+    Args:
+        db: Active database connection (caller manages commit/close).
+        app_id: Application ID (primary key).
+        reason: Human-readable reason for recomputation (for audit trail).
+        user: Optional user dict (for audit logging).
+        log_audit_fn: Optional callable(user, action, target, detail, **kwargs)
+                      for audit logging. If None, audit is skipped.
+        apply_routing_policy: When True (default), recomputation also runs the
+                      canonical deterministic EDD routing evaluation + actuation
+                      step. Callers may set this to False only when they will
+                      immediately invoke the same routing helper themselves
+                      after recomputation and want to avoid duplicate routing
+                      audit/actuation writes.
+
+    Returns:
+        dict with keys:
+            recomputed (bool): Whether risk was actually recomputed.
+            old_score (float|None): Previous risk score.
+            old_level (str|None): Previous risk level.
+            new_score (float|None): New risk score (None if not recomputed).
+            new_level (str|None): New risk level (None if not recomputed).
+            changed (bool): Whether score or level changed.
+    """
+    from prescreening.risk_inputs import build_prescreening_risk_input
+
+    result = {
+        "recomputed": False,
+        "old_score": None, "old_level": None,
+        "new_score": None, "new_level": None,
+        "base_risk_score": None,
+        "base_risk_level": None,
+        "final_risk_level": None,
+        "elevation_reason_text": "",
+        "risk_escalations": [],
+        "changed": False,
+    }
+
+    try:
+        app = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+        if not app:
+            logger.warning("recompute_risk: app_id=%s not found", app_id)
+            return result
+
+        # Only recompute if the app has been scored at least once
+        if app.get("risk_score") is None:
+            return result
+
+        old_score = app["risk_score"]
+        old_level = app["risk_level"]
+        result["old_score"] = old_score
+        result["old_level"] = old_level
+
+        # Build scorer input from current app data
+        prescreening = safe_json_loads(app["prescreening_data"])
+
+        # Import from neutral shared module to avoid circular dependency
+        # (importing from server.py would re-trigger Prometheus registration)
+        from party_utils import get_application_parties
+        directors, ubos, intermediaries = get_application_parties(db, app_id)
+
+        scoring_input = build_prescreening_risk_input(
+            application=app,
+            prescreening_data=prescreening,
+            directors=directors,
+            ubos=ubos,
+            intermediaries=intermediaries,
+        )
+        new_risk = compute_risk_score(scoring_input)
+        routing_floor = _apply_edd_routing_floor_for_recompute(db, app, new_risk)
+        screening_floor = _apply_screening_disposition_floor_for_recompute(db, app, new_risk)
+
+        new_score = new_risk["score"]
+        new_level = new_risk["level"]
+        result["new_score"] = new_score
+        result["new_level"] = new_level
+        result["base_risk_score"] = new_risk.get("base_risk_score")
+        result["base_risk_level"] = new_risk.get("base_risk_level")
+        result["final_risk_level"] = new_risk.get("final_risk_level", new_level)
+        result["elevation_reason_text"] = new_risk.get("elevation_reason_text", "")
+        result["risk_escalations"] = list(new_risk.get("escalations", []))
+        result["edd_routing_route"] = routing_floor.get("route")
+        result["edd_routing_triggers"] = list(routing_floor.get("triggers") or [])
+        result["screening_disposition_floor"] = screening_floor
+        result["recomputed"] = True
+        result["changed"] = (old_score != new_score or old_level != new_level)
+
+        # Get risk config version
+        config_version = _get_risk_config_version(db)
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        db.execute(
+            """UPDATE applications SET
+                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                risk_computed_at=?, risk_config_version=?,
+                risk_escalations=?,
+                base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
+                updated_at=datetime('now') WHERE id=?""",
+            (new_score, new_level,
+             json.dumps(new_risk.get("dimensions", {})),
+             new_risk.get("lane", "Standard Review"),
+             now_ts, config_version,
+             json.dumps(new_risk.get("escalations", [])),
+             new_risk.get("base_risk_level", new_level),
+             new_risk.get("final_risk_level", new_level),
+             new_risk.get("elevation_reason_text", ""),
+             app_id))
+
+        if result["changed"]:
+            logger.info(
+                "RISK RECOMPUTED: app_id=%s reason=%s score %s→%s, level %s→%s",
+                app_id, reason, old_score, new_score, old_level, new_level)
+        else:
+            logger.info(
+                "RISK RECOMPUTED (no change): app_id=%s reason=%s score=%s level=%s",
+                app_id, reason, new_score, new_level)
+
+        # Audit trail
+        if log_audit_fn and user:
+            before_state = {
+                "risk_score": old_score,
+                "risk_level": old_level,
+                "final_risk_level": app.get("final_risk_level") or old_level,
+                "base_risk_level": app.get("base_risk_level") or old_level,
+                "elevation_reason_text": app.get("elevation_reason_text") or "",
+            }
+            after_state = {
+                "risk_score": new_score,
+                "base_risk_score": new_risk.get("base_risk_score"),
+                "base_risk_level": new_risk.get("base_risk_level", new_level),
+                "risk_level": new_level,
+                "final_risk_level": new_risk.get("final_risk_level", new_level),
+                "risk_escalations": new_risk.get("escalations", []),
+                "elevation_reason_text": new_risk.get("elevation_reason_text", ""),
+                "risk_computed_at": now_ts,
+                "risk_config_version": config_version,
+            }
+            floor_detail = (
+                f". Floor/elevation reason: {new_risk.get('elevation_reason_text')}"
+                if new_risk.get("elevation_reason_text")
+                else ""
+            )
+            detail = (
+                f"Reason: {reason}. "
+                f"Score: {old_score}→{new_score}, Level: {old_level}→{new_level}"
+                f"{floor_detail}"
+            )
+            try:
+                log_audit_fn(user, "Risk Recomputed", app.get("ref", app_id), detail,
+                             db=db, before_state=before_state, after_state=after_state)
+            except Exception as e:
+                logger.warning("recompute_risk audit log failed: %s", e)
+
+
+        # Priority E: re-run EDD routing policy after every recompute unless a
+        # caller explicitly owns the routing step and will execute it
+        # immediately afterwards using the same established helper.
+        if apply_routing_policy:
+            try:
+                from routing_actuator import (
+                    apply_routing_decision,
+                    SOURCE_RISK_RECOMPUTE,
+                )
+                try:
+                    _app_post = db.execute(
+                        "SELECT * FROM applications WHERE id = ?", (app_id,)
+                    ).fetchone()
+                except Exception:
+                    _app_post = app
+                _risk_dict = dict(new_risk)
+                _risk_dict.setdefault("score", new_score)
+                _risk_dict.setdefault("level", new_level)
+                _risk_dict.setdefault("final_risk_level", new_level)
+                _risk_dict.setdefault("base_risk_level", new_risk.get("base_risk_level", new_level))
+                _risk_dict.setdefault("sector_label", (dict(_app_post or {})).get("sector"))
+                apply_routing_decision(
+                    db=db,
+                    app_row=(dict(_app_post) if _app_post else app),
+                    risk_dict=_risk_dict,
+                    edd_trigger_flags=_screening_floor_edd_trigger_flags(screening_floor),
+                    user=user,
+                    client_ip="",
+                    source=SOURCE_RISK_RECOMPUTE,
+                )
+            except Exception as _re_err:
+                logger.warning(
+                    "apply_routing_decision (recompute) failed for app_id=%s: %s",
+                    app_id, _re_err,
+                )
+
+    except Exception as e:
+        logger.warning("recompute_risk failed for app_id=%s: %s", app_id, e)
+
+    return result
+
+
+def recompute_risk_for_active_apps(db, reason, user=None, log_audit_fn=None):
+    """Recompute risk for all non-terminal applications.
+
+    Used when risk config changes — all active apps need rescoring against new config.
+    Terminal statuses (approved, rejected, withdrawn) are excluded.
+
+    Returns:
+        list of dicts — one per recomputed application.
+    """
+    TERMINAL_STATUSES = ("approved", "rejected", "withdrawn")
+    try:
+        rows = db.execute(
+            "SELECT id FROM applications WHERE risk_score IS NOT NULL AND status NOT IN (?,?,?)",
+            TERMINAL_STATUSES
+        ).fetchall()
+    except Exception as e:
+        logger.warning("recompute_risk_for_active_apps: failed to list apps: %s", e)
+        return []
+
+    results = []
+    for row in rows:
+        r = recompute_risk(db, row["id"], reason, user=user, log_audit_fn=log_audit_fn)
+        results.append({"app_id": row["id"], **r})
+
+    changed_count = sum(1 for r in results if r.get("changed"))
+    logger.info(
+        "Bulk risk recomputation: reason=%s, apps=%d, changed=%d",
+        reason, len(results), changed_count)
+
+    return results

@@ -1,0 +1,27 @@
+# Gotchas
+
+## Upload Latency Remediation
+
+- `docs/IMPLEMENTATION_PLAYBOOK.md` existed locally before PR0 but was not present on GitHub `main`; GitHub `main` remains the source of truth.
+- Backend upload limit is already 10 MB on GitHub `main`.
+- Back office client-side size check still references 25 MB before PR5.
+- Portal and back office currently chain upload and verification.
+- CloudWatch Logs Insights rejects `| sort bin(5m) desc` after a `stats ... by bin(5m)` aggregation. Alias the bin first: `by bin(5m) as window, ... | sort window desc`.
+- `FF_POLLING_SLOW` is backend-only under the current flag-exposure contract. PR4 must either keep the polling slowdown server-driven or explicitly lock a new client-exposure decision and test before frontend code reads that flag.
+- PR3 telemetry logs only upload/verify request-boundary duration. It does not yet split validation, S3, DB, or verifier phase timings.
+
+## Verification Truthfulness Remediation
+
+- Step 0 moved reliability remediation ahead of async rollout. Do not proceed
+  from PR5 directly to PR6/PR7; PR8 must land before async foundation/flip.
+- PR5 intentionally touches protected files (`db.py`, `arie-portal.html`,
+  `arie-backoffice.html`). The guard can pass with `protected-file-override`,
+  but merge still requires explicit written project-lead approval.
+- Portal final review must gate both company documents and person/intermediary
+  KYC documents on backend `verification_success`; stored/uploaded alone is not
+  sufficient.
+- The staging PostgreSQL database is VPC-private. Direct local DB connections
+  time out; use a read-only ECS one-off task in the staging network for schema
+  verification.
+- `/api/version` is auth-gated. Image/SHA verification can be done through ECS
+  task definition metadata when no staging token is available.

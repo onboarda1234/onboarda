@@ -132,7 +132,7 @@ class RuleCondition:
             triggered = search in field_value.lower()
             if triggered:
                 # Extract a snippet around the match for context
-                idx = field_value.lower().find(searck)
+                idx = field_value.lower().find(search)
                 start = max(0, idx - 30)
                 end = min(len(field_value), idx + len(search) + 30)
                 snippet = field_value[start:end]
@@ -267,7 +267,7 @@ class RulesEngine:
                 "rule_name": "missing_ubo_block_approval",
                 "rule_category": "ubo",
                 "description": "Missing UBO identification blocks approval",
-                "condition_json": {"field": "issues", "contains": "ubo","not_identified"},
+                "condition_json": {"field": "issues", "contains": "ubo_not_identified"},
                 "action": "block_approval",
                 "severity": "critical",
                 "overrides_ai": True,
@@ -275,7 +275,8 @@ class RulesEngine:
                 "priority": 15,
                 "is_active": True,
             },
-            {*                "id": "rule_company_not_found",
+            {
+                "id": "rule_company_not_found",
                 "rule_name": "company_not_in_registry",
                 "rule_category": "registry",
                 "description": "Company not found in official registry requires hold",
@@ -313,7 +314,8 @@ class RulesEngine:
                 "priority": 30,
                 "is_active": True,
             },
-            {                "id": "rule_adverse_media_severe",
+            {
+                "id": "rule_adverse_media_severe",
                 "rule_name": "severe_adverse_media",
                 "rule_category": "sanctions",
                 "description": "Severe adverse media findings require immediate escalation",
@@ -403,8 +405,8 @@ class RulesEngine:
 
         return evaluations
 
-    def get_blocking_ules(self, evaluations: List[RuleEvaluation]) -> List[RuleEvaluation]:
-        """Filter","evaluations to only blocking rules that were triggered."""
+    def get_blocking_rules(self, evaluations: List[RuleEvaluation]) -> List[RuleEvaluation]:
+        """Filter evaluations to only blocking rules that were triggered."""
         blocking_actions = {
             RuleAction.BLOCK_APPROVAL,
             RuleAction.REJECT,
@@ -417,7 +419,7 @@ class RulesEngine:
 
     def get_highest_severity_action(
         self, evaluations: List[RuleEvaluation]
-  ) -> Optional[RuleAction]:
+    ) -> Optional[RuleAction]:
         """Get the most severe action from triggered rules."""
         triggered = [e for e in evaluations if e.triggered]
         if not triggered:

@@ -1,0 +1,207 @@
+[
+  {
+    "name": "empty_directors_empty_ubos",
+    "description": "Application with no directors and no UBOs",
+    "report": {
+      "screened_at": "2025-06-15T14:30:00",
+      "company_screening": {
+        "found": true,
+        "source": "opencorporates",
+        "api_status": "live",
+        "sanctions": {"matched": false, "results": [], "source": "sumsub", "api_status": "live"}
+      },
+      "director_screenings": [],
+      "ubo_screenings": [],
+      "ip_geolocation": {"source": "ipapi", "api_status": "live", "risk_level": "LOW"},
+      "kyc_applicants": [],
+      "overall_flags": [],
+      "total_hits": 0,
+      "degraded_sources": []
+    }
+  },
+  {
+    "name": "degraded_sources",
+    "description": "Screening with degraded/unavailable sources",
+    "report": {
+      "screened_at": "2025-06-15T14:30:00",
+      "company_screening": {"found": false, "source": "unavailable", "degraded": true},
+      "director_screenings": [
+        {
+          "person_name": "John Smith",
+          "person_type": "director",
+          "nationality": "GB",
+          "declared_pep": "No",
+          "screening": {"matched": false, "results": [], "source": "unavailable", "degraded": true}
+        }
+      ],
+      "ubo_screenings": [],
+      "ip_geolocation": {"source": "unavailable", "degraded": true},
+      "kyc_applicants": [],
+      "overall_flags": [
+        "Company registry lookup unavailable: connection timeout",
+        "Director 'John Smith' screening unavailable: API error"
+      ],
+      "total_hits": 0,
+      "degraded_sources": ["opencorporates", "director_screening:John Smith"]
+    }
+  },
+  {
+    "name": "pep_hit_no_screening_results",
+    "description": "PEP-declared director with no actual screening results",
+    "report": {
+      "screened_at": "2025-06-15T14:30:00",
+      "company_screening": {
+        "found": true,
+        "source": "opencorporates",
+        "api_status": "live",
+        "sanctions": {"matched": false, "results": [], "source": "sumsub", "api_status": "live"}
+      },
+      "director_screenings": [
+        {
+          "person_name": "Alice PEP",
+          "person_type": "director",
+          "nationality": "FR",
+          "declared_pep": "Yes",
+          "screening": {"matched": false, "results": [], "source": "sumsub", "api_status": "live"}
+        }
+      ],
+      "ubo_screenings": [],
+      "ip_geolocation": {"source": "ipapi", "api_status": "live", "risk_level": "LOW"},
+      "kyc_applicants": [],
+      "overall_flags": [],
+      "total_hits": 0,
+      "degraded_sources": []
+    }
+  },
+  {
+    "name": "multiple_directors_multiple_ubos",
+    "description": "Full screening with multiple directors and UBOs",
+    "report": {
+      "screened_at": "2025-06-15T14:30:00",
+      "company_screening": {
+        "found": true,
+        "source": "opencorporates",
+        "api_status": "live",
+        "name": "Test Corp Ltd",
+        "company_number": "C12345",
+        "jurisdiction": "mu",
+        "status": "Active",
+        "sanctions": {"matched": false, "results": [], "source": "sumsub", "api_status": "live"}
+      },
+      "director_screenings": [
+        {
+          "person_name": "John Smith",
+          "person_type": "director",
+          "nationality": "GB",
+          "declared_pep": "No",
+          "screening": {
+            "matched": true,
+            "results": [{"is_pep": true, "is_sanctioned": false, "name": "JOHN SMITH", "score": 0.95}],
+            "source": "sumsub",
+            "api_status": "live"
+          },
+          "undeclared_pep": true
+        },
+        {
+          "person_name": "Jane Director",
+          "person_type": "director",
+          "nationality": "MU",
+          "declared_pep": "No",
+          "screening": {"matched": false, "results": [], "source": "sumsub", "api_status": "live"}
+        }
+      ],
+      "ubo_screenings": [
+        {
+          "person_name": "Bob UBO",
+          "person_type": "ubo",
+          "nationality": "SG",
+          "declared_pep": "No",
+          "ownership_pct": 51,
+          "screening": {
+            "matched": true,
+            "results": [{"is_pep": false, "is_sanctioned": true, "name": "BOB UBO", "score": 0.88}],
+            "source": "sumsub",
+            "api_status": "live"
+          }
+        },
+        {
+          "person_name": "Carol UBO",
+          "person_type": "ubo",
+          "nationality": "FR",
+          "declared_pep": "Yes",
+          "ownership_pct": 25,
+          "screening": {"matched": false, "results": [], "source": "sumsub", "api_status": "live"}
+        }
+      ],
+      "ip_geolocation": {
+        "source": "ipapi",
+        "api_status": "live",
+        "risk_level": "HIGH",
+        "country": "Iran",
+        "country_code": "IR",
+        "is_vpn": false,
+        "is_proxy": true,
+        "is_tor": false
+      },
+      "kyc_applicants": [
+        {"person_name": "John Smith", "source": "sumsub", "api_status": "live", "review_answer": "RED"},
+        {"person_name": "Jane Director", "source": "sumsub", "api_status": "live", "review_answer": "GREEN"}
+      ],
+      "overall_flags": [
+        "Director 'John Smith' has sanctions/PEP matches",
+        "Director 'John Smith' may be undeclared PEP",
+        "UBO 'Bob UBO' has sanctions/PEP matches",
+        "Client IP detected as proxy"
+      ],
+      "total_hits": 3,
+      "degraded_sources": []
+    }
+  },
+  {
+    "name": "error_api_status",
+    "description": "Screening with error API status on some sources",
+    "report": {
+      "screened_at": "2025-06-15T14:30:00",
+      "screening_mode": "live",
+      "company_screening": {
+        "found": false,
+        "source": "opencorporates",
+        "api_status": "error",
+        "sanctions": {"matched": false, "results": [], "source": "sumsub", "api_status": "error"}
+      },
+      "director_screenings": [
+        {
+          "person_name": "Error Director",
+          "person_type": "director",
+          "nationality": "",
+          "declared_pep": "No",
+          "screening": {"matched": false, "results": [], "source": "sumsub", "api_status": "error"}
+        }
+      ],
+      "ubo_screenings": [],
+      "ip_geolocation": {"source": "ipapi", "api_status": "error"},
+      "kyc_applicants": [],
+      "overall_flags": ["Company registry lookup failed"],
+      "total_hits": 0,
+      "degraded_sources": ["opencorporates", "sumsub_company_sanctions", "ip_geolocation"]
+    }
+  },
+  {
+    "name": "missing_optional_fields",
+    "description": "Minimal screening report with many optional fields absent",
+    "report": {
+      "screened_at": "2025-06-15T14:30:00",
+      "company_screening": {},
+      "director_screenings": [
+        {
+          "person_name": "Minimal Person",
+          "screening": {"matched": false, "results": []}
+        }
+      ],
+      "ubo_screenings": [],
+      "overall_flags": [],
+      "total_hits": 0,
+      "degraded_sources": []
+    }
+  }
+]

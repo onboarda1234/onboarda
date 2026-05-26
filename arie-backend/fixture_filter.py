@@ -1,0 +1,264 @@
+"""
+fixture_filter.py — Canonical fixture exclusion helpers.
+=========================================================
+
+Fixture rows are identified by the compound rule::
+
+    applications.id LIKE 'f1xed%'  OR  applications.is_fixture
+
+**Signal 1 — ID namespace** (``id LIKE 'f1xed%'``):
+All current staging scenarios use IDs in the reserved ``f1xed...``
+16-char hex namespace (e.g. ``f1xed00000000001`` through
+``f1xed00000000011``).  Real application IDs are
+``uuid.uuid4().hex[:16]`` and will never start with ``f1xed``.
+
+**Signal 2 — explicit column** (``is_fixture``):
+``applications.is_fixture`` is a boolean/integer column (``FALSE``/
+``0`` by default) set to ``TRUE``/``1`` for any fixture or historical
+test row.  This column was introduced to handle historical test rows
+that pre-date the ``f1xed`` namespace and later smoke/QA rows created
+with normal UUID-like IDs. These rows would bypass the ID-pattern check
+alone.
+
+Both signals are checked; a row is a fixture if *either* condition is
+true.  New seeded rows must set ``is_fixture = 1`` (the seeder does
+this automatically).  Future rows with IDs outside the ``f1xed``
+namespace are caught by ``is_fixture``.
+
+This is the ONLY authoritative fixture identification module for the
+back-office query layer.  All query layers must use these helpers rather
+than duplicating the rule.
+
+Design contract
+---------------
+* No DB connection dependency — pure SQL fragment generators.
+* All fragments use parameterised ``?`` placeholders so they are
+  portable to both SQLite (``?``) and PostgreSQL (translated to ``%s``
+  by ``db.DBConnection._translate_query``).
+* ``fixture_app_exclude_clause`` is for the ``applications`` table.
+* ``fixture_app_id_exclude_clause`` is for related tables
+  (``monitoring_alerts``, ``periodic_reviews``, ``edd_cases``) that
+  store the application's primary key in an ``application_id`` FK column.
+  It includes a NULL-safe guard for tables where ``application_id`` is
+  nullable (e.g. ``monitoring_alerts``).
+* ``fixture_request_opt_in`` normalises the accepted opt-in aliases
+  (``show_fixtures`` and ``include_fixtures``) from request handlers.
+* ``should_show_fixtures`` encodes the access policy: fixture opt-in query
+  params are honoured ONLY for ``admin`` or ``sco`` users; silently ignored
+  for all others.
+
+Public surface
+--------------
+* :data:`FIXTURE_APP_ID_PATTERN`
+* :func:`fixture_app_exclude_clause`
+* :func:`fixture_app_id_exclude_clause`
+* :func:`fixture_audit_target_exclude_clause`
+* :func:`fixture_request_opt_in`
+* :func:`should_show_fixtures`
+"""
+
+from __future__ import annotations
+
+from typing import List, Optional, Tuple
+
+# The reserved application-id prefix.  All fixture scenario rows share
+# IDs that start with this literal string.  Real UUIDs (hex-only) cannot
+# collide with it because ``f1xed`` contains the digit ``1`` as its second
+# character (index 1), making it visually distinct from a random UUID hex,
+# and because the seeder documentation explicitly marks this as a
+# *reserved namespace*.
+FIXTURE_APP_ID_PATTERN: str = "f1xed%"
+
+# Stable ``ref`` values of historical test rows that pre-date the
+# ``f1xed`` namespace or were created by smoke/QA probes before the Day 1
+# data-hygiene backfill. These rows are marked ``is_fixture = 1`` by
+# inline migration v2.29 and file migration 020. This tuple is kept here for
+# documentation and test coverage; the authoritative marking lives in the DB
+# column.
+ROGUE_FIXTURE_REFS: tuple = (
+    "ARF-2026-100454",  # EX06 DualApproval Test Corp
+    "ARF-2026-100456",  # EX06 Validation TestCo Ltd
+    "ARF-2026-100455",  # HighRisk Dual Approval Test Ltd
+    "ARF-2026-100421",  # Pipeline Test Corp Ltd
+    "ARF-2026-100424",  # Portal Audit Test Ltd
+    "ARF-2026-100430",  # Probe Test Co
+    "ARF-2026-100428",  # test 2
+    "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
+    "ARF-2026-900031",  # PHASE4 Closeout Runtime 20260503160321 Ltd
+    "ARF-2026-900030",  # PHASE4 Closeout Runtime 20260503160217 Ltd
+    "ARF-2026-900029",  # PHASE2 Postdeploy Validation 20260503T122058Z Ltd
+    "ARF-2026-900028",  # PHASE2 Diagnosis 20260503T094527Z Ltd
+    "ARF-2026-900027",  # PHASE1 Memo Truth Smoke 1777801085 Ltd
+    "ARF-2026-900026",  # PHASE1 Memo Truth Smoke 1777801021 Ltd
+    "ARF-2026-900025",  # PHASE1 Memo Truth Smoke 1777800962 Ltd
+    "ARF-2026-900024",  # PHASE1 Memo Truth Smoke 1777800913 Ltd
+    "ARF-2026-900023",  # PHASE0 Baseline Audit 1777793617 Ltd
+    "ARF-2026-900022",  # D2 Verify Probe Ltd
+    "ARF-2026-900021",  # AUDIT May2 Runtime 1777708928 Ltd
+    "ARF-2026-900020",  # AUDIT May2 Runtime 1777688957 Ltd
+    "ARF-2026-900019",  # AUDIT Runtime Upload 1777663856 Ltd
+    "ARF-2026-900018",  # Codex RMI Smoke 1777639540 Ltd
+    "ARF-2026-900017",  # Codex Phase1C Smoke 1777617157 Ltd
+    "ARF-2026-900016",  # Codex Resume Smoke 1777617050 Ltd
+    "ARF-2026-900015",  # E2E Test Corp 1777617014
+    "ARF-2026-900014",  # QA E2E Test 1 Standard Trading Ltd
+    "ARF-2026-900013",  # test
+    "ARF-2026-100470",  # Priority C QA Validation Ltd
+    "ARF-2026-100469",  # QA Audit Crypto Payments Ltd
+    "ARF-2026-100468",  # QA Audit MU SME Ltd
+    "ARF-2026-100451",  # EntityType Validator 31553 Ltd
+    "ARF-2026-100447",  # Phase2 Validator Delta
+    "ARF-2026-100446",  # Phase2 Validator Ltd
+    "ARF-2026-100422",  # Staging E2E Corp
+)
+
+def fixture_app_exclude_clause(table_alias: str = "a") -> Tuple[str, List[str]]:
+    """Return ``(sql_fragment, params)`` that excludes fixture applications.
+
+    For use in queries on the ``applications`` table where the table is
+    aliased (default alias ``"a"``).  Pass an empty string to omit the
+    alias (bare column reference).
+
+    The fragment uses the compound fixture rule:
+    ``NOT (id LIKE ? OR is_fixture)``
+
+    * ``id LIKE 'f1xed%'`` — catches all seeded fixture rows.
+    * ``is_fixture`` — catches historical rogue rows marked by migration
+      v2.29.  In PostgreSQL this is a BOOLEAN column; in SQLite it is
+      INTEGER 0/1; both dialects treat the bare column in a WHERE clause
+      as a truthy check.  NULL values evaluate as falsy (not a fixture).
+
+    Example::
+
+        excl, excl_params = fixture_app_exclude_clause()
+        query += f" AND {excl}"
+        params.extend(excl_params)
+    """
+    id_col = f"{table_alias}.id" if table_alias else "id"
+    fix_col = f"{table_alias}.is_fixture" if table_alias else "is_fixture"
+    return (
+        f"{id_col} NOT LIKE ? AND ({fix_col} IS NULL OR NOT {fix_col})",
+        [FIXTURE_APP_ID_PATTERN],
+    )
+
+
+def fixture_app_id_exclude_clause(
+    col_name: str = "application_id",
+) -> Tuple[str, List[str]]:
+    """Return ``(sql_fragment, params)`` that excludes fixture-linked rows.
+
+    For use in queries on related tables (``monitoring_alerts``,
+    ``periodic_reviews``, ``edd_cases``) where the fixture app ID is
+    stored in a FK/reference column.
+
+    The fragment uses the compound fixture rule via a correlated subquery:
+
+    .. code-block:: sql
+
+        (application_id IS NULL
+         OR (application_id NOT LIKE ?
+             AND application_id NOT IN
+               (SELECT id FROM applications WHERE is_fixture)))
+
+    * The ``NOT LIKE`` arm catches ``f1xed%`` IDs without a join.
+    * The ``NOT IN`` subquery catches rows whose linked application has
+      ``is_fixture = 1`` (historical and smoke/QA fixture rows).
+    * The ``IS NULL`` guard preserves manually created alerts/reviews
+      with no application link.
+
+    Example::
+
+        excl, excl_params = fixture_app_id_exclude_clause()
+        query += f" AND {excl}"
+        params.extend(excl_params)
+    """
+    return (
+        f"({col_name} IS NULL OR "
+        f"({col_name} NOT LIKE ? AND "
+        f"{col_name} NOT IN (SELECT id FROM applications WHERE is_fixture)))",
+        [FIXTURE_APP_ID_PATTERN],
+    )
+
+
+def fixture_audit_target_exclude_clause(
+    target_col: str = "target",
+) -> Tuple[str, List[str]]:
+    """Return ``(sql_fragment, params)`` excluding fixture-linked audit rows.
+
+    ``audit_log`` is target-oriented rather than FK-oriented. Application
+    events may target any of:
+
+    * application id (including the reserved ``f1xed%`` namespace)
+    * application ref (``ARF-...``)
+    * prefixed ref (``application:ARF-...``)
+
+    This helper keeps list and export endpoints on the same fixture policy as
+    the rest of the back-office query layer.
+    """
+    fixture_predicate = "(id LIKE ? OR is_fixture)"
+    return (
+        f"({target_col} IS NULL OR ("
+        f"{target_col} NOT LIKE ? AND "
+        f"{target_col} NOT IN (SELECT id FROM applications WHERE is_fixture) AND "
+        f"{target_col} NOT IN (SELECT ref FROM applications WHERE ref IS NOT NULL AND {fixture_predicate}) AND "
+        f"{target_col} NOT IN (SELECT 'application:' || ref FROM applications WHERE ref IS NOT NULL AND {fixture_predicate})"
+        f"))",
+        [
+            FIXTURE_APP_ID_PATTERN,
+            FIXTURE_APP_ID_PATTERN,
+            FIXTURE_APP_ID_PATTERN,
+        ],
+    )
+
+
+_FIXTURE_TRUE_VALUES = ("true", "1", "yes", "on")
+
+
+def _fixture_opt_in_truthy(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in _FIXTURE_TRUE_VALUES
+
+
+def fixture_request_opt_in(handler) -> Optional[str]:
+    """Return a truthy fixture opt-in value from a request handler, if any.
+
+    Both ``show_fixtures`` and ``include_fixtures`` are accepted. If one alias
+    is explicitly false and the other is truthy, opt-in still works; this avoids
+    the common ``show_fixtures=0&include_fixtures=1`` footgun.
+    """
+    for arg_name in ("show_fixtures", "include_fixtures"):
+        try:
+            value = handler.get_argument(arg_name, None)
+        except Exception:
+            value = None
+        if _fixture_opt_in_truthy(value):
+            return value
+    return None
+
+
+def should_show_fixtures(
+    user: Optional[dict],
+    query_param_value: Optional[str],
+) -> bool:
+    """Return True only when an admin/sco user explicitly opts in.
+
+    Policy:
+    * A fixture opt-in query parameter must be present.
+    * The authenticated user must have role ``admin`` or ``sco``.
+    * Any other combination silently returns False (fixtures excluded).
+    * ``user=None`` is treated as non-admin (returns False).
+
+    Args:
+        user:               The decoded JWT payload dict from
+                            ``BaseHandler.require_auth()``.
+        query_param_value:  The raw fixture opt-in query-string value
+                            (None if absent).
+
+    Returns:
+        bool — True iff fixtures should be visible in the response.
+    """
+    if not user:
+        return False
+    if not _fixture_opt_in_truthy(query_param_value):
+        return False
+    role = user.get("role") or user.get("type") or ""
+    return role in ("admin", "sco")

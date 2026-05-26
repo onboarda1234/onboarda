@@ -1,0 +1,39 @@
+-- Migration 005: Applications truth schema  (NO-OP)
+-- =====================================================
+-- SUPERSEDED BY init_db AND INLINE MIGRATIONS v2.5 / v2.7 IN db.py
+--
+-- Original intent: add ownership identity columns to `directors`
+-- and `ubos` (`person_key`, `first_name`, `last_name`,
+-- `pep_declaration`), create the `intermediaries` table, and add
+-- durable document-review columns (`review_status`, `review_comment`,
+-- `reviewed_by`, `reviewed_at`) to `documents`.
+--
+-- All of that work is now performed by:
+--   * `init_db` in arie-backend/db.py — the SQLite and PostgreSQL
+--     CREATE TABLE statements for `directors`, `ubos`,
+--     `intermediaries`, and `documents` already include every one
+--     of these columns on a fresh database;
+--   * inline migration v2.5 in db.py — adds the same columns and
+--     creates `intermediaries` on existing databases that pre-date
+--     the change;
+--   * inline migration v2.7 in db.py — adds the document review
+--     columns on existing databases.
+--
+-- The original SQL used `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`,
+-- which is PostgreSQL-only. SQLite (any version) rejects it with
+-- `near "EXISTS": syntax error`, so on a fresh SQLite database the
+-- file aborted before adding anything. This broke the docker-validate
+-- CI job and would break any first-client SQLite stand-up.
+--
+-- RETAINED AS NO-OP FOR schema_version CONTINUITY
+-- -----------------------------------------------
+-- Existing production environments already have version "005"
+-- recorded in `schema_version`. Renumbering or deleting this file
+-- would either re-orphan that row or shift later versions, so the
+-- file is preserved with a no-op body. The `SELECT 1` statement is
+-- portable across SQLite and PostgreSQL and has no side effects.
+--
+-- DO NOT delete this file. DO NOT renumber migrations. The file
+-- remains part of the applied-migration history on production
+-- environments.
+SELECT 1;

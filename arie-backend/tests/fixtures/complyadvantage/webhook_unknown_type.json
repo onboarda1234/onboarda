@@ -1,0 +1,11 @@
+{
+  "webhook_type": "CASE_STAGE_CHANGED",
+  "api_version": "2.0",
+  "account_identifier": "acct-test-fixture",
+  "case_identifier": "33333333-3333-4333-8333-333333333333",
+  "case_type": "screening",
+  "case_state": "open",
+  "case_stage": {"identifier": "stage-review", "display_name": "Review", "display_order": 1, "stage_type": "manual_review"},
+  "customer": {"identifier": "cust-test", "external_identifier": "app-test", "version": 1},
+  "subjects": [{"identifier": "subj-test", "external_identifier": "person-test", "type": "person"}]
+}

@@ -1,17 +1,54 @@
 #!/usr/bin/env python3
 """
-ARIE Finance — Back-End API Server
+Onboarda — Back-End API Server
 ====================================
 Single-file production-ready API server using Tornado + SQLite.
 Provides: authentication, application CRUD, document uploads,
 risk scoring, AI verification, audit trail, and user management.
 
 Run:  python server.py
-Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
+Env:  PORT=10000 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
-import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets
-from datetime import datetime, timedelta
+import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before any config reads
+from collections.abc import Mapping
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# Unified configuration — single source of truth for all env vars
+from config import (
+    ENVIRONMENT as _CFG_ENVIRONMENT,
+    IS_PRODUCTION as _CFG_IS_PRODUCTION,
+    JWT_SECRET as _CFG_JWT_SECRET,
+    SECRET_KEY as _CFG_SECRET_KEY,
+    DATABASE_URL as _CFG_DATABASE_URL,
+    DB_PATH as _CFG_DB_PATH,
+    PORT as _CFG_PORT,
+    ANTHROPIC_API_KEY as _CFG_ANTHROPIC_API_KEY,
+    CLAUDE_BUDGET_USD as _CFG_CLAUDE_BUDGET_USD,
+    CLAUDE_MOCK_MODE as _CFG_CLAUDE_MOCK_MODE,
+    SUMSUB_APP_TOKEN as _CFG_SUMSUB_APP_TOKEN,
+    SUMSUB_SECRET_KEY as _CFG_SUMSUB_SECRET_KEY,
+    SUMSUB_BASE_URL as _CFG_SUMSUB_BASE_URL,
+    SUMSUB_LEVEL_NAME as _CFG_SUMSUB_LEVEL_NAME,
+    SUMSUB_WEBHOOK_SECRET as _CFG_SUMSUB_WEBHOOK_SECRET,
+    OPENSANCTIONS_API_KEY as _CFG_OPENSANCTIONS_API_KEY,
+    OPENSANCTIONS_API_URL as _CFG_OPENSANCTIONS_API_URL,
+    OPENCORPORATES_API_KEY as _CFG_OPENCORPORATES_API_KEY,
+    OPENCORPORATES_API_URL as _CFG_OPENCORPORATES_API_URL,
+    IP_GEOLOCATION_API_KEY as _CFG_IP_GEOLOCATION_API_KEY,
+    IP_GEOLOCATION_API_URL as _CFG_IP_GEOLOCATION_API_URL,
+    S3_BUCKET as _CFG_S3_BUCKET,
+    UPLOAD_DIR as _CFG_UPLOAD_DIR,
+    DEBUG as _CFG_DEBUG,
+    LOG_FORMAT as _CFG_LOG_FORMAT,
+    ALLOWED_ORIGIN as _CFG_ALLOWED_ORIGIN,
+    validate_config,
+)
 from functools import wraps
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -23,1384 +60,2554 @@ import tornado.web
 import tornado.escape
 import requests
 
+import html
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# Import database module
+from db import get_db as db_get_db, init_db as db_init_db, USE_POSTGRESQL, log_agent_execution
+
+# S3 support (optional)
+try:
+    from s3_client import get_s3_client
+    HAS_S3 = True
+except ImportError:
+    HAS_S3 = False
+
+# Security hardening module — MANDATORY dependency
+# If this import fails, the server MUST NOT start. These modules enforce:
+# approval gates, password policy, file upload validation, token revocation,
+# PII encryption, and production environment guards.
+from security_hardening import (
+    ApprovalGateValidator, validate_production_environment,
+    PasswordPolicy, ApplicationSchema, FileUploadValidator,
+    TokenRevocationList, token_revocation_list,
+    get_safe_health_response, determine_screening_mode,
+    store_screening_mode, PIIEncryptor
+)
+HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
+
+# Claude AI integration (optional)
+try:
+    from claude_client import ClaudeClient, standardise_agent_output, compute_overall_status, AGENT_RISK_DIMENSIONS
+    HAS_CLAUDE_CLIENT = True
+except ImportError:
+    HAS_CLAUDE_CLIENT = False
+    ClaudeClient = None
+    standardise_agent_output = None
+    compute_overall_status = None
+    AGENT_RISK_DIMENSIONS = {}
+
+# Environment configuration module
+from environment import (
+    ENV, is_demo, is_production, is_staging, flags,
+    enforce_startup_safety, get_environment_info,
+    get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket
+)
+from verification_state import (
+    STATE_FAILED,
+    STATE_FLAGGED,
+    STATE_IN_PROGRESS,
+    STATE_PENDING,
+    STATE_VERIFIED,
+    decorate_document_verification_state,
+    normalize_verification_state,
+    verification_state_payload,
+)
+from screening_freshness_metadata import populate_screening_freshness_metadata
+
+# ── Sprint 2: Extracted modules ──────────────────────────
+from auth import (
+    create_token, decode_token,
+    sanitize_input, sanitize_dict,
+    RateLimiter,
+)
+from rule_engine import (
+    FATF_GREY, FATF_BLACK, SANCTIONED, SANCTIONED_COUNTRIES_FULL,
+    ALLOWED_CURRENCIES, LOW_RISK, SECTOR_SCORES,
+    HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
+    HIGH_RISK_COUNTRIES, ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
+    RISK_WEIGHTS, RISK_RANK,
+    classify_country, score_sector, compute_risk_score, classify_risk_level,
+    apply_risk_floor,
+    validate_risk_config,
+    recompute_risk, recompute_risk_for_active_apps,
+)
+from validation_engine import (
+    validate_compliance_memo,
+    pre_validate_application,
+    generate_fallback_memo,
+)
+from supervisor_engine import run_memo_supervisor
+from memo_handler import build_compliance_memo
+from decision_model import (
+    build_from_application_decision,
+    build_from_supervisor_verdict,
+    save_decision_record,
+    get_decision_records,
+)
+from edd_routing_policy import (
+    evaluate_edd_routing as _evaluate_edd_routing,
+    emit_routing_audit as _emit_edd_routing_audit,
+)
+from edd_actuation import (
+    resolve_valid_assigned_officer as _resolve_valid_edd_assigned_officer,
+    should_preserve_preapproved_kyc_status as _should_preserve_preapproved_kyc_status,
+)
+from edd_completion import (
+    collect_edd_completion_status as _collect_edd_completion_status,
+    edd_completion_satisfies_route as _edd_completion_satisfies_route,
+)
+from enhanced_requirements import (
+    ALLOWED_AUDIENCES,
+    ALLOWED_REQUIREMENT_TYPES,
+    ALLOWED_SUBJECT_SCOPES,
+    ALLOWED_WAIVER_ROLES,
+    audit_enhanced_requirements_approval_block,
+    build_enhanced_requirement_operational_summaries,
+    build_enhanced_requirement_operational_summary,
+    build_enhanced_review_memo_summary,
+    diagnose_enhanced_requirement_config,
+    fulfill_application_enhanced_requirement_document,
+    generate_application_enhanced_requirements,
+    list_portal_application_enhanced_requirements,
+    request_application_enhanced_requirement_from_client,
+    serialize_application_requirement,
+    serialize_rule as serialize_enhanced_requirement_rule,
+    submit_application_enhanced_requirement_response,
+    update_application_enhanced_requirement,
+    validate_enhanced_requirements_for_approval,
+    validate_rule_payload as validate_enhanced_requirement_rule_payload,
+)
+from monitoring_enrollment import (
+    backfill_approved_applications as _backfill_monitoring_enrollment,
+    enroll_approved_application as _enroll_approved_application_for_monitoring,
+    latest_active_review_summary as _latest_monitoring_review_summary,
+)
+from periodic_review_management import (
+    InvalidPeriodicReviewInput as _InvalidPeriodicReviewInput,
+    EvidenceLinkError as _PeriodicReviewEvidenceLinkError,
+    ImmutablePeriodicReviewFieldError as _ImmutablePeriodicReviewFieldError,
+    ReviewNotFound as _PeriodicReviewMgmtReviewNotFound,
+    UnauthorizedReviewOverride as _UnauthorizedPeriodicReviewOverride,
+    acknowledge_legacy_import as _acknowledge_periodic_review_import,
+    add_evidence_link as _add_periodic_review_evidence_link,
+    assign_review as _assign_periodic_review,
+    record_risk_change as _record_periodic_review_risk_change,
+    save_legacy_import_setup as _save_periodic_review_import_setup,
+    save_material_change_attestation as _save_periodic_review_material_change,
+    save_officer_rationale as _save_periodic_review_rationale,
+)
+from periodic_review_projection_service import (
+    get_review_projection as _get_periodic_review_projection,
+    latest_active_review_summary as _latest_periodic_review_projection,
+    list_review_projections as _list_periodic_review_projections,
+)
+
+# GDPR retention and purge engine (optional import — continues if unavailable)
+try:
+    from gdpr import run_scheduled_purge as _gdpr_run_scheduled_purge
+    HAS_GDPR_PURGE = True
+except ImportError:
+    HAS_GDPR_PURGE = False
+    _gdpr_run_scheduled_purge = None
+
+
+# ── Priority B.2 / Workstream A: EDD route actuation ─────────────────
+# When the deterministic EDD routing policy returns route="edd", this
+# helper turns the policy decision into actual workflow reality:
+#   1. upserts an ``edd_cases`` row at stage='triggered' for the
+#      application (idempotent — at most one active EDD case per
+#      application);
+#   2. flips ``applications.status`` to ``edd_required`` so the case
+#      leaves the Standard Review lane;
+#   3. preserves routing context (policy_version, triggers,
+#      evaluated_at, supervisor mandatory-escalation reasons,
+#      origin=``policy_routing``) inside the EDD case's
+#      ``trigger_notes`` and ``edd_notes`` so the audit trail is
+#      reconstructable without replaying the pipeline.
+# Returns ``{"case_id": int, "created": bool, "status_changed": bool}``.
+# The caller owns the transaction (``db.commit()``).
+_EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
+
+
+def _canonical_risk_level(value):
+    """Return a canonical risk level or None when the source is not rated."""
+    key = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+    return key if key in _CANONICAL_RISK_LEVELS else None
+
+
+def _canonical_risk_score(value):
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score < 0 or score > 100:
+        return None
+    return score
+
+
+def _application_risk_snapshot(app_row):
+    """Truthful risk snapshot for copying into downstream workflow rows.
+
+    Phase 4 deliberately refuses the historical HIGH/0 fallback. A non-low
+    zero score is treated as stale unless a real score is present.
+    """
+    if not app_row:
+        return None, None
+    try:
+        app = dict(app_row)
+    except Exception:
+        app = app_row
+    level = (
+        _canonical_risk_level(app.get("final_risk_level"))
+        or _canonical_risk_level(app.get("risk_level"))
+    )
+    score = (
+        _canonical_risk_score(app.get("final_risk_score"))
+        if app.get("final_risk_score") not in (None, "")
+        else _canonical_risk_score(app.get("risk_score"))
+    )
+    if not level:
+        return None, None
+    if level != "LOW" and score == 0:
+        score = None
+    return level, score
+
+
+_RISK_REQUIRED_APPLICATION_STATUSES = (
+    "submitted", "prescreening_submitted", "pricing_review", "pricing_accepted",
+    "pre_approval_review", "pre_approved", "kyc_documents", "kyc_submitted",
+    "compliance_review", "in_review", "under_review", "edd_required",
+    "approved", "rejected", "rmi_sent", "withdrawn",
+)
+_RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation required"
+_EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
+
+
+def _unique_list(values):
+    seen = set()
+    result = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _json_list_value(value):
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _decision_notes_dict(app):
+    raw = app.get("decision_notes") if app else None
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _edd_trigger_flags_from_app(app):
+    flags = []
+    notes = _decision_notes_dict(app)
+    flags.extend(_json_list_value(notes.get("edd_trigger_flags")))
+    if notes.get("decision") == "escalate_edd":
+        flags.append("officer_escalate_edd")
+    flags.extend("risk_escalation:" + str(item) for item in _json_list_value(app.get("risk_escalations")))
+    if app.get("elevation_reason_text"):
+        flags.append(str(app.get("elevation_reason_text")))
+    return _unique_list(flags)
+
+
+def _apply_edd_route_risk_floor(risk, routing_outcome):
+    """Keep final risk truthful by applying the minimum level implied by EDD routing."""
+    if not isinstance(risk, dict) or not isinstance(routing_outcome, dict):
+        return risk
+    if str(routing_outcome.get("route") or "").lower() != "edd":
+        return risk
+    try:
+        from edd_routing_policy import minimum_risk_level_for_routing
+        minimum_level = minimum_risk_level_for_routing(routing_outcome) or "MEDIUM"
+    except Exception:
+        minimum_level = "MEDIUM"
+    current = _canonical_risk_level(risk.get("final_risk_level") or risk.get("level"))
+    if current and RISK_RANK.get(current, 0) >= RISK_RANK.get(minimum_level, 0):
+        return risk
+    triggers = ", ".join(str(t) for t in (routing_outcome.get("triggers") or []) if t)
+    reason = "EDD routing floor: deterministic routing required EDD"
+    if triggers:
+        reason += f" ({triggers})"
+    floored = apply_risk_floor(
+        risk,
+        minimum_level,
+        "floor_rule_edd_routing",
+        reason,
+    )
+    floored["lane"] = "EDD"
+    return floored
+
+
+def _decorate_application_risk_integrity(app):
+    """Attach truthful risk-integrity metadata for API consumers.
+
+    This does not overwrite canonical risk fields. It prevents clients from
+    treating missing/stale risk as LOW/0 while preserving valid LOW risk cases.
+    """
+    if not app:
+        return app
+    level = (
+        _canonical_risk_level(app.get("final_risk_level"))
+        or _canonical_risk_level(app.get("risk_level"))
+    )
+    score = _canonical_risk_score(app.get("risk_score"))
+    status = app.get("status") or ""
+    flags = _edd_trigger_flags_from_app(app)
+    warnings = []
+
+    has_authoritative_risk = bool(level and score is not None)
+    if level and level != "LOW" and score == 0:
+        has_authoritative_risk = False
+
+    if status in _RISK_REQUIRED_APPLICATION_STATUSES and not has_authoritative_risk:
+        warnings.append(_RISK_UNAVAILABLE_WARNING)
+
+    if status == "edd_required":
+        if score == 0:
+            warnings.append(_EDD_ZERO_SCORE_WARNING)
+            has_authoritative_risk = False
+        if not flags:
+            warnings.append("EDD trigger reason unavailable")
+
+    app["has_authoritative_risk"] = has_authoritative_risk
+    app["risk_integrity_warnings"] = _unique_list(warnings)
+    app["edd_trigger_flags"] = flags
+    return app
+
+
+def _application_risk_integrity_error(app, action_label="continue"):
+    """Return a fail-closed risk integrity message for non-draft application actions."""
+    if not app:
+        return "Cannot " + action_label + ": application risk record is unavailable."
+    app_dict = dict(app)
+    status = str(app_dict.get("status") or "").lower()
+    if status == "draft":
+        return None
+    _decorate_application_risk_integrity(app_dict)
+    if app_dict.get("has_authoritative_risk") is True:
+        return None
+    warnings = app_dict.get("risk_integrity_warnings") or [_RISK_UNAVAILABLE_WARNING]
+    return (
+        "Cannot " + action_label + ": " + _RISK_UNAVAILABLE_WARNING
+        + ". Recompute risk before continuing. "
+        + "Integrity warning(s): " + "; ".join(warnings)
+    )
+
+
+def _edd_truthful_risk_snapshot(case_row, app_row=None):
+    app_level, app_score = _application_risk_snapshot(app_row)
+    if app_level:
+        return app_level, app_score
+
+    try:
+        case = dict(case_row)
+    except Exception:
+        case = case_row or {}
+    level = _canonical_risk_level(case.get("risk_level"))
+    score = _canonical_risk_score(case.get("risk_score"))
+    if not level:
+        return None, None
+    if level != "LOW" and score == 0:
+        return None, None
+    return level, score
+
+
+def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, client_ip=""):
+    """Create or upsert an EDD case + flip application status when route=edd.
+
+    Args:
+        db: live DBConnection (caller commits).
+        app_row: dict-like application record (must expose id, ref,
+                 company_name, risk_level, risk_score, status).
+        edd_routing: routing decision dict from evaluate_edd_routing.
+        supervisor_result: supervisor result dict (may be empty).
+        user: authenticated user dict for audit attribution.
+        client_ip: optional client IP for audit row.
+
+    Returns:
+        dict with ``case_id`` (int or None), ``created`` (bool),
+        ``status_changed`` (bool), and ``skipped`` (bool when route
+        is not edd or app_row missing).
+    """
+    result = {
+        "case_id": None,
+        "created": False,
+        "status_changed": False,
+        "status_preserved": False,
+        "skipped": False,
+        "edd_completion_satisfied": False,
+        "completion_recognized": False,
+    }
+    try:
+        if not isinstance(edd_routing, dict) or edd_routing.get("route") != "edd":
+            result["skipped"] = True
+            return result
+        if not app_row:
+            result["skipped"] = True
+            return result
+        try:
+            app_dict = dict(app_row)
+        except Exception:
+            app_dict = app_row
+        application_id = app_dict.get("id")
+        if not application_id:
+            result["skipped"] = True
+            return result
+
+        completion = _collect_edd_completion_status(db, application_id, routing=edd_routing)
+        if _edd_completion_satisfies_route(completion):
+            result["case_id"] = completion.get("case_id")
+            result["edd_completion_satisfied"] = True
+            result["completion_recognized"] = True
+            result["status_preserved"] = True
+            triggers = list(edd_routing.get("triggers") or [])
+            policy_version = edd_routing.get("policy_version", "")
+            evaluated_at = edd_routing.get("evaluated_at", "")
+            mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+            try:
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, "
+                    "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        (user or {}).get("sub") or "system",
+                        (user or {}).get("name") or "system",
+                        (user or {}).get("role") or "system",
+                        "edd_routing.actuated",
+                        "application:" + str(app_dict.get("ref") or application_id),
+                        json.dumps({
+                            "policy_version": policy_version,
+                            "route": edd_routing.get("route"),
+                            "triggers": triggers,
+                            "mandatory_escalation_reasons": mandatory_reasons,
+                            "evaluated_at": evaluated_at,
+                            "edd_case_id": result["case_id"],
+                            "edd_case_created": False,
+                            "status_changed": False,
+                            "status_preserved": True,
+                            "edd_completion_satisfied": True,
+                            "completion_recognized": True,
+                            "completion_reason": completion.get("reason"),
+                            "completion_case_id": completion.get("case_id"),
+                            "completion_current_triggers": completion.get("current_triggers"),
+                            "completion_covered_triggers": completion.get("covered_triggers"),
+                            "origin": "policy_routing",
+                        }, default=str, sort_keys=True),
+                        client_ip or "",
+                    ),
+                )
+            except Exception as _ae:
+                logger.warning("Failed to write completed EDD actuation audit row: %s", _ae)
+            return result
+
+        # Idempotency: at most one active EDD case per application.
+        placeholders = ",".join(["?"] * len(_EDD_ACTUATION_TERMINAL_STAGES))
+        existing = db.execute(
+            "SELECT id, stage FROM edd_cases WHERE application_id = ? "
+            "AND stage NOT IN (" + placeholders + ") "
+            "ORDER BY id ASC LIMIT 1",
+            (application_id, *_EDD_ACTUATION_TERMINAL_STAGES),
+        ).fetchone()
+
+        triggers = list(edd_routing.get("triggers") or [])
+        policy_version = edd_routing.get("policy_version", "")
+        evaluated_at = edd_routing.get("evaluated_at", "")
+        mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+        trigger_notes = (
+            "Auto-routed to EDD by policy " + str(policy_version)
+            + " | triggers: " + ", ".join(triggers[:8])
+            + (" | mandatory_escalation: " + ", ".join(mandatory_reasons[:6])
+               if mandatory_reasons else "")
+        )
+
+        if existing:
+            case_id = existing["id"]
+            # Append a new audited note so reviewers see the routing
+            # re-confirmed by this memo regeneration. We do not
+            # re-create the case (idempotent).
+            try:
+                _row = db.execute(
+                    "SELECT edd_notes FROM edd_cases WHERE id = ?",
+                    (case_id,),
+                ).fetchone()
+                existing_notes = []
+                if _row and _row.get("edd_notes"):
+                    raw = _row["edd_notes"]
+                    if isinstance(raw, str):
+                        try:
+                            existing_notes = json.loads(raw) or []
+                        except Exception:
+                            existing_notes = []
+                    elif isinstance(raw, list):
+                        existing_notes = list(raw)
+                existing_notes.append({
+                    "ts": datetime.now().isoformat(),
+                    "author": (user or {}).get("name") or "system",
+                    "source": "policy_routing",
+                    "policy_version": policy_version,
+                    "triggers": triggers,
+                    "mandatory_escalation_reasons": mandatory_reasons,
+                    "evaluated_at": evaluated_at,
+                    "note": "Routing re-confirmed by memo regeneration",
+                })
+                db.execute(
+                    "UPDATE edd_cases SET edd_notes = ? WHERE id = ?",
+                    (json.dumps(existing_notes), case_id),
+                )
+            except Exception as _ne:
+                logger.warning(
+                    "Failed to append routing note to EDD case %s: %s",
+                    case_id, _ne,
+                )
+            result["case_id"] = case_id
+            result["created"] = False
+        else:
+            initial_note = json.dumps([{
+                "ts": datetime.now().isoformat(),
+                "author": (user or {}).get("name") or "system",
+                "source": "policy_routing",
+                "policy_version": policy_version,
+                "triggers": triggers,
+                "mandatory_escalation_reasons": mandatory_reasons,
+                "evaluated_at": evaluated_at,
+                "note": "EDD case auto-created by routing policy actuation",
+            }])
+            risk_level, risk_score = _application_risk_snapshot(app_dict)
+            assigned_officer = _resolve_valid_edd_assigned_officer(db, user)
+            insert_params = (
+                application_id,
+                app_dict.get("company_name") or "",
+                risk_level,
+                risk_score,
+                "triggered",
+                assigned_officer,
+                "policy_routing",
+                trigger_notes,
+                initial_note,
+            )
+            if USE_POSTGRES:
+                row = db.execute(
+                    "INSERT INTO edd_cases (application_id, client_name, "
+                    "risk_level, risk_score, stage, assigned_officer, "
+                    "trigger_source, trigger_notes, edd_notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+                    insert_params,
+                ).fetchone()
+                case_id = row["id"]
+            else:
+                db.execute(
+                    "INSERT INTO edd_cases (application_id, client_name, "
+                    "risk_level, risk_score, stage, assigned_officer, "
+                    "trigger_source, trigger_notes, edd_notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    insert_params,
+                )
+                case_id = db.execute(
+                    "SELECT last_insert_rowid() as id"
+                ).fetchone()["id"]
+            result["case_id"] = case_id
+            result["created"] = True
+
+        # Flip application status to edd_required if not already on
+        # the EDD path. Preserve terminal/edd-approved states.
+        current_status = (app_dict.get("status") or "")
+        preserve_preapproved_kyc_status = _should_preserve_preapproved_kyc_status(app_dict)
+        if preserve_preapproved_kyc_status:
+            result["status_preserved"] = True
+        elif current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
+            db.execute(
+                "UPDATE applications SET status = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                ("edd_required", application_id),
+            )
+            result["status_changed"] = True
+
+        # Write a single audit row so the actuation is independently
+        # reconstructable (separate from the routing.evaluated row).
+        try:
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, "
+                "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (
+                    (user or {}).get("sub") or "system",
+                    (user or {}).get("name") or "system",
+                    (user or {}).get("role") or "system",
+                    "edd_routing.actuated",
+                    "application:" + str(app_dict.get("ref") or application_id),
+                    json.dumps({
+                        "policy_version": policy_version,
+                        "route": edd_routing.get("route"),
+                        "triggers": triggers,
+                        "mandatory_escalation_reasons": mandatory_reasons,
+                        "evaluated_at": evaluated_at,
+                        "edd_case_id": result["case_id"],
+                        "edd_case_created": result["created"],
+                        "status_changed": result["status_changed"],
+                        "status_preserved": result["status_preserved"],
+                        "origin": "policy_routing",
+                    }, default=str, sort_keys=True),
+                    client_ip or "",
+                ),
+            )
+        except Exception as _ae:
+            logger.warning("Failed to write edd_routing.actuated audit row: %s", _ae)
+    except Exception as _err:
+        # Fail-closed semantics: if actuation cannot complete, log
+        # loudly. The approval gate already refuses approval when
+        # route=edd and status is not edd_required, so the case
+        # cannot silently leak through.
+        logger.error("EDD route actuation failed: %s", _err, exc_info=True)
+    return result
+from branding import BRAND, get_risk_label, get_status_label
+from party_utils import (
+    _pii_encryptor, _pii_encryption_ok,
+    extract_fernet_token, encrypt_pii_fields, decrypt_pii_fields,
+    PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS, PII_FIELDS_APPLICATIONS,
+    parse_json_field, hydrate_party_record, get_application_parties,
+    get_application_parties_batch,
+)
+from prescreening.normalize import (
+    compose_source_of_funds_summary as _compose_source_of_funds_summary,
+    first_non_empty as _first_non_empty,
+    is_meaningful_value as _is_meaningful_value,
+    merge_prescreening_sources as _merge_prescreening_sources,
+    normalize_prescreening_data as _normalize_prescreening_data,
+    normalize_saved_session_prescreening as _normalize_saved_session_prescreening,
+    resolve_application_company_name as _resolve_application_company_name,
+    safe_json_loads as _safe_json_loads,
+)
+from prescreening.risk_inputs import build_prescreening_risk_input
+
+# Layered document verification engine (Agent 1)
+try:
+    from document_verification import verify_document_layered, to_legacy_result, _canonicalise_country
+    HAS_DOC_VERIFICATION = True
+except ImportError:
+    HAS_DOC_VERIFICATION = False
+    verify_document_layered = None
+    to_legacy_result = None
+    _canonicalise_country = None
+
+# Sprint 3: Server-side PDF generation
+try:
+    from pdf_generator import generate_memo_pdf
+    HAS_PDF_GENERATOR = True
+except ImportError:
+    HAS_PDF_GENERATOR = False
+    logging.getLogger("arie").warning("PDF generator not available — install weasyprint")
+
+# Supervisor framework
+try:
+    from supervisor.api import setup_supervisor, get_supervisor_routes, get_supervisor
+    from supervisor.agent_executors import register_all_executors
+    SUPERVISOR_AVAILABLE = True
+except ImportError:
+    SUPERVISOR_AVAILABLE = False
+    logging.getLogger("arie").warning("Supervisor framework not available — install pydantic>=2.0")
+
 # ── Logging ───────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# JSON structured logging for production, human-readable for development
+_log_format = _CFG_LOG_FORMAT  # "json" or "text"
+
+class JSONFormatter(logging.Formatter):
+    """JSON structured log formatter for production log aggregation."""
+    def format(self, record):
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+if _log_format == "json" or _CFG_IS_PRODUCTION:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(JSONFormatter())
+    logging.root.handlers = []
+    logging.root.addHandler(_handler)
+    logging.root.setLevel(logging.INFO)
+else:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 logger = logging.getLogger("arie")
 
-# ── Configuration ──────────────────────────────────────────
-PORT = int(os.environ.get("PORT", 8080))
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+# ── Configuration (from unified config module) ────────────
+PORT = _CFG_PORT
+ENVIRONMENT = _CFG_ENVIRONMENT
+SECRET_KEY = _CFG_SECRET_KEY
 
-# SECRET_KEY: In production, MUST be set via env var. In dev, auto-generate a random key per session.
-_env_secret = os.environ.get("SECRET_KEY", "")
-if not _env_secret and ENVIRONMENT == "production":
-    print("FATAL: SECRET_KEY environment variable is required in production mode.")
-    print("       Generate one with: python3 -c \"import secrets; print(secrets.token_hex(64))\"")
-    sys.exit(1)
-SECRET_KEY = _env_secret or secrets.token_hex(64)  # Random per-session in dev
+DATABASE_URL = _CFG_DATABASE_URL
+DB_PATH = _CFG_DB_PATH
+USE_POSTGRES = bool(DATABASE_URL)
 
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "arie.db"))
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads", "documents"))
+# PostgreSQL adapter (optional import)
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        import psycopg2.extras
+        logger.info("PostgreSQL mode enabled via DATABASE_URL")
+    except ImportError:
+        logger.error("DATABASE_URL set but psycopg2 not installed. Run: pip install psycopg2-binary")
+        sys.exit(1)
+
+UPLOAD_DIR = _CFG_UPLOAD_DIR
+RESOURCE_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "resources")
+REGULATORY_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "regulatory_intelligence")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..")  # Serves from arie-backend parent
 MAX_UPLOAD_MB = 10
 TOKEN_EXPIRY_HOURS = 24
 
-# ── External API Keys (set via environment variables) ──────
-OPENSANCTIONS_API_KEY = os.environ.get("OPENSANCTIONS_API_KEY", "")
-OPENSANCTIONS_API_URL = os.environ.get("OPENSANCTIONS_API_URL", "https://api.opensanctions.org")
-OPENCORPORATES_API_KEY = os.environ.get("OPENCORPORATES_API_KEY", "")
-OPENCORPORATES_API_URL = os.environ.get("OPENCORPORATES_API_URL", "https://api.opencorporates.com/v0.4")
-IP_GEOLOCATION_API_KEY = os.environ.get("IP_GEOLOCATION_API_KEY", "")
-IP_GEOLOCATION_API_URL = os.environ.get("IP_GEOLOCATION_API_URL", "https://ipapi.co")
+# ── External API Keys (from unified config module) ────────
+OPENSANCTIONS_API_KEY = _CFG_OPENSANCTIONS_API_KEY
+OPENSANCTIONS_API_URL = _CFG_OPENSANCTIONS_API_URL
+OPENCORPORATES_API_KEY = _CFG_OPENCORPORATES_API_KEY
+OPENCORPORATES_API_URL = _CFG_OPENCORPORATES_API_URL
+IP_GEOLOCATION_API_KEY = _CFG_IP_GEOLOCATION_API_KEY
+IP_GEOLOCATION_API_URL = _CFG_IP_GEOLOCATION_API_URL
 
 # Sumsub KYC/Identity Verification
-SUMSUB_APP_TOKEN = os.environ.get("SUMSUB_APP_TOKEN", "")
-SUMSUB_SECRET_KEY = os.environ.get("SUMSUB_SECRET_KEY", "")
-SUMSUB_BASE_URL = os.environ.get("SUMSUB_BASE_URL", "https://api.sumsub.com")
-SUMSUB_LEVEL_NAME = os.environ.get("SUMSUB_LEVEL_NAME", "basic-kyc-level")
-SUMSUB_WEBHOOK_SECRET = os.environ.get("SUMSUB_WEBHOOK_SECRET", "")
+SUMSUB_APP_TOKEN = _CFG_SUMSUB_APP_TOKEN
+SUMSUB_SECRET_KEY = _CFG_SUMSUB_SECRET_KEY
+SUMSUB_BASE_URL = _CFG_SUMSUB_BASE_URL
+SUMSUB_LEVEL_NAME = _CFG_SUMSUB_LEVEL_NAME
+SUMSUB_WEBHOOK_SECRET = _CFG_SUMSUB_WEBHOOK_SECRET
+
+
+def mask_email(email: str) -> str:
+    """Mask email addresses for safe logging (PII redaction)."""
+    if not email or '@' not in str(email):
+        return '***'
+    local, domain = str(email).rsplit('@', 1)
+    return f"{local[0]}***@{domain}"
+
+
+def hash_reset_token(token: str) -> str:
+    """Hash password reset tokens before storing them."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _resolve_upload_document_path(stored_path: str):
+    """Resolve a stored document path while enforcing UPLOAD_DIR containment."""
+    if not stored_path:
+        return None
+
+    raw_path = str(stored_path).strip()
+    if not raw_path:
+        return None
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = upload_root / candidate
+
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+    if resolved != upload_root and upload_root not in resolved.parents:
+        logger.warning(f"Rejected unsafe document path outside upload directory: {stored_path}")
+        return None
+
+    return str(resolved)
+
+
+def _revoke_all_client_sessions(db, user_id):
+    """
+    Best-effort revocation helper: invalidate any JWT that was issued for *user_id*.
+
+    Since JWTs are stateless the only mechanism we have is the token revocation
+    list, which tracks individual JTI values.  We don't store issued tokens
+    server-side, so there is nothing to iterate over.  Instead this function
+    records a "user-level" revocation entry keyed on the user_id itself.
+    ``decode_token`` already validates the per-JTI revocation list, and by
+    also checking the per-user key we can block all tokens for a given user
+    after a password reset / change.
+
+    The entry expires after TOKEN_EXPIRY_HOURS so it is automatically cleaned
+    up — any JWT issued before the password change will have expired by then.
+    """
+    import time as _time
+    from auth import TOKEN_EXPIRY_HOURS
+    expires_at = _time.time() + TOKEN_EXPIRY_HOURS * 3600
+    # Use a synthetic JTI that encode_token never generates but that the
+    # revocation list can match on via the helper below.
+    user_jti = f"user:{user_id}"
+    token_revocation_list.revoke(user_jti, expires_at)
+
+
+def build_regulatory_analysis(doc: dict) -> dict:
+    """Deterministic backend analysis for regulatory intelligence documents."""
+    text = str(doc.get("source_text") or "").lower()
+    title = str(doc.get("title") or "regulatory document")
+    regulator = str(doc.get("regulator") or "Unknown regulator")
+    jurisdiction = str(doc.get("jurisdiction") or "Unknown jurisdiction")
+    doc_type = str(doc.get("doc_type") or "Document")
+    effective_date = str(doc.get("effective_date") or "") or "TBD"
+
+    keyword_groups = {
+        "onboarding": ["onboard", "application", "client", "customer"],
+        "kyc": ["kyc", "document", "verification", "identity"],
+        "sanctions": ["sanction", "pep", "list", "designation", "watchlist"],
+        "riskScoring": ["risk", "score", "rating", "classification"],
+        "edd": ["edd", "enhanced", "due diligence", "high risk"],
+        "monitoring": ["monitor", "periodic", "ongoing", "review cycle", "review"],
+        "reporting": ["report", "fiu", "disclosure", "suspicious", "filing"],
+    }
+    affected_areas = {area: any(term in text for term in terms) for area, terms in keyword_groups.items()}
+    if not any(affected_areas.values()):
+        affected_areas["onboarding"] = True
+
+    suggestions = []
+
+    def add_suggestion(suggestion_type: str, short_text: str, detail: str):
+        suggestion_id = f"S{len(suggestions) + 1:03d}"
+        suggestions.append({
+            "id": suggestion_id,
+            "type": suggestion_type,
+            "text": short_text,
+            "detail": detail,
+            "status": "pending",
+            "reviewedBy": None,
+            "reviewedAt": None,
+            "notes": "",
+        })
+
+    if affected_areas["riskScoring"]:
+        add_suggestion(
+            "modify",
+            "Review and update risk scoring parameters based on new guidance",
+            "The update references risk assessment methodology. Review whether current RegMind scoring dimensions and thresholds capture the new risk factors, and document any approved model changes before deployment.",
+        )
+    if affected_areas["sanctions"]:
+        add_suggestion(
+            "flag",
+            "Update screening lists and sanctions interpretation controls",
+            "The update references sanctions, PEP, or designation changes. Confirm source lists and screening interpretation controls are aligned before relying on automated screening outcomes.",
+        )
+    if affected_areas["kyc"]:
+        add_suggestion(
+            "add",
+            "Review onboarding document requirements and verification checks",
+            "The update introduces or affects documentary obligations. Review onboarding checklists and automated document verification controls so required evidence is collected and validated consistently.",
+        )
+    if affected_areas["reporting"]:
+        add_suggestion(
+            "add",
+            "Assess reporting thresholds and filing workflows",
+            "The update appears to introduce or change reporting obligations. Validate whether SAR/FIU or equivalent filing workflows, thresholds, and turnaround expectations require configuration changes.",
+        )
+    if "jurisdict" in text or "country" in text or "grey" in text or "black" in text:
+        add_suggestion(
+            "flag",
+            "Review country risk references and affected-client exposure",
+            "The update affects jurisdictional treatment. Review country risk references and identify existing clients or onboarding cases with exposure to the affected jurisdictions.",
+        )
+    if affected_areas["edd"]:
+        add_suggestion(
+            "escalate",
+            "Review EDD trigger criteria and escalation routing",
+            "The update affects enhanced due diligence expectations. Confirm EDD triggers, officer routing, and approval gating remain aligned with the new obligations.",
+        )
+    if affected_areas["monitoring"]:
+        add_suggestion(
+            "modify",
+            "Review monitoring cadence and ongoing review rules",
+            "The update affects monitoring or review obligations. Confirm periodic review frequency, alerting, and monitoring procedures are aligned before relying on current settings.",
+        )
+    if not suggestions:
+        add_suggestion(
+            "modify",
+            "Perform documented gap assessment against current compliance procedures",
+            "A manual gap assessment is recommended to confirm whether this update changes onboarding, screening, memo, or monitoring controls before the effective date.",
+        )
+        add_suggestion(
+            "add",
+            "Brief compliance staff and record implementation decisions",
+            "Document the implementation decision, obtain human approval for any policy changes, and brief the compliance team before the update takes effect.",
+        )
+
+    client_types = [f"All regulated entities under {regulator}"]
+    if affected_areas["sanctions"]:
+        client_types.append("Clients with exposure to designated jurisdictions or persons")
+    if affected_areas["edd"]:
+        client_types.append("High-risk and very high-risk clients")
+    if affected_areas["riskScoring"]:
+        client_types.append("Clients whose onboarding risk classification may change")
+    if affected_areas["monitoring"]:
+        client_types.append("Clients subject to enhanced or periodic review obligations")
+    if "payment" in text:
+        client_types.append("Payment institutions and money service businesses")
+    if "fund" in text or "invest" in text:
+        client_types.append("Investment funds and asset managers")
+
+    obligations = [
+        f"Review and assess the regulatory requirements outlined in {title}",
+        "Determine applicability to RegMind's current client base, controls, and operating procedures",
+        f"Implement any approved changes before the effective date ({effective_date})",
+        "Brief the compliance team and retain an implementation audit trail",
+        "Record the final implementation decision with human approval",
+    ]
+
+    impacted_labels = [label for label, hit in affected_areas.items() if hit]
+    if impacted_labels:
+        if len(impacted_labels) == 1:
+            impacted_text = impacted_labels[0]
+        else:
+            impacted_text = ", ".join(impacted_labels[:-1]) + " and " + impacted_labels[-1]
+    else:
+        impacted_text = "onboarding"
+
+    # Heuristic confidence: base 35, +4 per suggestion, +3 per area hit, capped at 82.
+    # Intentionally conservative — this is keyword matching, not semantic analysis.
+    confidence = min(82, 35 + (len(suggestions) * 4) + sum(3 for hit in affected_areas.values() if hit))
+
+    return {
+        "summary": (
+            f"This {doc_type.lower()} from {regulator} ({jurisdiction}) introduces changes affecting {impacted_text}. "
+            f"{len(suggestions)} implementation suggestion(s) require human review before any control changes are made."
+        ),
+        "keyObligations": obligations,
+        "affectedAreas": affected_areas,
+        "suggestions": suggestions,
+        "affectedClientTypes": client_types,
+        "confidence": confidence,
+        "analysedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+        "analysisSource": "backend_rule_assisted",
+        "humanReviewRequired": True,
+    }
+
+
+def build_regulatory_workflow_state(doc: dict) -> str:
+    """Return a truthful UI workflow state for regulatory intelligence records."""
+    status = str(doc.get("status") or "")
+    analysis_source = str(doc.get("analysis_source") or "")
+    source_text = bool(doc.get("source_text"))
+    file_name = bool(doc.get("file_name"))
+
+    if analysis_source == "manual_review_required" or status == "review_required":
+        return "manual_text_required"
+    if analysis_source == "backend_rule_assisted" or status == "analysed":
+        return "heuristic_review"
+    if file_name or source_text or status == "uploaded":
+        return "stored_only"
+    # Conservative default: unknown records should not appear as "analysis available".
+    return "stored_only"
+
+
+def send_portal_email(to_addr: str, subject: str, text_body: str) -> bool:
+    """Send a transactional portal email via SMTP if configured."""
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT", 587))
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_password = os.environ.get("SMTP_PASSWORD")
+    smtp_from = BRAND.get("email_from_address") or smtp_user
+    smtp_from_name = BRAND.get("email_from_name") or "Onboarda"
+
+    if not smtp_host or not smtp_user:
+        logger.warning("SMTP not configured. Transactional email not sent: %s", subject)
+        return False
+
+    msg = MIMEMultipart()
+    msg["From"] = f"{smtp_from_name} <{smtp_from}>"
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.attach(MIMEText(text_body, "plain"))
+
+    try:
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        if smtp_password:
+            server.login(smtp_user, smtp_password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as exc:
+        logger.error("Transactional email failed for %s: %s", mask_email(to_addr), exc)
+        return False
+
+
+def _safe_verification_status(checks: list, raw_status: str = None) -> str:
+    """
+    Improvement 9: No Result = No Pass.
+    Returns NOT_RUN if no checks exist. Never returns 'verified'/'pass' without evidence.
+    """
+    if not checks:
+        return "not_run"
+    if raw_status in ("verified", "pass"):
+        # Verify that checks actually support a pass
+        has_fail = any((c.get("result") or "").lower() == "fail" for c in checks)
+        has_warn = any((c.get("result") or "").lower() == "warn" for c in checks)
+        if has_fail:
+            return "flagged"
+        if has_warn:
+            return "flagged"
+        return raw_status
+    return raw_status or "not_run"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(RESOURCE_UPLOAD_DIR, exist_ok=True)
+os.makedirs(REGULATORY_UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
+# ── C-02: PII Encryption ─────────────────────────────────────
+# PII encryptor, field constants, encrypt/decrypt helpers, and
+# party-query utilities now live in party_utils.py (imported above)
+# to avoid circular imports (rule_engine → server → Prometheus clash).
+
+
+def safe_json_loads(val):
+    """Safely parse JSON — handles PostgreSQL JSONB (already dict) and SQLite TEXT (string)."""
+    return _safe_json_loads(val)
+
+
+def _json_ready_value(value):
+    """Return a JSON-safe copy while preserving memo/audit evidence."""
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return str(value)
+        return value
+    if isinstance(value, Decimal):
+        if value.is_nan() or value.is_infinite():
+            return str(value)
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(k): _json_ready_value(v) for k, v in value.items()}
+    if hasattr(value, "keys"):
+        try:
+            return {str(k): _json_ready_value(value[k]) for k in value.keys()}
+        except Exception:
+            return str(value)
+    if isinstance(value, (list, tuple, set)):
+        return [_json_ready_value(item) for item in value]
+    try:
+        json.dumps(value, allow_nan=False)
+        return value
+    except (TypeError, ValueError, OverflowError):
+        return str(value)
+
+
+def _json_dumps_strict(value, **kwargs):
+    """Serialize only after recursive normalization so DB memo JSON never fails on rows/timestamps."""
+    return json.dumps(_json_ready_value(value), allow_nan=False, **kwargs)
+
+
+def _rollback_and_close(db):
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    try:
+        db.close()
+    except Exception:
+        pass
+
+
+def _is_lock_timeout_error(exc):
+    text = str(exc or "").lower()
+    return (
+        getattr(exc, "pgcode", None) == "55P03"
+        or "locknotavailable" in type(exc).__name__.lower()
+        or "lock timeout" in text
+        or "could not obtain lock" in text
+    )
+
+
+# ── Priority C: Draft form_data at-rest protection ───────────
+# Drafts persisted in client_sessions.form_data may contain PII
+# (contact email, names, DOB, nationality, ownership %, etc.).
+# We encrypt the whole JSON blob using the existing PIIEncryptor
+# (same Fernet key used for director/UBO PII fields). When the
+# encryptor is not configured (dev/test without PII_ENCRYPTION_KEY)
+# we fall back to plaintext JSON so existing behaviour is preserved.
+# Reads transparently handle both encrypted and legacy plaintext
+# rows so deployment requires no data migration.
+
+DRAFT_FORM_DATA_ENCRYPTED_PREFIX = "enc:v1:"
+DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY = "__draft_form_data_enc_v1"
+
+
+def encrypt_draft_form_data(payload) -> str:
+    """Serialize a draft form_data payload, encrypting at rest if a PII key is available."""
+    raw = json.dumps(payload or {})
+    if _pii_encryptor is None:
+        return raw
+    try:
+        token = _pii_encryptor.encrypt(raw)
+    except Exception as exc:
+        logger.warning("Draft form_data encryption failed, falling back to plaintext: %s", exc)
+        return raw
+    # Store encrypted payloads as JSON so PostgreSQL JSONB columns accept them.
+    return json.dumps({DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY: token})
+
+
+def decrypt_draft_form_data(stored) -> dict:
+    """Decrypt + parse a stored client_sessions.form_data value.
+
+    Accepts:
+      * dict (PostgreSQL JSONB legacy rows) → returned as-is
+      * plaintext JSON strings (legacy rows / encryptor disabled)
+      * "enc:v1:<fernet_token>" strings written by encrypt_draft_form_data
+    Always returns a dict; never raises.
+    """
+    no_token = object()
+
+    def _decrypt_token(token):
+        if not isinstance(token, str) or not token.strip():
+            return no_token
+        if _pii_encryptor is None:
+            logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
+            return {}
+        try:
+            plaintext = _pii_encryptor.decrypt(token)
+        except Exception as exc:
+            logger.warning("Draft form_data decryption failed: %s", exc)
+            return {}
+        return safe_json_loads(plaintext) or {}
+
+    if stored is None or stored == "":
+        return {}
+    if isinstance(stored, dict):
+        decrypted = _decrypt_token(stored.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY))
+        if decrypted is not no_token:
+            return decrypted
+        return stored
+    if isinstance(stored, (bytes, bytearray)):
+        try:
+            stored = stored.decode("utf-8")
+        except Exception:
+            return {}
+    if not isinstance(stored, str):
+        return {}
+    if stored.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):
+        return _decrypt_token(stored[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]) or {}
+    decoded = safe_json_loads(stored)
+    if isinstance(decoded, dict):
+        decrypted = _decrypt_token(decoded.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY))
+        if decrypted is not no_token:
+            return decrypted
+        return decoded
+    # Legacy plaintext JSON (or raw dict-like string)
+    if isinstance(decoded, str) and decoded.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):
+        return _decrypt_token(decoded[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]) or {}
+    return {}
+
+
+def _draft_value_is_meaningful(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, dict):
+        return any(_draft_value_is_meaningful(v) for v in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_draft_value_is_meaningful(v) for v in value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return True
+
+
+def _draft_party_row_is_meaningful(row) -> bool:
+    """Ignore synthetic/default party-row values when classifying draft content."""
+    if not isinstance(row, dict):
+        return _draft_value_is_meaningful(row)
+    interesting_keys = (
+        "first_name",
+        "last_name",
+        "nationality",
+        "date_of_birth",
+        "ownership_pct",
+        "entity_name",
+        "jurisdiction",
+    )
+    if any(_draft_value_is_meaningful(row.get(key)) for key in interesting_keys):
+        return True
+    if str(row.get("is_pep") or "").strip().lower() == "yes":
+        return True
+    pep_declaration = row.get("pep_declaration")
+    if isinstance(pep_declaration, dict):
+        for key, value in pep_declaration.items():
+            if key in ("person_key", "person_type", "is_pep"):
+                continue
+            if _draft_value_is_meaningful(value):
+                return True
+        return False
+    return _draft_value_is_meaningful(pep_declaration)
+
+
+def _draft_uploaded_doc_is_meaningful(value) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in ("id", "slot_id", "slot_key"):
+                continue
+            if _draft_value_is_meaningful(nested):
+                return True
+        return False
+    return _draft_value_is_meaningful(value)
+
+
+def _draft_payload_is_meaningful(payload) -> bool:
+    """Reject completely empty drafts (no form fields, no party rows)."""
+    if not isinstance(payload, dict) or not payload:
+        return False
+    # Metadata-only payloads must not count as real draft content.
+    list_predicates = {
+        "directors": _draft_party_row_is_meaningful,
+        "ubos": _draft_party_row_is_meaningful,
+        "intermediaries": _draft_party_row_is_meaningful,
+        "intermediary_shareholders": _draft_party_row_is_meaningful,
+        "uploadedDocs": _draft_uploaded_doc_is_meaningful,
+    }
+    for key, predicate in list_predicates.items():
+        value = payload.get(key)
+        if isinstance(value, (list, tuple, set)) and any(predicate(item) for item in value):
+            return True
+    interesting_keys = (
+        "prescreening",
+        "prescreening_data",
+        "servicesRequired",
+        "accountPurposes",
+        "currencies",
+        "countriesOfOperation",
+        "targetMarkets",
+        "kycPersons",
+        "company_name",
+        "entity_name",
+        "registered_entity_name",
+        "country",
+        "sector",
+        "entity_type",
+        "ownership_structure",
+        "brn",
+    )
+    return any(_draft_value_is_meaningful(payload.get(key)) for key in interesting_keys)
+
+
+def _extract_save_resume_form_data(payload) -> dict:
+    """Accept both modern {form_data: {...}} and legacy/root payload shapes."""
+    if not isinstance(payload, dict):
+        return {}
+    form_data = payload.get("form_data")
+    if isinstance(form_data, dict):
+        return form_data
+
+    extracted = {}
+    for key in (
+        "prescreening",
+        "prescreening_data",
+        "directors",
+        "ubos",
+        "intermediaries",
+        "intermediary_shareholders",
+        "servicesRequired",
+        "accountPurposes",
+        "currencies",
+        "countriesOfOperation",
+        "targetMarkets",
+        "kycPersons",
+        "uploadedDocs",
+        "company_name",
+        "entity_name",
+        "registered_entity_name",
+        "country",
+        "sector",
+        "entity_type",
+        "ownership_structure",
+        "brn",
+    ):
+        if key in payload:
+            extracted[key] = payload.get(key)
+    return extracted
+
+
+def first_non_empty(*values):
+    """Return the first non-empty string-like value, preserving non-string scalars."""
+    return _first_non_empty(*values)
+
+
+def compose_source_of_funds_summary(prescreening: dict) -> str:
+    return _compose_source_of_funds_summary(prescreening)
+
+
+def normalize_prescreening_data(data: dict, existing=None) -> dict:
+    """Merge incoming prescreening data with existing state and normalize core aliases."""
+    return _normalize_prescreening_data(data, existing=existing)
+
+
+def is_meaningful_value(value) -> bool:
+    return _is_meaningful_value(value)
+
+
+def normalize_saved_session_prescreening(form_data) -> dict:
+    """Backfill authoritative prescreening aliases from save/resume session payloads."""
+    return _normalize_saved_session_prescreening(form_data)
+
+
+def merge_prescreening_sources(primary, fallback) -> dict:
+    """Merge prescreening sources while preserving authoritative stored values over backfill."""
+    return _merge_prescreening_sources(primary, fallback)
+
+
+def load_saved_session_prescreening(db, app_record) -> dict:
+    """Load the latest saved portal form snapshot for an application, if any."""
+    app_id = app_record.get("id") if isinstance(app_record, dict) else None
+    session = None
+    if app_id:
+        session = db.execute(
+            "SELECT form_data FROM client_sessions WHERE application_id=? ORDER BY updated_at DESC LIMIT 1",
+            (app_id,)
+        ).fetchone()
+    if not session:
+        return {}
+    if isinstance(session, dict):
+        form_data = session.get("form_data")
+    else:
+        form_data = session["form_data"]
+    decoded = decrypt_draft_form_data(form_data)
+    return normalize_saved_session_prescreening(decoded)
+
+
+def resolve_application_company_name(data: dict, prescreening_data: dict, fallback="") -> str:
+    """Resolve the authoritative legal entity name for application persistence."""
+    return _resolve_application_company_name(data, prescreening_data, fallback=fallback)
+
+
+def build_full_name(record: dict) -> str:
+    first_name = first_non_empty(record.get("first_name"))
+    last_name = first_non_empty(record.get("last_name"))
+    if first_name or last_name:
+        return f"{first_name} {last_name}".strip()
+    return first_non_empty(record.get("full_name"))
+
+
+def normalize_is_pep(value, default="No") -> str:
+    normalized = first_non_empty(value, default)
+    return "Yes" if str(normalized).strip().lower() in ("yes", "true", "1") else "No"
+
+
+def _validate_date_of_birth(dob_str):
+    """Validate a date of birth string. Returns the cleaned date string or empty string if invalid.
+    Rejects future dates and implausible ages (< 16 or > 120 years old).
+    """
+    if not dob_str or not isinstance(dob_str, str):
+        return ""
+    dob_str = dob_str.strip()
+    if not dob_str:
+        return ""
+    try:
+        parsed = datetime.strptime(dob_str, "%Y-%m-%d").date()
+    except ValueError:
+        # Try other common formats
+        for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+            try:
+                parsed = datetime.strptime(dob_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            return ""  # Unparseable → store empty rather than garbage
+    today = datetime.now(timezone.utc).date()
+    if parsed > today:
+        return ""  # Future date → invalid
+    from datetime import date as _date
+    age_years = (today - parsed).days / 365.25
+    if age_years < 16 or age_years > 120:
+        return ""  # Implausible age → store empty
+    return parsed.isoformat()  # Normalize to YYYY-MM-DD
+
+
+def _check_dob_not_future(dob_str):
+    """Raise ValueError if dob_str parses as a valid date that is in the future."""
+    if not dob_str or not isinstance(dob_str, str):
+        return
+    dob_str = dob_str.strip()
+    if not dob_str:
+        return
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+        try:
+            parsed = datetime.strptime(dob_str, fmt).date()
+            today = datetime.now(timezone.utc).date()
+            if parsed > today:
+                raise ValueError(f"Date of birth cannot be in the future: {dob_str!r}")
+            return
+        except ValueError as exc:
+            if "future" in str(exc):
+                raise
+            continue
+
+
+def _pep_declaration_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"yes", "true", "1", "y", "declared_yes", "confirmed_pep"}
+
+
+def normalize_pep_declaration(value, *, declared_pep=False, person_type="", person_key="", person_id=None):
+    """Normalize portal PEP declarations into the canonical structured JSON shape.
+
+    The database intentionally keeps this as JSON so legacy rows remain readable,
+    but the JSON now carries explicit fields for portal capture, back-office
+    display, memo wording, and officer corrections.
+    """
+    data = parse_json_field(value, {}) or {}
+    if not isinstance(data, dict):
+        data = {}
+
+    declared = _pep_declaration_bool(declared_pep) or _pep_declaration_bool(data.get("declared_pep")) or _pep_declaration_bool(data.get("client_declared_pep"))
+
+    def pick(*keys):
+        for key in keys:
+            val = data.get(key)
+            if val not in (None, "", []):
+                return val
+        return ""
+
+    role_type = pick("pep_role_type", "role_type", "pep_type")
+    public_function = pick("public_function", "position_title", "public_position")
+    position_title = pick("position_title", "public_function", "public_position")
+    country_jurisdiction = pick("pep_country_jurisdiction", "country_jurisdiction", "jurisdiction", "country")
+    evidence_reference = pick("supporting_note_evidence", "evidence_reference", "supporting_evidence_reference")
+
+    normalized = dict(data)
+    normalized.update({
+        "person_type": person_type or pick("person_type"),
+        "person_key": person_key or pick("person_key"),
+        "declared_pep": declared,
+        "client_declared_pep": declared,
+        "pep_status": pick("pep_status") or ("declared_yes" if declared else "declared_no"),
+        "pep_schema_version": "portal_pep_v2",
+        "pep_role_type": role_type,
+        "role_type": role_type,
+        "public_function": public_function,
+        "position_title": position_title,
+        "pep_country_jurisdiction": country_jurisdiction,
+        "country_jurisdiction": country_jurisdiction,
+        "relationship_type": pick("relationship_type") or "self",
+        "related_pep_name": pick("related_pep_name"),
+        "start_date": pick("start_date"),
+        "end_date": pick("end_date"),
+        "current_status": _pep_declaration_bool(pick("current_status")),
+        "source_of_wealth_detail": pick("source_of_wealth_detail", "source_of_wealth_note"),
+        "source_of_funds_detail": pick("source_of_funds_detail", "source_of_funds_note"),
+        "supporting_note_evidence": evidence_reference,
+        "evidence_reference": evidence_reference,
+        "notes": pick("notes"),
+        "supporting_document_names": data.get("supporting_document_names") if isinstance(data.get("supporting_document_names"), list) else [],
+    })
+    if person_id is not None:
+        normalized["person_id"] = person_id
+    if declared and not normalized.get("pep_verification_source"):
+        normalized["pep_verification_source"] = "client_declaration"
+    if not isinstance(normalized.get("source_of_wealth_categories"), list):
+        normalized["source_of_wealth_categories"] = []
+    return normalized
+
+
+def _pep_declaration_audit_subjects(directors=None, ubos=None):
+    subjects = []
+    for person_type, rows in (("director", directors or []), ("ubo", ubos or [])):
+        for row in rows or []:
+            is_declared = normalize_is_pep(row.get("is_pep", "No")) == "Yes"
+            if not is_declared:
+                continue
+            person_key = row.get("person_key") or f"{person_type}:{len(subjects) + 1}"
+            subjects.append(f"{person_type}:{person_key}")
+    return subjects
+
+
+def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
+    """Store party records with validation of DOB and ownership_pct."""
+    if directors is not None:
+        db.execute("DELETE FROM directors WHERE application_id = ?", (application_id,))
+        for director in directors:
+            full_name = build_full_name(director)
+            if not full_name:
+                continue
+            # Validate DOB if provided
+            dob = director.get("date_of_birth", "")
+            if dob:
+                _check_dob_not_future(dob)
+                dob = _validate_date_of_birth(dob)
+            # W2-6: Normalize nationality if canonical lookup is available
+            raw_nat = director.get("nationality", "")
+            if raw_nat and _canonicalise_country:
+                canon = _canonicalise_country(raw_nat)
+                if canon:
+                    director = dict(director)
+                    director["nationality"] = canon
+            encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
+            normalized_pep = normalize_is_pep(director.get("is_pep", "No"))
+            pep_declaration = normalize_pep_declaration(
+                director.get("pep_declaration"),
+                declared_pep=normalized_pep == "Yes",
+                person_type="director",
+                person_key=director.get("person_key"),
+            )
+            db.execute("""
+                INSERT INTO directors (
+                    application_id, person_key, first_name, last_name, full_name,
+                    nationality, is_pep, pep_declaration, date_of_birth
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                application_id,
+                director.get("person_key"),
+                director.get("first_name", ""),
+                director.get("last_name", ""),
+                full_name,
+                encrypted.get("nationality", ""),
+                normalized_pep,
+                json.dumps(pep_declaration, default=str, sort_keys=True),
+                dob,
+            ))
+    if ubos is not None:
+        db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
+        for ubo in ubos:
+            full_name = build_full_name(ubo)
+            if not full_name:
+                continue
+            # Validate DOB if provided
+            dob = ubo.get("date_of_birth", "")
+            if dob:
+                _check_dob_not_future(dob)
+                dob = _validate_date_of_birth(dob)
+            # Validate ownership_pct range (0–100)
+            raw_pct = ubo.get("ownership_pct", 0)
+            try:
+                pct_val = float(raw_pct) if raw_pct else 0.0
+            except (ValueError, TypeError):
+                pct_val = 0.0
+            pct_val = max(0.0, min(100.0, pct_val))
+            # W2-6: Normalize nationality if canonical lookup is available
+            raw_nat = ubo.get("nationality", "")
+            if raw_nat and _canonicalise_country:
+                canon = _canonicalise_country(raw_nat)
+                if canon:
+                    ubo = dict(ubo)
+                    ubo["nationality"] = canon
+            encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
+            normalized_pep = normalize_is_pep(ubo.get("is_pep", "No"))
+            pep_declaration = normalize_pep_declaration(
+                ubo.get("pep_declaration"),
+                declared_pep=normalized_pep == "Yes",
+                person_type="ubo",
+                person_key=ubo.get("person_key"),
+            )
+            db.execute("""
+                INSERT INTO ubos (
+                    application_id, person_key, first_name, last_name, full_name,
+                    nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                application_id,
+                ubo.get("person_key"),
+                ubo.get("first_name", ""),
+                ubo.get("last_name", ""),
+                full_name,
+                encrypted.get("nationality", ""),
+                pct_val,
+                normalized_pep,
+                json.dumps(pep_declaration, default=str, sort_keys=True),
+                dob,
+            ))
+    if intermediaries is not None:
+        db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
+        for intermediary in intermediaries:
+            entity_name = first_non_empty(intermediary.get("entity_name"), intermediary.get("full_name"))
+            if not entity_name:
+                continue
+            intermediary_id = first_non_empty(intermediary.get("id"), secrets.token_hex(8))
+            db.execute("""
+                INSERT INTO intermediaries (id, application_id, person_key, entity_name, jurisdiction, ownership_pct)
+                VALUES (?,?,?,?,?,?)
+            """, (
+                intermediary_id,
+                application_id,
+                intermediary.get("person_key"),
+                entity_name,
+                intermediary.get("jurisdiction", ""),
+                intermediary.get("ownership_pct", 0),
+            ))
+
+
+PERSON_TYPE_ALIASES = {
+    "director": "director",
+    "directors": "director",
+    "dir": "director",
+    "ubo": "ubo",
+    "ubos": "ubo",
+    "beneficial_owner": "ubo",
+    "beneficial-owner": "ubo",
+    "intermediary": "intermediary",
+    "intermediaries": "intermediary",
+    "inter": "intermediary",
+    "int": "intermediary",
+}
+
+
+def normalize_person_type(value):
+    if value is None:
+        return None
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(value).strip().lower()).strip("_")
+    return PERSON_TYPE_ALIASES.get(normalized)
+
+
+def _resolve_application_person_by_type(db, application_id, person_ref, person_type):
+    if not application_id or not person_ref:
+        return None
+    person_type = normalize_person_type(person_type)
+    if person_type == "director":
+        director = db.execute("""
+            SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth
+            FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
+            LIMIT 1
+        """, (application_id, person_ref, person_ref)).fetchone()
+        if director:
+            result = hydrate_party_record(director, PII_FIELDS_DIRECTORS)
+            result["person_type"] = "director"
+            result["entity_type"] = "Person"
+            return result
+    elif person_type == "ubo":
+        ubo = db.execute("""
+            SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
+            FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
+            LIMIT 1
+        """, (application_id, person_ref, person_ref)).fetchone()
+        if ubo:
+            result = hydrate_party_record(ubo, PII_FIELDS_UBOS)
+            result["person_type"] = "ubo"
+            result["entity_type"] = "Person"
+            return result
+    elif person_type == "intermediary":
+        intermediary = db.execute("""
+            SELECT id, person_key, entity_name, jurisdiction, ownership_pct
+            FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?)
+            LIMIT 1
+        """, (application_id, person_ref, person_ref)).fetchone()
+        if intermediary:
+            result = dict(intermediary)
+            result["full_name"] = result.get("entity_name", "")
+            result["person_type"] = "intermediary"
+            result["entity_type"] = "Company"
+            return result
+    return None
+
+
+def resolve_application_person(db, application_id, person_ref, person_type=None):
+    if not application_id or not person_ref:
+        return None
+    requested_type = normalize_person_type(person_type)
+    if requested_type:
+        return _resolve_application_person_by_type(db, application_id, person_ref, requested_type)
+
+    for candidate_type in ("director", "ubo", "intermediary"):
+        result = _resolve_application_person_by_type(db, application_id, person_ref, candidate_type)
+        if result:
+            return result
+
+    return None
+
+
+def resolve_document_subject_context(db, app, doc):
+    person_record = None
+    if app and doc.get("person_id"):
+        person_record = resolve_application_person(db, app["id"], doc["person_id"])
+    if not person_record and app:
+        dir_match = re.search(r'_dir(\d+)$', doc.get("doc_type", ""))
+        ubo_match = re.search(r'_ubo(\d+)$', doc.get("doc_type", ""))
+        int_match = re.search(r'_int(\d+)$', doc.get("doc_type", ""))
+        if dir_match:
+            idx = int(dir_match.group(1)) - 1
+            directors = get_application_parties(db, app["id"])[0]
+            if 0 <= idx < len(directors):
+                person_record = directors[idx]
+                person_record["person_type"] = "director"
+                person_record["entity_type"] = "Person"
+        elif ubo_match:
+            idx = int(ubo_match.group(1)) - 1
+            ubos = get_application_parties(db, app["id"])[1]
+            if 0 <= idx < len(ubos):
+                person_record = ubos[idx]
+                person_record["person_type"] = "ubo"
+                person_record["entity_type"] = "Person"
+        elif int_match:
+            idx = int(int_match.group(1)) - 1
+            intermediaries = get_application_parties(db, app["id"])[2]
+            if 0 <= idx < len(intermediaries):
+                person_record = intermediaries[idx]
+                person_record["person_type"] = "intermediary"
+                person_record["entity_type"] = "Company"
+
+    raw_doc_type = doc.get("doc_type", "general")
+    base_doc_type = raw_doc_type
+    if base_doc_type.startswith("intermediary_"):
+        base_doc_type = base_doc_type[len("intermediary_"):]
+    base_doc_type = re.sub(r'_(dir|ubo|inter)\d+$', '', base_doc_type)
+
+    company_doc_types = {
+        "cert_inc", "memarts", "reg_sh", "reg_dir", "fin_stmt", "board_res",
+        "structure_chart", "poa", "bankref", "licence", "contracts",
+        "source_wealth", "source_funds", "bank_statements", "aml_policy",
+    }
+    if person_record and person_record.get("person_type") == "intermediary":
+        doc_category = "company"
+        subject_type = "intermediary_company"
+    elif person_record and person_record.get("person_type") in ("director", "ubo"):
+        doc_category = "kyc"
+        subject_type = person_record.get("person_type")
+    else:
+        doc_category = "company" if raw_doc_type in company_doc_types else "kyc"
+        subject_type = "application_company" if doc_category == "company" else "person"
+
+    return {
+        "person_record": person_record,
+        "raw_doc_type": raw_doc_type,
+        "base_doc_type": base_doc_type,
+        "doc_category": doc_category,
+        "subject_type": subject_type,
+    }
+
+
+def build_document_verification_context(db, app, doc):
+    context = resolve_document_subject_context(db, app, doc)
+    person_record = context["person_record"]
+    doc_category = context["doc_category"]
+
+    stored_prescreening = parse_json_field(app.get("prescreening_data") if app else None, {})
+    saved_session_prescreening = load_saved_session_prescreening(db, app) if app else {}
+    prescreening_data = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
+    if not isinstance(prescreening_data, dict):
+        prescreening_data = {}
+
+    entity_name = app.get("company_name", "") if app else ""
+    person_name = ""
+    directors_list = []
+    ubos_list = []
+
+    if app and context["subject_type"] == "application_company":
+        dir_rows = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+        directors_list = [r["full_name"] for r in dir_rows if r.get("full_name")]
+        ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+        ubos_list = [r["full_name"] for r in ubo_rows if r.get("full_name")]
+
+    if person_record and doc_category == "kyc":
+        prescreening_data = dict(prescreening_data)
+        pep_decl = parse_json_field(person_record.get("pep_declaration"), {}) or {}
+        person_name = person_record.get("full_name", "")
+        person_fields = {
+            "full_name": person_name,
+            "date_of_birth": person_record.get("date_of_birth", ""),
+            "nationality": person_record.get("nationality", ""),
+            "residential_address": person_record.get("residential_address", ""),
+            "role": person_record.get("person_type", ""),
+            "source_of_wealth_detail": pep_decl.get("source_of_wealth_detail", ""),
+            "pep_function": pep_decl.get("public_function", ""),
+            "pep_net_worth": pep_decl.get("estimated_assets_usd", ""),
+            "pep_source_of_funds": pep_decl.get("source_of_wealth_detail", ""),
+        }
+        for key, value in person_fields.items():
+            if value not in (None, "", {}, []):
+                prescreening_data[key] = value
+    elif person_record and person_record.get("person_type") == "intermediary":
+        prescreening_data = dict(prescreening_data)
+        entity_name = first_non_empty(person_record.get("entity_name"), person_record.get("full_name"), entity_name)
+        intermediary_fields = {
+            "registered_entity_name": entity_name,
+            "company_name": entity_name,
+            "country_of_incorporation": person_record.get("jurisdiction", ""),
+            "jurisdiction": person_record.get("jurisdiction", ""),
+            "ownership_pct": person_record.get("ownership_pct", ""),
+        }
+        for key, value in intermediary_fields.items():
+            if value not in (None, "", {}, []):
+                prescreening_data[key] = value
+        for key in ("shareholders", "directors", "ubos"):
+            prescreening_data.pop(key, None)
+
+    context.update({
+        "prescreening_data": prescreening_data,
+        "entity_name": entity_name,
+        "person_name": person_name,
+        "directors_list": directors_list,
+        "ubos_list": ubos_list,
+    })
+    return context
+
+
+def resolve_user_display_name(db, user_id):
+    if not user_id:
+        return ""
+    row = db.execute("SELECT full_name, email FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+    if not row:
+        return str(user_id)
+    return row.get("full_name") or row.get("email") or str(user_id)
+
+
+# ── Prometheus Metrics (optional) ──────────────────────────
+try:
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+
+    def _metric_or_existing(factory, name, *args, **kwargs):
+        """Create a Prometheus metric once, reusing it on accidental re-imports."""
+        collectors = getattr(REGISTRY, "_names_to_collectors", {})
+        existing = collectors.get(name)
+        if existing is not None:
+            return existing
+        try:
+            return factory(name, *args, **kwargs)
+        except ValueError as exc:
+            if "Duplicated timeseries" not in str(exc):
+                raise
+            existing = collectors.get(name)
+            if existing is not None:
+                return existing
+            raise
+
+    METRICS_ENABLED = True
+    REQUEST_COUNT = _metric_or_existing(Counter, "arie_http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"])
+    REQUEST_LATENCY = _metric_or_existing(Histogram, "arie_http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"])
+    ACTIVE_CONNECTIONS = _metric_or_existing(Gauge, "arie_active_connections", "Active HTTP connections")
+    APPLICATION_COUNT = _metric_or_existing(Gauge, "arie_applications_total", "Total applications by status", ["status"])
+    SCREENING_COUNT = _metric_or_existing(Counter, "arie_screenings_total", "Total screenings run", ["source", "result"])
+    SAR_COUNT = _metric_or_existing(Counter, "arie_sar_reports_total", "Total SAR reports", ["status"])
+    logger.info("Prometheus metrics enabled")
+except ImportError:
+    METRICS_ENABLED = False
+    logger.info("prometheus-client not installed — metrics disabled")
+
+# ── Environment Validation ──────────────────────────────────
+def validate_environment():
+    """Validate required environment configuration on startup."""
+    warnings = []
+    errors = []
+
+    if ENVIRONMENT == "production":
+        if not SECRET_KEY or SECRET_KEY == "arie-dev-secret-change-in-production":
+            errors.append("SECRET_KEY must be set to a secure random value in production")
+        if not _CFG_ALLOWED_ORIGIN or _CFG_ALLOWED_ORIGIN == "http://localhost:10000":
+            warnings.append("ALLOWED_ORIGIN not set — CORS defaults to same-origin only")
+        if not DATABASE_URL:
+            warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
+        if not OPENSANCTIONS_API_KEY:
+            warnings.append("OPENSANCTIONS_API_KEY not set — sanctions screening will be simulated")
+        if not SUMSUB_APP_TOKEN:
+            warnings.append("SUMSUB_APP_TOKEN not set — KYC verification will be simulated")
+    else:
+        if not SECRET_KEY:
+            warnings.append("SECRET_KEY not set — using auto-generated random key")
+
+    for w in warnings:
+        logger.warning("ENV CHECK: %s", w)
+    for e in errors:
+        logger.error("ENV CHECK: %s", e)
+
+    if errors:
+        logger.error("Environment validation failed — aborting startup")
+        sys.exit(1)
+
+    logger.info("Environment validation passed (%d warning(s))", len(warnings))
+    return {"warnings": warnings, "errors": errors}
+
+# ── Pricing Configuration (based on risk profile) ──
+PRICING_TIERS = {
+    "LOW": {
+        "onboarding_fee": 500,
+        "annual_monitoring_fee": 250,
+        "currency": "USD",
+        "description": "Standard onboarding — Low risk profile",
+        "includes": ["Basic KYC verification", "Sanctions screening", "Annual review"]
+    },
+    "MEDIUM": {
+        "onboarding_fee": 1500,
+        "annual_monitoring_fee": 750,
+        "currency": "USD",
+        "description": "Enhanced onboarding — Medium risk profile",
+        "includes": ["Enhanced KYC verification", "Sanctions & PEP screening", "Semi-annual review", "Adverse media monitoring"]
+    },
+    "HIGH": {
+        "onboarding_fee": 3500,
+        "annual_monitoring_fee": 2000,
+        "currency": "USD",
+        "description": "Enhanced Due Diligence onboarding — High risk profile",
+        "includes": ["Full EDD verification", "Continuous sanctions & PEP monitoring", "Quarterly review", "Adverse media monitoring", "Behaviour & risk drift monitoring"]
+    },
+    "VERY_HIGH": {
+        "onboarding_fee": 5000,
+        "annual_monitoring_fee": 3500,
+        "currency": "USD",
+        "description": "Maximum Due Diligence onboarding — Very High risk profile",
+        "includes": ["Maximum EDD verification", "Real-time sanctions & PEP monitoring", "Monthly review", "Full monitoring suite", "Dedicated compliance officer"]
+    }
+}
 
 # ══════════════════════════════════════════════════════════
 # DATABASE
 # ══════════════════════════════════════════════════════════
+
+class PostgresRowWrapper:
+    """Wraps psycopg2 DictRow to behave like sqlite3.Row for compatibility."""
+    def __init__(self, row):
+        self._row = row
+    def __getitem__(self, key):
+        return self._row[key]
+    def keys(self):
+        return self._row.keys() if hasattr(self._row, 'keys') else []
+
 def get_db():
-    """Get a thread-local database connection."""
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
-    return db
+    """Get a database connection — delegates to db module.
+    PostgreSQL if DATABASE_URL is set, otherwise SQLite."""
+    return db_get_db()
 
 
 def init_db():
-    """Create all tables if they don't exist."""
+    """Initialize database schema and seed initial data."""
+    from db import (
+        seed_initial_data,
+        sync_ai_checks_from_seed,
+        normalize_legacy_doc_types,
+        repair_document_current_versions,
+    )
+    logger.info("startup: entering db_init_db (schema + pool)")
+    db_init_db()
+    logger.info("startup: db_init_db completed")
     db = get_db()
-    db.executescript("""
-    -- Users / Officers
-    CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        full_name TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'analyst' CHECK(role IN ('admin','sco','co','analyst')),
-        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Client accounts (applicants)
-    CREATE TABLE IF NOT EXISTS clients (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        company_name TEXT,
-        status TEXT DEFAULT 'active',
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Applications
-    CREATE TABLE IF NOT EXISTS applications (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        ref TEXT UNIQUE NOT NULL,
-        client_id TEXT REFERENCES clients(id),
-        company_name TEXT NOT NULL,
-        brn TEXT,
-        country TEXT,
-        sector TEXT,
-        entity_type TEXT,
-        ownership_structure TEXT,
-        -- Pre-screening data (JSON blob)
-        prescreening_data TEXT DEFAULT '{}',
-        -- Risk scoring
-        risk_score REAL,
-        risk_level TEXT CHECK(risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
-        risk_dimensions TEXT DEFAULT '{}',
-        onboarding_lane TEXT,
-        -- Status
-        status TEXT DEFAULT 'draft' CHECK(status IN (
-            'draft','submitted','pending_review','in_review','kyc_documents','compliance_review',
-            'edd_required','approved','rejected','rmi_sent','withdrawn'
-        )),
-        assigned_to TEXT REFERENCES users(id),
-        -- Metadata
-        submitted_at TEXT,
-        decided_at TEXT,
-        decision_by TEXT REFERENCES users(id),
-        decision_notes TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Directors
-    CREATE TABLE IF NOT EXISTS directors (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        full_name TEXT NOT NULL,
-        nationality TEXT,
-        is_pep TEXT DEFAULT 'No',
-        pep_declaration TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- UBOs
-    CREATE TABLE IF NOT EXISTS ubos (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        full_name TEXT NOT NULL,
-        nationality TEXT,
-        ownership_pct REAL,
-        is_pep TEXT DEFAULT 'No',
-        pep_declaration TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Documents
-    CREATE TABLE IF NOT EXISTS documents (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        person_id TEXT,
-        doc_type TEXT NOT NULL,
-        doc_name TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        file_size INTEGER,
-        mime_type TEXT,
-        -- AI verification
-        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
-        verification_results TEXT DEFAULT '{}',
-        uploaded_at TEXT DEFAULT (datetime('now')),
-        verified_at TEXT
-    );
-
-    -- Risk Model Configuration
-    CREATE TABLE IF NOT EXISTS risk_config (
-        id INTEGER PRIMARY KEY DEFAULT 1,
-        dimensions TEXT NOT NULL DEFAULT '{}',
-        thresholds TEXT NOT NULL DEFAULT '{}',
-        updated_at TEXT DEFAULT (datetime('now')),
-        updated_by TEXT REFERENCES users(id)
-    );
-
-    -- AI Agents Configuration
-    CREATE TABLE IF NOT EXISTS ai_agents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_number INTEGER UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        icon TEXT DEFAULT '🤖',
-        stage TEXT NOT NULL,
-        description TEXT,
-        enabled INTEGER DEFAULT 1,
-        checks TEXT DEFAULT '[]',
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- AI Verification Checks Configuration
-    CREATE TABLE IF NOT EXISTS ai_checks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT NOT NULL CHECK(category IN ('entity','person')),
-        doc_type TEXT NOT NULL,
-        doc_name TEXT NOT NULL,
-        checks TEXT DEFAULT '[]',
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Audit Trail
-    CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT DEFAULT (datetime('now')),
-        user_id TEXT,
-        user_name TEXT,
-        user_role TEXT,
-        action TEXT NOT NULL,
-        target TEXT,
-        detail TEXT,
-        ip_address TEXT
-    );
-
-    -- Notifications
-    CREATE TABLE IF NOT EXISTS notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT REFERENCES users(id),
-        title TEXT NOT NULL,
-        message TEXT,
-        read INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Session / Save & Resume tokens
-    CREATE TABLE IF NOT EXISTS client_sessions (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        client_id TEXT REFERENCES clients(id),
-        application_id TEXT REFERENCES applications(id),
-        form_data TEXT DEFAULT '{}',
-        last_step INTEGER DEFAULT 0,
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-    """)
-
-    # Seed default admin user if no users exist
-    count = db.execute("SELECT COUNT(*) as c FROM users").fetchone()["c"]
-    if count == 0:
-        # Generate a secure random password for initial admin setup
-        _init_password = os.environ.get("ADMIN_INITIAL_PASSWORD", "")
-        if not _init_password:
-            _init_password = secrets.token_urlsafe(16)  # e.g. "aB3_xY7kLm9pQ2wR"
-            print(f"\n  ⚠️  INITIAL ADMIN PASSWORD (save this now): {_init_password}")
-            print(f"  ⚠️  Change it immediately after first login.\n")
-
-        pw_hash = bcrypt.hashpw(_init_password.encode(), bcrypt.gensalt()).decode()
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("admin001", "asudally@ariefinance.mu", pw_hash, "Aisha Sudally", "admin", "active"))
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("sco001", "raj.patel@ariefinance.mu", pw_hash, "Raj Patel", "sco", "active"))
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("co001", "m.dubois@ariefinance.mu", pw_hash, "Marie Dubois", "co", "active"))
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("analyst001", "l.wei@ariefinance.mu", pw_hash, "Li Wei", "analyst", "active"))
-        db.commit()
-
-        # Seed default risk config
-        default_dims = json.dumps([
-            {"id":"D1","name":"Customer / Entity Risk","weight":30,"subcriteria":[
-                {"name":"Entity Type","weight":20},{"name":"Ownership Structure","weight":20},
-                {"name":"PEP Status","weight":25},{"name":"Adverse Media","weight":15},
-                {"name":"Source of Wealth","weight":10},{"name":"Source of Funds","weight":10}
-            ]},
-            {"id":"D2","name":"Geographic Risk","weight":25,"subcriteria":[
-                {"name":"Country of Incorporation","weight":40},
-                {"name":"Countries of Operation","weight":30},
-                {"name":"Target Markets","weight":30}
-            ]},
-            {"id":"D3","name":"Product / Service Risk","weight":20,"subcriteria":[
-                {"name":"Service Type","weight":40},{"name":"Monthly Volume","weight":30},
-                {"name":"Transaction Complexity","weight":30}
-            ]},
-            {"id":"D4","name":"Industry / Sector Risk","weight":15,"subcriteria":[
-                {"name":"Industry Sector","weight":100}
-            ]},
-            {"id":"D5","name":"Delivery Channel Risk","weight":10,"subcriteria":[
-                {"name":"Introduction Method","weight":50},{"name":"Delivery Channel","weight":50}
-            ]}
-        ])
-        default_thresholds = json.dumps([
-            {"level":"LOW","min":0,"max":39.9},
-            {"level":"MEDIUM","min":40,"max":54.9},
-            {"level":"HIGH","min":55,"max":69.9},
-            {"level":"VERY_HIGH","min":70,"max":100}
-        ])
-        db.execute("INSERT INTO risk_config (id, dimensions, thresholds) VALUES (1, ?, ?)",
-                    (default_dims, default_thresholds))
-
-        # Seed AI agents (10-agent architecture)
-        agents_seed = [
-            (1, "Identity & Document Integrity Agent", "🔍", "document_verification", "Performs 66 automated document checks + company registry verification (OpenCorporates, Companies House, ADGM, DIFC registries). Checks: company name, registration number, incorporation date, jurisdiction, company status, directors, shareholders.", 1, "[]"),
-            (2, "Corporate Structure & UBO Mapping Agent", "🏗️", "ubo_mapping", "Parses shareholder registers, maps ownership chains, identifies natural-person UBOs, detects nominee/layered structures, highlights high-risk jurisdictions. Output: ownership map, UBO list, structure complexity score.", 1, "[]"),
-            (3, "Business Model Plausibility Agent", "📊", "business_analysis", "Reviews business description, compares with industry benchmarks, detects vague/inconsistent narratives, flags high-risk sectors. Output: business summary, plausibility score, red flags.", 1, "[]"),
-            (4, "FinCrime Screening Interpretation Agent", "💼", "screening", "Conducts and summarises sanctions, PEP, adverse media screening. Distinguishes false positives, highlights material adverse media, flags political exposure. Output: screening summary, relevance assessment.", 1, "[]"),
-            (5, "Compliance Memo & Risk Recommendation Agent", "📝", "compliance_memo", "Combines outputs from other agents, generates onboarding memo, highlights key risks, recommends risk rating. Output: structured onboarding report, risk recommendation, review checklist.", 1, "[]"),
-            (6, "Periodic Review Preparation Agent", "📅", "periodic_review", "Prepares client files for periodic reviews, identifies expired documents, requests updated information, summarises changes since onboarding.", 1, "[]"),
-            (7, "Adverse Media & PEP Monitoring Agent", "📡", "media_monitoring", "Continuous media monitoring, PEP status changes, new sanctions exposure, enforcement actions. Output: alert summaries, severity classification.", 1, "[]"),
-            (8, "Behaviour & Risk Drift Agent", "📈", "risk_drift", "Compares current activity vs onboarding profile, detects new jurisdictions, identifies sector changes, flags unusual growth patterns. Output: risk drift score, escalation trigger.", 1, "[]"),
-            (9, "Regulatory Impact Agent", "⚖️", "regulatory_impact", "Analyses new circulars/rules, identifies impacted client segments, triggers compliance actions. Output: regulatory impact summary, remediation tasks.", 1, "[]"),
-            (10, "Ongoing Compliance Review Agent", "📋", "compliance_review", "Consolidates monitoring alerts, summarises risk changes, recommends actions (maintain/EDD/exit). Output: periodic review memo, updated risk classification, escalation recommendation.", 1, "[]")
-        ]
-        for agent_data in agents_seed:
-            db.execute("INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) VALUES (?,?,?,?,?,?,?)", agent_data)
-        db.commit()
-
-        # Log the init
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail) VALUES (?,?,?,?,?,?)",
-                    ("system", "System", "system", "Initialize", "Database", "Database initialized with seed data"))
-        db.commit()
-
-    db.close()
-    print(f"✅ Database initialized at {DB_PATH}")
-
-
-# ══════════════════════════════════════════════════════════
-# AUTH HELPERS
-# ══════════════════════════════════════════════════════════
-def create_token(user_id, role, name, token_type="officer"):
-    payload = {
-        "sub": user_id,
-        "role": role,
-        "name": name,
-        "type": token_type,
-        "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
-        "iat": datetime.utcnow()
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-
-
-def decode_token(token):
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
-        return None
+        logger.info("startup: entering seed_initial_data")
+        seed_initial_data(db)
+        db.commit()
+        logger.info("startup: completed seed_initial_data")
+        # Normalize any legacy portal-style doc_type values in documents table
+        logger.info("startup: entering normalize_legacy_doc_types")
+        normalize_legacy_doc_types(db)
+        logger.info("startup: completed normalize_legacy_doc_types")
+        logger.info("startup: entering repair_document_current_versions")
+        repair_document_current_versions(db)
+        db.commit()
+        logger.info("startup: completed repair_document_current_versions")
+        # Upsert canonical ai_checks on every startup so stale rows on
+        # existing databases (staging/prod) are always brought up to date.
+        logger.info("startup: entering sync_ai_checks_from_seed")
+        sync_ai_checks_from_seed(db)
+        logger.info("startup: completed sync_ai_checks_from_seed")
+    except Exception as e:
+        logging.error(f"Seed error: {e}", exc_info=True)
+        raise RuntimeError(
+            "Verification-critical startup initialization failed. "
+            "Check database connectivity and Agent 1 seed/ai_checks data integrity."
+        ) from e
+    finally:
+        db.close()
+
+
+# ── Extracted modules: auth.py, rule_engine.py, screening.py, memo_handler.py,
+# ── validation_engine.py, supervisor_engine.py (see Sprint 2 architecture)
+
+_REF_BASE_NUMBER = 100421  # First issued ref suffix — all refs start from ARF-YYYY-100421
 
 
 def generate_ref():
-    """Generate application reference like ARF-2026-100429"""
-    db = get_db()
-    count = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
-    db.close()
+    """Generate a unique application reference like ARF-2026-100429.
+
+    Uses the maximum existing numeric suffix for the current year rather than
+    COUNT(*) so that refs remain monotonically increasing even after
+    application deletions. COUNT-based generation regenerates previously-issued
+    refs when applications are deleted, causing UNIQUE constraint violations
+    (HTTP 500) on staging databases where draft discard and demo resets delete
+    rows.  MAX-based generation is safe regardless of deletion history.
+    """
     year = datetime.now().year
-    return f"ARF-{year}-{100421 + count}"
-
-
-# ══════════════════════════════════════════════════════════
-# RISK SCORING ENGINE
-# ══════════════════════════════════════════════════════════
-# Country risk classification
-FATF_GREY = {"syria","myanmar","iran","north korea","yemen","haiti","south sudan",
-             "nigeria","south africa","kenya","philippines","tanzania","mozambique",
-             "democratic republic of congo","cameroon","burkina faso","mali","senegal"}
-FATF_BLACK = {"iran","north korea","myanmar"}
-SANCTIONED = {"iran","north korea","syria","cuba","crimea"}
-LOW_RISK = {"mauritius","united kingdom","uk","france","germany","sweden","norway",
-            "denmark","finland","australia","new zealand","canada","usa","united states",
-            "japan","singapore","hong kong","switzerland","netherlands","belgium","luxembourg",
-            "ireland","austria","portugal","spain","italy"}
-
-SECTOR_SCORES = {
-    "regulated financial":1, "government":1, "bank":1, "listed company":1,
-    "healthcare":2, "technology":2, "software":2, "saas":2, "manufacturing":2,
-    "retail":2, "e-commerce":2, "education":2, "media":2, "logistics":2,
-    "import":3, "export":3, "real estate":3, "construction":3, "mining":3,
-    "oil":3, "gas":3, "moneservices":3, "forex":3, "precious":3,
-    "non-profit":3, "ngo":3, "charity":3, "advisory":3,
-    "crypto":4, "virtual asset":4, "gambling":4, "gaming":4, "betting":4,
-    "arms":4, "defence":4, "military":4, "shell company":4, "nominee":4
-}
-
-
-def classify_country(country_name):
-    """Return risk score 1-4 for a country."""
-    if not country_name:
-        return 2
-    c = country_name.lower().strip()
-    if c in SANCTIONED:
-        return 4
-    if c in FATF_BLACK:
-        return 4
-    if c in FATF_GREY:
-        return 3
-    if c in LOW_RISK:
-        return 1
-    return 2  # standard
-
-
-def score_sector(sector_name):
-    """Return risk score 1-4 for a sector."""
-    if not sector_name:
-        return 2
-    s = sector_name.lower()
-    for key, score in SECTOR_SCORES.items():
-        if key in s:
-            return score
-    return 2
-
-
-def compute_risk_score(app_data):
-    """
-    Compute composite risk score from application data.
-    Returns: { score, level, dimensions: {d1..d5}, lane }
-    """
-    data = app_data if isinstance(app_data, dict) else json.loads(app_data)
-
-    # D1: Customer / Entity Risk (30%)
-    entity_map = {"listed":1,"regulated":1,"government":1,"large private":2,"sme":2,
-                  "newly incorporated":3,"trust":3,"foundation":3,"non-profit":3,"shell":4}
-    owner_map = {"simple":1,"1-2":2,"3+":3,"complex":4}
-
-    d1_entity = 2
-    et = (data.get("entity_type") or "").lower()
-    for k, v in entity_map.items():
-        if k in et:
-            d1_entity = v; break
-
-    d1_owner = 2
-    os_val = (data.get("ownership_structure") or "").lower()
-    for k, v in owner_map.items():
-        if k in os_val:
-            d1_owner = v; break
-
-    has_pep = any(d.get("is_pep") == "Yes" for d in data.get("directors", []))
-    has_pep = has_pep or any(u.get("is_pep") == "Yes" for u in data.get("ubos", []))
-    d1_pep = 3 if has_pep else 1
-
-    d1 = d1_entity * 0.20 + d1_owner * 0.20 + d1_pep * 0.25 + 1 * 0.15 + 2 * 0.10 + 2 * 0.10
-
-    # D2: Geographic Risk (25%)
-    d2_inc = classify_country(data.get("country"))
-    op_countries = data.get("operating_countries", [])
-    d2_op = max([classify_country(c) for c in op_countries]) if op_countries else d2_inc
-    target_markets = data.get("target_markets", [])
-    d2_tgt = max([classify_country(c) for c in target_markets]) if target_markets else d2_inc
-    d2 = d2_inc * 0.40 + d2_op * 0.30 + d2_tgt * 0.30
-
-    # D3: Product / Service Risk (20%)
-    vol_map = {"under":1,"50,000":2,"500,000":3,"over":4}
-    d3_svc = 2  # default
-    if data.get("cross_border"):
-        d3_svc = 3
-    d3_vol = 2
-    vol = (data.get("monthly_volume") or "").lower()
-    for k, v in vol_map.items():
-        if k in vol:
-            d3_vol = v; break
-    d3 = d3_svc * 0.40 + d3_vol * 0.30 + 2 * 0.30
-
-    # D4: Industry / Sector Risk (15%)
-    d4 = score_sector(data.get("sector"))
-
-    # D5: Delivery Channel Risk (10%)
-    intro_map = {"direct":1,"regulated":1,"non-regulated":3,"unsolicited":4}
-    d5_intro = 2
-    intro = (data.get("introduction_method") or "").lower()
-    for k, v in intro_map.items():
-        if k in intro:
-            d5_intro = v; break
-    d5 = d5_intro * 0.50 + 2 * 0.50  # non-face-to-face by default
-
-    # Composite
-    composite = (d1 * 0.30 + d2 * 0.25 + d3 * 0.20 + d4 * 0.15 + d5 * 0.10) / 4 * 100
-    composite = round(composite, 1)
-
-    if composite >= 70:
-        level = "VERY_HIGH"
-    elif composite >= 55:
-        level = "HIGH"
-    elif composite >= 40:
-        level = "MEDIUM"
-    else:
-        level = "LOW"
-
-    lane_map = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}
-
-    return {
-        "score": composite,
-        "level": level,
-        "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
-        "lane": lane_map[level]
-    }
-
-
-# ══════════════════════════════════════════════════════════
-# REAL API INTEGRATIONS
-# ══════════════════════════════════════════════════════════
-
-def screen_opensanctions(name, birth_date=None, nationality=None, entity_type="Person"):
-    """
-    Screen a person or entity against OpenSanctions (sanctions, PEP, watchlists).
-    Returns: { matched: bool, results: [...], source: "opensanctions"|"simulated" }
-    """
-    if not OPENSANCTIONS_API_KEY:
-        logger.info(f"OpenSanctions: No API key — simulating screening for '{name}'")
-        return _simulate_sanctions_screen(name)
-
+    prefix = f"ARF-{year}-"
+    db = get_db()
     try:
-        headers = {"Authorization": f"ApiKey {OPENSANCTIONS_API_KEY}"}
-        params = {
-            "schema": entity_type,  # "Person" or "Company"
-            "properties.name": name,
-            "limit": 10,
-        }
-        if birth_date:
-            params["properties.birthDate"] = birth_date
-        if nationality:
-            params["properties.nationality"] = nationality
-
-        resp = requests.get(
-            f"{OPENSANCTIONS_API_URL}/match/default",
-            headers=headers,
-            params=params,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-            hits = []
-            for r in results:
-                score = r.get("score", 0)
-                if score >= 0.65:  # Only consider strong matches
-                    props = r.get("properties", {})
-                    hits.append({
-                        "match_score": round(score * 100, 1),
-                        "matched_name": (props.get("name", [""])[0] if isinstance(props.get("name"), list) else props.get("name", "")),
-                        "datasets": r.get("datasets", []),
-                        "schema": r.get("schema", ""),
-                        "topics": props.get("topics", []),
-                        "countries": props.get("country", []),
-                        "sanctions_list": ", ".join(r.get("datasets", [])),
-                        "is_pep": "role.pep" in (props.get("topics", []) if isinstance(props.get("topics"), list) else []),
-                        "is_sanctioned": any(d in ["sanctions", "crime"] for d in r.get("datasets", [])),
-                    })
-
-            return {
-                "matched": len(hits) > 0,
-                "results": hits,
-                "total_checked": len(results),
-                "source": "opensanctions",
-                "api_status": "live",
-                "screened_at": datetime.utcnow().isoformat()
-            }
-        elif resp.status_code == 401:
-            logger.warning("OpenSanctions: Invalid API key — falling back to simulation")
-            return _simulate_sanctions_screen(name, note="API key invalid — simulated result")
-        else:
-            logger.warning(f"OpenSanctions: HTTP {resp.status_code} — falling back to simulation")
-            return _simulate_sanctions_screen(name, note=f"API returned {resp.status_code} — simulated result")
-
-    except requests.exceptions.Timeout:
-        logger.warning("OpenSanctions: Request timed out — falling back to simulation")
-        return _simulate_sanctions_screen(name, note="API timeout — simulated result")
-    except Exception as e:
-        logger.error(f"OpenSanctions error: {e}")
-        return _simulate_sanctions_screen(name, note=f"API error — simulated result")
-
-
-def _simulate_sanctions_screen(name, note="No API key configured — simulated result"):
-    """Fallback: realistic simulation when API key not set."""
-    import random
-    is_hit = random.random() < 0.08  # 8% simulated hit rate
-    results = []
-    if is_hit:
-        results.append({
-            "match_score": round(random.uniform(68, 95), 1),
-            "matched_name": name,
-            "datasets": ["sanctions-simulated"],
-            "schema": "Person",
-            "topics": ["role.pep"] if random.random() < 0.5 else ["sanction"],
-            "countries": [],
-            "sanctions_list": "Simulated Sanctions List",
-            "is_pep": random.random() < 0.5,
-            "is_sanctioned": random.random() < 0.3,
-        })
-    return {
-        "matched": is_hit,
-        "results": results,
-        "total_checked": 1,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "screened_at": datetime.utcnow().isoformat()
-    }
-
-
-def lookup_opencorporates(company_name, jurisdiction=None):
-    """
-    Look up a company via Open Corporates registry.
-    Returns: { found: bool, companies: [...], source: "opencorporates"|"simulated" }
-    """
-    if not OPENCORPORATES_API_KEY:
-        logger.info(f"OpenCorporates: No API key — simulating lookup for '{company_name}'")
-        return _simulate_company_lookup(company_name)
-
-    try:
-        params = {"q": company_name, "api_token": OPENCORPORATES_API_KEY}
-        if jurisdiction:
-            params["jurisdiction_code"] = jurisdiction.lower()
-
-        resp = requests.get(
-            f"{OPENCORPORATES_API_URL}/companies/search",
-            params=params,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            companies_raw = data.get("results", {}).get("companies", [])
-            companies = []
-            for c_wrap in companies_raw[:5]:  # Top 5 matches
-                c = c_wrap.get("company", {})
-                companies.append({
-                    "name": c.get("name", ""),
-                    "company_number": c.get("company_number", ""),
-                    "jurisdiction": c.get("jurisdiction_code", ""),
-                    "incorporation_date": c.get("incorporation_date", ""),
-                    "dissolution_date": c.get("dissolution_date"),
-                    "company_type": c.get("company_type", ""),
-                    "registry_url": c.get("registry_url", ""),
-                    "status": c.get("current_status", ""),
-                    "registered_address": c.get("registered_address_in_full", ""),
-                    "opencorporates_url": c.get("opencorporates_url", ""),
-                })
-
-            return {
-                "found": len(companies) > 0,
-                "companies": companies,
-                "total_results": data.get("results", {}).get("total_count", 0),
-                "source": "opencorporates",
-                "api_status": "live",
-                "searched_at": datetime.utcnow().isoformat()
-            }
-        elif resp.status_code == 401:
-            logger.warning("OpenCorporates: Invalid API key — falling back to simulation")
-            return _simulate_company_lookup(company_name, note="API key invalid — simulated result")
-        else:
-            logger.warning(f"OpenCorporates: HTTP {resp.status_code}")
-            return _simulate_company_lookup(company_name, note=f"API returned {resp.status_code} — simulated")
-
-    except Exception as e:
-        logger.error(f"OpenCorporates error: {e}")
-        return _simulate_company_lookup(company_name, note=f"API error — simulated result")
-
-
-def _simulate_company_lookup(company_name, note="No API key configured — simulated result"):
-    """Fallback: simulated company registry lookup."""
-    import random
-    found = random.random() < 0.85  # 85% chance found
-    companies = []
-    if found:
-        companies.append({
-            "name": company_name,
-            "company_number": f"C{random.randint(10000,99999)}",
-            "jurisdiction": "mu",
-            "incorporation_date": f"20{random.randint(10,24)}-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
-            "dissolution_date": None,
-            "company_type": random.choice(["Private Company Limited by Shares", "Global Business Company"]),
-            "registry_url": "",
-            "status": random.choice(["Active", "Active"]),
-            "registered_address": "Port Louis, Mauritius",
-            "opencorporates_url": "",
-        })
-    return {
-        "found": found,
-        "companies": companies,
-        "total_results": 1 if found else 0,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "searched_at": datetime.utcnow().isoformat()
-    }
-
-
-def geolocate_ip(ip_address):
-    """
-    Look up geolocation and risk data for an IP address.
-    Returns: { country, city, is_vpn, is_proxy, risk_level, source }
-    """
-    if not ip_address or ip_address in ("127.0.0.1", "::1", "0.0.0.0"):
-        return {
-            "country": "Local",
-            "country_code": "XX",
-            "city": "Localhost",
-            "region": "",
-            "is_vpn": False,
-            "is_proxy": False,
-            "is_tor": False,
-            "risk_level": "LOW",
-            "source": "local",
-            "api_status": "skipped",
-            "checked_at": datetime.utcnow().isoformat()
-        }
-
-    try:
-        # Use ipapi.co (free tier: 1000 req/day, no key needed for basic)
-        url = f"{IP_GEOLOCATION_API_URL}/{ip_address}/json/"
-        if IP_GEOLOCATION_API_KEY:
-            url += f"?key={IP_GEOLOCATION_API_KEY}"
-
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("error"):
-                return _simulate_ip_geolocation(ip_address, note=data.get("reason", "API error"))
-
-            country_code = (data.get("country_code") or "").upper()
-            # Determine IP risk level
-            ip_risk = "LOW"
-            if country_code in [c.upper() for c in SANCTIONED]:
-                ip_risk = "VERY_HIGH"
-            elif country_code in [c.upper() for c in FATF_BLACK]:
-                ip_risk = "HIGH"
-            elif country_code in [c.upper() for c in FATF_GREY]:
-                ip_risk = "MEDIUM"
-
-            return {
-                "country": data.get("country_name", "Unknown"),
-                "country_code": country_code,
-                "city": data.get("city", ""),
-                "region": data.get("region", ""),
-                "latitude": data.get("latitude"),
-                "longitude": data.get("longitude"),
-                "org": data.get("org", ""),
-                "asn": data.get("asn", ""),
-                "is_vpn": False,  # Basic API doesn't detect VPN
-                "is_proxy": False,
-                "is_tor": False,
-                "risk_level": ip_risk,
-                "source": "ipapi",
-                "api_status": "live",
-                "checked_at": datetime.utcnow().isoformat()
-            }
-        else:
-            return _simulate_ip_geolocation(ip_address, note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"IP Geolocation error: {e}")
-        return _simulate_ip_geolocation(ip_address, note=f"API error — simulated")
-
-
-def _simulate_ip_geolocation(ip_address, note="Simulated result"):
-    """Fallback: simulated IP geolocation."""
-    import random
-    countries = [
-        ("Mauritius", "MU"), ("United Kingdom", "GB"), ("France", "FR"),
-        ("India", "IN"), ("South Africa", "ZA"), ("Singapore", "SG")
-    ]
-    country, code = random.choice(countries)
-    return {
-        "country": country,
-        "country_code": code,
-        "city": "Simulated City",
-        "region": "",
-        "is_vpn": random.random() < 0.05,
-        "is_proxy": random.random() < 0.03,
-        "is_tor": False,
-        "risk_level": "LOW",
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "checked_at": datetime.utcnow().isoformat()
-    }
-
-
-# ══════════════════════════════════════════════════════════
-# SUMSUB KYC / IDENTITY VERIFICATION
-# ══════════════════════════════════════════════════════════
-
-def _sumsub_sign(method, url_path, body=b""):
-    """
-    Create HMAC-SHA256 signature for Sumsub API requests.
-    Returns headers dict with X-App-Token, X-App-Access-Ts, X-App-Access-Sig.
-    """
-    ts = str(int(time.time()))
-    # Build signature payload: ts + method + path + body
-    sig_payload = ts.encode("utf-8") + method.upper().encode("utf-8") + url_path.encode("utf-8")
-    if body:
-        sig_payload += body if isinstance(body, bytes) else body.encode("utf-8")
-    sig = hmac.new(
-        SUMSUB_SECRET_KEY.encode("utf-8"),
-        sig_payload,
-        hashlib.sha256
-    ).hexdigest()
-    return {
-        "X-App-Token": SUMSUB_APP_TOKEN,
-        "X-App-Access-Ts": ts,
-        "X-App-Access-Sig": sig,
-    }
-
-
-def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
-                            email=None, phone=None, dob=None, country=None,
-                            level_name=None):
-    """
-    Create a Sumsub applicant for KYC verification.
-    Returns: { applicant_id, external_user_id, status, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        logger.info(f"Sumsub: No credentials — simulating applicant creation for '{external_user_id}'")
-        return _simulate_sumsub_applicant(external_user_id, first_name, last_name)
-
-    try:
-        level = level_name or SUMSUB_LEVEL_NAME
-        url_path = f"/resources/applicants?levelName={level}"
-        body_data = {
-            "externalUserId": external_user_id,
-        }
-        if first_name or last_name:
-            fixed_info = {}
-            if first_name:
-                fixed_info["firstName"] = first_name
-            if last_name:
-                fixed_info["lastName"] = last_name
-            if dob:
-                fixed_info["dob"] = dob
-            if country:
-                fixed_info["country"] = country
-            body_data["fixedInfo"] = fixed_info
-        if email:
-            body_data["email"] = email
-        if phone:
-            body_data["phone"] = phone
-
-        body_bytes = json.dumps(body_data).encode("utf-8")
-        headers = _sumsub_sign("POST", url_path, body_bytes)
-        headers["Content-Type"] = "application/json"
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            data=body_bytes,
-            timeout=15
-        )
-
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            applicant_id = data.get("id", "")
-            logger.info(f"Sumsub: Created applicant {applicant_id} for user {external_user_id}")
-            return {
-                "applicant_id": applicant_id,
-                "external_user_id": external_user_id,
-                "status": data.get("review", {}).get("reviewStatus", "init"),
-                "inspection_id": data.get("inspectionId", ""),
-                "level_name": level,
-                "created_at": data.get("createdAt", ""),
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub create applicant failed: {resp.status_code} — {resp.text[:300]}")
-            # If applicant already exists, try to get existing
-            if resp.status_code == 409:
-                return sumsub_get_applicant_by_external_id(external_user_id)
-            return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
-                                             note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub create applicant error: {e}")
-        return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
-                                         note=f"Exception: {str(e)[:100]}")
-
-
-def sumsub_get_applicant_by_external_id(external_user_id):
-    """Retrieve an existing Sumsub applicant by external user ID."""
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return _simulate_sumsub_applicant(external_user_id)
-
-    try:
-        url_path = f"/resources/applicants/-;externalUserId={external_user_id}/one"
-        headers = _sumsub_sign("GET", url_path)
-
-        resp = requests.get(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                "applicant_id": data.get("id", ""),
-                "external_user_id": external_user_id,
-                "status": data.get("review", {}).get("reviewStatus", "init"),
-                "review_answer": data.get("review", {}).get("reviewResult", {}).get("reviewAnswer", ""),
-                "inspection_id": data.get("inspectionId", ""),
-                "level_name": data.get("requiredIdDocs", {}).get("docSets", [{}])[0].get("idDocSetType", "") if data.get("requiredIdDocs") else "",
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            return _simulate_sumsub_applicant(external_user_id,
-                                             note=f"Lookup returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub get applicant error: {e}")
-        return _simulate_sumsub_applicant(external_user_id, note=str(e)[:100])
-
-
-def sumsub_generate_access_token(external_user_id, level_name=None):
-    """
-    Generate an access token for the Sumsub WebSDK.
-    The client portal uses this token to launch the KYC widget.
-    Returns: { token, userId, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        logger.info(f"Sumsub: No credentials — simulating access token for '{external_user_id}'")
-        return _simulate_sumsub_token(external_user_id)
-
-    try:
-        level = level_name or SUMSUB_LEVEL_NAME
-        url_path = f"/resources/accessTokens?userId={external_user_id}&levelName={level}"
-        headers = _sumsub_sign("POST", url_path)
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            logger.info(f"Sumsub: Generated access token for user {external_user_id}")
-            return {
-                "token": data.get("token", ""),
-                "user_id": external_user_id,
-                "level_name": level,
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub token gen failed: {resp.status_code} — {resp.text[:300]}")
-            return _simulate_sumsub_token(external_user_id,
-                                         note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub token error: {e}")
-        return _simulate_sumsub_token(external_user_id, note=str(e)[:100])
-
-
-def sumsub_get_applicant_status(applicant_id):
-    """
-    Get the verification status of a Sumsub applicant.
-    Returns: { applicant_id, status, review_answer, verification_steps, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return _simulate_sumsub_status(applicant_id)
-
-    try:
-        # Get applicant data
-        url_path = f"/resources/applicants/{applicant_id}/one"
-        headers = _sumsub_sign("GET", url_path)
-
-        resp = requests.get(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            review = data.get("review", {})
-            review_result = review.get("reviewResult", {})
-
-            result = {
-                "applicant_id": applicant_id,
-                "external_user_id": data.get("externalUserId", ""),
-                "status": review.get("reviewStatus", "init"),
-                "review_answer": review_result.get("reviewAnswer", ""),
-                "rejection_labels": review_result.get("rejectLabels", []),
-                "moderation_comment": review_result.get("moderationComment", ""),
-                "created_at": data.get("createdAt", ""),
-                "source": "sumsub",
-                "api_status": "live",
-            }
-
-            # Also get verification steps
-            steps_url = f"/resources/applicants/{applicant_id}/requiredIdDocsStatus"
-            steps_headers = _sumsub_sign("GET", steps_url)
-            steps_resp = requests.get(
-                f"{SUMSUB_BASE_URL}{steps_url}",
-                headers=steps_headers,
-                timeout=10
-            )
-            if steps_resp.status_code == 200:
-                result["verification_steps"] = steps_resp.json()
-
-            return result
-        else:
-            logger.warning(f"Sumsub status check failed: {resp.status_code}")
-            return _simulate_sumsub_status(applicant_id,
-                                          note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub status error: {e}")
-        return _simulate_sumsub_status(applicant_id, note=str(e)[:100])
-
-
-def sumsub_add_document(applicant_id, doc_type, country, file_path=None, file_data=None, file_name="document.pdf"):
-    """
-    Add an identity document to a Sumsub applicant.
-    doc_type: PASSPORT, ID_CARD, DRIVERS, SELFIE, etc.
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return {"status": "simulated", "message": "Sumsub not configured", "source": "simulated"}
-
-    try:
-        url_path = f"/resources/applicants/{applicant_id}/info/idDoc"
-        metadata = json.dumps({
-            "idDocType": doc_type,
-            "country": country,
-        })
-
-        # Read file content
-        content = None
-        if file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                content = f.read()
-        elif file_data:
-            content = base64.b64decode(file_data) if isinstance(file_data, str) else file_data
-
-        if not content:
-            return {"status": "error", "message": "No document content provided", "source": "sumsub"}
-
-        # Multipart form data — we need to sign without the body for multipart
-        headers = _sumsub_sign("POST", url_path)
-
-        files = {
-            "metadata": (None, metadata, "application/json"),
-            "content": (file_name, content, "application/octet-stream"),
-        }
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            files=files,
-            timeout=30
-        )
-
-        if resp.status_code in (200, 201):
-            logger.info(f"Sumsub: Added {doc_type} document for applicant {applicant_id}")
-            return {
-                "status": "uploaded",
-                "doc_type": doc_type,
-                "applicant_id": applicant_id,
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub doc upload failed: {resp.status_code} — {resp.text[:200]}")
-            return {
-                "status": "error",
-                "message": f"Upload failed: {resp.status_code}",
-                "source": "sumsub",
-            }
-
-    except Exception as e:
-        logger.error(f"Sumsub doc upload error: {e}")
-        return {"status": "error", "message": str(e)[:100], "source": "sumsub"}
-
-
-def sumsub_verify_webhook(body_bytes, signature_header):
-    """Verify a Sumsub webhook signature (HMAC-SHA256)."""
-    if not SUMSUB_WEBHOOK_SECRET:
-        if ENVIRONMENT == "production":
-            logger.error("Sumsub webhook secret not configured in production — REJECTING webhook")
-            return False
-        logger.warning("Sumsub webhook secret not configured — accepting in dev mode only")
-        return True
-
-    expected = hmac.new(
-        SUMSUB_WEBHOOK_SECRET.encode("utf-8"),
-        body_bytes,
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature_header or "")
-
-
-# ── Sumsub simulation fallbacks ──────────────────────────
-
-def _simulate_sumsub_applicant(external_user_id, first_name=None, last_name=None, note="No Sumsub credentials configured"):
-    """Fallback: simulated applicant creation."""
-    sim_id = f"sim_{hashlib.md5(external_user_id.encode()).hexdigest()[:16]}"
-    return {
-        "applicant_id": sim_id,
-        "external_user_id": external_user_id,
-        "status": "init",
-        "inspection_id": f"insp_{sim_id[:12]}",
-        "level_name": SUMSUB_LEVEL_NAME,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-
-def _simulate_sumsub_token(external_user_id, note="No Sumsub credentials configured"):
-    """Fallback: simulated access token."""
-    token = base64.b64encode(f"sim_token_{external_user_id}_{int(time.time())}".encode()).decode()
-    return {
-        "token": token,
-        "user_id": external_user_id,
-        "level_name": SUMSUB_LEVEL_NAME,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-    }
-
-
-def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured"):
-    """Fallback: simulated verification status."""
-    import random
-    statuses = ["init", "pending", "completed"]
-    answers = ["", "", "GREEN"]
-    idx = random.randint(0, 2)
-    return {
-        "applicant_id": applicant_id,
-        "external_user_id": "",
-        "status": statuses[idx],
-        "review_answer": answers[idx],
-        "rejection_labels": [],
-        "moderation_comment": "",
-        "verification_steps": {
-            "IDENTITY": {"reviewResult": {"reviewAnswer": answers[idx]} if idx == 2 else {}},
-            "SELFIE": {"reviewResult": {"reviewAnswer": answers[idx]} if idx == 2 else {}},
-        },
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-
-def run_full_screening(application_data, directors, ubos, client_ip=None):
-    """
-    Run all screening agents against an application.
-    Returns a comprehensive screening report used by Agents 1, 5, and 6.
-    """
-    company_name = application_data.get("company_name", "")
-    country = application_data.get("country", "")
-
-    report = {
-        "screened_at": datetime.utcnow().isoformat(),
-        "company_screening": {},
-        "director_screenings": [],
-        "ubo_screenings": [],
-        "ip_geolocation": {},
-        "overall_flags": [],
-        "total_hits": 0,
-    }
-
-    # ── Agent 5: Company Registry (Open Corporates) ──
-    jurisdiction = None
-    if country:
-        jur_map = {"mauritius": "mu", "united kingdom": "gb", "uk": "gb", "france": "fr",
-                   "singapore": "sg", "india": "in", "hong kong": "hk", "usa": "us",
-                   "united states": "us", "south africa": "za", "germany": "de"}
-        jurisdiction = jur_map.get(country.lower())
-    report["company_screening"] = lookup_opencorporates(company_name, jurisdiction)
-    if not report["company_screening"]["found"]:
-        report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
-
-    # ── Agent 5: Company sanctions screening ──
-    company_sanctions = screen_opensanctions(company_name, entity_type="Company")
-    report["company_screening"]["sanctions"] = company_sanctions
-    if company_sanctions["matched"]:
-        report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
-        report["total_hits"] += len(company_sanctions["results"])
-
-    # ── Agent 6: Director sanctions/PEP screening ──
-    for d in directors:
-        d_name = d.get("full_name", "")
-        if not d_name:
-            continue
-        screening = screen_opensanctions(d_name, nationality=d.get("nationality"), entity_type="Person")
-        result = {
-            "person_name": d_name,
-            "person_type": "director",
-            "nationality": d.get("nationality", ""),
-            "declared_pep": d.get("is_pep", "No"),
-            "screening": screening,
-        }
-        if screening["matched"]:
-            report["overall_flags"].append(f"Director '{d_name}' has sanctions/PEP matches")
-            report["total_hits"] += len(screening["results"])
-            # Check for undeclared PEP
-            for hit in screening["results"]:
-                if hit.get("is_pep") and d.get("is_pep", "No") != "Yes":
-                    result["undeclared_pep"] = True
-                    report["overall_flags"].append(f"Director '{d_name}' may be undeclared PEP")
-        report["director_screenings"].append(result)
-
-    # ── Agent 6: UBO sanctions/PEP screening ──
-    for u in ubos:
-        u_name = u.get("full_name", "")
-        if not u_name:
-            continue
-        screening = screen_opensanctions(u_name, nationality=u.get("nationality"), entity_type="Person")
-        result = {
-            "person_name": u_name,
-            "person_type": "ubo",
-            "nationality": u.get("nationality", ""),
-            "ownership_pct": u.get("ownership_pct", 0),
-            "declared_pep": u.get("is_pep", "No"),
-            "screening": screening,
-        }
-        if screening["matched"]:
-            report["overall_flags"].append(f"UBO '{u_name}' has sanctions/PEP matches")
-            report["total_hits"] += len(screening["results"])
-            for hit in screening["results"]:
-                if hit.get("is_pep") and u.get("is_pep", "No") != "Yes":
-                    result["undeclared_pep"] = True
-                    report["overall_flags"].append(f"UBO '{u_name}' may be undeclared PEP")
-        report["ubo_screenings"].append(result)
-
-    # ── Agent 1: IP Geolocation ──
-    if client_ip:
-        report["ip_geolocation"] = geolocate_ip(client_ip)
-        ip_geo = report["ip_geolocation"]
-        if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
-            report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
-        if ip_geo.get("is_vpn"):
-            report["overall_flags"].append("Client IP detected as VPN")
-        if ip_geo.get("is_proxy"):
-            report["overall_flags"].append("Client IP detected as proxy")
-        if ip_geo.get("is_tor"):
-            report["overall_flags"].append("Client IP detected as Tor exit node")
-
-    # ── Agent 2 & 3: Sumsub KYC — Create applicants for directors/UBOs ──
-    report["kyc_applicants"] = []
-    all_persons = [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]
-    for person, ptype in all_persons:
-        p_name = person.get("full_name", "")
-        if not p_name:
-            continue
-        # Use email or generate an external ID
-        ext_id = person.get("email", "") or f"{ptype}_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
-        parts = p_name.strip().split(" ", 1)
-        first = parts[0] if parts else ""
-        last = parts[1] if len(parts) > 1 else ""
-        applicant = sumsub_create_applicant(
-            external_user_id=ext_id,
-            first_name=first,
-            last_name=last,
-            country=person.get("nationality", ""),
-        )
-        applicant["person_name"] = p_name
-        applicant["person_type"] = ptype
-        report["kyc_applicants"].append(applicant)
-
-        if applicant.get("review_answer") == "RED":
-            report["overall_flags"].append(f"Sumsub KYC FAILED for {ptype} '{p_name}'")
-            report["total_hits"] += 1
-
-    return report
-
-
-# ══════════════════════════════════════════════════════════
-# RATE LIMITING
-# ══════════════════════════════════════════════════════════
-
-class RateLimiter:
-    """In-memory sliding window rate limiter. Keyed by IP + endpoint."""
-    def __init__(self):
-        self._attempts = {}  # key → list of timestamps
-
-    def is_limited(self, key, max_attempts=10, window_seconds=900):
-        """Returns True if the key has exceeded max_attempts in the window."""
-        now = time.time()
-        cutoff = now - window_seconds
-        if key not in self._attempts:
-            self._attempts[key] = []
-        # Prune old entries
-        self._attempts[key] = [t for t in self._attempts[key] if t > cutoff]
-        if len(self._attempts[key]) >= max_attempts:
-            return True
-        self._attempts[key].append(now)
-        return False
-
-    def remaining(self, key, max_attempts=10, window_seconds=900):
-        """Returns how many attempts remain for the key."""
-        now = time.time()
-        cutoff = now - window_seconds
-        attempts = [t for t in self._attempts.get(key, []) if t > cutoff]
-        return max(0, max_attempts - len(attempts))
-
-    def reset(self, key):
-        """Reset rate limit for a key (e.g., after successful login)."""
-        self._attempts.pop(key, None)
-
-# Global rate limiter instance
-rate_limiter = RateLimiter()
-
-
-# ══════════════════════════════════════════════════════════
-# TORNADO REQUEST HANDLERS
-# ══════════════════════════════════════════════════════════
-
-class BaseHandler(tornado.web.RequestHandler):
-    def set_default_headers(self):
-        # CORS — in production, MUST set ALLOWED_ORIGIN env var to your domain
-        allowed_origin = os.environ.get("ALLOWED_ORIGIN", "")
-        if not allowed_origin:
-            if ENVIRONMENT == "production":
-                # In production, no CORS header = same-origin only (most secure)
-                logger.warning("ALLOWED_ORIGIN not set in production — defaulting to same-origin only")
-            else:
-                allowed_origin = "*"  # Permissive in dev only
-        if allowed_origin:
-            self.set_header("Access-Control-Allow-Origin", allowed_origin)
-        self.set_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        self.set_header("Access-Control-Max-Age", "3600")
-        self.set_header("Content-Type", "application/json")
-        # Security headers — always on
-        self.set_header("X-Content-Type-Options", "nosniff")
-        self.set_header("X-Frame-Options", "DENY")
-        self.set_header("X-XSS-Protection", "1; mode=block")
-        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
-        if ENVIRONMENT == "production":
-            self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-
-    def options(self, *args):
-        self.set_status(204)
-        self.finish()
-
-    def get_json(self):
+        rows = db.execute(
+            "SELECT ref FROM applications WHERE ref LIKE ?",
+            (f"{prefix}%",),
+        ).fetchall()
+    finally:
+        db.close()
+    max_num = _REF_BASE_NUMBER - 1  # one below the first valid ref
+    for row in rows:
+        ref_val = row["ref"] if isinstance(row, dict) else row[0]
         try:
-            return json.loads(self.request.body)
-        except Exception:
-            return {}
+            num = int(str(ref_val)[len(prefix):])
+            if num > max_num:
+                max_num = num
+        except (ValueError, IndexError, TypeError):
+            pass
+    return f"{prefix}{max_num + 1}"
 
-    def get_current_user_token(self):
-        auth = self.request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            return decode_token(auth[7:])
-        return None
+from screening import (
+    screen_sumsub_aml, _simulate_aml_screen,
+    lookup_opencorporates, _simulate_company_lookup,
+    geolocate_ip, _simulate_ip_geolocation,
+    _sumsub_sign, sumsub_create_applicant, sumsub_get_applicant_by_external_id,
+    sumsub_generate_access_token, sumsub_get_applicant_status,
+    sumsub_add_document, sumsub_verify_webhook,
+    _simulate_sumsub_applicant, _simulate_sumsub_token, _simulate_sumsub_status,
+    run_full_screening as _legacy_run_full_screening, ScreeningProviderError,
+)
+from screening_routing import run_screening_for_active_provider
 
-    def require_auth(self, roles=None):
-        user = self.get_current_user_token()
+
+def run_full_screening(application_data, directors, ubos, client_ip=None, db=None):
+    return run_screening_for_active_provider(
+        application_data,
+        directors,
+        ubos,
+        client_ip=client_ip,
+        db=db,
+        legacy_runner=_legacy_run_full_screening,
+    )
+
+
+def _persist_normalized_screening_report_if_enabled(db, client_id, application_id, report):
+    from screening_config import is_abstraction_enabled
+
+    if not is_abstraction_enabled():
+        return
+
+    from screening_storage import (
+        ensure_normalized_table,
+        persist_normalized_report,
+        compute_report_hash,
+    )
+
+    ensure_normalized_table(db)
+    if isinstance(report, dict) and report.get("normalized_version"):
+        _src_hash = report.get("source_screening_report_hash") or compute_report_hash(report)
+        persist_normalized_report(
+            db,
+            client_id,
+            application_id,
+            report,
+            _src_hash,
+            provider=report.get("provider", "sumsub"),
+            normalized_version=str(report.get("normalized_version") or "1.0"),
+        )
+        return
+
+    from screening_normalizer import normalize_screening_report
+
+    _src_hash = compute_report_hash(report)
+    _norm = normalize_screening_report(report)
+    persist_normalized_report(db, client_id, application_id, _norm, _src_hash)
+
+# Priority A — Canonical screening state model (truthful, fail-closed).
+# See screening_state.py for state semantics. Used by the screening queue
+# serializer to ensure pending / not_configured / failed provider states are
+# never rendered as "Clear" or "No Provider Match".
+from screening_state import (
+    derive_screening_state,
+    derive_screening_truth,
+    build_screening_truth_summary,
+    build_screening_terminality_summary,
+    derive_subject_state,
+    state_label as screening_state_label,
+    legacy_status_value as _screening_legacy_status,
+    combine_states as _combine_screening_states,
+    COMPLETED_CLEAR as _SCR_COMPLETED_CLEAR,
+    COMPLETED_MATCH as _SCR_COMPLETED_MATCH,
+    NOT_CONFIGURED as _SCR_NOT_CONFIGURED,
+    FAILED as _SCR_FAILED,
+    PENDING_PROVIDER as _SCR_PENDING,
+    PARTIAL_RESULT as _SCR_PARTIAL,
+    NOT_STARTED as _SCR_NOT_STARTED,
+    TERMINAL_STATES as _SCR_TERMINAL_STATES,
+)
+
+# Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
+from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
+from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler
+
+# Public API v1 — versioned external endpoints
+from public_api import (
+    PublicHealthHandler,
+    PublicApplicationStatusHandler,
+    PublicApplicationDecisionHandler,
+    PublicDashboardStatusHandler,
+)
+
+
+# ── Database Reset (temporary — remove after staging wipe) ──
+class AdminResetDBHandler(BaseHandler):
+    def post(self):
+        """One-time staging database reset. Drops all data and re-seeds."""
+        user = self.require_auth(roles=["admin"])
         if not user:
-            self.set_status(401)
-            self.write({"error": "Authentication required"})
-            return None
-        if roles and user.get("role") not in roles:
-            self.set_status(403)
-            self.write({"error": "Insufficient permissions"})
-            return None
-        return user
+            return
+        from config import IS_PRODUCTION
+        if IS_PRODUCTION:
+            self.error("Cannot reset production database", 403)
+            return
 
-    def get_client_ip(self):
-        return self.request.headers.get("X-Real-IP", self.request.remote_ip)
+        required_confirm = (os.environ.get("ADMIN_RESET_DB_CONFIRMATION") or "").strip()
+        if not required_confirm:
+            logger.error("ADMIN_RESET_DB_CONFIRMATION is not set; refusing reset endpoint request")
+            self.error("Reset control is not configured", 503)
+            return
 
-    def success(self, data, status=200):
-        self.set_status(status)
-        self.write(json.dumps(data, default=str))
-
-    def error(self, message, status=400):
-        self.set_status(status)
-        self.write({"error": message})
-
-    def log_audit(self, user, action, target, detail, db=None):
-        own_db = db is None
-        if own_db:
+        secret = self.get_json().get("confirm")
+        if secret != required_confirm:
+            self.error("Invalid confirmation", 403)
+            return
+        try:
             db = get_db()
-        db.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip())
+            if db.is_postgres:
+                # Disable FK constraints, truncate all tables, re-enable
+                db.execute("SET session_replication_role = 'replica'")
+                tables = db.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall()
+                for t in tables:
+                    tname = t.get("tablename") if hasattr(t, 'get') else t[0]
+                    if tname and tname not in ("schema_version", "schema_migrations"):
+                        db.execute(f'TRUNCATE TABLE "{tname}" CASCADE')
+                db.execute("SET session_replication_role = 'origin'")
+            else:
+                tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                for t in tables:
+                    tname = t.get("name") if hasattr(t, 'get') else t[0]
+                    if tname and tname not in ("schema_version", "schema_migrations"):
+                        db.execute(f"DELETE FROM {tname}")
+            # Add missing columns if needed
+            if db.is_postgres:
+                try:
+                    db.execute("ALTER TABLE applications ADD COLUMN IF NOT EXISTS screening_mode TEXT DEFAULT 'live'")
+                except Exception:
+                    pass
+            db.commit()
+            # Re-seed directly (don't use init_db which may skip if schema exists)
+            from db import seed_initial_data
+            try:
+                seed_initial_data(db)
+                logger.info("Database re-seeded successfully after reset")
+            except Exception as seed_err:
+                logger.error(f"Re-seed failed: {seed_err}", exc_info=True)
+                db.close()
+                self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
+                return
+            db.close()
+            self.log_audit(user, "Admin Reset", "Database", "Staging database reset and re-seeded")
+            self.success({"status": "reset_complete", "message": "Database wiped and re-seeded"})
+        except Exception as e:
+            logger.error(f"DB reset failed: {e}", exc_info=True)
+            self.error(f"Reset failed: {str(e)}", 500)
+
+
+class AdminResetPasswordHandler(BaseHandler):
+    """POST /api/admin/reset-password — reset a client's password (staging only)."""
+    def post(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
+        from config import IS_PRODUCTION
+        if IS_PRODUCTION:
+            self.error("Not available in production", 403)
+            return
+        data = self.get_json()
+        confirm = data.get("confirm", "")
+        email = data.get("email", "").strip().lower()
+        new_password = data.get("new_password", "")
+
+        required_confirm = (os.environ.get("ADMIN_CLIENT_RESET_CONFIRMATION") or "").strip()
+        if not required_confirm:
+            logger.error("ADMIN_CLIENT_RESET_CONFIRMATION is not set; refusing client reset request")
+            self.error("Reset control is not configured", 503)
+            return
+
+        if confirm != required_confirm:
+            self.error("Invalid confirmation token", 403)
+            return
+        if not email or not new_password:
+            self.error("email and new_password required", 400)
+            return
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            self.error(f"Password policy violation: {pw_error}", 400)
+            return
+
+        db = get_db()
+        client = db.execute("SELECT id, email, company_name FROM clients WHERE LOWER(email)=?", (email,)).fetchone()
+        if not client:
+            db.close()
+            self.error("Email not found", 404)
+            return
+
+        import bcrypt
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE clients SET password_hash=? WHERE LOWER(email)=?", (pw_hash, email))
+        self.log_audit(
+            user,
+            "Admin Password Reset",
+            f"client:{email}",
+            json.dumps({
+                "subject_type": "client",
+                "subject_id": client["id"],
+                "subject_email": email,
+                "sessions_revoked": True,
+            }, default=str),
+            db=db,
+            commit=False,
         )
         db.commit()
-        if own_db:
-            db.close()
+        _revoke_all_client_sessions(db, client["id"])
+        db.close()
+        self.success({"status": "password_reset", "email": email})
 
-    def check_app_ownership(self, user, app):
-        """Returns True if user is allowed to access this application."""
-        if user.get("type") == "client" and app["client_id"] != user["sub"]:
-            self.error("Unauthorized", 403)
-            return False
-        return True
+
+class AdminOfficerPasswordResetHandler(BaseHandler):
+    """POST /api/admin/officer-reset-password — reset an officer's password (staging only).
+    Targets the users table (officers/admins), NOT the clients table.
+    Requires admin auth + confirmation token. NOT available in production."""
+    def post(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
+        from config import IS_PRODUCTION
+        if IS_PRODUCTION:
+            return self.error("Not available in production", 403)
+
+        data = self.get_json()
+        confirm = data.get("confirm", "")
+        email = data.get("email", "").strip().lower()
+        new_password = data.get("new_password", "")
+
+        required_confirm = (os.environ.get("ADMIN_OFFICER_RESET_CONFIRMATION") or "").strip()
+        if not required_confirm:
+            logger.error("ADMIN_OFFICER_RESET_CONFIRMATION is not set; refusing officer reset request")
+            return self.error("Reset control is not configured", 503)
+
+        if confirm != required_confirm:
+            return self.error("Invalid confirmation token", 403)
+        if not email or not new_password:
+            return self.error("email and new_password required", 400)
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return self.error(f"Password policy violation: {pw_error}", 400)
+
+        db = get_db()
+        officer_row = db.execute("SELECT id, role, full_name FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
+        if not officer_row:
+            db.close()
+            return self.error("Officer not found", 404)
+
+        import bcrypt
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (pw_hash, email))
+        self.log_audit(
+            user,
+            "Admin Password Reset",
+            f"officer:{email}",
+            json.dumps({
+                "subject_type": "officer",
+                "subject_id": officer_row["id"],
+                "subject_email": email,
+                "subject_role": officer_row["role"],
+                "sessions_revoked": True,
+            }, default=str),
+            db=db,
+            commit=False,
+        )
+        db.commit()
+        _revoke_all_client_sessions(db, officer_row["id"])
+        db.close()
+
+        logger.warning(f"OFFICER PASSWORD RESET: {email} (role={officer_row['role']}) password was reset via staging endpoint")
+        self.success({"status": "password_reset", "email": email, "role": officer_row["role"]})
 
 
 # ── Health Check ──
+def _complyadvantage_runtime_status():
+    """Return truthful ComplyAdvantage readiness without activating it.
+
+    Sumsub remains authoritative for IDV/KYC.  ComplyAdvantage only reports
+    live when both the provider selection and abstraction gate are active and
+    the CA credential boundary validates.
+    """
+    from screening_config import get_active_provider_name, is_abstraction_enabled
+
+    requested_provider = get_active_provider_name()
+    abstraction_enabled = is_abstraction_enabled()
+    ca_env_keys = (
+        "COMPLYADVANTAGE_API_BASE_URL",
+        "COMPLYADVANTAGE_AUTH_URL",
+        "COMPLYADVANTAGE_REALM",
+        "COMPLYADVANTAGE_USERNAME",
+        "COMPLYADVANTAGE_PASSWORD",
+    )
+    has_partial_config = any((os.environ.get(key) or "").strip() for key in ca_env_keys)
+    configured = False
+    config_error = ""
+    try:
+        from screening_complyadvantage.config import CAConfig
+        CAConfig.from_env()
+        configured = True
+    except Exception as exc:
+        config_error = str(exc)
+
+    active = requested_provider == "complyadvantage" and abstraction_enabled and configured
+    if active:
+        status = "live"
+    elif configured:
+        status = "ready"
+    elif has_partial_config:
+        status = "misconfigured"
+    else:
+        status = "not_configured"
+
+    blockers = []
+    if requested_provider == "complyadvantage" and not abstraction_enabled:
+        blockers.append("ENABLE_SCREENING_ABSTRACTION is false")
+    if not configured and config_error:
+        blockers.append(config_error)
+
+    return {
+        "configured": configured,
+        "status": status,
+        "active": active,
+        "requested_provider": requested_provider,
+        "abstraction_enabled": abstraction_enabled,
+        "implementation_status": "in_progress",
+        "role": "KYB screening, adverse media, and ongoing monitoring",
+        "description": "ComplyAdvantage KYB, adverse-media, and ongoing-monitoring integration",
+        "blockers": blockers,
+    }
+
+
 class HealthHandler(BaseHandler):
     def get(self):
-        self.success({"status": "ok", "service": "ARIE Finance API", "version": "1.0.0"})
+        """Safe unauthenticated liveness check.
+
+        Detailed database and provider configuration is only returned to admins;
+        unauthenticated callers should not be able to fingerprint deployment
+        internals from /api/health.
+        """
+        from branding import BRAND
+        health = {
+            "status": "ok",
+            "service": f"{BRAND['backoffice_name']} API",
+            "platform": BRAND["portal_name"],
+            "version": "1.0.0",
+            "environment": ENV,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+        db_status = "connected"
+        db = None
+        try:
+            db = get_db()
+            db.execute("SELECT 1")
+        except Exception as e:
+            logger.error("Health check database dependency error: %s", e)
+            db_status = "error"
+            health["status"] = "degraded"
+            health["readiness"] = "degraded"
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+        user = self.get_current_user_token()
+        if user and user.get("role") == "admin":
+            health["database"] = {"status": db_status, "type": "postgresql" if USE_POSTGRES else "sqlite"}
+
+            health["integrations"] = {
+                "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
+                "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
+                "ip_geolocation": "live",
+                "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
+                "complyadvantage": _complyadvantage_runtime_status()["status"],
+            }
+            health["metrics_enabled"] = METRICS_ENABLED
+
+        status_code = 200 if health["status"] == "ok" else 503
+        self.set_status(status_code)
+        self.write(json.dumps(health, default=str))
+
+
+def _readiness_status_payload():
+    """Return deep readiness status without writing to a handler."""
+    checks = {}
+    ready = True
+
+    # 1. PII encryption init status
+    if _pii_encryption_ok and _pii_encryptor is not None:
+        checks["encryption"] = {"status": "ok"}
+    else:
+        checks["encryption"] = {"status": "failed", "detail": "PIIEncryptor not initialised or self-test failed"}
+        ready = False
+
+    # 2. Database connectivity
+    db = None
+    try:
+        db = get_db()
+        db.execute("SELECT 1")
+        checks["database"] = {"status": "ok"}
+        if getattr(db, "is_postgres", False):
+            threshold_seconds = 0
+            try:
+                threshold_seconds = max(0, int(os.environ.get("READINESS_IDLE_TX_THRESHOLD_SECONDS", "0")))
+            except (TypeError, ValueError):
+                threshold_seconds = 0
+            idle_row = db.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                  AND state = 'idle in transaction'
+                  AND xact_start IS NOT NULL
+                  AND now() - xact_start >= (? * interval '1 second')
+                """,
+                (threshold_seconds,),
+            ).fetchone()
+            idle_count = int((idle_row or {}).get("c") or 0)
+            checks["database"]["idle_in_transaction_count"] = idle_count
+            checks["database"]["idle_in_transaction_threshold_seconds"] = threshold_seconds
+            if idle_count > 0:
+                checks["database"]["status"] = "degraded"
+                checks["database"]["detail"] = "idle-in-transaction sessions detected"
+                ready = False
+    except Exception as e:
+        checks["database"] = {"status": "failed", "detail": str(e)}
+        ready = False
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    # 3. Required config present (environment-specific)
+    missing_config = []
+    if ENVIRONMENT in ("staging", "production", "prod"):
+        if not os.environ.get("PII_ENCRYPTION_KEY"):
+            missing_config.append("PII_ENCRYPTION_KEY")
+        if not SECRET_KEY:
+            missing_config.append("SECRET_KEY/JWT_SECRET")
+    if missing_config:
+        checks["config"] = {"status": "failed", "missing": missing_config}
+        ready = False
+    else:
+        checks["config"] = {"status": "ok"}
+
+    return ready, {
+        "ready": ready,
+        "environment": ENVIRONMENT,
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+class LivenessHandler(BaseHandler):
+    """GET /api/liveness — public, hardened liveness check for ALB/ECS."""
+
+    def get(self):
+        self.success({
+            "status": "ok",
+            "service": "regmind-backend",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+
+class ReadinessHandler(BaseHandler):
+    """GET /api/readiness — authenticated deep readiness probe.
+
+    Returns 200 only when ALL critical subsystems are operational:
+    - PII encryption initialised and self-test passed
+    - Database reachable
+    - Required secrets/config present for the current environment
+    """
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        ready, payload = _readiness_status_payload()
+        status_code = 200 if ready else 503
+        self.set_status(status_code)
+        self.write(json.dumps(payload, default=str))
+
+
+class MetricsHandler(BaseHandler):
+    """GET /metrics — Prometheus metrics endpoint, auth/token gated."""
+
+    def _metrics_token_valid(self):
+        required = (os.environ.get("METRICS_TOKEN") or "").strip()
+        if not required:
+            return False
+        auth = (self.request.headers.get("Authorization") or "").strip()
+        if auth.startswith("Bearer "):
+            supplied = auth.split("Bearer ", 1)[1].strip()
+        else:
+            supplied = auth
+        return bool(supplied) and secrets.compare_digest(supplied, required)
+
+    def get(self):
+        if not self._metrics_token_valid():
+            user = self.require_auth(roles=["admin", "sco"])
+            if not user:
+                return
+        if not METRICS_ENABLED:
+            self.set_status(404)
+            self.write("Metrics not enabled")
+            return
+        self.set_header("Content-Type", CONTENT_TYPE_LATEST)
+        self.write(generate_latest())
+
+
+class HardenedNotFoundHandler(BaseHandler):
+    """Default 404 path with the same header posture as normal handlers."""
+
+    def prepare(self):
+        self._upload_latency_started_at = time.monotonic()
+
+    def _not_found(self, *args, **kwargs):
+        self.set_status(404)
+        self.write({"error": "Not found"})
+
+    get = post = put = patch = delete = head = _not_found
 
 
 # ══════════════════════════════════════════════════════════
@@ -1420,24 +2627,27 @@ class OfficerLoginHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"officer_login:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
-            self.set_status(429)
-            self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
-            logger.warning(f"Rate limited officer login from {ip} for {email}")
-            return
+            logger.warning(f"Rate limited officer login from {ip} for {mask_email(email)}")
+            return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
-        user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
-        db.close()
+        try:
+            user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        finally:
+            db.close()
 
         if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
             return self.error("Invalid credentials", 401)
 
         rate_limiter.reset(rl_key)  # Reset on successful login
         token = create_token(user["id"], user["role"], user["full_name"], "officer")
+        csrf_token = self.issue_csrf_token()
+        self.issue_session_cookie(token)  # Sprint 3.5: httpOnly cookie auth
         self.log_audit({"sub": user["id"], "name": user["full_name"], "role": user["role"]},
                        "Login", "System", f"Officer login from {ip}")
         self.success({
             "token": token,
+            "csrf_token": csrf_token,
             "user": {"id": user["id"], "email": user["email"], "name": user["full_name"], "role": user["role"]}
         })
 
@@ -1455,14 +2665,14 @@ class ClientLoginHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"client_login:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
-            self.set_status(429)
-            self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
-            logger.warning(f"Rate limited client login from {ip} for {email}")
-            return
+            logger.warning(f"Rate limited client login from {ip} for {mask_email(email)}")
+            return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
-        client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
-        db.close()
+        try:
+            client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        finally:
+            db.close()
 
         if not client or not bcrypt.checkpw(password.encode(), client["password_hash"].encode()):
             return self.error("Invalid credentials", 401)
@@ -1470,8 +2680,11 @@ class ClientLoginHandler(BaseHandler):
         rate_limiter.reset(rl_key)  # Reset on successful login
 
         token = create_token(client["id"], "client", client["company_name"] or email, "client")
+        csrf_token = self.issue_csrf_token()
+        self.issue_session_cookie(token)  # Sprint 3.5: httpOnly cookie auth
         self.success({
             "token": token,
+            "csrf_token": csrf_token,
             "client": {"id": client["id"], "email": client["email"], "company": client["company_name"]}
         })
 
@@ -1490,12 +2703,21 @@ class ClientRegisterHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"register:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
-            self.set_status(429)
-            self.write({"error": "Too many registration attempts. Please try again later."})
-            return
+            return self.error("Too many registration attempts. Please try again later.", 429)
 
-        if len(password) < 8:
-            return self.error("Password must be at least 8 characters")
+        if len(password) < 12:
+            return self.error("Password must be at least 12 characters")
+
+        # Check for common passwords
+        common_passwords = {"password", "12345678", "qwerty", "letmein", "welcome", "monkey",
+                           "dragon", "master", "abc123", "password1", "onboarda", "123456789012"}
+        if password.lower() in common_passwords or any(cp in password.lower() for cp in common_passwords):
+            return self.error("Password is too common or easily guessable", 400)
+
+        # Validate password policy (mandatory)
+        is_valid, pw_error = PasswordPolicy.validate(password)
+        if not is_valid:
+            return self.error(f"Password policy violation: {pw_error}", 400)
 
         db = get_db()
         exists = db.execute("SELECT id FROM clients WHERE email = ?", (email,)).fetchone()
@@ -1511,7 +2733,161 @@ class ClientRegisterHandler(BaseHandler):
         db.close()
 
         token = create_token(client_id, "client", company or email, "client")
-        self.success({"token": token, "client": {"id": client_id, "email": email, "company": company}}, 201)
+        csrf_token = self.issue_csrf_token()
+        self.issue_session_cookie(token)
+        self.success({"token": token, "csrf_token": csrf_token, "client": {"id": client_id, "email": email, "company": company}}, 201)
+
+
+class ForgotPasswordHandler(BaseHandler):
+    """POST /api/auth/client/forgot-password — generate a password reset token."""
+    def post(self):
+        data = self.get_json()
+        email = data.get("email", "").strip().lower()
+        if not email:
+            return self.error("Email is required", 400)
+
+        # Rate limit: 5 attempts per 30 minutes per IP
+        ip = self.get_client_ip()
+        rl_key = f"forgot_pw:{ip}"
+        if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
+            return self.error("Too many reset attempts. Please try again later.", 429)
+
+        # Per-email rate limit: prevent enumeration via repeated requests for the same address
+        email_rl_key = f"forgot_pw:email:{hashlib.sha256(email.encode()).hexdigest()}"
+        if rate_limiter.is_limited(email_rl_key, max_attempts=3, window_seconds=1800):
+            # Return identical success message to prevent email enumeration
+            return self.success({"message": "If that email is registered, a reset link has been sent."})
+
+        db = get_db()
+        client = db.execute("SELECT id, email FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        if not client:
+            db.close()
+            # Don't reveal whether email exists
+            return self.success({"message": "If that email is registered, a reset link has been sent."})
+
+        # Generate reset token and expiry (1 hour)
+        reset_token = secrets.token_urlsafe(32)
+        reset_token_hash = hash_reset_token(reset_token)
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        db.execute("UPDATE clients SET password_reset_token=?, password_reset_expires=? WHERE id=?",
+                   (reset_token_hash, expires, client["id"]))
+        db.commit()
+        db.close()
+
+        from config import IS_PRODUCTION
+        result = {"message": "If that email is registered, a reset link has been sent."}
+        portal_base = os.environ.get("PORTAL_BASE_URL") or BRAND.get("website") or ""
+        reset_link = f"{portal_base.rstrip('/')}/?reset_token={reset_token}" if portal_base else ""
+        email_body = (
+            "A password reset was requested for your Onboarda portal account.\n\n"
+            f"Use this reset token: {reset_token}\n\n"
+            + (f"Reset link: {reset_link}\n\n" if reset_link else "")
+            + "This token will expire in 1 hour. If you did not request this change, you can ignore this email."
+        )
+        email_sent = send_portal_email(email, "Onboarda password reset", email_body)
+
+        if not IS_PRODUCTION:
+            result["reset_token"] = reset_token  # Only expose token in non-production
+            if reset_link:
+                result["reset_link"] = reset_link
+        result["email_sent"] = bool(email_sent)
+        self.success(result)
+
+
+class ResetPasswordHandler(BaseHandler):
+    """POST /api/auth/client/reset-password — reset password using token."""
+    def post(self):
+        data = self.get_json()
+        token = data.get("token", "").strip()
+        new_password = data.get("new_password", "")
+        if not token or not new_password:
+            return self.error("Token and new_password are required", 400)
+
+        if len(new_password) < 12:
+            return self.error("Password must be at least 12 characters", 400)
+
+        # Validate password policy
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return self.error(f"Password policy violation: {pw_error}", 400)
+
+        token_hash = hash_reset_token(token)
+        db = get_db()
+        client = db.execute(
+            "SELECT id, email, password_reset_token, password_reset_expires FROM clients WHERE password_reset_token = ?",
+            (token_hash,)
+        ).fetchone()
+
+        if not client:
+            db.close()
+            return self.error("Invalid or expired reset token", 400)
+
+        # Check expiry — compare as naive UTC consistently
+        try:
+            expires = datetime.fromisoformat(client["password_reset_expires"])
+            # Normalise both sides to naive UTC for safe comparison
+            if expires.tzinfo is not None:
+                expires = expires.replace(tzinfo=None)
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            if now_utc > expires:
+                db.close()
+                return self.error("Reset token has expired", 400)
+        except (ValueError, TypeError):
+            db.close()
+            return self.error("Invalid or expired reset token", 400)
+
+        # Reset password and clear token
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE clients SET password_hash=?, password_reset_token=NULL, password_reset_expires=NULL WHERE id=?",
+                   (pw_hash, client["id"]))
+        db.commit()
+
+        # Revoke all active sessions for this client so old tokens can't be reused
+        _revoke_all_client_sessions(db, client["id"])
+
+        db.close()
+
+        logger.info(f"Password reset completed for {mask_email(client['email'])}")
+        self.success({"message": "Password has been reset successfully."})
+
+
+class ClientChangePasswordHandler(BaseHandler):
+    """POST /api/auth/client/change-password — change password for authenticated client."""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+        data = self.get_json()
+        current = data.get("current_password", "")
+        new_pw = data.get("new_password", "")
+        if not current or not new_pw:
+            return self.error("current_password and new_password required", 400)
+        if len(new_pw) < 12:
+            return self.error("Password must be at least 12 characters", 400)
+
+        db = get_db()
+        client = db.execute("SELECT password_hash FROM clients WHERE id=?", (user.get("sub"),)).fetchone()
+        if not client or not bcrypt.checkpw(current.encode(), client["password_hash"].encode()):
+            db.close()
+            return self.error("Current password is incorrect", 401)
+        is_valid, pw_error = PasswordPolicy.validate(new_pw)
+        if not is_valid:
+            db.close()
+            return self.error(f"Password policy violation: {pw_error}", 400)
+        new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
+        db.commit()
+
+        # Revoke the current session — client must re-login with new password
+        jti = user.get("jti")
+        exp = user.get("exp")
+        if jti and exp:
+            token_revocation_list.revoke(jti, exp)
+
+        db.close()
+        self.clear_session_cookie()
+        logger.info(f"Password changed for client {user.get('sub')}")
+        self.success({"status": "password_changed"})
 
 
 class MeHandler(BaseHandler):
@@ -1521,6 +2897,45 @@ class MeHandler(BaseHandler):
         if not user:
             return
         self.success({"id": user["sub"], "name": user["name"], "role": user["role"], "type": user["type"]})
+
+
+class LogoutHandler(BaseHandler):
+    """POST /api/auth/logout — Revoke token and clear session cookie."""
+    def post(self):
+        presented_tokens = []
+        auth = self.request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            presented_tokens.append(auth[7:])
+        session_token = self.get_cookie("arie_session", None)
+        if session_token:
+            presented_tokens.append(session_token)
+
+        user = None
+        revoked_count = 0
+        seen_tokens = set()
+        for token in presented_tokens:
+            if not token or token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+            decoded = decode_token(token)
+            if not decoded:
+                continue
+            if user is None:
+                user = decoded
+            jti = decoded.get("jti")
+            exp = decoded.get("exp")
+            if jti and exp:
+                token_revocation_list.revoke(jti, exp)
+                revoked_count += 1
+        if user:
+            self.log_audit(
+                user,
+                "Logout",
+                "System",
+                f"User {user.get('name', '')} logged out; revoked {revoked_count} session token(s)",
+            )
+        self.clear_session_cookie()
+        self.success({"status": "logged_out"})
 
 
 # ══════════════════════════════════════════════════════════
@@ -1534,44 +2949,222 @@ class ApplicationsHandler(BaseHandler):
         if not user:
             return
 
+        from fixture_filter import (
+            fixture_app_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
         db = get_db()
         status = self.get_argument("status", None)
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
+        enhanced_review = (self.get_argument("enhanced_review", None) or "").strip().lower()
+        limit = _bounded_int(self.get_argument("limit", 5000), 5000, min_value=1, max_value=5000)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
 
-        query = "SELECT * FROM applications WHERE 1=1"
+        query = """
+            SELECT a.*, u.full_name AS assigned_name
+            FROM applications a
+            LEFT JOIN users u ON a.assigned_to = u.id
+            WHERE 1=1
+        """
         params = []
+
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
 
         # Clients can only see their own
         if user["type"] == "client":
-            query += " AND client_id = ?"
+            query += " AND a.client_id = ?"
             params.append(user["sub"])
+        if not show_fx:
+            fx_excl, fx_params = fixture_app_exclude_clause()
+            query += f" AND {fx_excl}"
+            params.extend(fx_params)
 
         if status:
-            query += " AND status = ?"
+            query += " AND a.status = ?"
             params.append(status)
         if risk:
-            query += " AND risk_level = ?"
+            query += " AND a.risk_level = ?"
             params.append(risk)
         if assigned:
-            query += " AND assigned_to = ?"
+            query += " AND a.assigned_to = ?"
             params.append(assigned)
+        if enhanced_review and user["type"] != "client":
+            risk_expr = "UPPER(COALESCE(a.final_risk_level, a.risk_level, ''))"
+            status_expr = "LOWER(COALESCE(a.status, ''))"
+            lane_expr = "LOWER(COALESCE(a.onboarding_lane, ''))"
+            aer_active_expr = "aer.active = 1"
+            aer_required_expr = "(aer.mandatory = 1 OR aer.blocking_approval = 1)"
+            requires_enhanced_expr = (
+                f"({risk_expr} IN ('HIGH', 'VERY_HIGH') "
+                f"OR {status_expr} IN ('edd_required', 'edd_approved') "
+                f"OR {lane_expr} = 'edd')"
+            )
+            active_exists_expr = (
+                "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                f"WHERE aer.application_id = a.id AND {aer_active_expr})"
+            )
+            missing_generated_expr = (
+                f"({requires_enhanced_expr} AND NOT {active_exists_expr})"
+            )
+            unresolved_expr = (
+                "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                f"WHERE aer.application_id = a.id AND {aer_active_expr} "
+                f"AND {aer_required_expr} "
+                "AND aer.status IN ('generated','requested','uploaded','under_review','rejected'))"
+            )
+            invalid_waiver_expr = (
+                "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                f"WHERE aer.application_id = a.id AND {aer_active_expr} "
+                f"AND {aer_required_expr} "
+                "AND aer.status = 'waived' "
+                "AND (aer.waiver_reason IS NULL OR TRIM(aer.waiver_reason) = '' "
+                "OR aer.waived_by IS NULL OR TRIM(aer.waived_by) = '' "
+                "OR aer.waived_at IS NULL))"
+            )
+            approval_blocked_expr = f"({missing_generated_expr} OR {unresolved_expr} OR {invalid_waiver_expr})"
+            if enhanced_review == "active":
+                query += f" AND ({active_exists_expr} OR {requires_enhanced_expr})"
+            elif enhanced_review == "approval_blocked":
+                query += f" AND {approval_blocked_expr}"
+            elif enhanced_review == "pending_client":
+                query += (
+                    " AND EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                    f"WHERE aer.application_id = a.id AND {aer_active_expr} "
+                    "AND aer.status = 'requested' AND aer.audience IN ('client','both'))"
+                )
+            elif enhanced_review == "awaiting_review":
+                query += (
+                    " AND EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                    f"WHERE aer.application_id = a.id AND {aer_active_expr} "
+                    "AND aer.status = 'uploaded')"
+                )
+            elif enhanced_review == "resolved":
+                query += f" AND {active_exists_expr} AND NOT {approval_blocked_expr}"
 
-        query += " ORDER BY created_at DESC LIMIT 200"
-        rows = db.execute(query, params).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS c FROM ({query}) filtered", params).fetchone()["c"]
+
+        query += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
+        rows = db.execute(query, params + [limit, offset]).fetchall()
         db.close()
 
         apps = [dict(r) for r in rows]
-        # Attach directors and UBOs for each
+
+        # EX-13: Batch-fetch related records to eliminate N+1 query pattern.
+        # Instead of 4N+1 queries, we use 5 total queries regardless of app count.
         db = get_db()
+        app_ids = [app["id"] for app in apps]
+
+        # Batch fetch parties (3 queries: directors, ubos, intermediaries)
+        parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
+
+        # Batch fetch documents (1 query)
+        docs_by_app = {}
+        if app_ids:
+            doc_placeholders = ",".join("?" for _ in app_ids)
+            doc_rows = db.execute(
+                "SELECT id, doc_type, doc_name, file_size, verification_status, "
+                "verification_results, verified_at, person_id, review_status, "
+                "review_comment, reviewed_by, reviewed_at, application_id, "
+                "slot_key, is_current, version, superseded_at, superseded_by_document_id "
+                f"FROM documents WHERE application_id IN ({doc_placeholders}) "
+                f"AND {ACTIVE_DOCUMENT_SQL}",
+                app_ids,
+            ).fetchall()
+            for d in doc_rows:
+                doc = dict(d)
+                doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+                decorate_document_verification_state(doc)
+                docs_by_app.setdefault(d["application_id"], []).append(doc)
+
+        rmi_by_app = _load_rmi_requests_for_apps(db, app_ids) if app_ids else {}
+        enhanced_summaries = {}
+        periodic_reviews_by_app = {}
+        if user["type"] != "client" and app_ids:
+            enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
+            if app_ids:
+                for projection in _list_periodic_review_projections(db, application_ids=app_ids):
+                    app_id = projection.get("application_id")
+                    periodic_reviews_by_app.setdefault(app_id, []).append(projection)
+        screening_reviews_by_app = {}
+        if app_ids:
+            review_placeholders = ",".join("?" for _ in app_ids)
+            review_rows = db.execute(
+                f"SELECT * FROM screening_reviews WHERE application_id IN ({review_placeholders}) "
+                "ORDER BY application_id, updated_at DESC, created_at DESC, id DESC",
+                app_ids,
+            ).fetchall()
+            app_ref_by_id = {app["id"]: app.get("ref") for app in apps}
+            review_dicts = [dict(row) for row in review_rows]
+            audit_lookup = _load_screening_review_audit_lookup(db, review_dicts, app_ref_by_id)
+            for review_row in review_dicts:
+                review = _annotate_screening_review_for_truth(
+                    db,
+                    app_ref_by_id.get(review_row["application_id"]),
+                    review_row,
+                    audit_rows_by_target=audit_lookup,
+                )
+                screening_reviews_by_app.setdefault(review["application_id"], []).append(review)
+
+        # Stitch results back into each application
         for app in apps:
-            app["directors"] = [dict(d) for d in db.execute(
-                "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
-            app["ubos"] = [dict(u) for u in db.execute(
-                "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
+            app["status_label"] = get_status_label(app.get("status"))
+            app["risk_level_label"] = get_risk_label(app.get("risk_level"))
+            app["final_risk_level_label"] = get_risk_label(app.get("final_risk_level") or app.get("risk_level"))
+            parties = parties_by_app.get(app["id"], ([], [], []))
+            app["directors"] = parties[0]
+            app["ubos"] = parties[1]
+            app["intermediaries"] = parties[2]
+            app_docs = docs_by_app.get(app["id"], [])
+            # Remove application_id from document dicts (not part of original response)
+            for doc in app_docs:
+                doc.pop("application_id", None)
+            app["documents"] = app_docs
+            app["rmi_requests"] = rmi_by_app.get(app["id"], [])
+            app["periodic_review"] = _latest_periodic_review_projection(db, app["id"])
+            app["periodic_reviews"] = periodic_reviews_by_app.get(app["id"], [])
+            if user["type"] != "client":
+                app["enhanced_review_summary"] = enhanced_summaries.get(app["id"])
+                app["screening_reviews"] = [
+                    dict(review, **_screening_review_payload_fields(review))
+                    for review in screening_reviews_by_app.get(app["id"], [])
+                ]
+            prescreening_for_truth = safe_json_loads(app.get("prescreening_data"))
+            screening_report_for_truth = prescreening_for_truth.get("screening_report") if isinstance(prescreening_for_truth, dict) else None
+            app["screening_truth_summary"] = build_screening_truth_summary(
+                screening_report_for_truth if isinstance(screening_report_for_truth, dict) else {},
+                prescreening_for_truth if isinstance(prescreening_for_truth, dict) else {},
+                screening_reviews_by_app.get(app["id"], []),
+            )
+            # Bug #4: Parse risk_dimensions from JSON string for API consumers
+            if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
+                app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
+            _decorate_application_risk_integrity(app)
         db.close()
 
-        self.success({"applications": apps, "total": len(apps)})
+        # EX-13: ETag support — compute hash of response for conditional requests
+        payload = {
+            "applications": apps,
+            "total": total,
+            "returned": len(apps),
+            "limit": limit,
+            "offset": offset,
+        }
+        payload_json = json.dumps(payload, sort_keys=True, default=str)
+        etag = '"' + hashlib.md5(payload_json.encode("utf-8")).hexdigest() + '"'
+
+        # Check If-None-Match header for conditional request
+        client_etag = self.request.headers.get("If-None-Match", "")
+        if client_etag == etag:
+            self.set_status(304)
+            self.set_header("ETag", etag)
+            self.finish()
+            return
+
+        self.set_header("ETag", etag)
+        self.success(payload)
 
     def post(self):
         user = self.require_auth()
@@ -1581,40 +3174,609 @@ class ApplicationsHandler(BaseHandler):
         data = self.get_json()
         app_id = uuid.uuid4().hex[:16]
         ref = generate_ref()
+        prescreening_data = normalize_prescreening_data(data)
+        company_name = resolve_application_company_name(data, prescreening_data)
+        if not company_name:
+            return self.error("Registered entity name is required.", 400)
+
+        # W3: BRN basic validation — if provided, allow letters, numbers, internal spaces, dashes, dots, and slashes
+        brn = first_non_empty(data.get("brn"), prescreening_data.get("brn")) or ""
+        brn = re.sub(r'\s+', ' ', brn.strip())  # collapse multiple spaces
+        if brn and not re.match(r'^[A-Za-z0-9\-/.][A-Za-z0-9\-/. ]{0,28}[A-Za-z0-9\-/.]$', brn):
+            return self.error("Invalid Business Registration Number format. Please use 2-30 characters consisting of letters, numbers, spaces, dashes, dots, or slashes.", 400)
 
         db = get_db()
+
+        # W3/GATE-03: Prevent duplicate active applications for same client + company
+        # Normalize company_name for comparison to prevent bypass via case/whitespace variants
+        client_id = user["sub"] if user["type"] == "client" else data.get("client_id")
+        # Defence-in-depth: if caller supplies an existing application_id, exclude
+        # it from the duplicate check so a self-update is never blocked.
+        exclude_app_id = data.get("application_id") or None
+        if client_id and company_name:
+            normalized_name = re.sub(r'\s+', ' ', company_name.strip()).lower()
+            existing = db.execute(
+                "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status NOT IN ('rejected','withdrawn')",
+                (client_id,)
+            ).fetchall()
+            dup = next((e for e in existing
+                        if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name
+                        and e['id'] != exclude_app_id), None)
+            existing = dup
+            if existing:
+                db.close()
+                return self.error(
+                    f"An active application for '{company_name}' already exists (ref: {existing['ref']}). "
+                    "Please resume the existing application instead of creating a new one.",
+                    409
+                )
         db.execute("""
             INSERT INTO applications (id, ref, client_id, company_name, brn, country, sector,
                 entity_type, ownership_structure, prescreening_data, status)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (
             app_id, ref,
-            user["sub"] if user["type"] == "client" else data.get("client_id"),
-            data.get("company_name", ""),
-            data.get("brn", ""),
-            data.get("country", ""),
-            data.get("sector", ""),
-            data.get("entity_type", ""),
-            data.get("ownership_structure", ""),
-            json.dumps(data.get("prescreening_data", {})),
+            client_id,
+            company_name,
+            brn,
+            first_non_empty(data.get("country"), prescreening_data.get("country_of_incorporation")),
+            first_non_empty(data.get("sector"), prescreening_data.get("sector")),
+            first_non_empty(data.get("entity_type"), prescreening_data.get("entity_type")),
+            first_non_empty(data.get("ownership_structure"), prescreening_data.get("ownership_structure")),
+            json.dumps(prescreening_data),
             "draft"
         ))
 
-        # Add directors
-        for d in data.get("directors", []):
-            db.execute("INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?,?,?,?)",
-                        (app_id, d.get("full_name",""), d.get("nationality",""), d.get("is_pep","No")))
-
-        # Add UBOs
-        for u in data.get("ubos", []):
-            db.execute("INSERT INTO ubos (application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
-                        (app_id, u.get("full_name",""), u.get("nationality",""), u.get("ownership_pct",0), u.get("is_pep","No")))
+        try:
+            store_application_parties(
+                db,
+                app_id,
+                directors=data.get("directors"),
+                ubos=data.get("ubos"),
+                intermediaries=data.get("intermediaries")
+            )
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
 
         db.commit()
         db.close()
 
-        self.log_audit(user, "Create", ref, f"New application created: {data.get('company_name','')}")
-        self.success({"id": app_id, "ref": ref, "status": "draft"}, 201)
+        self.log_audit(user, "Create", ref, f"New application created: {company_name}")
+        pep_subjects = _pep_declaration_audit_subjects(data.get("directors"), data.get("ubos"))
+        if pep_subjects:
+            self.log_audit(
+                user,
+                "PEP Declaration Recorded",
+                ref,
+                json.dumps({
+                    "source": "client_portal",
+                    "declared_pep_count": len(pep_subjects),
+                    "declared_pep_subjects": pep_subjects,
+                }, sort_keys=True),
+            )
+        self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
+
+
+def cleanup_application_delete_artifacts(db, application_id, application_ref):
+    """Delete uploaded document artifacts and non-cascading child rows before app hard delete."""
+    documents = db.execute(
+        "SELECT id, file_path, s3_key FROM documents WHERE application_id=?",
+        (application_id,)
+    ).fetchall()
+
+    for doc in documents:
+        file_path = doc["file_path"]
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Failed to remove draft document file %s: %s", file_path, exc)
+
+        if doc.get("s3_key") and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                deleted, message = s3.delete_document(doc["s3_key"])
+                if not deleted:
+                    logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], message)
+            except Exception as exc:
+                logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], exc)
+
+    # RMI rows are explicitly removed before generic child cleanup so the later
+    # client_notifications delete cannot leave stale rmi_request_id mirrors.
+    db.execute(
+        "DELETE FROM rmi_request_items WHERE request_id IN (SELECT id FROM rmi_requests WHERE application_id=?)",
+        (application_id,),
+    )
+    db.execute("DELETE FROM rmi_requests WHERE application_id=?", (application_id,))
+
+    for table in (
+        "client_sessions",
+        "documents",
+        "client_notifications",
+        "monitoring_alerts",
+        "periodic_reviews",
+        "sar_reports",
+        "compliance_memos",
+        "edd_cases",
+        "directors",
+        "ubos",
+        "intermediaries",
+        "transactions",
+        "agent_executions",
+        "sumsub_applicant_mappings",
+        "supervisor_pipeline_results",
+        "supervisor_audit_log",
+    ):
+        db.execute(f"DELETE FROM {table} WHERE application_id=?", (application_id,))
+    db.execute("DELETE FROM decision_records WHERE application_ref=?", (application_ref,))
+
+    # Sprint 3 Obj 2a (PR #116 fixup H2/H3): Delete normalized screening
+    # records via the shared helper, which narrowly handles the
+    # missing-table case (migration 007 not applied) without swallowing
+    # other DB errors.  This is the single production cleanup path.
+    from screening_storage import delete_normalized_reports_for_application
+    delete_normalized_reports_for_application(db, application_id)
+
+
+def _memo_final_status(memo_row):
+    """Return a canonical final memo status for UI and API consumers."""
+    if not memo_row:
+        return "not_generated"
+    if _memo_stale_bool(memo_row.get("is_stale")):
+        return "stale"
+    review_status = (memo_row.get("review_status") or "draft").lower()
+    validation_status = (memo_row.get("validation_status") or "pending").lower()
+    if memo_row.get("blocked"):
+        return "blocked"
+    if review_status == "approved":
+        if validation_status == "pass_with_fixes":
+            return "approved_with_findings"
+        return "approved"
+    if review_status == "rejected":
+        return "rejected"
+    if validation_status == "fail":
+        return "validation_failed"
+    if validation_status == "pass_with_fixes":
+        return "requires_fixes"
+    if validation_status == "pass":
+        return "validated"
+    if review_status == "draft":
+        return "draft"
+    return "draft"
+
+
+OFFICER_CORRECTION_TARGETS = frozenset({
+    "application",
+    "director",
+    "ubo",
+    "intermediary",
+    "risk_field",
+    "pep_status",
+})
+OFFICER_CORRECTION_MATERIALITIES = frozenset({"tier1", "tier2", "tier3"})
+OFFICER_CORRECTION_APPLICATION_FIELDS = frozenset({
+    "company_name",
+    "brn",
+    "country",
+    "sector",
+    "entity_type",
+    "ownership_structure",
+})
+OFFICER_CORRECTION_RISK_FIELDS = frozenset({
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "monthly_volume",
+    "business_description",
+    "trading_name",
+    "expected_volumes",
+})
+OFFICER_CORRECTION_DIRECTOR_FIELDS = frozenset({
+    "first_name",
+    "last_name",
+    "full_name",
+    "nationality",
+    "date_of_birth",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+})
+OFFICER_CORRECTION_UBO_FIELDS = frozenset(
+    set(OFFICER_CORRECTION_DIRECTOR_FIELDS) | {"ownership_pct"}
+)
+OFFICER_CORRECTION_INTERMEDIARY_FIELDS = frozenset({
+    "entity_name",
+    "jurisdiction",
+    "ownership_pct",
+})
+OFFICER_CORRECTION_TIER1_FIELDS = frozenset({
+    "country",
+    "jurisdiction",
+    "sector",
+    "ownership_structure",
+    "ownership_pct",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "expected_volumes",
+    "monthly_volume",
+})
+OFFICER_CORRECTION_TIER2_FIELDS = frozenset({
+    "company_name",
+    "entity_type",
+    "business_description",
+    "trading_name",
+    "full_name",
+    "first_name",
+    "last_name",
+    "nationality",
+    "date_of_birth",
+    "entity_name",
+})
+OFFICER_CORRECTION_RISK_RELEVANT_FIELDS = frozenset({
+    "country",
+    "jurisdiction",
+    "sector",
+    "ownership_structure",
+    "ownership_pct",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "expected_volumes",
+    "monthly_volume",
+    "entity_type",
+})
+OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
+    set(OFFICER_CORRECTION_TIER1_FIELDS)
+    | {
+        "company_name",
+        "entity_type",
+        "ownership_structure",
+        "business_description",
+        "trading_name",
+        "full_name",
+        "entity_name",
+    }
+)
+OFFICER_CORRECTION_HIGH_RISK_COUNTRY_FIELDS = frozenset({"country", "jurisdiction"})
+OFFICER_CORRECTION_HIGH_RISK_SECTOR_FIELDS = frozenset({"sector"})
+OFFICER_CORRECTION_ALWAYS_TIER1_FIELDS = frozenset({
+    "ownership_structure",
+    "ownership_pct",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "expected_volumes",
+    "monthly_volume",
+    "sanctions_status",
+    "sanctions_match",
+    "adverse_media_status",
+    "adverse_media_match",
+})
+OFFICER_CORRECTION_MATERIALITY_ORDER = {
+    "tier3": 1,
+    "tier2": 2,
+    "tier1": 3,
+}
+
+
+def _officer_correction_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_officer_correction_json(value, fallback):
+    parsed = safe_json_loads(value)
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def _correction_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y")
+
+
+PEP_STATUS_VALUES = frozenset({
+    "declared_no",
+    "declared_yes",
+    "not_verified",
+    "confirmed_pep",
+    "false_positive",
+    "not_pep",
+    "pending_review",
+})
+PEP_VERIFICATION_SOURCES = frozenset({
+    "client_declaration",
+    "officer_correction",
+    "screening_review",
+    "not_verified",
+})
+
+
+def _optional_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return None
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text in ("1", "true", "yes", "y"):
+        return True
+    if text in ("0", "false", "no", "n"):
+        return False
+    return None
+
+
+def _normalize_pep_status(status):
+    normalized = str(status or "").strip().lower()
+    return normalized if normalized in PEP_STATUS_VALUES else None
+
+
+def _normalize_pep_verification_source(source):
+    normalized = str(source or "").strip().lower()
+    return normalized if normalized in PEP_VERIFICATION_SOURCES else None
+
+
+def _pep_status_to_verified_value(status):
+    normalized = _normalize_pep_status(status)
+    if normalized == "confirmed_pep":
+        return True
+    if normalized in ("false_positive", "not_pep"):
+        return False
+    return None
+
+
+def _derive_party_pep_visibility(item, pep_decl):
+    record = dict(item or {})
+    pep_data = dict(pep_decl or {})
+    explicit_declared = pep_data.get("client_declared_pep", pep_data.get("declared_pep"))
+    explicit_verified = pep_data.get("officer_verified_pep", pep_data.get("verified_pep"))
+    client_declared_pep = _optional_bool(explicit_declared)
+    officer_verified_pep = _optional_bool(explicit_verified)
+
+    legacy_is_pep = _optional_bool(record.get("is_pep"))
+    has_verification_record = (
+        "verified_pep" in pep_data
+        or "officer_verified_pep" in pep_data
+        or bool(pep_data.get("corrected_at"))
+        or bool(pep_data.get("evidence_source"))
+        or bool(pep_data.get("correction_reason"))
+        or bool(pep_data.get("correction_note"))
+        or bool(pep_data.get("corrected_by"))
+        or _normalize_pep_verification_source(
+            pep_data.get("pep_verification_source") or pep_data.get("correction_source")
+        ) in ("officer_correction", "screening_review")
+    )
+    if client_declared_pep is None and not has_verification_record and legacy_is_pep is not None:
+        client_declared_pep = legacy_is_pep
+
+    pep_status = _normalize_pep_status(pep_data.get("pep_status"))
+    if pep_status is None:
+        if officer_verified_pep is True:
+            pep_status = "confirmed_pep"
+        elif officer_verified_pep is False:
+            pep_status = "not_pep"
+        elif client_declared_pep is True:
+            pep_status = "declared_yes"
+        elif client_declared_pep is False:
+            pep_status = "declared_no"
+        else:
+            pep_status = "not_verified"
+
+    pep_verification_source = _normalize_pep_verification_source(
+        pep_data.get("pep_verification_source") or pep_data.get("correction_source")
+    )
+    if pep_verification_source is None:
+        if officer_verified_pep is not None:
+            pep_verification_source = "officer_correction"
+        elif client_declared_pep is not None:
+            pep_verification_source = "client_declaration"
+        else:
+            pep_verification_source = "not_verified"
+
+    if pep_status == "pending_review" and officer_verified_pep is None:
+        officer_verified_pep_display = "Pending review"
+    elif officer_verified_pep is True:
+        officer_verified_pep_display = "Yes"
+    elif officer_verified_pep is False:
+        officer_verified_pep_display = "No"
+    else:
+        officer_verified_pep_display = "Not verified yet"
+
+    status_display = {
+        "declared_no": "Client declared not PEP",
+        "declared_yes": "Client declared PEP",
+        "not_verified": "Not verified yet",
+        "confirmed_pep": "Confirmed PEP",
+        "false_positive": "False positive",
+        "not_pep": "Officer verified not PEP",
+        "pending_review": "Pending review",
+    }[pep_status]
+
+    return {
+        "client_declared_pep": client_declared_pep,
+        "officer_verified_pep": officer_verified_pep,
+        "pep_status": pep_status,
+        "pep_status_display": status_display,
+        "pep_verification_source": pep_verification_source,
+        "client_declared_pep_display": (
+            "Yes" if client_declared_pep is True else
+            "No" if client_declared_pep is False else
+            "Not captured"
+        ),
+        "officer_verified_pep_display": officer_verified_pep_display,
+    }
+
+
+def _normalize_officer_correction_materiality(target_type, field_changes, requested=None):
+    requested_materiality = str(requested or "").strip().lower()
+    system_materiality = _system_derived_officer_correction_materiality(
+        target_type,
+        field_changes,
+    )
+    if requested_materiality not in OFFICER_CORRECTION_MATERIALITIES:
+        return system_materiality
+    return _max_officer_correction_materiality(
+        system_materiality,
+        requested_materiality,
+    )
+
+
+def _max_officer_correction_materiality(*tiers):
+    valid = [
+        str(tier or "").strip().lower()
+        for tier in tiers
+        if str(tier or "").strip().lower() in OFFICER_CORRECTION_MATERIALITIES
+    ]
+    if not valid:
+        return "tier3"
+    return max(
+        valid,
+        key=lambda tier: OFFICER_CORRECTION_MATERIALITY_ORDER.get(tier, 0),
+    )
+
+
+def _system_derived_officer_correction_materiality(target_type, field_changes):
+    field_names = {str(name or "").strip() for name in (field_changes or {}).keys() if str(name or "").strip()}
+    if target_type == "pep_status":
+        return "tier1"
+    if field_names & OFFICER_CORRECTION_ALWAYS_TIER1_FIELDS:
+        return "tier1"
+    if _officer_correction_values_force_tier1(field_changes):
+        return "tier1"
+    if field_names & (OFFICER_CORRECTION_TIER1_FIELDS - OFFICER_CORRECTION_ALWAYS_TIER1_FIELDS):
+        return "tier1"
+    if field_names & OFFICER_CORRECTION_TIER2_FIELDS:
+        return "tier2"
+    return "tier3" if field_names else "tier3"
+
+
+def _officer_correction_values_force_tier1(field_changes):
+    if not isinstance(field_changes, dict):
+        return False
+    for field, value in field_changes.items():
+        field_name = str(field or "").strip()
+        if field_name in OFFICER_CORRECTION_HIGH_RISK_COUNTRY_FIELDS and _officer_correction_is_high_risk_country(value):
+            return True
+        if field_name in OFFICER_CORRECTION_HIGH_RISK_SECTOR_FIELDS and _officer_correction_is_high_risk_sector(value):
+            return True
+        if field_name in ("sanctions_status", "sanctions_match") and _correction_bool(value):
+            return True
+        if field_name in ("adverse_media_status", "adverse_media_match") and _correction_bool(value):
+            return True
+    return False
+
+
+def _officer_correction_is_high_risk_country(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    raw_lower = raw.lower()
+    if raw_lower in {
+        "iran",
+        "north korea",
+        "syria",
+        "crimea",
+        "donetsk",
+        "luhansk",
+        "sudan",
+    }:
+        return True
+    try:
+        from rule_engine import classify_country
+
+        return int(classify_country(raw) or 0) >= 3
+    except Exception:
+        return False
+
+
+def _officer_correction_is_high_risk_sector(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    raw_lower = raw.lower()
+    if any(token in raw_lower for token in ("crypto", "vasp", "virtual asset", "digital asset", "exchange")):
+        return True
+    try:
+        from rule_engine import score_sector
+
+        return int(score_sector(raw) or 0) >= 3
+    except Exception:
+        return False
+
+
+def _officer_correction_target_config(target_type, payload):
+    subject_type = str((payload or {}).get("subject_type") or "").strip().lower()
+    if target_type == "application":
+        return {"table": "applications", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_APPLICATION_FIELDS}
+    if target_type == "risk_field":
+        return {"table": "applications", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_RISK_FIELDS}
+    if target_type == "director":
+        return {"table": "directors", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_DIRECTOR_FIELDS}
+    if target_type == "ubo":
+        return {"table": "ubos", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_UBO_FIELDS}
+    if target_type == "intermediary":
+        return {"table": "intermediaries", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_INTERMEDIARY_FIELDS}
+    if target_type == "pep_status":
+        if subject_type not in ("director", "ubo"):
+            raise ValueError("pep_status corrections require subject_type 'director' or 'ubo'")
+        return _officer_correction_target_config(subject_type, payload)
+    raise ValueError(f"Unsupported correction target_type '{target_type}'")
+
+
+def _decorate_party_pep_visibility(party):
+    item = dict(party or {})
+    pep_decl = parse_json_field(item.get("pep_declaration"), {})
+    item["pep_declaration"] = pep_decl
+    pep_visibility = _derive_party_pep_visibility(item, pep_decl)
+    item.update(pep_visibility)
+    item["declared_pep"] = pep_visibility["client_declared_pep"]
+    item["verified_pep"] = pep_visibility["officer_verified_pep"]
+    return item
+
+
+def _list_application_corrections(db, application_id, limit=100):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM application_corrections
+        WHERE application_id = ?
+        ORDER BY corrected_at DESC, id DESC
+        LIMIT ?
+        """,
+        (application_id, limit),
+    ).fetchall()
+    results = []
+    for row in rows:
+        item = dict(row)
+        item["before_state"] = _parse_officer_correction_json(item.get("before_state"), {})
+        item["after_state"] = _parse_officer_correction_json(item.get("after_state"), {})
+        item["downstream_state"] = _parse_officer_correction_json(item.get("downstream_state"), {})
+        results.append(item)
+    return results
+
+
+def _correction_log_audit(handler, user, action, target, detail, db=None, **kwargs):
+    kwargs.setdefault("commit", False)
+    handler.log_audit(user, action, target, detail, db=db, **kwargs)
 
 
 class ApplicationDetailHandler(BaseHandler):
@@ -1635,12 +3797,119 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         result = dict(app)
-        result["directors"] = [dict(d) for d in db.execute(
-            "SELECT * FROM directors WHERE application_id = ?", (result["id"],)).fetchall()]
-        result["ubos"] = [dict(u) for u in db.execute(
-            "SELECT * FROM ubos WHERE application_id = ?", (result["id"],)).fetchall()]
+        result["status_label"] = get_status_label(result.get("status"))
+        result["risk_level_label"] = get_risk_label(result.get("risk_level"))
+        result["final_risk_level_label"] = get_risk_label(result.get("final_risk_level") or result.get("risk_level"))
+        result["assigned_name"] = resolve_user_display_name(db, result.get("assigned_to"))
+        result["first_approver_name"] = resolve_user_display_name(db, result.get("first_approver_id"))
+        result["decision_by_name"] = resolve_user_display_name(db, result.get("decision_by"))
+        result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
+        result["directors"] = [_decorate_party_pep_visibility(party) for party in result["directors"]]
+        result["ubos"] = [_decorate_party_pep_visibility(party) for party in result["ubos"]]
+        include_history = self.get_argument("include_history", "false").lower() == "true"
         result["documents"] = [dict(d) for d in db.execute(
-            "SELECT * FROM documents WHERE application_id = ?", (result["id"],)).fetchall()]
+            f"SELECT * FROM documents WHERE application_id = ? AND {ACTIVE_DOCUMENT_SQL} "
+            "ORDER BY uploaded_at DESC, id DESC",
+            (result["id"],)
+        ).fetchall()]
+        for doc in result["documents"]:
+            doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+            doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            decorate_document_verification_state(doc)
+        if include_history:
+            result["document_history"] = [dict(d) for d in db.execute(
+                "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
+                (result["id"],)
+            ).fetchall()]
+            for doc in result["document_history"]:
+                doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+                doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+                decorate_document_verification_state(doc)
+        result["rmi_requests"] = _load_rmi_requests(db, result["id"])
+        result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
+        result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
+        result["periodic_reviews"] = _list_periodic_review_projections(db, application_id=result["id"])
+        if user["type"] != "client":
+            result["enhanced_review_summary"] = build_enhanced_requirement_operational_summary(
+                db,
+                result["id"],
+                app_row=result,
+            )
+        stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
+        saved_session_prescreening = load_saved_session_prescreening(db, result)
+        result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
+        screening_report = result["prescreening_data"].get("screening_report") if isinstance(result["prescreening_data"], dict) else None
+        screening_reviews = _load_screening_reviews_for_truth(db, result["id"], result.get("ref"))
+        if user["type"] != "client":
+            result["screening_reviews"] = [
+                dict(review, **_screening_review_payload_fields(review))
+                for review in screening_reviews
+            ]
+        result["screening_truth_summary"] = build_screening_truth_summary(
+            screening_report if isinstance(screening_report, dict) else {},
+            result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {},
+            screening_reviews,
+        )
+        # Bug #4: Parse risk_dimensions from JSON string for API consumers
+        if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
+            result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
+        _decorate_application_risk_integrity(result)
+        latest_memo = db.execute("""
+            SELECT id, version, memo_data, review_status, validation_status, blocked, block_reason,
+                   quality_score, memo_version, approved_by, approved_at, created_at,
+                   is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
+            FROM compliance_memos
+            WHERE application_id = ?
+            ORDER BY version DESC, id DESC
+            LIMIT 1
+        """, (result["id"],)).fetchone()
+        if latest_memo:
+            latest_memo_dict = dict(latest_memo)
+            stale_view = _memo_staleness_view(result, latest_memo_dict)
+            latest_memo_final_status = "stale" if stale_view["is_stale"] else _memo_final_status(latest_memo_dict)
+            latest_memo_data = parse_json_field(latest_memo_dict.get("memo_data"), {})
+            latest_memo_data.setdefault("metadata", {})
+            latest_memo_data["review_status"] = latest_memo_dict.get("review_status")
+            latest_memo_data["validation_status"] = latest_memo_dict.get("validation_status")
+            latest_memo_data["final_status"] = latest_memo_final_status
+            latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
+            latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
+            latest_memo_data["is_stale"] = stale_view["is_stale"]
+            latest_memo_data["stale_reason"] = stale_view["reason"]
+            latest_memo_data["stale_trigger"] = stale_view["trigger"]
+            latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
+            latest_memo_data["memo_generated"] = latest_memo_dict.get("created_at")
+            latest_memo_data["application_ref"] = result.get("ref")
+            latest_memo_data["metadata"]["blocked"] = bool(latest_memo_dict.get("blocked"))
+            latest_memo_data["metadata"]["block_reason"] = latest_memo_dict.get("block_reason")
+            latest_memo_data["metadata"]["quality_score"] = latest_memo_dict.get("quality_score")
+            latest_memo_data["metadata"]["is_stale"] = stale_view["is_stale"]
+            latest_memo_data["metadata"]["stale_reason"] = stale_view["reason"]
+            latest_memo_data["metadata"]["stale_trigger"] = stale_view["trigger"]
+
+            latest_memo_dict.pop("memo_data", None)
+            latest_memo_dict["final_status"] = latest_memo_final_status
+            latest_memo_dict["is_stale"] = stale_view["is_stale"]
+            latest_memo_dict["stale_reason"] = stale_view["reason"]
+            latest_memo_dict["stale_trigger"] = stale_view["trigger"]
+            latest_memo_dict["stale_reasons"] = stale_view["reasons"]
+            result["latest_memo"] = latest_memo_dict
+            result["latest_memo_data"] = latest_memo_data
+            result["memo_is_stale"] = stale_view["is_stale"]
+            result["memo_stale_reason"] = stale_view["reason"]
+            result["memo_stale_trigger"] = stale_view["trigger"]
+            result["memo_stale_reasons"] = stale_view["reasons"]
+        else:
+            result["latest_memo"] = None
+            result["latest_memo_data"] = None
+            result["memo_is_stale"] = False
+            result["memo_stale_reason"] = ""
+            result["memo_stale_trigger"] = ""
+            result["memo_stale_reasons"] = []
+        result["memo_requires_regeneration"] = bool(result.get("memo_is_stale"))
+        result["supervisor_requires_rerun"] = bool(result.get("memo_is_stale") and result.get("latest_memo"))
+        if user["type"] != "client":
+            result["officer_corrections"] = _list_application_corrections(db, result["id"])
         db.close()
 
         self.success(result)
@@ -1664,41 +3933,136 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         real_id = app["id"]
+        existing_prescreening = safe_json_loads(app["prescreening_data"])
+        normalized_prescreening = normalize_prescreening_data(data, existing_prescreening)
+        resolved_company_name = resolve_application_company_name(data, normalized_prescreening, app["company_name"])
 
-        db.execute("""
-            UPDATE applications SET
-                company_name=?, brn=?, country=?, sector=?, entity_type=?,
-                ownership_structure=?, prescreening_data=?, updated_at=datetime('now')
-            WHERE id=?
-        """, (
-            data.get("company_name", app["company_name"]),
-            data.get("brn", app["brn"]),
-            data.get("country", app["country"]),
-            data.get("sector", app["sector"]),
-            data.get("entity_type", app["entity_type"]),
-            data.get("ownership_structure", app["ownership_structure"]),
-            json.dumps(data.get("prescreening_data", json.loads(app["prescreening_data"]))),
-            real_id
-        ))
+        # ── C-04/C-07 FIX: Block modification of screening data and immutable fields after submission ──
+        non_draft_statuses = ("submitted", "pricing_review", "under_review", "edd_required", "approved", "rejected", "kyc_documents")
+        if app["status"] in non_draft_statuses:
+            # Block prescreening_data modification entirely after submission
+            if "prescreening_data" in data:
+                db.close()
+                return self.error(
+                    "Screening data is immutable after submission. Cannot modify prescreening_data.",
+                    403
+                )
+            # Block screening_mode modification
+            if "screening_mode" in data:
+                db.close()
+                return self.error(
+                    "Screening mode is immutable after submission.",
+                    403
+                )
 
-        # Rebuild directors and UBOs if provided
-        if "directors" in data:
-            db.execute("DELETE FROM directors WHERE application_id = ?", (real_id,))
-            for d in data["directors"]:
-                db.execute("INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?,?,?,?)",
-                            (real_id, d.get("full_name",""), d.get("nationality",""), d.get("is_pep","No")))
+        # ── C-04/C-07: Only allow prescreening_data update in draft status ──
+        if app["status"] == "draft":
+            db.execute("""
+                UPDATE applications SET
+                    company_name=?, brn=?, country=?, sector=?, entity_type=?,
+                    ownership_structure=?, prescreening_data=?,
+                    updated_at=datetime('now'), inputs_updated_at=datetime('now')
+                WHERE id=?
+            """, (
+                resolved_company_name,
+                first_non_empty(data.get("brn"), normalized_prescreening.get("brn"), app["brn"]),
+                first_non_empty(data.get("country"), normalized_prescreening.get("country_of_incorporation"), app["country"]),
+                first_non_empty(data.get("sector"), normalized_prescreening.get("sector"), app["sector"]),
+                first_non_empty(data.get("entity_type"), normalized_prescreening.get("entity_type"), app["entity_type"]),
+                first_non_empty(data.get("ownership_structure"), normalized_prescreening.get("ownership_structure"), app["ownership_structure"]),
+                json.dumps(normalized_prescreening),
+                real_id
+            ))
+        else:
+            # Post-submission: only allow metadata updates, NOT screening data
+            db.execute("""
+                UPDATE applications SET
+                    company_name=?, brn=?, country=?, sector=?, entity_type=?,
+                    ownership_structure=?,
+                    updated_at=datetime('now'), inputs_updated_at=datetime('now')
+                WHERE id=?
+            """, (
+                resolved_company_name,
+                first_non_empty(data.get("brn"), normalized_prescreening.get("brn"), app["brn"]),
+                first_non_empty(data.get("country"), normalized_prescreening.get("country_of_incorporation"), app["country"]),
+                first_non_empty(data.get("sector"), normalized_prescreening.get("sector"), app["sector"]),
+                first_non_empty(data.get("entity_type"), normalized_prescreening.get("entity_type"), app["entity_type"]),
+                first_non_empty(data.get("ownership_structure"), normalized_prescreening.get("ownership_structure"), app["ownership_structure"]),
+                real_id
+            ))
 
-        if "ubos" in data:
-            db.execute("DELETE FROM ubos WHERE application_id = ?", (real_id,))
-            for u in data["ubos"]:
-                db.execute("INSERT INTO ubos (application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
-                            (real_id, u.get("full_name",""), u.get("nationality",""), u.get("ownership_pct",0), u.get("is_pep","No")))
+        if any(key in data for key in ("directors", "ubos", "intermediaries")):
+            # ── Phase 4: Block party modifications after compliance review / approval states ──
+            immutable_party_states = ("compliance_review", "in_review", "edd_required",
+                                      "under_review", "approved", "rejected")
+            if app["status"] in immutable_party_states:
+                db.close()
+                return self.error(
+                    f"Cannot modify directors/UBOs/intermediaries after compliance review has started. "
+                    f"Current status: {app['status']}. Create a new application or contact an officer "
+                    f"to reopen the case if changes are required and reopening is allowed.",
+                    403
+                )
+            try:
+                store_application_parties(
+                    db,
+                    real_id,
+                    directors=data["directors"] if "directors" in data else None,
+                    ubos=data["ubos"] if "ubos" in data else None,
+                    intermediaries=data["intermediaries"] if "intermediaries" in data else None
+                )
+            except ValueError as exc:
+                db.close()
+                return self.error(str(exc), 400)
+
+        # ── Risk recomputation on material field edits ──
+        # If any risk-relevant field changed, recompute the canonical risk score.
+        # This prevents stale risk values after back-office edits.
+        RISK_RELEVANT_FIELDS = {
+            "entity_type", "ownership_structure", "sector", "country",
+            "directors", "ubos", "intermediaries",
+        }
+        # Also check fields inside prescreening_data that affect scoring
+        RISK_RELEVANT_PRESCREENING = {
+            "operating_countries", "countries_of_operation", "target_markets",
+            "primary_service", "service_required", "monthly_volume",
+            "expected_volume", "transaction_complexity", "payment_corridors",
+            "source_of_wealth", "source_of_funds", "introduction_method",
+            "customer_interaction", "interaction_type", "cross_border",
+        }
+        risk_changed = any(k in data for k in RISK_RELEVANT_FIELDS)
+        if not risk_changed and "prescreening_data" in data:
+            ps = data.get("prescreening_data", {})
+            if isinstance(ps, dict):
+                risk_changed = any(k in ps for k in RISK_RELEVANT_PRESCREENING)
+
+        risk_recomputed = False
+        if risk_changed and app.get("risk_score") is not None:
+            rr = recompute_risk(db, real_id, "application_edit", user=user,
+                                log_audit_fn=self.log_audit)
+            risk_recomputed = rr.get("recomputed", False)
+        if risk_changed:
+            refreshed_after_edit = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+            _mark_latest_memo_stale(
+                db,
+                real_id,
+                trigger="application_material_edit",
+                reason="Application, ownership, party, or risk input data changed after memo generation.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=snapshot_app_state(app),
+                after_state=snapshot_app_state(refreshed_after_edit),
+            )
 
         db.commit()
         db.close()
 
-        self.log_audit(user, "Update", app["ref"], f"Application updated")
-        self.success({"status": "updated"})
+        audit_detail = "Application updated"
+        if risk_recomputed:
+            audit_detail += " (risk recomputed)"
+        self.log_audit(user, "Update", app["ref"], audit_detail)
+        self.success({"status": "updated", "risk_recomputed": risk_recomputed})
 
     def patch(self, app_id):
         """Partial update — status changes, assignments, etc."""
@@ -1725,28 +4089,1290 @@ class ApplicationDetailHandler(BaseHandler):
                 db.close()
                 return self.error("Only officers can change application status", 403)
 
-        # Handle status changes
+        # C-05: Workflow integrity enforcement
         new_status = data.get("status")
         if new_status:
-            db.execute("UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?", (new_status, real_id))
+            current_status = app["status"]
+
+            # Define valid state transitions (v2.1: includes pre-approval flow)
+            valid_transitions = {
+                "draft": ["submitted", "prescreening_submitted"],
+                "prescreening_submitted": ["pricing_review", "pre_approval_review"],
+                "pre_approval_review": ["pre_approved", "rejected", "draft"],  # officer pre-approval decisions
+                "pre_approved": ["kyc_documents"],
+                "pricing_review": ["pricing_accepted"],
+                "pricing_accepted": ["kyc_documents", "pre_approval_review"],
+                "kyc_documents": ["kyc_submitted", "compliance_review"],
+                "kyc_submitted": ["compliance_review"],
+                "submitted": ["under_review", "rejected"],
+                "compliance_review": ["in_review", "edd_required", "approved", "rejected"],
+                "in_review": ["edd_required", "approved", "rejected"],
+                "under_review": ["edd_required", "approved", "rejected"],
+                "edd_required": ["under_review", "in_review", "approved", "rejected"],
+                "approved": [],  # Terminal state
+                "rejected": ["draft"],  # Can reopen to draft
+            }
+
+            allowed = valid_transitions.get(current_status, [])
+            if new_status not in allowed:
+                db.close()
+                return self.error(
+                    f"Invalid workflow transition: '{current_status}' → '{new_status}'. "
+                    f"Allowed transitions: {allowed or 'none (terminal state)'}",
+                    400
+                )
+
+            # v2.1: HIGH/VERY_HIGH risk MUST go through pre_approval_review before kyc_documents
+            risk_level = (app.get("risk_level") or "").upper()
+            if new_status == "kyc_documents" and risk_level in ("HIGH", "VERY_HIGH"):
+                if app.get("pre_approval_decision") != "PRE_APPROVE":
+                    db.close()
+                    return self.error(
+                        "HIGH/VERY_HIGH risk applications must be pre-approved before KYC. "
+                        f"Pre-approval decision: {app.get('pre_approval_decision') or 'none'}",
+                        400
+                    )
+
+            # ── H-05 FIX: High-risk cases MUST go through compliance review before approval ──
+            if new_status == "approved" and risk_level in ("HIGH", "VERY_HIGH"):
+                review_states = ("under_review", "edd_required", "compliance_review", "in_review")
+                if current_status not in review_states:
+                    db.close()
+                    return self.error(
+                        f"HIGH/VERY_HIGH risk applications must undergo compliance review "
+                        f"before approval. Current status: {current_status}",
+                        400
+                    )
+
+            # For approval: enforce that screening is complete, memo exists, and approval gate passes
+            if new_status == "approved":
+                # Require screening to have been run (not in draft)
+                prescreening = safe_json_loads(app["prescreening_data"])
+                if not prescreening.get("screening_report"):
+                    db.close()
+                    return self.error("Cannot approve: screening has not been run. Submit the application first.", 400)
+
+                # Freeze screening post-submission: prevent re-screening after approval
+                screening_report = prescreening.get("screening_report", {})
+                if screening_report.get("screening_mode") == "simulated" and is_production():
+                    db.close()
+                    return self.error("Cannot approve: screening used simulated data in production.", 400)
+
+                # Require compliance memo before approval decision
+                memo = db.execute("SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", (real_id,)).fetchone()
+                if not memo:
+                    db.close()
+                    return self.error("Cannot approve: compliance memo must be generated before decision.", 400)
+                stale = _ensure_memo_fresh_or_mark_stale(
+                    db,
+                    app,
+                    memo,
+                    actor=user,
+                    ip_address=self.get_client_ip(),
+                    context="application_status_approval",
+                )
+                if stale.get("is_stale"):
+                    db.commit()
+                    db.close()
+                    return self.error(
+                        "Approval gate failed: Compliance memo is stale: "
+                        + stale.get("reason", "Regenerate the memo before approving."),
+                        400,
+                    )
+
+                # Run full approval gate validation
+                app_dict = dict(app)
+                app_dict["prescreening_data"] = prescreening
+                can_approve, gate_error = ApprovalGateValidator.validate_approval(app_dict, db)
+                if not can_approve:
+                    _audit_enhanced_requirement_approval_block_if_applicable(
+                        db, app_dict, user, gate_error
+                    )
+                    db.commit()
+                    db.close()
+                    return self.error(f"Approval gate failed: {gate_error}", 400)
+
+            lane_synced = new_status == "edd_required" and str(app.get("onboarding_lane") or "").strip().upper() != "EDD"
+            if lane_synced:
+                db.execute(
+                    "UPDATE applications SET status=?, onboarding_lane='EDD', updated_at=datetime('now') WHERE id=?",
+                    (new_status, real_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?",
+                    (new_status, real_id),
+                )
             if new_status in ("approved", "rejected"):
                 db.execute("UPDATE applications SET decided_at=datetime('now'), decision_by=?, decision_notes=? WHERE id=?",
                            (user["sub"], data.get("notes",""), real_id))
-            self.log_audit(user, new_status.replace("_"," ").title(), app["ref"], f"Status → {new_status}", db=db)
+            audit_detail = f"Status: {current_status} → {new_status}"
+            if lane_synced:
+                audit_detail += (
+                    f" | onboarding_lane: {app.get('onboarding_lane') or ''} → EDD"
+                )
+            self.log_audit(user, "Status Change", app["ref"], audit_detail, db=db)
 
-        # Handle assignment
+        # Handle assignment — only admin, sco, co can reassign
         if "assigned_to" in data:
+            if user.get("role") not in ("admin", "sco", "co"):
+                db.close()
+                return self.error("Only Admin, Senior Compliance Officer, or Compliance Officer can reassign applications", 403)
+            old_assigned = app.get("assigned_to") or "Unassigned"
+            new_assigned = data["assigned_to"] or "Unassigned"
             db.execute("UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
                        (data["assigned_to"], real_id))
-            self.log_audit(user, "Assign", app["ref"], f"Assigned to {data['assigned_to']}", db=db)
+            self.log_audit(user, "Reassign", app["ref"],
+                           f"Reassigned from {old_assigned} to {new_assigned}", db=db)
 
         db.commit()
         db.close()
         self.success({"status": "updated"})
 
+    def delete(self, app_id):
+        """Delete a draft application for the owning client."""
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        if user.get("type") != "client":
+            db.close()
+            return self.error("Only portal clients can delete applications.", 403)
+
+        if app["status"] != "draft":
+            db.close()
+            return self.error("Only draft applications can be deleted.", 403)
+
+        cleanup_application_delete_artifacts(db, app["id"], app["ref"])
+        db.execute("DELETE FROM applications WHERE id=?", (app["id"],))
+        self.log_audit(user, "Delete", app["ref"], f"Draft application deleted by client: {app['company_name']}", db=db)
+        db.commit()
+        db.close()
+        self.success({"status": "deleted", "id": app["id"], "ref": app["ref"]})
+
+
+class ApplicationCorrectionHandler(BaseHandler):
+    """GET/POST /api/applications/:id/corrections."""
+
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            self.success({
+                "application_id": app["id"],
+                "corrections": _list_application_corrections(db, app["id"]),
+            })
+        finally:
+            db.close()
+
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        payload = self.get_json() or {}
+        target_type = str(payload.get("target_type") or "").strip().lower()
+        if target_type not in OFFICER_CORRECTION_TARGETS:
+            return self.error("Unsupported target_type", 400)
+
+        field_changes = payload.get("field_changes") or {}
+        if not isinstance(field_changes, dict):
+            return self.error("field_changes must be an object", 400)
+        if target_type == "pep_status" and not field_changes:
+            field_changes = {
+                "verified_pep": payload.get("verified_pep"),
+            }
+        field_changes = {
+            str(key).strip(): value
+            for key, value in field_changes.items()
+            if str(key).strip()
+        }
+        if not field_changes:
+            return self.error("At least one field change is required", 400)
+
+        try:
+            target_config = _officer_correction_target_config(target_type, payload)
+        except ValueError as exc:
+            return self.error(str(exc), 400)
+
+        unsupported = sorted(set(field_changes) - set(target_config["allowed_fields"]))
+        if unsupported:
+            return self.error(
+                "Unsupported field(s) for target: " + ", ".join(unsupported),
+                400,
+            )
+
+        materiality = _normalize_officer_correction_materiality(
+            target_type,
+            field_changes,
+            payload.get("materiality"),
+        )
+        correction_reason = str(payload.get("correction_reason") or payload.get("reason") or "").strip()
+        evidence_source = str(payload.get("evidence_source") or payload.get("evidence") or "").strip()
+        correction_note = str(payload.get("correction_note") or payload.get("note") or "").strip()
+        correction_source = str(payload.get("correction_source") or "officer_review").strip() or "officer_review"
+        if materiality in ("tier1", "tier2"):
+            missing = []
+            if not correction_reason:
+                missing.append("correction_reason")
+            if not evidence_source:
+                missing.append("evidence_source")
+            if not correction_note:
+                missing.append("correction_note")
+            if missing:
+                return self.error(
+                    "Material corrections require: " + ", ".join(missing),
+                    400,
+                )
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+
+            app_dict = dict(app)
+            target_id = str(payload.get("target_id") or "").strip() or None
+            subject_type = str(payload.get("subject_type") or "").strip().lower() or None
+            correction_ts = _officer_correction_now()
+            risk_relevant = bool(
+                target_type == "pep_status"
+                or set(field_changes).intersection(OFFICER_CORRECTION_RISK_RELEVANT_FIELDS)
+            )
+            memo_visible = bool(
+                target_type == "pep_status"
+                or set(field_changes).intersection(OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS)
+            )
+            substantive_change = bool(materiality == "tier1" or risk_relevant or memo_visible)
+
+            before_state, after_state = self._apply_officer_correction(
+                db=db,
+                app=app_dict,
+                target_type=target_type,
+                target_config=target_config,
+                target_id=target_id,
+                subject_type=subject_type,
+                field_changes=field_changes,
+                correction_reason=correction_reason,
+                evidence_source=evidence_source,
+                correction_note=correction_note,
+                correction_source=correction_source,
+                correction_ts=correction_ts,
+                substantive_change=substantive_change,
+                user=user,
+            )
+
+            downstream_state = self._run_correction_downstream(
+                db,
+                app_dict["id"],
+                app_dict["ref"],
+                materiality,
+                target_type,
+                field_changes,
+                risk_relevant,
+                memo_visible,
+                user,
+                self.get_client_ip(),
+            )
+            stale_result = {"marked": False}
+            if substantive_change:
+                stale_result = _mark_latest_memo_stale(
+                    db,
+                    app_dict["id"],
+                    trigger=f"backoffice_correction:{target_type}",
+                    reason=(
+                        "Back-office correction changed material memo inputs "
+                        f"({','.join(sorted(field_changes.keys()))})."
+                    ),
+                    actor=user,
+                    app_ref=app_dict["ref"],
+                    ip_address=self.get_client_ip(),
+                    before_state=before_state,
+                    after_state=after_state,
+                )
+                downstream_state["memo_stale"] = stale_result
+
+            db.execute(
+                """
+                INSERT INTO application_corrections
+                (application_id, target_type, target_id, subject_type, field_scope,
+                 materiality, correction_reason, evidence_source, correction_note,
+                 correction_source, before_state, after_state, downstream_state,
+                 corrected_by, corrected_by_name, corrected_by_role, corrected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_dict["id"],
+                    target_type,
+                    target_id,
+                    subject_type,
+                    ",".join(sorted(field_changes.keys())),
+                    materiality,
+                    correction_reason,
+                    evidence_source,
+                    correction_note,
+                    correction_source,
+                    json.dumps(before_state, default=str, sort_keys=True),
+                    json.dumps(after_state, default=str, sort_keys=True),
+                    json.dumps(downstream_state, default=str, sort_keys=True),
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    correction_ts,
+                ),
+            )
+            _correction_log_audit(
+                self,
+                user,
+                "Officer Correction",
+                app_dict["ref"],
+                (
+                    f"target_type={target_type}; field_scope={','.join(sorted(field_changes.keys()))}; "
+                    f"materiality={materiality}; source={correction_source}; "
+                    f"reason={correction_reason or 'n/a'}; evidence={evidence_source or 'n/a'}"
+                )[:4000],
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+            )
+            db.commit()
+
+            refreshed_app = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (app_dict["id"],),
+            ).fetchone()
+            summary = build_enhanced_requirement_operational_summary(
+                db,
+                app_dict["id"],
+                app_row=dict(refreshed_app) if refreshed_app else None,
+            )
+            latest_memo = db.execute(
+                """
+                SELECT id, created_at, is_stale
+                FROM compliance_memos
+                WHERE application_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (app_dict["id"],),
+            ).fetchone()
+            latest_memo_dict = dict(latest_memo) if latest_memo else {}
+            memo_requires_regeneration = bool(
+                latest_memo and (substantive_change or _memo_stale_bool(latest_memo_dict.get("is_stale")))
+            )
+            self.success({
+                "status": "corrected",
+                "application_id": app_dict["id"],
+                "target_type": target_type,
+                "target_id": target_id,
+                "materiality": materiality,
+                "before_state": before_state,
+                "after_state": after_state,
+                "downstream_state": {
+                    **downstream_state,
+                    "memo_requires_regeneration": memo_requires_regeneration,
+                    "supervisor_requires_rerun": memo_requires_regeneration,
+                    "enhanced_review_summary": summary,
+                },
+            })
+        except ValueError as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return self.error(str(exc), 400)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "officer correction failed: app_id=%s target_type=%s error=%s",
+                app_id,
+                target_type,
+                exc,
+                exc_info=True,
+            )
+            return self.error("Failed to apply officer correction", 500)
+        finally:
+            db.close()
+
+    def _load_target_row(self, db, app_id, target_config, target_id):
+        if target_config["table"] == "applications":
+            row = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (app_id,),
+            ).fetchone()
+        else:
+            if not target_id:
+                raise ValueError("target_id is required for this correction target")
+            # Safe SQL identifier interpolation: table/id_field come only from
+            # _officer_correction_target_config(), which returns hard-coded
+            # whitelist values for each supported correction target.
+            row = db.execute(
+                f"SELECT * FROM {target_config['table']} WHERE application_id = ? AND {target_config['id_field']} = ?",
+                (app_id, target_id),
+            ).fetchone()
+        if not row:
+            raise ValueError("Correction target not found")
+        return dict(row)
+
+    def _touch_application_after_correction(self, db, app_id, correction_ts, substantive_change):
+        if substantive_change:
+            db.execute(
+                "UPDATE applications SET updated_at = ?, inputs_updated_at = ? WHERE id = ?",
+                (correction_ts, correction_ts, app_id),
+            )
+        else:
+            db.execute(
+                "UPDATE applications SET updated_at = ? WHERE id = ?",
+                (correction_ts, app_id),
+            )
+
+    def _apply_officer_correction(
+        self,
+        db,
+        app,
+        target_type,
+        target_config,
+        target_id,
+        subject_type,
+        field_changes,
+        correction_reason,
+        evidence_source,
+        correction_note,
+        correction_source,
+        correction_ts,
+        substantive_change,
+        user,
+    ):
+        target_row = self._load_target_row(db, app["id"], target_config, target_id)
+        if target_type == "application":
+            before_state = {field: target_row.get(field) for field in field_changes}
+            after_state = dict(before_state)
+            for field, value in field_changes.items():
+                after_state[field] = value
+            if not set(field_changes).issubset(set(target_config["allowed_fields"])):
+                raise ValueError("Unsafe application correction fields rejected")
+            # Safe SQL identifier interpolation: assignments are composed only
+            # from OFFICER_CORRECTION_APPLICATION_FIELDS after whitelist
+            # validation in post().
+            assignments = ", ".join(f"{field} = ?" for field in field_changes)
+            params = [after_state[field] for field in field_changes]
+            params.extend([correction_ts, app["id"]])
+            db.execute(
+                f"UPDATE applications SET {assignments}, updated_at = ? WHERE id = ?",
+                tuple(params),
+            )
+            self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
+            return before_state, after_state
+
+        if target_type == "risk_field":
+            prescreening = parse_json_field(app.get("prescreening_data"), {})
+            before_state = {field: prescreening.get(field) for field in field_changes}
+            after_state = dict(before_state)
+            for field, value in field_changes.items():
+                if field == "expected_volumes":
+                    prescreening["expected_volume"] = value
+                    after_state[field] = value
+                else:
+                    prescreening[field] = value
+                    after_state[field] = value
+            db.execute(
+                "UPDATE applications SET prescreening_data = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(prescreening, default=str), correction_ts, app["id"]),
+            )
+            self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
+            return before_state, after_state
+
+        if target_type == "pep_status" or any(field in field_changes for field in ("is_pep", "verified_pep", "pep_status")):
+            return self._apply_pep_correction(
+                db=db,
+                app_id=app["id"],
+                target_type=subject_type or target_type,
+                target_id=target_id,
+                correction_ts=correction_ts,
+                substantive_change=substantive_change,
+                correction_reason=correction_reason,
+                evidence_source=evidence_source,
+                correction_note=correction_note,
+                correction_source=correction_source,
+                field_changes=field_changes,
+                user=user,
+            )
+
+        before_state = {field: target_row.get(field) for field in field_changes}
+        after_state = dict(before_state)
+        normalized_updates = {}
+        for field, value in field_changes.items():
+            normalized = value
+            if field == "ownership_pct":
+                try:
+                    normalized = max(0.0, min(100.0, float(value)))
+                except (TypeError, ValueError):
+                    raise ValueError("ownership_pct must be numeric")
+            elif field == "date_of_birth" and value:
+                _check_dob_not_future(value)
+                normalized = _validate_date_of_birth(value)
+            normalized_updates[field] = normalized
+            after_state[field] = normalized
+
+        if target_config["table"] in ("directors", "ubos"):
+            first_name = normalized_updates.get("first_name", target_row.get("first_name", ""))
+            last_name = normalized_updates.get("last_name", target_row.get("last_name", ""))
+            full_name = normalized_updates.get("full_name")
+            if "first_name" in normalized_updates or "last_name" in normalized_updates:
+                full_name = build_full_name({"first_name": first_name, "last_name": last_name}) or full_name
+            if full_name:
+                normalized_updates["full_name"] = full_name
+                after_state["full_name"] = full_name
+
+        if not set(normalized_updates).issubset(set(target_config["allowed_fields"])):
+            raise ValueError("Unsafe subject correction fields rejected")
+        # Safe SQL identifier interpolation: table/id_field are hard-coded
+        # whitelist values and assignments use only validated field names.
+        assignments = ", ".join(f"{field} = ?" for field in normalized_updates)
+        params = [normalized_updates[field] for field in normalized_updates]
+        params.extend([app["id"], target_id])
+        db.execute(
+            f"UPDATE {target_config['table']} SET {assignments} WHERE application_id = ? AND {target_config['id_field']} = ?",
+            tuple(params),
+        )
+        self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
+        return before_state, after_state
+
+    def _apply_pep_correction(
+        self,
+        db,
+        app_id,
+        target_type,
+        target_id,
+        correction_ts,
+        substantive_change,
+        correction_reason,
+        evidence_source,
+        correction_note,
+        correction_source,
+        field_changes,
+        user,
+    ):
+        table = "directors" if target_type == "director" else "ubos"
+        # Safe SQL identifier interpolation: table is reduced to one of two
+        # hard-coded values above and never comes directly from request data.
+        row = db.execute(
+            f"SELECT * FROM {table} WHERE application_id = ? AND id = ?",
+            (app_id, target_id),
+        ).fetchone()
+        if not row:
+            raise ValueError("Correction target not found")
+        row = dict(row)
+        pep_declaration = parse_json_field(row.get("pep_declaration"), {})
+        current_pep_state = _derive_party_pep_visibility(row, pep_declaration)
+        declared_pep = current_pep_state.get("client_declared_pep")
+        verified_input = field_changes.get("verified_pep")
+        if verified_input is None:
+            verified_input = field_changes.get("is_pep")
+        if verified_input is None and "pep_status" in field_changes:
+            verified_input = _pep_status_to_verified_value(field_changes.get("pep_status"))
+        verified_pep = _optional_bool(verified_input)
+        pep_status = _normalize_pep_status(field_changes.get("pep_status"))
+        if pep_status is None:
+            if verified_pep is True:
+                pep_status = "confirmed_pep"
+            elif verified_pep is False:
+                pep_status = "not_pep"
+            else:
+                pep_status = current_pep_state.get("pep_status") or "pending_review"
+        pep_verification_source = _normalize_pep_verification_source(correction_source)
+        if pep_verification_source in (None, "client_declaration", "not_verified"):
+            pep_verification_source = "officer_correction"
+        before_state = {
+            "declared_pep": current_pep_state.get("client_declared_pep"),
+            "client_declared_pep": current_pep_state.get("client_declared_pep"),
+            "verified_pep": current_pep_state.get("officer_verified_pep"),
+            "officer_verified_pep": current_pep_state.get("officer_verified_pep"),
+            "pep_status": current_pep_state.get("pep_status"),
+            "pep_verification_source": current_pep_state.get("pep_verification_source"),
+        }
+        updated_pep_declaration = dict(pep_declaration)
+        updated_pep_declaration.update({
+            "declared_pep": declared_pep,
+            "client_declared_pep": declared_pep,
+            "verified_pep": verified_pep,
+            "officer_verified_pep": verified_pep,
+            "pep_status": pep_status,
+            "pep_verification_source": pep_verification_source,
+            "correction_reason": correction_reason,
+            "evidence_source": evidence_source,
+            "correction_note": correction_note,
+            "correction_source": correction_source,
+            "corrected_at": correction_ts,
+            "corrected_by": user.get("sub", ""),
+        })
+        db.execute(
+            f"UPDATE {table} SET is_pep = ?, pep_declaration = ? WHERE application_id = ? AND id = ?",
+            (
+                normalize_is_pep(verified_pep) if verified_pep is not None else row.get("is_pep"),
+                json.dumps(updated_pep_declaration, default=str, sort_keys=True),
+                app_id,
+                target_id,
+            ),
+        )
+        self._touch_application_after_correction(db, app_id, correction_ts, substantive_change)
+        after_state = {
+            "declared_pep": declared_pep,
+            "client_declared_pep": declared_pep,
+            "verified_pep": verified_pep,
+            "officer_verified_pep": verified_pep,
+            "pep_status": pep_status,
+            "pep_verification_source": pep_verification_source,
+            "pep_declaration": updated_pep_declaration,
+        }
+        return before_state, after_state
+
+    def _run_correction_downstream(
+        self,
+        db,
+        app_id,
+        app_ref,
+        materiality,
+        target_type,
+        field_changes,
+        risk_relevant,
+        memo_visible,
+        user,
+        client_ip,
+    ):
+        downstream = {
+            "risk_recomputed": False,
+            "risk_relevant": risk_relevant,
+            "memo_visible": memo_visible,
+            "enhanced_requirements_generated": 0,
+            "next_action_code": "none",
+            "edd_routing_evaluated": False,
+            "edd_routing_actuated": False,
+        }
+        if materiality == "tier1" or (materiality == "tier2" and risk_relevant):
+            def audit_fn(*args, **kwargs):
+                return _correction_log_audit(self, *args, **kwargs)
+
+            rr = recompute_risk(
+                db,
+                app_id,
+                f"officer_correction:{target_type}",
+                user=user,
+                log_audit_fn=audit_fn,
+                apply_routing_policy=(materiality != "tier1"),
+            )
+            downstream["risk_recomputed"] = bool(rr.get("recomputed"))
+            downstream["risk_result"] = rr
+
+        if materiality == "tier1":
+            refreshed_app = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (app_id,),
+            ).fetchone()
+            refreshed_app_dict = dict(refreshed_app) if refreshed_app else {}
+            from routing_actuator import (
+                apply_routing_decision,
+                SOURCE_RISK_RECOMPUTE,
+            )
+
+            risk_dict = {
+                "score": refreshed_app_dict.get("risk_score"),
+                "level": refreshed_app_dict.get("risk_level"),
+                "final_risk_level": refreshed_app_dict.get("final_risk_level") or refreshed_app_dict.get("risk_level"),
+                "base_risk_level": refreshed_app_dict.get("base_risk_level") or refreshed_app_dict.get("risk_level"),
+                "sector_label": refreshed_app_dict.get("sector"),
+            }
+            routing_outcome = apply_routing_decision(
+                db=db,
+                app_row=refreshed_app,
+                risk_dict=risk_dict,
+                user=user,
+                client_ip=client_ip or "",
+                source=SOURCE_RISK_RECOMPUTE,
+            )
+            downstream["edd_routing"] = routing_outcome
+            downstream["edd_routing_evaluated"] = bool(routing_outcome.get("ran"))
+            downstream["edd_routing_actuated"] = bool((routing_outcome.get("actuation") or {}).get("case_id"))
+            downstream["edd_routing_route"] = routing_outcome.get("route")
+            downstream["edd_routing_triggers"] = routing_outcome.get("triggers") or []
+            downstream["edd_routing_errors"] = routing_outcome.get("errors") or []
+            generation = routing_outcome.get("enhanced_requirements_generation")
+            if not generation:
+                generation = generate_application_enhanced_requirements(
+                    db,
+                    app_id,
+                    app_row=refreshed_app,
+                    actor=user,
+                    generation_source="officer_correction",
+                )
+            downstream["enhanced_requirements_generation"] = generation
+            downstream["enhanced_requirements_generated"] = int(generation.get("generated_count") or 0)
+
+        refreshed_app = db.execute(
+            "SELECT * FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        refreshed_app_dict = dict(refreshed_app) if refreshed_app else {}
+        summary = build_enhanced_requirement_operational_summary(
+            db,
+            app_id,
+            app_row=refreshed_app_dict or None,
+        )
+        downstream["risk_level"] = refreshed_app_dict.get("risk_level")
+        downstream["final_risk_level"] = refreshed_app_dict.get("final_risk_level")
+        downstream["status"] = refreshed_app_dict.get("status")
+        downstream["onboarding_lane"] = refreshed_app_dict.get("onboarding_lane")
+        downstream["next_action_code"] = summary.get("next_action_code")
+        downstream["next_action"] = summary.get("next_action")
+        downstream["approval_blocked_until_refresh"] = bool(
+            materiality == "tier1" or memo_visible
+        )
+        downstream["target_application_ref"] = app_ref
+        return downstream
+
 
 class SubmitApplicationHandler(BaseHandler):
-    """POST /api/applications/:id/submit — submit, run screening, and trigger risk scoring"""
+    """POST /api/applications/:id/submit — submit pre-screening, run screening, calculate risk, show pricing"""
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        if not self.check_rate_limit("submit", max_attempts=5, window_seconds=60):
+            return
+
+        db = get_db()
+        stage = "init"
+        try:
+            return self._do_submit(db, user, app_id)
+        except Exception as exc:
+            # ── Outer defence-in-depth handler ──
+            # Guarantee no unhandled exception leaks as Tornado's default 500.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            # Attempt to identify the failing stage from the traceback
+            import traceback
+            tb_text = traceback.format_exc()
+            if "compute_risk_score" in tb_text or "_score_entity_type" in tb_text:
+                stage = "compute_risk_score"
+            elif "run_full_screening" in tb_text:
+                stage = "run_full_screening"
+            elif "build_prescreening_risk_input" in tb_text:
+                stage = "build_prescreening_risk_input"
+            elif "classify_risk_level" in tb_text:
+                stage = "classify_risk_level"
+            else:
+                stage = "unknown"
+            logger.error(
+                "SubmitApplicationHandler unhandled error: app_id=%s user=%s ip=%s stage=%s error=%s",
+                app_id,
+                user.get("sub", "unknown") if user else "unknown",
+                self.get_client_ip(),
+                stage,
+                str(exc)[:500],
+                exc_info=True,
+            )
+            return self.error("An unexpected error occurred while processing your submission. Please try again.", 500)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _do_submit(self, db, user, app_id):
+        """Core submit logic, separated for clean error handling."""
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            return
+
+        real_id = app["id"]
+
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
+
+        # ── v2.2: Pre-screening validation ──────────────────────────
+        prescreening_raw = safe_json_loads(app["prescreening_data"])
+
+        # Validate incorporation date (no future dates)
+        inc_date = prescreening_raw.get("incorporation_date", "")
+        if inc_date:
+            try:
+                from datetime import date
+                parsed_date = datetime.strptime(inc_date, "%Y-%m-%d").date()
+                if parsed_date > datetime.now(timezone.utc).date():
+                    return self.error("Incorporation date cannot be in the future.", 400)
+            except ValueError:
+                pass  # Non-standard date format, allow through
+
+        # Validate country is not sanctioned
+        country = (app.get("country") or "").lower().strip()
+        if country in SANCTIONED_COUNTRIES_FULL:
+            return self.error(
+                f"{BRAND['portal_name']} cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
+                403
+            )
+
+        # Source of Wealth / Source of Funds detail fields are optional — no minimum enforced
+
+        # Validate currency
+        currency = prescreening_raw.get("currency", "")
+        if currency and currency not in ALLOWED_CURRENCIES:
+            return self.error(f"Currency '{currency}' not supported. Allowed: {', '.join(ALLOWED_CURRENCIES)}", 400)
+
+        # ── v2.3: Validate contact fields (email, phone, website) ──
+        contact_email = prescreening_raw.get("entity_contact_email", "")
+        if contact_email:
+            if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', contact_email):
+                return self.error("Invalid email format. Please provide a valid email address.", 400)
+
+        contact_phone = prescreening_raw.get("entity_contact_mobile", "")
+        if contact_phone:
+            stripped_phone = re.sub(r'[\s\-()]', '', contact_phone)
+            if not re.match(r'^[0-9]{4,15}$', stripped_phone):
+                return self.error("Invalid phone number. Please enter 4-15 digits.", 400)
+
+        website = prescreening_raw.get("website", "")
+        if website:
+            if not re.match(r'^(https?://)?([a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(/.*)?$', website):
+                return self.error("Invalid website URL. Please enter a valid domain (e.g. www.company.com).", 400)
+
+        directors, ubos, intermediaries = get_application_parties(db, real_id)
+
+        # W2-2: Require at least one director before submission
+        if not directors:
+            return self.error("At least one director is required before submitting the application.", 400)
+
+        prescreening = safe_json_loads(app["prescreening_data"])
+        scoring_input = build_prescreening_risk_input(
+            application=app,
+            prescreening_data=prescreening,
+            directors=directors,
+            ubos=ubos,
+            intermediaries=intermediaries,
+        )
+
+        # ── Run real screening (Agents 1, 2, 3, 5) ──
+        client_ip = self.get_client_ip()
+        try:
+            screening_report = run_full_screening(
+                scoring_input, directors, ubos, client_ip=client_ip, db=db
+            )
+        except ScreeningProviderError as spe:
+            logger.error(
+                "Screening provider critical failure: app_id=%s ref=%s user=%s ip=%s stage=run_full_screening error=%s",
+                real_id, app.get("ref", ""), user.get("sub", ""), client_ip, str(spe)[:300],
+                exc_info=True,
+            )
+            return self.error(
+                "Screening provider temporarily unavailable. Please retry in a moment.", 503
+            )
+        except Exception as screening_exc:
+            logger.error(
+                "Screening failed: app_id=%s ref=%s user=%s ip=%s stage=run_full_screening error=%s",
+                real_id, app.get("ref", ""), user.get("sub", ""), client_ip, str(screening_exc)[:300],
+                exc_info=True,
+            )
+            return self.error(
+                "Screening provider temporarily unavailable. Please retry in a moment.", 503
+            )
+
+        # Track screening mode (live vs simulated)
+        try:
+            screening_mode = determine_screening_mode(screening_report)
+            if not store_screening_mode(db, real_id, screening_mode):
+                logger.warning(
+                    "store_screening_mode returned False: app_id=%s mode=%s", real_id, screening_mode
+                )
+            screening_report["screening_mode"] = screening_mode
+        except Exception as mode_exc:
+            logger.error(
+                "Screening mode storage failed: app_id=%s ref=%s stage=store_screening_mode error=%s",
+                real_id, app.get("ref", ""), str(mode_exc)[:300],
+                exc_info=True,
+            )
+            screening_report["screening_mode"] = "unknown"
+
+        populate_screening_freshness_metadata(
+            prescreening,
+            screening_report,
+            screened_by=user.get("sub"),
+        )
+        screening_summary = build_screening_terminality_summary(
+            screening_report,
+            prescreening,
+        )
+
+        # Compute risk score
+        risk = compute_risk_score(scoring_input)
+
+        # EX-09: Capture risk config version at computation time
+        try:
+            from rule_engine import _get_risk_config_version
+            risk["_config_version"] = _get_risk_config_version(db) or ""
+        except Exception:
+            risk["_config_version"] = ""
+
+        # Priority E: policy-driven EDD routing on prescreening submit.
+        # Even when level=MEDIUM, sector/jurisdiction/PEP/ownership can
+        # mandate EDD. Run the deterministic v1 policy now so the case
+        # is on the EDD lane and an edd_cases row is created
+        # before the application reaches the officer queue.
+        _routing_outcome = {}
+        try:
+            from routing_actuator import (
+                apply_routing_decision,
+                SOURCE_PRESCREENING_SUBMIT,
+            )
+            _routing_outcome = apply_routing_decision(
+                db=db,
+                app_row=app,
+                risk_dict=risk,
+                screening_summary=screening_summary,
+                user=user,
+                client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
+                source=SOURCE_PRESCREENING_SUBMIT,
+            )
+            if str(_routing_outcome.get("route") or "").lower() == "edd":
+                risk['lane'] = 'EDD'
+                risk = _apply_edd_route_risk_floor(risk, _routing_outcome)
+        except Exception as _routing_err:
+            logger.warning(
+                'apply_routing_decision (prescreening_submit) failed: %s',
+                _routing_err,
+            )
+            risk["screening_elevated"] = True
+            risk["screening_hits"] = screening_report["total_hits"]
+
+        # ── DB write path: store screening results and update application ──
+        try:
+            # Store screening report in prescreening_data
+            prescreening["screening_report"] = screening_report
+            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                       (json.dumps(prescreening, default=str), real_id))
+
+            # SCR-010: Dual-write normalized screening report (non-authoritative)
+            try:
+                _persist_normalized_screening_report_if_enabled(
+                    db, app.get("client_id", ""), real_id, screening_report
+                )
+            except Exception as _norm_exc:
+                logger.warning(
+                    "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",
+                    real_id, app.get("client_id", ""), type(_norm_exc).__name__,
+                )
+                try:
+                    from screening_storage import (
+                        ensure_normalized_table, persist_normalization_failure,
+                        compute_report_hash,
+                    )
+                    ensure_normalized_table(db)
+                    persist_normalization_failure(
+                        db, app.get("client_id", ""), real_id,
+                        compute_report_hash(screening_report),
+                        type(_norm_exc).__name__,
+                    )
+                except Exception:
+                    pass  # Do not block onboarding flow
+
+            # Sync undeclared PEP detections back to director/UBO records
+            for ds in screening_report.get("director_screenings", []):
+                if ds.get("undeclared_pep"):
+                    db.execute(
+                        "UPDATE directors SET is_pep='Yes' WHERE application_id=? AND full_name=?",
+                        (real_id, ds.get("person_name", ""))
+                    )
+            for us in screening_report.get("ubo_screenings", []):
+                if us.get("undeclared_pep"):
+                    db.execute(
+                        "UPDATE ubos SET is_pep='Yes' WHERE application_id=? AND full_name=?",
+                        (real_id, us.get("person_name", ""))
+                    )
+
+            db.execute("""
+                UPDATE applications SET
+                    status='submitted', submitted_at=datetime('now'),
+                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                    risk_computed_at=?, risk_config_version=?,
+                    risk_escalations=?,
+                    base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
+                    pre_approval_decision=NULL, pre_approval_notes=NULL,
+                    pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"],
+                  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  str(risk.get("_config_version", "")),
+                  json.dumps(risk.get("escalations", [])),
+                  risk.get("base_risk_level", risk["level"]),
+                  risk.get("final_risk_level", risk["level"]),
+                  risk.get("elevation_reason_text", ""),
+                  real_id))
+
+            # After pre-screening: ALL risk levels see pricing first
+            # Routing to pre-approval (HIGH/VERY_HIGH) happens after pricing acceptance
+            db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
+
+            # Get pricing for this risk level
+            pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
+
+            # Store pricing in prescreening data
+            prescreening["pricing"] = pricing
+            prescreening["pricing"]["risk_level"] = risk["level"]
+            prescreening["pricing"]["final_risk_level"] = risk.get("final_risk_level", risk["level"])
+            prescreening["pricing"]["base_risk_level"] = risk.get("base_risk_level", risk["level"])
+            prescreening["pricing"]["elevation_reason_text"] = risk.get("elevation_reason_text", "")
+            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                       (json.dumps(prescreening, default=str), real_id))
+
+            # Post-persistence safety pass: the routing actuator also runs
+            # generation, but on PostgreSQL an earlier actuation failure can
+            # abort the transaction before requirements are written. Running
+            # idempotent generation after the durable application risk/lane
+            # fields are saved keeps HIGH/EDD/PEP cases from requiring a
+            # manual back-office generation step.
+            requires_compliance_preapproval = (
+                risk["level"] in ("HIGH", "VERY_HIGH")
+                or risk.get("lane") == "EDD"
+                or (_routing_outcome or {}).get("route") == "edd"
+            )
+            requires_enhanced_generation = requires_compliance_preapproval
+            generation = None
+            generation_failure = None
+            if requires_enhanced_generation:
+                try:
+                    refreshed_app = db.execute(
+                        "SELECT * FROM applications WHERE id=?",
+                        (real_id,),
+                    ).fetchone()
+                    generation = generate_application_enhanced_requirements(
+                        db,
+                        real_id,
+                        app_row=refreshed_app,
+                        routing=_routing_outcome or None,
+                        actor=user,
+                        generation_source="prescreening_submit_post_persist",
+                    )
+                    if generation and generation.get("config_ok") is False:
+                        logger.error(
+                            "Enhanced requirement auto-generation config invalid: app_id=%s ref=%s errors=%s",
+                            real_id,
+                            app.get("ref", ""),
+                            generation.get("errors"),
+                        )
+                except Exception as generation_exc:
+                    generation_failure = generation_exc
+                    logger.error(
+                        "Enhanced requirement auto-generation failed after prescreening persistence: app_id=%s ref=%s error=%s",
+                        real_id,
+                        app.get("ref", ""),
+                        generation_exc,
+                        exc_info=True,
+                    )
+
+            if requires_enhanced_generation:
+                persisted_app = db.execute(
+                    """
+                    SELECT status, risk_score, risk_level, onboarding_lane, submitted_at
+                    FROM applications
+                    WHERE id=?
+                    """,
+                    (real_id,),
+                ).fetchone()
+                persisted = dict(persisted_app or {})
+                durable_state_missing = (
+                    not persisted
+                    or str(persisted.get("status") or "").strip().lower() == "draft"
+                    or persisted.get("risk_score") in (None, "")
+                    or not str(persisted.get("risk_level") or "").strip()
+                    or not str(persisted.get("onboarding_lane") or "").strip()
+                    or not persisted.get("submitted_at")
+                )
+                generated_or_existing = 0
+                if generation:
+                    try:
+                        generated_or_existing = (
+                            int(generation.get("generated_count") or 0)
+                            + int(generation.get("existing_count") or 0)
+                        )
+                    except Exception:
+                        generated_or_existing = 0
+                generation_invalid = (
+                    generation_failure is not None
+                    or not generation
+                    or generation.get("config_ok") is False
+                    or generated_or_existing <= 0
+                )
+                if durable_state_missing or generation_invalid:
+                    logger.error(
+                        "Enhanced requirement auto-generation critical failure: app_id=%s ref=%s durable_state_missing=%s generation_invalid=%s persisted_state=%s generation=%s error=%s",
+                        real_id,
+                        app.get("ref", ""),
+                        durable_state_missing,
+                        generation_invalid,
+                        persisted,
+                        generation,
+                        generation_failure,
+                    )
+                    try:
+                        db.rollback()
+                    except Exception as rollback_exc:
+                        try:
+                            from observability import log_error
+
+                            log_error(
+                                "prescreening_enhanced_generation_rollback_failed",
+                                handler="SubmitApplicationHandler._do_submit",
+                                application_id=real_id,
+                                application_ref=app.get("ref", ""),
+                                error=str(rollback_exc),
+                            )
+                        except Exception as obs_exc:
+                            logger.debug(
+                                "Observability logging failed for rollback failure: %s",
+                                obs_exc,
+                            )
+                        logger.error(
+                            "Rollback failed after enhanced requirement auto-generation critical failure: app_id=%s ref=%s error=%s",
+                            real_id,
+                            app.get("ref", ""),
+                            rollback_exc,
+                            exc_info=True,
+                        )
+                    return self.error(
+                        "Enhanced review requirement generation failed. Please retry your submission.",
+                        500,
+                    )
+
+            flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
+            elevation_summary = (
+                f", Floor/Elevation: {risk.get('elevation_reason_text')}"
+                if risk.get("elevation_reason_text")
+                else ""
+            )
+            _after = {
+                "status": "pricing_review",
+                "risk_score": risk["score"],
+                "base_risk_score": risk.get("base_risk_score"),
+                "base_risk_level": risk.get("base_risk_level", risk["level"]),
+                "risk_level": risk["level"],
+                "final_risk_level": risk.get("final_risk_level", risk["level"]),
+                "risk_escalations": risk.get("escalations", []),
+                "elevation_reason_text": risk.get("elevation_reason_text", ""),
+                "onboarding_lane": risk["lane"],
+            }
+            self.log_audit(
+                user,
+                "Pre-Screening Submitted",
+                app["ref"],
+                f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}{elevation_summary}",
+                db=db,
+                before_state=_before,
+                after_state=_after,
+                commit=False,
+            )
+            db.commit()
+        except Exception as db_exc:
+            logger.error(
+                "DB write failed after screening: app_id=%s ref=%s user=%s stage=post_screening_db_write error=%s",
+                real_id, app.get("ref", ""), user.get("sub", ""), str(db_exc)[:300],
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return self.error(
+                "Failed to save screening results. Please retry your submission.", 500
+            )
+
+        # Notify compliance after durable state is committed. Notification
+        # failures must not turn a successfully committed submit into a 500.
+        if requires_compliance_preapproval:
+            try:
+                compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+                for cu in compliance_users:
+                    db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                              (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
+                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}), Lane: {risk['lane']}. "
+                               f"This application requires pre-approval before the client can proceed to KYC. "
+                               f"Review pre-screening data and screening results in the Pre-Approval Queue."))
+                db.commit()
+            except Exception as notify_exc:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.warning(
+                    "Pre-screening compliance notification failed after durable submit: app_id=%s ref=%s error=%s",
+                    real_id,
+                    app.get("ref", ""),
+                    str(notify_exc)[:300],
+                    exc_info=True,
+                )
+
+        result_status = "pricing_review"
+        self.success({
+            "ref": app["ref"],
+            "risk_score": risk["score"],
+            "risk_level": risk["level"],
+            "base_risk_score": risk.get("base_risk_score"),
+            "base_risk_level": risk.get("base_risk_level", risk["level"]),
+            "final_risk_level": risk.get("final_risk_level", risk["level"]),
+            "risk_escalations": risk.get("escalations", []),
+            "elevation_reason_text": risk.get("elevation_reason_text", ""),
+            "risk_dimensions": risk["dimensions"],
+            "onboarding_lane": risk["lane"],
+            "status": result_status,
+            "requires_pre_approval": risk["level"] in ("HIGH", "VERY_HIGH") or risk.get("lane") == "EDD",
+            "pricing": pricing,
+            "screening": {
+                "total_hits": screening_report["total_hits"],
+                "flags": screening_report["overall_flags"],
+                "degraded_sources": screening_report.get("degraded_sources", []),
+                "api_sources": {
+                    "sanctions": screening_report.get("director_screenings", [{}])[0].get("screening", {}).get("source", "none") if screening_report.get("director_screenings") else "none",
+                    "corporate_registry": screening_report["company_screening"].get("source", "none"),
+                    "ip_geolocation": screening_report["ip_geolocation"].get("source", "none") if screening_report.get("ip_geolocation") else "none",
+                }
+            }
+        })
+
+
+class PricingAcceptHandler(BaseHandler):
+    """POST /api/applications/:id/accept-pricing — Client accepts pricing, proceeds to next step"""
     def post(self, app_id):
         user = self.require_auth()
         if not user:
@@ -1762,98 +5388,651 @@ class SubmitApplicationHandler(BaseHandler):
             db.close()
             return
 
+        if app["status"] != "pricing_review":
+            db.close()
+            return self.error("Application is not in pricing review stage", 400)
+
         real_id = app["id"]
-
-        # Build scoring input
-        directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
-
-        prescreening = json.loads(app["prescreening_data"]) if app["prescreening_data"] else {}
-        scoring_input = {
-            **prescreening,
-            "entity_type": app["entity_type"],
-            "ownership_structure": app["ownership_structure"],
-            "country": app["country"],
-            "sector": app["sector"],
-            "company_name": app["company_name"],
-            "directors": directors,
-            "ubos": ubos
-        }
-
-        # ── Run real screening (Agents 1, 5, 6) ──
-        client_ip = self.get_client_ip()
-        screening_report = run_full_screening(
-            scoring_input, directors, ubos, client_ip=client_ip
+        risk_error = _application_risk_integrity_error(app, "accept pricing")
+        if risk_error:
+            db.close()
+            return self.error(risk_error, 400)
+        risk_level, _risk_score = _application_risk_snapshot(app)
+        app_snapshot = dict(app)
+        requires_pre_approval = (
+            risk_level in ("HIGH", "VERY_HIGH")
+            or str(app_snapshot.get("onboarding_lane") or "").strip().upper() == "EDD"
         )
 
-        # Compute risk score
-        risk = compute_risk_score(scoring_input)
+        # Update status: accepted pricing
+        db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
 
-        # Elevate risk if screening found hits
-        if screening_report["total_hits"] > 0:
-            risk_bump = min(screening_report["total_hits"] * 8, 25)  # Up to +25 points
-            risk["score"] = min(100, risk["score"] + risk_bump)
-            # Re-classify level
-            if risk["score"] >= 70:
-                risk["level"] = "VERY_HIGH"
-            elif risk["score"] >= 55:
-                risk["level"] = "HIGH"
-            elif risk["score"] >= 40:
-                risk["level"] = "MEDIUM"
-            risk["lane"] = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}[risk["level"]]
-            risk["screening_elevated"] = True
-            risk["screening_hits"] = screening_report["total_hits"]
-
-        # Store screening report in prescreening_data
-        prescreening["screening_report"] = screening_report
-        db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                   (json.dumps(prescreening, default=str), real_id))
-
-        db.execute("""
-            UPDATE applications SET
-                status='submitted', submitted_at=datetime('now'),
-                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
-                updated_at=datetime('now')
-            WHERE id=?
-        """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
-
-        # Auto-route: Low/Medium risk → kyc_documents (proceed to KYC), High/VH → compliance_review (referred to compliance)
-        auto_status = "kyc_documents" if risk["level"] in ("LOW","MEDIUM") else "compliance_review"
-        db.execute("UPDATE applications SET status=? WHERE id=?", (auto_status, real_id))
-
-        # Create compliance team notification for high-risk applications
-        if risk["level"] in ("HIGH","VERY_HIGH"):
+        # Route based on risk level after pricing acceptance:
+        # LOW/MEDIUM → proceed directly to KYC & Documents (straight-through)
+        # HIGH/VERY_HIGH → pre-approval review (KYC blocked until officer pre-approves)
+        if requires_pre_approval:
+            next_status = "pre_approval_review"
+            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+            message = "Pricing accepted. Your application is now undergoing an initial compliance review before document submission."
+            # Notify compliance officers
             compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
-            for user in compliance_users:
+            for cu in compliance_users:
                 db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                          (user["id"], "High-Risk Application Submitted",
-                           f"Application {app['ref']} ({app['company_name']}) requires compliance review. Risk Level: {risk['level']} (Score: {risk['score']})"))
-            db.commit()
+                          (cu["id"], f"PRE-APPROVAL REQUIRED: {app['ref']}",
+                           f"{app['company_name']} — Risk: {risk_level}. Client accepted pricing. "
+                           f"Pre-approval required before KYC proceeds."))
+        else:
+            next_status = "kyc_documents"
+            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+            message = "Pricing accepted. Please proceed with KYC verification and document upload."
 
+        self.log_audit(
+            user,
+            "Pricing Accepted",
+            app["ref"],
+            f"Pricing accepted — Risk: {risk_level}, Next: {next_status}",
+            db=db,
+            commit=False,
+        )
         db.commit()
         db.close()
 
-        flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
-        self.log_audit(user, "Submit", app["ref"],
-                       f"Application submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}")
+        self.success({"status": next_status, "message": message, "risk_level": risk_level})
+
+
+def _kyc_requires_pre_approval(app):
+    """Return whether the current application facts require pre-KYC approval."""
+    app_snapshot = dict(app or {})
+    risk_level, _risk_score = _application_risk_snapshot(app_snapshot)
+    onboarding_lane = str(app_snapshot.get("onboarding_lane") or "").strip().upper()
+    status = str(app_snapshot.get("status") or "").strip().lower()
+    return (
+        risk_level in ("HIGH", "VERY_HIGH")
+        or onboarding_lane == "EDD"
+        or status == "pre_approval_review"
+    )
+
+
+def _kyc_prerequisite_error(app, *, action):
+    """Validate KYC collection/submission prerequisites.
+
+    KYC is unlocked by PricingAcceptHandler after pricing acceptance and, where
+    required, officer pre-approval. Treat the resulting kyc_documents status as
+    the authoritative server-side collection state.
+    """
+    status = str((app or {}).get("status") or "").strip().lower()
+    if status != "kyc_documents":
+        if status in ("draft", "submitted", "prescreening_submitted"):
+            return (
+                "pricing_not_accepted",
+                f"KYC {action} is locked until prescreening is complete and pricing has been accepted.",
+            )
+        if status == "pricing_review":
+            return (
+                "pricing_not_accepted",
+                f"KYC {action} is locked until pricing has been accepted.",
+            )
+        if status in ("pricing_accepted", "pre_approval_review", "pre_approved"):
+            return (
+                "pre_approval_or_routing_incomplete",
+                f"KYC {action} is locked until the application is routed to KYC Documents.",
+            )
+        return (
+            "invalid_kyc_state",
+            f"KYC {action} is only allowed while the application is in KYC Documents.",
+        )
+
+    if _kyc_requires_pre_approval(app) and (app or {}).get("pre_approval_decision") != "PRE_APPROVE":
+        return (
+            "pre_approval_required",
+            f"KYC {action} is locked until required pre-approval is completed.",
+        )
+
+    return None, None
+
+
+def _pre_approval_decision_state_error(app):
+    """Return an error when an officer cannot record pre-approval now.
+
+    EDD route actuation can move a still-pre-approval-required case to
+    edd_required before an officer records the pre-approval decision. That
+    state must remain recoverable: KYC is still locked by
+    _kyc_prerequisite_error until PRE_APPROVE is recorded.
+    """
+    status = str((app or {}).get("status") or "").strip().lower()
+    if status == "pre_approval_review":
+        return None
+    if status == "edd_required" and _kyc_requires_pre_approval(app):
+        return None
+    return (
+        f"Pre-approval decision not allowed: application is in '{status or 'unknown'}' status. "
+        "Only applications in 'pre_approval_review' or pre-approval-required "
+        "'edd_required' can receive pre-approval decisions."
+    )
+
+
+def _audit_blocked_kyc_transition(handler, db, user, app, *, attempted_action,
+                                  reason_code, message, status_code):
+    detail = {
+        "event": "kyc_transition_blocked",
+        "attempted_action": attempted_action,
+        "reason_code": reason_code,
+        "message": str(message or "")[:500],
+        "application_id": (app or {}).get("id"),
+        "application_ref": (app or {}).get("ref"),
+        "current_status": (app or {}).get("status"),
+        "risk_level": (app or {}).get("risk_level"),
+        "onboarding_lane": (app or {}).get("onboarding_lane"),
+        "pre_approval_decision": (app or {}).get("pre_approval_decision"),
+        "response_code": status_code,
+    }
+    try:
+        handler.log_audit(
+            user,
+            f"KYC Transition Blocked: {reason_code}",
+            (app or {}).get("ref") or (app or {}).get("id") or "kyc-transition",
+            json.dumps(detail, sort_keys=True),
+            db=db,
+            commit=True,
+        )
+    except Exception as exc:
+        logger.error(
+            "kyc_transition_block_audit_failed=true action=%s reason_code=%s app=%s error=%s",
+            attempted_action,
+            reason_code,
+            (app or {}).get("ref") or (app or {}).get("id"),
+            exc,
+        )
+
+
+def _truthy_prescreening_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on", "licensed")
+
+
+def _party_requirement_key(person):
+    return (person or {}).get("person_key") or (person or {}).get("id")
+
+
+def _kyc_required_document_expectations(db, app):
+    """Return the required KYC document slots for the current application."""
+    app_dict = dict(app or {})
+    ps_data = safe_json_loads(app_dict.get("prescreening_data")) if app_dict.get("prescreening_data") else {}
+    if not isinstance(ps_data, dict):
+        ps_data = {}
+    risk_level = str(app_dict.get("final_risk_level") or app_dict.get("risk_level") or "").upper()
+    is_high_risk = risk_level in ("HIGH", "VERY_HIGH")
+    has_licence = (
+        _truthy_prescreening_value(ps_data.get("is_licensed"))
+        or _truthy_prescreening_value(ps_data.get("has_licence"))
+        or _truthy_prescreening_value(app_dict.get("is_licensed"))
+    )
+
+    expectations = [
+        {"doc_type": "cert_inc", "label": "Certificate of Incorporation", "person_id": None},
+        {"doc_type": "memarts", "label": "Memorandum of Association", "person_id": None},
+        {"doc_type": "reg_sh", "label": "Shareholder Register", "person_id": None},
+        {"doc_type": "reg_dir", "label": "Register of Directors", "person_id": None},
+        {"doc_type": "fin_stmt", "label": "Financial Statements / Management Accounts", "person_id": None},
+        {"doc_type": "poa", "label": "Proof of Registered Address", "person_id": None},
+        {"doc_type": "board_res", "label": "Board Resolution", "person_id": None},
+        {"doc_type": "structure_chart", "label": "Company Structure Chart", "person_id": None},
+    ]
+    if is_high_risk:
+        expectations.append({"doc_type": "bankref", "label": "Bank Reference Letter", "person_id": None})
+    if has_licence:
+        expectations.append({"doc_type": "licence", "label": "Regulatory Licence(s)", "person_id": None})
+
+    directors, ubos, intermediaries = get_application_parties(db, app_dict.get("id"))
+    for party_type, people in (("director", directors or []), ("ubo", ubos or [])):
+        for person in people:
+            person_id = _party_requirement_key(person)
+            if not person_id:
+                continue
+            owner = (person or {}).get("full_name") or person_id
+            expectations.append({
+                "doc_type": "passport",
+                "label": f"Passport / Government ID for {owner}",
+                "person_id": person_id,
+                "person_type": party_type,
+            })
+            expectations.append({
+                "doc_type": "poa",
+                "label": f"Proof of Address for {owner}",
+                "person_id": person_id,
+                "person_type": party_type,
+            })
+    for person in intermediaries or []:
+        person_id = _party_requirement_key(person)
+        if not person_id:
+            continue
+        owner = (person or {}).get("entity_name") or (person or {}).get("full_name") or person_id
+        for doc_type, label in (
+            ("cert_inc", "Certificate of Incorporation"),
+            ("reg_dir", "Register of Directors"),
+            ("reg_sh", "Register of Shareholders"),
+            ("cert_gs", "Certificate of Good Standing"),
+            ("fin_stmt", "Financial Statements"),
+        ):
+            expectations.append({
+                "doc_type": doc_type,
+                "label": f"{label} for {owner}",
+                "person_id": person_id,
+                "person_type": "intermediary",
+            })
+
+    for expectation in expectations:
+        expectation["doc_type"] = _normalize_document_type(expectation["doc_type"])
+        expectation["slot_key"] = _document_slot_key(
+            expectation["doc_type"],
+            expectation.get("person_id"),
+            person_type=expectation.get("person_type"),
+        )
+    return expectations
+
+
+def _kyc_verified_required_document_gate(db, app):
+    """Return a gate result for submit-kyc required verified documents."""
+    expectations = _kyc_required_document_expectations(db, app)
+    rows = [
+        dict(row) for row in db.execute(
+            f"SELECT id, doc_type, doc_name, person_id, slot_key, verification_status "
+            f"FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (app["id"],),
+        ).fetchall()
+    ]
+    docs_by_slot = {}
+    for doc in rows:
+        slot_key = doc.get("slot_key") or _document_slot_key(doc.get("doc_type"), doc.get("person_id"))
+        docs_by_slot[slot_key] = doc
+
+    missing = []
+    not_verified = []
+    for expectation in expectations:
+        doc = docs_by_slot.get(expectation["slot_key"])
+        if not doc:
+            missing.append(expectation)
+            continue
+        status = normalize_verification_state(doc.get("verification_status"))
+        if status != STATE_VERIFIED:
+            not_verified.append({
+                "document_id": doc.get("id"),
+                "doc_name": doc.get("doc_name"),
+                "doc_type": doc.get("doc_type"),
+                "slot_key": expectation["slot_key"],
+                "label": expectation["label"],
+                "verification_status": status,
+            })
+    return {
+        "passed": not missing and not not_verified,
+        "required_count": len(expectations),
+        "uploaded_count": len(rows),
+        "verified_required_count": len(expectations) - len(missing) - len(not_verified),
+        "missing": missing,
+        "not_verified": not_verified,
+    }
+
+
+class KYCSubmitHandler(BaseHandler):
+    """POST /api/applications/:id/submit-kyc — Submit KYC documents for compliance review"""
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="submission")
+        if prerequisite_error:
+            _audit_blocked_kyc_transition(
+                self, db, user, app,
+                attempted_action="submit_kyc",
+                reason_code=reason_code,
+                message=prerequisite_error,
+                status_code=409,
+            )
+            db.close()
+            return self.error(prerequisite_error, 409)
+
+        real_id = app["id"]
+
+        # Fast reject empty submissions before recomputing risk.
+        doc_count = db.execute(
+            f"SELECT COUNT(*) as c FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (real_id,),
+        ).fetchone()["c"]
+        if doc_count == 0:
+            _audit_blocked_kyc_transition(
+                self, db, user, app,
+                attempted_action="submit_kyc",
+                reason_code="missing_required_documents",
+                message="Please upload at least one document before submitting",
+                status_code=400,
+            )
+            db.close()
+            return self.error("Please upload at least one document before submitting", 400)
+
+        # Always recompute risk at KYC submission — data may have changed since pre-screening
+        rr = recompute_risk(db, real_id, "kyc_submission", user=user,
+                            log_audit_fn=self.log_audit)
+        refreshed_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+        if rr.get("recomputed"):
+            _mark_latest_memo_stale(
+                db,
+                real_id,
+                trigger="risk_recomputed",
+                reason="Risk recomputation changed memo-relevant risk facts after memo generation.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=snapshot_app_state(app),
+                after_state=snapshot_app_state(refreshed_app),
+            )
+        reason_code, prerequisite_error = _kyc_prerequisite_error(refreshed_app or app, action="submission")
+        if prerequisite_error:
+            _audit_blocked_kyc_transition(
+                self, db, user, refreshed_app or app,
+                attempted_action="submit_kyc",
+                reason_code=reason_code,
+                message=prerequisite_error,
+                status_code=409,
+            )
+            db.close()
+            return self.error(prerequisite_error, 409)
+        verification_gate = _kyc_verified_required_document_gate(db, refreshed_app or app)
+        if not verification_gate["passed"]:
+            missing_count = len(verification_gate["missing"])
+            not_verified_count = len(verification_gate["not_verified"])
+            message = (
+                "All required KYC documents must be uploaded and verified before submission. "
+                f"Missing: {missing_count}; not verified: {not_verified_count}."
+            )
+            _audit_blocked_kyc_transition(
+                self, db, user, refreshed_app or app,
+                attempted_action="submit_kyc",
+                reason_code="required_documents_not_verified",
+                message=message,
+                status_code=400,
+            )
+            db.close()
+            return self.error(message, 400)
+        risk_app_for_submission = dict(refreshed_app or app)
+        risk_app_for_submission["status"] = "kyc_submitted"
+        risk_error = _application_risk_integrity_error(risk_app_for_submission, "submit KYC documents")
+        if risk_error:
+            db.close()
+            return self.error(risk_error, 400)
+        risk_level, risk_score = _application_risk_snapshot(refreshed_app or app)
+
+        # W2-4: Set status to kyc_submitted (previously dead state, now active)
+        db.execute("""
+            UPDATE applications SET
+                status='kyc_submitted',
+                updated_at=datetime('now')
+            WHERE id=?
+        """, (real_id,))
+
+        # Priority C: KYC submission is the final client-side hand-off into
+        # compliance review. The portal draft (client_sessions row) is no
+        # longer needed at this point — discard it so a stale "Resume"
+        # banner does not reappear on the dashboard after submission.
+        try:
+            db.execute(
+                "DELETE FROM client_sessions WHERE application_id=?",
+                (real_id,),
+            )
+        except Exception as exc:
+            # Non-fatal: KYC submission is the source of truth, not the draft.
+            logger.warning(
+                "Failed to clear draft session for app %s after KYC submit: %s",
+                real_id, exc,
+            )
+
+        # Notify ALL compliance officers
+        compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
+        for cu in compliance_users:
+            db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                      (cu["id"], f"KYC Submitted — Ready for Review: {app['ref']}",
+                       f"{app['company_name']} has completed KYC & document upload. Risk: {risk_level} (Score: {risk_score}). Awaiting compliance approval."))
+
+        self.log_audit(
+            user,
+            "KYC Submitted",
+            app["ref"],
+            f"KYC documents submitted for compliance review — {doc_count} document(s)",
+            db=db,
+            commit=False,
+        )
+        self.log_audit(
+            user,
+            "KYC Attestation Submitted",
+            app["ref"],
+            json.dumps({
+                "event": "kyc_attestation_submitted",
+                "actor_type": "user",
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "required_documents_verified": verification_gate["verified_required_count"],
+                "required_documents_total": verification_gate["required_count"],
+                "documents_uploaded": doc_count,
+            }, sort_keys=True),
+            db=db,
+            commit=False,
+        )
+        db.commit()
+        db.close()
 
         self.success({
-            "ref": app["ref"],
-            "risk_score": risk["score"],
-            "risk_level": risk["level"],
-            "risk_dimensions": risk["dimensions"],
-            "onboarding_lane": risk["lane"],
-            "status": auto_status,
-            "screening": {
-                "total_hits": screening_report["total_hits"],
-                "flags": screening_report["overall_flags"],
-                "api_sources": {
-                    "sanctions": screening_report.get("director_screenings", [{}])[0].get("screening", {}).get("source", "none") if screening_report.get("director_screenings") else "none",
-                    "corporate_registry": screening_report["company_screening"].get("source", "none"),
-                    "ip_geolocation": screening_report["ip_geolocation"].get("source", "none") if screening_report.get("ip_geolocation") else "none",
-                }
-            }
+            "status": "kyc_submitted",
+            "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
+            "documents_uploaded": doc_count,
+            "required_documents_verified": verification_gate["verified_required_count"],
         })
+
+
+# ══════════════════════════════════════════════════════════
+# PRE-APPROVAL DECISION ENDPOINT (v2.1: Risk-Gated Flow)
+# ══════════════════════════════════════════════════════════
+
+class PreApprovalDecisionHandler(BaseHandler):
+    """POST /api/applications/:id/pre-approval-decision
+
+    Allows compliance officers to pre-approve, reject, or request info
+    on HIGH/VERY_HIGH risk applications BEFORE KYC stage.
+
+    Decisions:
+      PRE_APPROVE   → status = pre_approved → pricing shown → KYC unlocked
+      REJECT        → status = rejected (terminal)
+      REQUEST_INFO  → status = draft (client re-edits pre-screening)
+    """
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("pre_approval", max_attempts=10, window_seconds=60):
+            return
+
+        data = self.get_json()
+        db = get_db()
+        attempt_summary = _governance_summary(data, ("decision", "notes"))
+        attempt_target = app_id
+
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+        attempt_target = app["ref"]
+
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
+
+        # Enforce: allow normal pre_approval_review and recoverable EDD-routed
+        # cases that still need a pre-KYC approval decision.
+        state_error = _pre_approval_decision_state_error(app)
+        if state_error:
+            reason = state_error
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 400)
+
+        # Validate decision
+        decision = (data.get("decision") or "").upper()
+        valid_decisions = ["PRE_APPROVE", "REJECT", "REQUEST_INFO"]
+        if decision not in valid_decisions:
+            reason = f"Invalid pre-approval decision. Must be one of: {', '.join(valid_decisions)}"
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 400)
+
+        notes = sanitize_input(data.get("notes", ""))
+        if not notes:
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                "Pre-approval decision notes are required", attempt_summary, db=db)
+            db.close()
+            return self.error("Pre-approval decision notes are required", 400)
+
+        if decision in ("PRE_APPROVE", "REJECT"):
+            risk_error = _application_risk_integrity_error(app, "record pre-approval decision")
+            if risk_error:
+                self.log_governance_attempt(
+                    user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                    risk_error, attempt_summary, db=db)
+                db.close()
+                return self.error(risk_error, 400)
+
+        # Idempotency: check if a decision was already recorded
+        if app.get("pre_approval_decision"):
+            reason = (
+                f"Pre-approval decision already recorded: {app['pre_approval_decision']}. "
+                "Duplicate decisions are blocked for audit integrity."
+            )
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 409)
+
+        # Apply decision
+        if decision == "PRE_APPROVE":
+            new_status = "kyc_documents"
+            message = "Application pre-approved. Client can now proceed to KYC document submission."
+            # Auto-transition to kyc_documents (pricing was already accepted before pre-approval)
+            db.execute("""
+                UPDATE applications SET
+                    status='kyc_documents',
+                    pre_approval_decision='PRE_APPROVE',
+                    pre_approval_notes=?,
+                    pre_approval_officer_id=?,
+                    pre_approval_timestamp=datetime('now'),
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, user["sub"], real_id))
+
+            # Notify the client
+            if app.get("client_id"):
+                db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
+                          (app["client_id"], real_id,
+                           "Application Pre-Approved — Proceed to KYC Documents",
+                           f"Your application {app['ref']} has passed initial compliance review. "
+                           f"You can now proceed with KYC verification and document submission.",
+                           "pre_approval"))
+
+        elif decision == "REJECT":
+            new_status = "rejected"
+            message = "Application rejected at pre-approval stage."
+            db.execute("""
+                UPDATE applications SET
+                    status='rejected',
+                    pre_approval_decision='REJECT',
+                    pre_approval_notes=?,
+                    pre_approval_officer_id=?,
+                    pre_approval_timestamp=datetime('now'),
+                    decided_at=datetime('now'),
+                    decision_by=?,
+                    decision_notes=?,
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, user["sub"], user["sub"], f"Rejected at pre-approval: {notes}", real_id))
+
+            # Notify the client
+            if app.get("client_id"):
+                db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
+                          (app["client_id"], real_id,
+                           "Application Update",
+                           f"Your application {app['ref']} has been reviewed. "
+                           f"Unfortunately, we are unable to proceed with your application at this time. "
+                           f"Please contact our compliance team for further information.",
+                           "pre_approval_reject"))
+
+        elif decision == "REQUEST_INFO":
+            new_status = "draft"
+            message = "Additional information requested. Client can re-edit pre-screening data."
+            db.execute("""
+                UPDATE applications SET
+                    status='draft',
+                    pre_approval_decision='REQUEST_INFO',
+                    pre_approval_notes=?,
+                    pre_approval_officer_id=?,
+                    pre_approval_timestamp=datetime('now'),
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, user["sub"], real_id))
+
+            # Notify the client
+            if app.get("client_id"):
+                db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
+                          (app["client_id"], real_id,
+                           "Additional Information Required",
+                           f"Our compliance team requires additional information for application {app['ref']}. "
+                           f"Please update your pre-screening data and resubmit. Officer notes: {notes}",
+                           "pre_approval_rmi"))
+
+        # Audit trail — authoritative in-transaction record carries before/after state
+        _after = {"status": new_status, "pre_approval_decision": decision}
+        db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
+                     VALUES (?,?,?,?,?,?,?,?,?)""",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""),
+                    f"Pre-Approval: {decision}", app["ref"],
+                    f"Pre-approval decision: {decision} | Risk: {app['risk_level']} (Score: {app['risk_score']}) | Notes: {notes}",
+                    self.get_client_ip(), _safe_json(_before), _safe_json(_after)))
+
+        self.log_governance_attempt(
+            user, "application.pre_approval_decision", attempt_target, "accepted", 201,
+            "", attempt_summary, db=db, commit=False)
+        db.commit()
+        db.close()
+
+        self.log_audit(user, f"Pre-Approval {decision}", app["ref"],
+                       f"Pre-approval decision: {decision} — {notes}")
+
+        self.success({
+            "status": "decision_recorded",
+            "decision": decision,
+            "application_status": new_status,
+            "message": message
+        }, 201)
 
 
 # ══════════════════════════════════════════════════════════
@@ -1861,8 +6040,48 @@ class SubmitApplicationHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 
 class DocumentUploadHandler(BaseHandler):
-    """POST /api/applications/:id/documents"""
-    def post(self, app_id):
+    """GET/POST /api/applications/:id/documents"""
+
+    def _upload_duration_ms(self):
+        started = getattr(self, "_upload_latency_started_at", None)
+        if started is None:
+            return None
+        return round((time.monotonic() - started) * 1000, 2)
+
+    def _audit_upload_rejected(self, user, target, reason_code, message, *,
+                               filename="", doc_type="", declared_size=None,
+                               rmi_item_id=None, status_code=400, db=None):
+        """Best-effort audit row for rejected uploads."""
+        detail = {
+            "outcome": "rejected",
+            "reason_code": reason_code,
+            "message": str(message or "")[:500],
+            "filename": os.path.basename(str(filename or ""))[:180],
+            "doc_type": str(doc_type or "")[:120],
+            "declared_size": declared_size,
+            "rmi_item_id": str(rmi_item_id or "")[:80],
+            "response_code": status_code,
+            "duration_ms": self._upload_duration_ms(),
+        }
+        try:
+            self.log_audit(
+                user,
+                f"Upload Rejected: {reason_code}",
+                target or "document-upload",
+                json.dumps(detail, sort_keys=True),
+                db=db,
+                commit=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "upload_rejection_audit_failed=true reason_code=%s target=%s error=%s",
+                reason_code,
+                target,
+                exc,
+            )
+
+    def get(self, app_id):
+        """Return current documents for an application by default."""
         user = self.require_auth()
         if not user:
             return
@@ -1877,19 +6096,143 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return
 
+        include_history = self.get_argument("include_history", "false").lower() == "true"
+        where_active = "" if include_history else f" AND {ACTIVE_DOCUMENT_SQL}"
+        docs = [dict(d) for d in db.execute(
+            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, "
+            "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
+            "expiry_date, valid_until, expiry_source, expiry_confidence, expiry_extracted_at, "
+            "verification_status, verification_results, verified_at, review_status, "
+            f"review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?{where_active} "
+            "ORDER BY uploaded_at DESC, id DESC",
+            (app["id"],)).fetchall()]
+
+        # Parse verification_results JSON strings
+        for doc in docs:
+            if doc.get("verification_results"):
+                try:
+                    doc["verification_results"] = safe_json_loads(doc["verification_results"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            decorate_document_verification_state(doc)
+
+        db.close()
+
+        self.success(docs)
+
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        if not self.check_rate_limit("doc_upload", max_attempts=30, window_seconds=60):
+            return
+
+        db = get_db()
+        app = db.execute(
+            "SELECT id, ref, client_id, risk_level, status, onboarding_lane, pre_approval_decision "
+            "FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id),
+        ).fetchone()
+        if not app:
+            self._audit_upload_rejected(user, app_id, "application_not_found", "Application not found", status_code=404, db=db)
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        requested_doc_type, doc_type_error = _validate_document_type(
+            self.get_argument("doc_type", "general"),
+            allow_general=False,
+        )
+        if doc_type_error:
+            self._audit_upload_rejected(
+                user, app["ref"], "invalid_doc_type", doc_type_error,
+                doc_type=self.get_argument("doc_type", "general"), db=db,
+            )
+            db.close()
+            return self.error(doc_type_error, 400)
+        rmi_item_id = self.get_argument("rmi_item_id", None)
+        rmi_target = None
+        if rmi_item_id:
+            rmi_target, rmi_target_error = _validate_rmi_upload_target(db, app["id"], rmi_item_id)
+            if rmi_target_error:
+                self._audit_upload_rejected(
+                    user, app["ref"], "invalid_rmi_slot", rmi_target_error,
+                    doc_type=requested_doc_type, rmi_item_id=rmi_item_id, db=db,
+                )
+                db.close()
+                return self.error(rmi_target_error, 400)
+            if rmi_target and rmi_target.get("doc_type") != requested_doc_type:
+                self._audit_upload_rejected(
+                    user, app["ref"], "doc_type_slot_mismatch",
+                    "Uploaded document type does not match the requested document slot",
+                    doc_type=requested_doc_type, rmi_item_id=rmi_item_id, db=db,
+                )
+                db.close()
+                return self.error("Uploaded document type does not match the requested document slot", 400)
+
+        rmi_status_allowed = str(app.get("status") or "").lower() == "rmi_sent"
+        if not rmi_status_allowed:
+            reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="upload")
+            if prerequisite_error:
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    reason_code,
+                    prerequisite_error,
+                    doc_type=requested_doc_type,
+                    rmi_item_id=rmi_item_id,
+                    db=db,
+                    status_code=409,
+                )
+                db.close()
+                return self.error(prerequisite_error, 409)
+
         if "file" not in self.request.files:
+            self._audit_upload_rejected(
+                user, app["ref"], "missing_file", "No file provided",
+                doc_type=requested_doc_type, db=db,
+            )
             db.close()
             return self.error("No file provided")
 
+        doc_type = requested_doc_type
         file_info = self.request.files["file"][0]
         filename = file_info["filename"]
+        # Sanitize filename
+        filename = os.path.basename(filename)
         body = file_info["body"]
+        content_type = file_info.get("content_type", "application/octet-stream")
 
         if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+            self._audit_upload_rejected(
+                user, app["ref"], "file_too_large",
+                f"File exceeds {MAX_UPLOAD_MB}MB limit",
+                filename=filename, doc_type=doc_type, declared_size=len(body), db=db,
+            )
             db.close()
             return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit")
 
-        # Save file
+        # Validate file upload (mandatory)
+        is_valid, upload_reason_code, upload_error = FileUploadValidator.validate_with_reason(
+            filename, content_type, body
+        )
+        if not is_valid:
+            self._audit_upload_rejected(
+                user,
+                app["ref"],
+                upload_reason_code or "file_rejected",
+                f"File rejected: {upload_error}",
+                filename=filename, doc_type=doc_type, declared_size=len(body), db=db,
+            )
+            db.close()
+            return self.error(f"File rejected: {upload_error}", 400)
+
+        # Save file locally (as cache; S3 is the durable store in production)
         doc_id = uuid.uuid4().hex[:16]
         ext = os.path.splitext(filename)[1]
         safe_name = f"{app['id']}_{doc_id}{ext}"
@@ -1898,18 +6241,459 @@ class DocumentUploadHandler(BaseHandler):
         with open(file_path, "wb") as f:
             f.write(body)
 
-        doc_type = self.get_argument("doc_type", "general")
-        person_id = self.get_argument("person_id", None)
+        # Upload to S3 — required in production/staging, best-effort in demo
+        s3_key = None
+        if HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, key_or_error = s3.upload_document(
+                    file_data=body,
+                    client_id=app["id"],
+                    doc_type=doc_type,
+                    filename=safe_name,
+                    content_type=content_type,
+                    metadata={"original_name": filename}
+                )
+                if success:
+                    s3_key = key_or_error
+                    logger.info(f"Document {doc_id} uploaded to S3: {s3_key}")
+                else:
+                    logger.error(f"S3 upload failed for {doc_id}: {key_or_error}")
+                    if is_production() or is_staging():
+                        self._audit_upload_rejected(
+                            user, app["ref"], "durable_storage_failed",
+                            "Document upload failed: unable to store document durably",
+                            filename=filename, doc_type=doc_type, declared_size=len(body), db=db, status_code=500,
+                        )
+                        db.close()
+                        return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                    logger.warning(f"S3 upload failed in demo — using local storage only for {doc_id}")
+            except Exception as e:
+                logger.error(f"S3 upload exception for {doc_id}: {e}")
+                if is_production() or is_staging():
+                    self._audit_upload_rejected(
+                        user, app["ref"], "durable_storage_exception",
+                        "Document upload failed: unable to store document durably",
+                        filename=filename, doc_type=doc_type, declared_size=len(body), db=db, status_code=500,
+                    )
+                    db.close()
+                    return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                logger.warning(f"S3 upload exception in demo — using local storage only for {doc_id}")
+                s3_key = None
+        elif is_production() or is_staging():
+            self._audit_upload_rejected(
+                user, app["ref"], "durable_storage_unavailable",
+                "Document upload failed: S3 storage is not available",
+                filename=filename, doc_type=doc_type, declared_size=len(body), db=db, status_code=500,
+            )
+            db.close()
+            return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
 
-        db.execute("""
-            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, file_size, mime_type)
-            VALUES (?,?,?,?,?,?,?,?)
-        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, len(body), file_info["content_type"]))
+        if ENVIRONMENT == "production" and not s3_key:
+            db.close()
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except OSError as cleanup_err:
+                logger.warning(f"Failed to clean up local file after storage error for {doc_id}: {cleanup_err}")
+            return self.error(
+                "Document storage is temporarily unavailable. Please retry once durable storage is restored.",
+                503
+            )
+
+        person_id = self.get_argument("person_id", None)
+        requested_person_type = normalize_person_type(self.get_argument("person_type", None))
+
+        # Validate person_id refers to an existing person if provided
+        person_resolved = None
+        person_type = requested_person_type
+        if person_id:
+            person_resolved = resolve_application_person(db, app["id"], person_id, requested_person_type)
+            if not person_resolved:
+                logger.warning(
+                    f"[doc-upload] person_id={person_id!r} not found in application={app['id']} "
+                    f"person_type={requested_person_type!r} doc_type={doc_type} file={filename} "
+                    f"— storing document with unresolved person_id"
+                )
+            else:
+                person_type = person_resolved.get("person_type") or requested_person_type
+
+        logger.info(
+            f"[doc-upload] app={app['id']} doc_id={doc_id} doc_type={doc_type} "
+            f"person_id={person_id!r} person_type={person_type!r} person_resolved={'yes' if person_resolved else 'no'} "
+            f"file={filename} size={len(body)} s3={'yes' if s3_key else 'no'}"
+        )
+
+        try:
+            slot_key = _document_slot_key(
+                doc_type,
+                person_id,
+                person_type=person_type,
+                rmi_item_id=rmi_item_id,
+            )
+            replacement = _prepare_document_slot_replacement(
+                db,
+                application_id=app["id"],
+                new_document_id=doc_id,
+                doc_type=doc_type,
+                person_id=person_id,
+                person_type=person_type,
+                slot_key=slot_key,
+                actor_user=user,
+                replaced_reason="upload_replacement",
+                extra_document_ids=[rmi_target.get("document_id")] if rmi_target and rmi_target.get("document_id") else None,
+            )
+            previous_documents = replacement["previous_documents"]
+            db.execute("""
+                INSERT INTO documents
+                (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
+                 file_size, mime_type, slot_key, is_current, version, verification_status,
+                 verification_results)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
+                len(body), content_type, replacement["slot_key"], True, replacement["version"],
+                STATE_PENDING, "{}",
+            ))
+            _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
+
+            rmi_fulfilled_item_id, rmi_error = _mark_rmi_item_uploaded(
+                db, app["id"], doc_id, doc_type, rmi_item_id=rmi_item_id
+            )
+            if rmi_error:
+                raise ValueError(rmi_error)
+
+            audit_detail = f"Document uploaded: {filename} ({doc_type})"
+            if person_id:
+                audit_detail += f" person_id={person_id}"
+            if rmi_fulfilled_item_id:
+                audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
+            self.log_audit(user, "Upload", app["ref"], audit_detail, db=db, commit=False)
+            if previous_documents:
+                self.log_audit(
+                    user,
+                    "document.replaced",
+                    app["ref"],
+                    json.dumps({
+                        "event": "document.replaced",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "doc_type": doc_type,
+                        "person_id": person_id,
+                        "person_type": person_type,
+                        "slot_key": replacement["slot_key"],
+                        "old_document_id": previous_documents[0]["id"],
+                        "old_document_ids": [row["id"] for row in previous_documents],
+                        "new_document_id": doc_id,
+                        "actor": user.get("sub", ""),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state={"documents": previous_documents},
+                    after_state={"document_id": doc_id, "version": replacement["version"], "is_current": True},
+                )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="document_replaced" if previous_documents else "document_uploaded",
+                reason=(
+                    "Document replacement changed memo evidence."
+                    if previous_documents
+                    else "Document upload changed memo evidence."
+                ),
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state={"documents": previous_documents} if previous_documents else None,
+                after_state={"document_id": doc_id, "doc_type": doc_type, "version": replacement["version"]},
+            )
+            db.commit()
+        except Exception as db_err:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            reason = str(db_err)
+            self._audit_upload_rejected(
+                user, app["ref"], "document_persistence_failed", reason,
+                filename=filename, doc_type=doc_type, declared_size=len(body), rmi_item_id=rmi_item_id,
+            )
+            status_code = 400 if isinstance(db_err, ValueError) else 500
+            return self.error(reason, status_code)
+        db.close()
+
+        response = {
+            "id": doc_id,
+            "doc_name": filename,
+            "doc_type": doc_type,
+            "file_size": len(body),
+            "s3_key": s3_key,
+            "person_type": person_type,
+            "slot_key": replacement["slot_key"],
+            "is_current": True,
+            "version": replacement["version"],
+            "replaced_document_ids": [row["id"] for row in previous_documents],
+        }
+        if rmi_fulfilled_item_id:
+            response["rmi_item_id"] = rmi_fulfilled_item_id
+        self.success(response, 201)
+
+
+class DocumentDeleteHandler(BaseHandler):
+    """DELETE /api/applications/:app_id/documents/:doc_id — delete an uploaded document"""
+    def delete(self, app_id, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute(
+            "SELECT id, ref, client_id, status FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id)
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        # Only allow deletion in pre-submission statuses (post-submission documents
+        # are part of the compliance audit trail and must not be removed)
+        allowed_statuses = ("draft", "kyc_documents", "rmi_sent", "pricing_accepted", "pricing_review", "pre_approved")
+        if app["status"] not in allowed_statuses:
+            db.close()
+            return self.error("Documents cannot be deleted after submission.", 403)
+
+        doc = db.execute(
+            "SELECT id, doc_name, file_path, s3_key FROM documents WHERE id=? AND application_id=?",
+            (doc_id, app["id"])
+        ).fetchone()
+        if not doc:
+            db.close()
+            return self.error("Document not found", 404)
+
+        linked_rmi_items = db.execute(
+            """SELECT i.id, i.request_id, i.status
+               FROM rmi_request_items i
+               JOIN rmi_requests r ON r.id = i.request_id
+               WHERE i.document_id = ? AND r.application_id = ?""",
+            (doc_id, app["id"]),
+        ).fetchall()
+        if any((item.get("status") or "") == "accepted" for item in linked_rmi_items):
+            db.close()
+            return self.error("Accepted requested documents cannot be deleted.", 403)
+
+        # Delete local file if exists
+        if doc["file_path"] and os.path.exists(doc["file_path"]):
+            try:
+                os.remove(doc["file_path"])
+            except OSError:
+                pass
+
+        # Delete from S3 if applicable (best-effort; DB record removal proceeds regardless)
+        if doc.get("s3_key") and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                deleted, message = s3.delete_document(doc["s3_key"])
+                if not deleted:
+                    logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], message)
+            except Exception as e:
+                logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], e)
+
+        affected_rmi_request_ids = sorted({item["request_id"] for item in linked_rmi_items})
+        if linked_rmi_items:
+            db.execute(
+                """UPDATE rmi_request_items
+                   SET status = 'requested',
+                       document_id = NULL,
+                       uploaded_at = NULL,
+                       reviewed_at = NULL
+                   WHERE document_id = ?""",
+                (doc_id,),
+            )
+
+        db.execute("DELETE FROM documents WHERE id=? AND application_id=?", (doc_id, app["id"]))
+        for request_id in affected_rmi_request_ids:
+            _sync_rmi_request_status(db, request_id)
         db.commit()
         db.close()
 
-        self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})")
-        self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body)}, 201)
+        audit_detail = f"Document deleted: {doc['doc_name']}"
+        if affected_rmi_request_ids:
+            audit_detail += " | linked RMI item reset"
+        self.log_audit(user, "Delete", app["ref"], audit_detail)
+        self.success({"deleted": True, "id": doc_id})
+
+
+def _normalize_verification_check_payload(raw_check, index=0):
+    """Return a safe verification-check dict for untrusted AI/check payloads."""
+    if isinstance(raw_check, dict):
+        check = dict(raw_check)
+        check.setdefault("label", f"Verification Check {index + 1}")
+        check.setdefault("type", "validity")
+        check.setdefault("result", "warn")
+        check.setdefault("source", "verification_engine")
+        message = check.get("message")
+        if message is None:
+            check["message"] = "Verification check returned no message; manual review required."
+        elif not isinstance(message, str):
+            check["message"] = str(message)[:500]
+        return check
+
+    # Do not echo raw AI strings back into logs: they can contain extracted
+    # document text. Preserve the operational meaning without leaking content.
+    return {
+        "label": f"Verification Check {index + 1}",
+        "type": "validity",
+        "result": "warn",
+        "source": "verification_engine",
+        "message": (
+            "Verification engine returned an unstructured "
+            f"{type(raw_check).__name__} check payload; manual review required."
+        ),
+    }
+
+
+def _normalize_verification_checks_payload(raw_checks):
+    if raw_checks is None:
+        return []
+    if isinstance(raw_checks, list):
+        return [_normalize_verification_check_payload(item, idx) for idx, item in enumerate(raw_checks)]
+    return [_normalize_verification_check_payload(raw_checks, 0)]
+
+
+def _normalize_verification_result_payload(raw_result):
+    """Normalize layered/AI verification results before any .get access."""
+    if isinstance(raw_result, dict):
+        result = dict(raw_result)
+        result["checks"] = _normalize_verification_checks_payload(result.get("checks"))
+        extracted = result.get("extracted_fields")
+        if extracted is not None and not isinstance(extracted, dict):
+            result["extracted_fields"] = {}
+        return result
+
+    if isinstance(raw_result, list):
+        return {
+            "overall": "flagged",
+            "checks": _normalize_verification_checks_payload(raw_result),
+            "_rejected": True,
+            "error": "verification returned list payload instead of result object",
+            "ai_source": "live",
+        }
+
+    return {
+        "overall": "flagged",
+        "checks": _normalize_verification_checks_payload(raw_result),
+        "_rejected": True,
+        "error": f"verification returned unsupported {type(raw_result).__name__} payload",
+        "ai_source": "live",
+    }
+
+
+def _verification_check_flags(checks):
+    flags = []
+    for check in _normalize_verification_checks_payload(checks):
+        result = str(check.get("result") or "").lower()
+        if result in ("fail", "warn"):
+            flags.append(str(check.get("message") or "")[:500])
+    return flags
+
+
+def _document_verification_transition_state(doc, status=None, **extra):
+    payload = {
+        "document_id": doc.get("id"),
+        "verification_status": normalize_verification_state(
+            status if status is not None else doc.get("verification_status")
+        ),
+        "doc_name": doc.get("doc_name"),
+        "doc_type": doc.get("doc_type"),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _log_document_verification_transition(handler, db, user, app, doc, before_state,
+                                          after_state, *, actor_type, trigger):
+    detail = {
+        "event": "document_verification_state_transition",
+        "actor_type": actor_type,
+        "trigger": trigger,
+        "application_id": (app or {}).get("id"),
+        "application_ref": (app or {}).get("ref"),
+        "document_id": doc.get("id"),
+        "from": before_state.get("verification_status"),
+        "to": after_state.get("verification_status"),
+    }
+    handler.log_audit(
+        user,
+        "Document Verification State Changed",
+        (app or {}).get("ref") or doc.get("application_id") or doc.get("id"),
+        json.dumps(detail, sort_keys=True),
+        before_state=before_state,
+        after_state=after_state,
+        db=db,
+        commit=False,
+    )
+
+
+def _mark_document_verification_failed(handler, doc_id, user, error_message):
+    """Best-effort failed terminal transition for unexpected verify crashes."""
+    fail_db = None
+    try:
+        fail_db = get_db()
+        doc = fail_db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        if not doc:
+            return
+        app = fail_db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            return
+        before_state = _document_verification_transition_state(doc)
+        error_payload = {
+            "overall": STATE_FAILED,
+            "checks": [{
+                "label": "Verification runtime",
+                "type": "system",
+                "result": "fail",
+                "message": "Verification failed before a trustworthy result could be produced.",
+            }],
+            "system_warning": "verification_runtime_failed",
+            "error": str(error_message or "")[:300],
+            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        after_state = _document_verification_transition_state(doc, STATE_FAILED)
+        fail_db.execute(
+            "UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
+            (STATE_FAILED, json.dumps(error_payload, sort_keys=True), doc_id),
+        )
+        _log_document_verification_transition(
+            handler,
+            fail_db,
+            user,
+            app,
+            doc,
+            before_state,
+            after_state,
+            actor_type="system",
+            trigger="verify_runtime_failure",
+        )
+        fail_db.commit()
+    except Exception:
+        logger.exception("Failed to persist verification failed state for doc=%s", doc_id)
+        try:
+            if fail_db:
+                fail_db.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            if fail_db:
+                fail_db.close()
+        except Exception:
+            pass
 
 
 class DocumentVerifyHandler(BaseHandler):
@@ -1920,6 +6704,40 @@ class DocumentVerifyHandler(BaseHandler):
             return
 
         db = get_db()
+        try:
+            return self._post_with_db(doc_id, user, db)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Document verification request failed for doc=%s", doc_id)
+            _mark_document_verification_failed(self, doc_id, user, exc)
+            return self.error(
+                "Document verification failed. The document requires manual review.",
+                500,
+            )
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _post_with_db(self, doc_id, user, db):
+
+        # P0-3: Check if Agent 1 (document verification) is enabled before executing
+        agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
+        if agent1 and not agent1["enabled"]:
+            db.close()
+            self.log_audit(user, "Agent Skipped", "Agent 1", "Document verification skipped — agent disabled")
+            self.success({
+                "status": "skipped",
+                "message": "Document verification agent is currently disabled",
+                "checks": [],
+                "requires_review": True
+            })
+            return
+
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
             db.close()
@@ -1927,78 +6745,1383 @@ class DocumentVerifyHandler(BaseHandler):
 
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found for document", 404)
 
-        import random
+        # PR5: Synchronous verification has an explicit, auditable in-progress state.
+        _initial_before = _document_verification_transition_state(doc)
+        if _initial_before["verification_status"] != STATE_IN_PROGRESS:
+            _in_progress_after = _document_verification_transition_state(doc, STATE_IN_PROGRESS)
+            db.execute(
+                "UPDATE documents SET verification_status=? WHERE id=?",
+                (STATE_IN_PROGRESS, doc_id),
+            )
+            _log_document_verification_transition(
+                self,
+                db,
+                user,
+                app,
+                doc,
+                _initial_before,
+                _in_progress_after,
+                actor_type="user",
+                trigger="verify_request_started",
+            )
+            db.commit()
+            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+
+        # EX-05: Capture before-state for final audit trail.
+        _doc_before = _document_verification_transition_state(doc)
+
+        # ── AI Document Verification (real vision analysis) ──
         checks = []
-        check_types = [
-            ("Name Match", "name", "Entity/person name verified against application"),
-            ("Document Date", "age", "Document is within acceptable date range"),
-            ("Document Clarity", "quality", "Document is legible and complete"),
-            ("Content Verification", "content", "Required content elements present"),
-        ]
         all_passed = True
-        for label, ctype, rule in check_types:
-            passed = random.random() > 0.12  # 88% pass rate
-            severity = "pass" if passed else ("warn" if random.random() > 0.4 else "fail")
-            if not passed:
+
+        # Resolve file path — prefer local, fallback to S3 download
+        file_path = doc.get("file_path", "")
+        if file_path and not os.path.isabs(file_path):
+            file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
+
+        file_source = "none"
+        if file_path and os.path.isfile(file_path):
+            file_source = "local"
+        elif doc.get("s3_key") and HAS_S3:
+            # S3 fallback: local file missing (e.g. after container redeploy) but S3 key exists
+            try:
+                s3 = get_s3_client()
+                s3_ok, s3_data = s3.download_document(doc["s3_key"])
+                if s3_ok and isinstance(s3_data, bytes):
+                    ext = os.path.splitext(doc.get("doc_name", "") or "")[1] or ".bin"
+                    cache_name = f"s3_cache_{doc_id}{ext}"
+                    cache_path = os.path.join(UPLOAD_DIR, cache_name)
+                    with open(cache_path, "wb") as _cf:
+                        _cf.write(s3_data)
+                    file_path = cache_path
+                    file_source = "s3"
+                    logger.info(f"[verify] doc={doc_id} retrieved from S3 ({len(s3_data)} bytes)")
+                else:
+                    logger.warning(f"[verify] doc={doc_id} S3 download failed: {s3_data}")
+            except Exception as s3_err:
+                logger.error(f"[verify] doc={doc_id} S3 fallback error: {s3_err}")
+
+        verification_context = build_document_verification_context(db, app, doc)
+        person_record = verification_context["person_record"]
+        raw_doc_type = verification_context["raw_doc_type"]
+        base_doc_type = verification_context["base_doc_type"]
+        doc_category = verification_context["doc_category"]
+        entity_name = verification_context["entity_name"]
+        person_name = verification_context["person_name"]
+        directors_list = verification_context["directors_list"]
+        ubos_list = verification_context["ubos_list"]
+        verify_name = entity_name if doc_category == "company" else person_name
+
+        # Diagnostic logging for verification context
+        logger.info(
+            f"[verify-context] doc={doc_id} app={doc.get('application_id','')} "
+            f"raw_doc_type={raw_doc_type} base_doc_type={base_doc_type} doc_category={doc_category} "
+            f"person_id={doc.get('person_id','')} verify_name={verify_name!r} entity_name={entity_name!r} "
+            f"file_source={file_source} local_exists={os.path.isfile(file_path) if file_path else False} "
+            f"s3_key={'yes' if doc.get('s3_key') else 'no'}"
+        )
+
+        # Load check overrides from ai_checks table (hybrid/AI checks only)
+        check_overrides = None
+        try:
+            check_category = "entity" if doc_category == "company" else "person"
+            ai_check_row = db.execute(
+                "SELECT checks FROM ai_checks WHERE doc_type=? AND category=?",
+                (base_doc_type, check_category)
+            ).fetchone()
+            if ai_check_row and ai_check_row["checks"]:
+                loaded_checks = safe_json_loads(ai_check_row["checks"])
+                if loaded_checks:
+                    check_overrides = loaded_checks
+            if not check_overrides:
+                logger.warning(f"No DB checks found for doc_type={base_doc_type}, category={check_category}. Using matrix fallback.")
+        except Exception as e:
+            logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using matrix fallback.")
+
+        # Build effective declared-data context from stored application data + save/resume overlay
+        prescreening_data = verification_context["prescreening_data"]
+        risk_level = (app.get("risk_level") or "MEDIUM") if app else "MEDIUM"
+
+        # Compute SHA-256 hashes of other documents already uploaded for this application
+        # Used by GATE-03 duplicate detection
+        existing_hashes = []
+        if app:
+            try:
+                other_docs = db.execute(
+                    f"SELECT file_path FROM documents WHERE application_id=? AND id!=? AND {ACTIVE_DOCUMENT_SQL}",
+                    (app["id"], doc_id)
+                ).fetchall()
+                for od in other_docs:
+                    fp = od.get("file_path", "")
+                    if fp and not os.path.isabs(fp):
+                        fp = os.path.join(UPLOAD_DIR, os.path.basename(fp))
+                    if fp and os.path.isfile(fp):
+                        try:
+                            h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
+                            existing_hashes.append(h)
+                        except OSError:
+                            pass
+            except Exception as e:
+                logger.debug(f"Could not compute existing hashes: {e}")
+
+        ai_result = None
+        try:
+            if HAS_DOC_VERIFICATION:
+                _claude = ClaudeClient(
+                    api_key=_CFG_ANTHROPIC_API_KEY,
+                    monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
+                    mock_mode=_CFG_CLAUDE_MOCK_MODE,
+                ) if HAS_CLAUDE_CLIENT else None
+
+                ai_result = verify_document_layered(
+                    doc_type=base_doc_type,
+                    category="entity" if doc_category == "company" else "person",
+                    file_path=file_path,
+                    file_size=doc.get("file_size") or 0,
+                    mime_type=doc.get("mime_type") or "",
+                    prescreening_data=prescreening_data,
+                    risk_level=risk_level,
+                    existing_hashes=existing_hashes,
+                    claude_client=_claude,
+                    entity_name=entity_name,
+                    person_name=verify_name,
+                    directors=directors_list,
+                    ubos=ubos_list,
+                    check_overrides=check_overrides,
+                    file_name=doc.get("doc_name", ""),
+                )
+                ai_result = _normalize_verification_result_payload(ai_result)
+
+                # P0-2: Guard against rejected/invalid AI responses
+                if ai_result.get("_rejected") or ai_result.get("_validated") is False:
+                    logger.warning(f"Layered verification rejected for doc {doc_id}: {ai_result.get('error', 'validation failed')}")
+                    checks = ai_result.get("checks") or [{"label": "AI Verification", "type": "validity", "result": "fail",
+                               "message": "Verification output failed validation — manual review required"}]
+                    all_passed = False
+                else:
+                    checks = _normalize_verification_checks_payload(ai_result.get("checks", []))
+                    # P0-5: No pass without evidence
+                    if not checks:
+                        all_passed = False
+                    else:
+                        all_passed = ai_result.get("overall") == "verified"
+
+            elif HAS_CLAUDE_CLIENT:
+                # Fallback: legacy single-Claude-call path if layered engine unavailable
+                claude_client = ClaudeClient(
+                    api_key=_CFG_ANTHROPIC_API_KEY,
+                    monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
+                    mock_mode=_CFG_CLAUDE_MOCK_MODE,
+                )
+                ai_result = claude_client.verify_document(
+                    doc_type=base_doc_type,
+                    file_name=doc.get("doc_name", ""),
+                    person_name=verify_name,
+                    doc_category=doc_category,
+                    file_path=file_path,
+                    check_overrides=check_overrides,
+                    entity_name=entity_name,
+                    directors=directors_list,
+                    ubos=ubos_list,
+                )
+                ai_result = _normalize_verification_result_payload(ai_result)
+                if ai_result.get("_rejected") or ai_result.get("_validated") is False:
+                    logger.warning(f"AI verification rejected for doc {doc_id}: {ai_result.get('error', 'schema validation failed')}")
+                    checks = ai_result.get("checks") or [{"label": "AI Verification", "type": "validity", "result": "fail",
+                               "message": "AI output failed validation — manual review required"}]
+                    all_passed = False
+                else:
+                    checks = _normalize_verification_checks_payload(ai_result.get("checks", []))
+                    if not checks:
+                        all_passed = False
+                    else:
+                        all_passed = ai_result.get("overall") == "verified"
+            else:
+                logger.warning("Document verification engine not available — flagging for manual review")
+                checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                           "message": "Verification engine unavailable — manual review required"}]
                 all_passed = False
-            checks.append({
-                "label": label,
-                "type": ctype,
-                "rule": rule,
-                "result": severity,
-                "message": "" if passed else f"Check flagged — manual review recommended"
+        except Exception as e:
+            logger.warning(
+                "Document verification engine failed for doc=%s error_type=%s",
+                doc_id,
+                type(e).__name__,
+            )
+            ai_result = _normalize_verification_result_payload({
+                "overall": "flagged",
+                "_rejected": True,
+                "error": str(e)[:200],
+                "checks": [{"label": "AI Verification", "type": "validity", "result": "warn",
+                           "message": f"Verification error: {str(e)[:100]}. Manual review required."}],
             })
+            checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                       "message": f"Verification error: {str(e)[:100]}. Manual review required."}]
+            all_passed = False
 
         # If it's an identity document, run sanctions/PEP screening
         sanctions_result = None
         id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
         if doc["doc_type"] in id_doc_types and doc["person_id"]:
-            # Try to find the person's name
-            person = db.execute("SELECT full_name, nationality FROM directors WHERE id=?", (doc["person_id"],)).fetchone()
-            if not person:
-                person = db.execute("SELECT full_name, nationality FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
-            if person:
-                sanctions_result = screen_opensanctions(
-                    person["full_name"],
-                    nationality=person["nationality"],
-                    entity_type="Person"
-                )
-                if sanctions_result["matched"]:
-                    all_passed = False
-                    checks.append({
-                        "label": "Sanctions/PEP Screening",
-                        "type": "sanctions",
-                        "rule": "Screened against OpenSanctions watchlists and PEP databases",
-                        "result": "fail",
-                        "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
-                        "details": sanctions_result["results"],
-                        "source": sanctions_result["source"]
-                    })
+            try:
+                person = resolve_application_person(db, doc["application_id"], doc["person_id"])
+                if person:
+                    person_name = person.get("full_name") or ""
+                    if not person_name:
+                        logger.warning(f"[verify] doc={doc_id} person_id={doc['person_id']} resolved but full_name is empty — skipping sanctions screening")
+                    else:
+                        sanctions_result = screen_sumsub_aml(
+                            person_name,
+                            nationality=person.get("nationality"),
+                            entity_type="Person"
+                        )
+                        if sanctions_result["matched"]:
+                            all_passed = False
+                            checks.append({
+                                "label": "Sanctions/PEP Screening",
+                                "type": "sanctions",
+                                "rule": "Screened against Sumsub AML watchlists and PEP databases",
+                                "result": "fail",
+                                "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
+                                "details": sanctions_result["results"],
+                                "source": sanctions_result["source"]
+                            })
+                        else:
+                            checks.append({
+                                "label": "Sanctions/PEP Screening",
+                                "type": "sanctions",
+                                "rule": "Screened against Sumsub AML watchlists and PEP databases",
+                                "result": "pass",
+                                "message": "No matches found on sanctions or PEP lists",
+                                "source": sanctions_result["source"]
+                            })
                 else:
-                    checks.append({
-                        "label": "Sanctions/PEP Screening",
-                        "type": "sanctions",
-                        "rule": "Screened against OpenSanctions watchlists and PEP databases",
-                        "result": "pass",
-                        "message": "No matches found on sanctions or PEP lists",
-                        "source": sanctions_result["source"]
-                    })
+                    logger.warning(
+                        f"[verify] doc={doc_id} person_id={doc['person_id']} not found in application={doc['application_id']} — skipping sanctions screening"
+                    )
+            except Exception as screening_err:
+                logger.error(f"[verify] Sanctions screening failed for doc={doc_id} person_id={doc.get('person_id')}: {screening_err}")
+                checks.append({
+                    "label": "Sanctions/PEP Screening",
+                    "type": "sanctions",
+                    "result": "warn",
+                    "message": "Screening temporarily unavailable. Manual review required."
+                })
+                all_passed = False
 
-        status = "verified" if all_passed else "flagged"
-        results = json.dumps({
-            "checks": checks,
+        status = STATE_VERIFIED if all_passed else STATE_FLAGGED
+
+        # Finding 9: Propagate ai_source so mock/degraded results are explicit
+        ai_source = "live"
+        if isinstance(ai_result, dict):
+            ai_source = ai_result.get("ai_source", "live")
+        if not HAS_CLAUDE_CLIENT:
+            ai_source = "unavailable"
+        if _CFG_CLAUDE_MOCK_MODE:
+            ai_source = "mock"
+
+        # Build system_warning if file was inaccessible
+        system_warning = None
+        if file_source == "none":
+            system_warning = "file_not_accessible"
+        elif not verify_name and doc_category == "company":
+            system_warning = "entity_context_missing"
+
+        normalized_ai_result = _normalize_verification_result_payload(ai_result or {"checks": checks, "overall": status})
+        try:
+            layered_results = to_legacy_result(normalized_ai_result) if to_legacy_result else {
+                "checks": checks,
+                "overall": status,
+            }
+            if not isinstance(layered_results, dict):
+                layered_results = {"checks": checks, "overall": status}
+        except Exception as exc:
+            logger.warning(
+                "Verification legacy-result normalization failed for doc=%s error_type=%s",
+                doc_id,
+                type(exc).__name__,
+            )
+            layered_results = {"checks": checks, "overall": status}
+        checks = _normalize_verification_checks_payload(checks)
+        layered_results.update({
             "overall": status,
-            "verified_at": datetime.utcnow().isoformat(),
-            "sanctions_screening": sanctions_result
-        }, default=str)
+            "checks": checks,
+            "ai_source": ai_source,
+            "file_source": file_source,
+            "system_warning": system_warning,
+            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "sanctions_screening": sanctions_result,
+            "doc_category": doc_category,
+            "subject_id": doc.get("person_id") or (app.get("id") if app else ""),
+            "subject_type": verification_context["subject_type"],
+        })
+        results = json.dumps(layered_results, default=str)
+        extracted_fields = {}
+        if isinstance(normalized_ai_result, dict):
+            extracted_fields = normalized_ai_result.get("extracted_fields") or {}
+        if not extracted_fields and isinstance(layered_results.get("extracted_fields"), dict):
+            extracted_fields = layered_results.get("extracted_fields") or {}
+        # Canonical extraction keys come from document_verification /
+        # Claude field extraction. We accept the historical aliases here
+        # so stored document metadata stays compatible across older
+        # verification payloads.
+        extracted_expiry = (
+            extracted_fields.get("expiry_date")
+            or extracted_fields.get("expiry")
+            or extracted_fields.get("validity_to")
+        )
+        extracted_valid_until = extracted_fields.get("valid_until")
+        persisted_expiry = (
+            extracted_expiry
+            if extracted_expiry not in (None, "")
+            else doc.get("expiry_date")
+        )
+        persisted_valid_until = (
+            extracted_valid_until
+            if extracted_valid_until not in (None, "")
+            else doc.get("valid_until")
+        )
 
-        db.execute("UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
-                   (status, results, doc_id))
+        # EX-05/PR5: Log final document verification with before/after state.
+        _doc_after = _document_verification_transition_state(doc, status, checks_count=len(checks))
+        db.execute(
+            "UPDATE documents SET verification_status=?, verification_results=?, "
+            "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
+            (
+                status,
+                results,
+                persisted_expiry,
+                persisted_valid_until,
+                doc_id,
+            ),
+        )
+        _log_document_verification_transition(
+            self,
+            db,
+            user,
+            app,
+            doc,
+            _doc_before,
+            _doc_after,
+            actor_type="user",
+            trigger="verify_request_completed",
+        )
+        self.log_audit(
+            user,
+            "Document Verified",
+            app["ref"],
+            f"Document '{doc.get('doc_name', doc_id)}' verification: {status} ({len(checks)} checks)",
+            before_state=_doc_before,
+            after_state=_doc_after,
+            db=db,
+            commit=False,
+        )
+        if (_doc_before.get("verification_status") or "") != status:
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="document_verification_status_changed",
+                reason="Document verification status changed after memo generation.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=_doc_before,
+                after_state=_doc_after,
+            )
         db.commit()
         db.close()
 
-        self.success({"doc_id": doc_id, "status": status, "checks": checks})
+        # Improvement 8: Log agent execution for traceability
+        try:
+            app_id = doc.get("application_id", "")
+            log_agent_execution(
+                application_id=app_id,
+                agent_name="verify_document",
+                agent_number=1,
+                status=status,
+                checks=checks,
+                flags=_verification_check_flags(checks),
+                requires_review=not all_passed,
+                document_id=doc_id,
+            )
+        except Exception as e:
+            logger.debug(f"Agent execution logging failed: {e}")
+
+        self.success({
+            "doc_id": doc_id,
+            "status": status,
+            "verification_status": status,
+            **verification_state_payload(status),
+            "checks": checks,
+            "verification_results": layered_results,
+            "verified_at": layered_results.get("verified_at"),
+        })
+
+
+class DocumentReviewHandler(BaseHandler):
+    """POST /api/documents/:id/review — persist officer document review outcome"""
+    def post(self, doc_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        review_status = str(data.get("status", "pending")).strip().lower()
+        review_comment = str(data.get("comment", "") or "").strip()
+        allowed_statuses = {"pending", "accepted", "rejected", "info_requested"}
+        if review_status not in allowed_statuses:
+            return self.error("Invalid document review status", 400)
+
+        db = get_db()
+        doc = db.execute(
+            "SELECT id, application_id, doc_name, doc_type, verification_status, review_status, review_comment, reviewed_by "
+            "FROM documents WHERE id=?", (doc_id,)
+        ).fetchone()
+        if not doc:
+            db.close()
+            return self.error("Document not found", 404)
+
+        app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        user_role = (user.get("role") or "").lower()
+
+        # Senior-officer override gate for flagged documents (EX-06):
+        # Only admin/sco may accept a flagged document, and a non-empty reason
+        # (review_comment) is mandatory.  Non-senior roles are rejected outright.
+        is_flagged = (doc.get("verification_status") or "").lower() == "flagged"
+        if is_flagged and review_status == "accepted":
+            if user_role not in ("admin", "sco"):
+                db.close()
+                return self.error(
+                    "Only senior compliance officers (admin/sco) may accept flagged documents", 403
+                )
+            if not review_comment:
+                db.close()
+                return self.error(
+                    "A documented reason is required when accepting a flagged document", 400
+                )
+
+        # Capture before-state for audit trail
+        _before = {
+            "verification_status": doc.get("verification_status"),
+            "review_status": doc.get("review_status"),
+            "review_comment": doc.get("review_comment"),
+            "reviewed_by": doc.get("reviewed_by"),
+        }
+
+        db.execute("""
+            UPDATE documents
+            SET review_status = ?, review_comment = ?, reviewed_by = ?, reviewer_role = ?, reviewed_at = datetime('now')
+            WHERE id = ?
+        """, (review_status, review_comment, user.get("sub", ""), user_role, doc_id))
+        rmi_item = db.execute(
+            "SELECT id, request_id FROM rmi_request_items WHERE document_id = ? ORDER BY uploaded_at DESC LIMIT 1",
+            (doc_id,),
+        ).fetchone()
+        if rmi_item:
+            if review_status == "accepted":
+                db.execute(
+                    "UPDATE rmi_request_items SET status = 'accepted', reviewed_at = datetime('now') WHERE id = ?",
+                    (rmi_item["id"],),
+                )
+            elif review_status in ("rejected", "info_requested"):
+                db.execute(
+                    "UPDATE rmi_request_items SET status = 'rejected', reviewed_at = datetime('now') WHERE id = ?",
+                    (rmi_item["id"],),
+                )
+            _sync_rmi_request_status(db, rmi_item["request_id"])
+        db.commit()
+
+        reviewed_doc = db.execute("""
+            SELECT id, review_status, review_comment, reviewed_by, reviewed_at, reviewer_role
+            FROM documents WHERE id = ?
+        """, (doc_id,)).fetchone()
+        result = dict(reviewed_doc)
+        result["reviewed_by_name"] = resolve_user_display_name(db, result.get("reviewed_by"))
+        db.close()
+
+        # Audit trail — enhanced for flagged-document override
+        _after = {
+            "verification_status": doc.get("verification_status"),
+            "review_status": review_status,
+            "review_comment": review_comment,
+            "reviewed_by": user.get("sub", ""),
+            "reviewer_role": user_role,
+        }
+        if is_flagged and review_status == "accepted":
+            audit_action = "Document Accepted With Findings"
+            audit_detail = (
+                f"Senior override: flagged document '{doc['doc_name']}' (type={doc.get('doc_type')}) "
+                f"accepted by {user.get('name', '')} (role={user_role}). "
+                f"Reason: {review_comment}"
+            )
+        else:
+            audit_action = "Document Review"
+            audit_detail = (
+                f"Document {doc['doc_name']} marked {review_status}"
+                + (f" — {review_comment}" if review_comment else "")
+            )
+
+        self.log_audit(
+            user,
+            audit_action,
+            app["ref"],
+            audit_detail,
+            before_state=_before,
+            after_state=_after,
+        )
+        self.success(result)
+
+
+class DocumentAIVerifyHandler(BaseHandler):
+    """POST /api/documents/ai-verify — AI document verification using Claude"""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        if not self.check_rate_limit("ai_verify", max_attempts=10, window_seconds=60):
+            return
+
+        try:
+            body = json.loads(self.request.body)
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.warning(f"Invalid JSON in AI verify request: {e}")
+            return self.error("Invalid JSON", 400)
+
+        doc_type = body.get("doc_type", "")
+        file_name = body.get("file_name", "")
+        person_name = body.get("person_name", "")
+        doc_category = body.get("doc_category", "identity")
+        doc_id = body.get("doc_id", "")
+        entity_name = body.get("entity_name", "")
+        directors = body.get("directors", [])
+        ubos = body.get("ubos", [])
+        app_id = body.get("application_id", "")
+
+        # Defense-in-depth: normalize portal HTML IDs to canonical doc_type values
+        _DOC_TYPE_NORMALIZE = {
+            "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+            "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+            "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+            "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+            "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+            "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+            "doc-aml-policy": "aml_policy",
+        }
+        doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
+
+        if not doc_type or not file_name:
+            return self.error("doc_type and file_name are required", 400)
+        doc_type, doc_type_error = _validate_document_type(doc_type, allow_general=False)
+        if doc_type_error:
+            return self.error(doc_type_error, 400)
+
+        # If pre-screening context not provided in request, look it up from the application
+        if (not entity_name or not directors) and app_id:
+            try:
+                db = get_db()
+                app_row = db.execute("SELECT company_name, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
+                if app_row:
+                    if not entity_name:
+                        entity_name = app_row.get("company_name", "") or ""
+                    if not directors:
+                        dir_rows = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app_id,)).fetchall()
+                        directors = [r["full_name"] for r in dir_rows if r.get("full_name")]
+                    if not ubos:
+                        ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app_id,)).fetchall()
+                        ubos = [r["full_name"] for r in ubo_rows if r.get("full_name")]
+                db.close()
+            except Exception as e:
+                logger.warning(f"Could not look up pre-screening data for app {app_id}: {e}")
+
+        # Resolve file path if doc_id provided, with S3 fallback
+        file_path = None
+        if doc_id:
+            db = get_db()
+            doc_record = db.execute("SELECT file_path, s3_key, doc_name, application_id, person_id FROM documents WHERE id=?", (doc_id,)).fetchone()
+            db.close()
+            if doc_record:
+                fp = doc_record.get("file_path", "")
+                if fp and not os.path.isabs(fp):
+                    file_path = os.path.join(UPLOAD_DIR, os.path.basename(fp))
+                elif fp:
+                    file_path = fp
+
+                # S3 fallback: local file missing (e.g. after container redeploy)
+                if (not file_path or not os.path.isfile(file_path)) and doc_record.get("s3_key") and HAS_S3:
+                    try:
+                        s3 = get_s3_client()
+                        s3_ok, s3_data = s3.download_document(doc_record["s3_key"])
+                        if s3_ok and isinstance(s3_data, bytes):
+                            ext = os.path.splitext(doc_record.get("doc_name", "") or "")[1] or ".bin"
+                            cache_name = f"s3_cache_{doc_id}{ext}"
+                            cache_path = os.path.join(UPLOAD_DIR, cache_name)
+                            with open(cache_path, "wb") as _cf:
+                                _cf.write(s3_data)
+                            file_path = cache_path
+                            logger.info(f"[ai-verify] doc={doc_id} retrieved from S3 ({len(s3_data)} bytes)")
+                    except Exception as s3_err:
+                        logger.error(f"[ai-verify] doc={doc_id} S3 fallback error: {s3_err}")
+
+                # Auto-resolve application_id from document record if not provided
+                if not app_id and doc_record.get("application_id"):
+                    app_id = doc_record["application_id"]
+
+                # Auto-resolve person_name from document record if not provided
+                if not person_name and doc_record.get("person_id"):
+                    try:
+                        db2 = get_db()
+                        person_row = db2.execute(
+                            "SELECT full_name FROM directors WHERE id=? UNION SELECT full_name FROM ubos WHERE id=?",
+                            (doc_record["person_id"], doc_record["person_id"])
+                        ).fetchone()
+                        db2.close()
+                        if person_row:
+                            person_name = person_row.get("full_name", "")
+                    except Exception:
+                        pass
+
+        # Load check_overrides and prescreening_context from DB so that the helper path
+        # uses the same canonical check IDs as the authoritative DocumentVerifyHandler.
+        check_overrides = None
+        prescreening_context = {}
+        if app_id:
+            try:
+                db3 = get_db()
+                check_category = "entity" if doc_category in ("company", "entity") else "person"
+                ai_check_row = db3.execute(
+                    "SELECT checks FROM ai_checks WHERE doc_type=? AND category=?",
+                    (doc_type, check_category)
+                ).fetchone()
+                if ai_check_row and ai_check_row.get("checks"):
+                    loaded = safe_json_loads(ai_check_row["checks"])
+                    if loaded:
+                        check_overrides = loaded
+
+                # Build minimal prescreening context from declared values
+                ps_row = db3.execute(
+                    "SELECT prescreening_data, company_name FROM applications WHERE id=?",
+                    (app_id,)
+                ).fetchone()
+                if ps_row:
+                    stored_ps = parse_json_field(ps_row.get("prescreening_data"), {})
+                    if isinstance(stored_ps, dict):
+                        prescreening_context = {
+                            k: v for k, v in stored_ps.items()
+                            if v not in (None, "", [], {})
+                        }
+                db3.close()
+            except Exception as _e:
+                logger.warning(f"[ai-verify] Could not load check_overrides/prescreening for app {app_id}: {_e}")
+
+        # Initialize Claude client
+        if not HAS_CLAUDE_CLIENT:
+            logger.warning("Claude client not available — returning flagged response for manual review")
+            return self.success({
+                "checks": [
+                    {"label": "Document Type Match", "type": "doc_type_match", "result": "warn", "message": "AI unavailable — manual review required"},
+                    {"label": "Document Validity", "type": "validity", "result": "warn", "message": "AI unavailable — manual review required"},
+                ],
+                "overall": "flagged",
+                "confidence": 0.0,
+                "ai_source": "unavailable",
+                # /api/documents/ai-verify is helper-only; persisted /api/documents/:id/verify stays authoritative.
+                "authoritative": False,
+            })
+
+        try:
+            claude_client = ClaudeClient(
+                api_key=_CFG_ANTHROPIC_API_KEY,
+                monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
+                mock_mode=_CFG_CLAUDE_MOCK_MODE
+            )
+
+            result = claude_client.verify_document(
+                doc_type=doc_type,
+                file_name=file_name,
+                person_name=person_name,
+                doc_category=doc_category,
+                file_path=file_path,
+                entity_name=entity_name,
+                directors=directors,
+                ubos=ubos,
+                check_overrides=check_overrides or None,
+                prescreening_context=prescreening_context or None,
+            )
+
+            # P0-2: Guard against rejected/invalid AI responses
+            if result.get("_rejected") or result.get("_validated") is False:
+                logger.warning(f"AI verify rejected for {doc_type}/{file_name}: {result.get('error', 'schema validation failed')}")
+                result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "fail",
+                                     "message": "AI output failed validation — manual review required"}]
+                result["overall"] = "flagged"
+
+            # P0-5: No pass without evidence — empty checks cannot be "verified"
+            if not result.get("checks"):
+                result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                                     "message": "No verification checks returned — manual review required"}]
+                result["overall"] = "flagged"
+
+            # /api/documents/ai-verify is helper-only; persisted /api/documents/:id/verify stays authoritative.
+            result["authoritative"] = False
+            self.success(result)
+        except Exception as e:
+            logger.error(f"Document AI verification failed: {e}")
+            self.error("AI verification temporarily unavailable — please retry or proceed with manual review", 500)
+
+
+# ══════════════════════════════════════════════════════════
+# DOCUMENT DOWNLOAD ENDPOINT
+# ══════════════════════════════════════════════════════════
+
+# MIME types that support inline preview in browsers
+INLINE_PREVIEWABLE_TYPES = {
+    "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
+}
+
+class DocumentDownloadHandler(BaseHandler):
+    """GET /api/documents/:id/download — get presigned S3 URL or serve local file.
+    Query params:
+      ?view=inline — for previewable types (PDF, images), serve with Content-Disposition: inline
+                     so the browser opens the file in a new tab instead of downloading.
+    """
+    def get(self, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        inline_view = self.get_argument("view", "") == "inline"
+
+        db = get_db()
+        try:
+            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+            if not doc:
+                return self.error("Document not found", 404)
+
+            # Check access - officer can view any, client can only view their own.
+            app = db.execute("SELECT id, client_id, ref FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if user.get("type") == "client" and app["client_id"] != user["sub"]:
+                return self.error("Access denied", 403)
+
+            mime_type = doc.get("mime_type") or "application/octet-stream"
+            is_previewable = mime_type in INLINE_PREVIEWABLE_TYPES
+            disposition = "inline" if (inline_view and is_previewable) else "attachment"
+
+            s3_key = doc.get("s3_key") if doc else None
+
+            # Prefer S3 presigned URL if document is stored in S3.
+            if s3_key and HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, url_or_error = s3.get_presigned_url_with_ownership(
+                        key=s3_key,
+                        requesting_user_id=user.get("sub", ""),
+                        requesting_user_role=user.get("role") or user.get("type", ""),
+                        db_connection=db,
+                        expiry=900,
+                        response_filename=doc["doc_name"]
+                    )
+                    if success:
+                        action = "View" if inline_view else "Download"
+                        self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed via S3: {doc['doc_name']}")
+                        return self.success({
+                            "download_url": url_or_error,
+                            "source": "s3",
+                            "expires_in": 900,
+                            "disposition": disposition,
+                            "previewable": is_previewable,
+                        })
+                    logger.warning(f"S3 presigned URL failed for {doc_id}: {url_or_error}. Falling back to local.")
+                except Exception as e:
+                    logger.warning(f"S3 download failed for {doc_id}: {e}. Falling back to local.")
+
+            # Fall back to local file with strict upload directory containment.
+            file_path = _resolve_upload_document_path(doc.get("file_path"))
+            if not file_path or not os.path.exists(file_path):
+                return self.error("Document file not found on server", 404)
+
+            self.set_header("Content-Type", mime_type)
+            self.set_header("Content-Disposition", f'{disposition}; filename="{doc["doc_name"]}"')
+            with open(file_path, "rb") as f:
+                self.write(f.read())
+            action = "View" if inline_view else "Download"
+            self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed locally: {doc['doc_name']}")
+            self.finish()
+        finally:
+            db.close()
+
+
+# ══════════════════════════════════════════════════════════
+# COMPLIANCE RESOURCES ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class ComplianceResourcesHandler(BaseHandler):
+    """GET/POST /api/resources — list and upload compliance reference resources"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        rows = db.execute("""
+            SELECT r.id, r.slug, r.title, r.description, r.category, r.resource_type, r.file_name,
+                   r.mime_type, r.file_size, r.created_at, r.updated_at, r.uploaded_by,
+                   u.full_name AS uploaded_by_name
+            FROM compliance_resources r
+            LEFT JOIN users u ON r.uploaded_by = u.id
+            ORDER BY
+                CASE WHEN r.resource_type = 'system' THEN 0 ELSE 1 END,
+                r.created_at DESC,
+                r.title ASC
+        """).fetchall()
+        db.close()
+        self.success({"resources": [dict(r) for r in rows]})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("resource_upload", max_attempts=20, window_seconds=60):
+            return
+
+        files = self.request.files.get("files") or self.request.files.get("file") or []
+        if not files:
+            return self.error("No file provided", 400)
+
+        uploaded = []
+        db = get_db()
+        try:
+            for file_info in files:
+                filename = os.path.basename(file_info["filename"] or "")
+                body = file_info["body"]
+                content_type = file_info.get("content_type", "application/octet-stream")
+
+                if not filename:
+                    continue
+                if len(body) > 25 * 1024 * 1024:
+                    return self.error(f"File exceeds 25MB limit: {filename}", 400)
+
+                is_valid, upload_error = FileUploadValidator.validate(filename, content_type, body)
+                if not is_valid:
+                    return self.error(f"File rejected: {upload_error}", 400)
+
+                resource_id = uuid.uuid4().hex[:16]
+                ext = os.path.splitext(filename)[1]
+                safe_name = f"{resource_id}{ext}"
+                file_path = os.path.join(RESOURCE_UPLOAD_DIR, safe_name)
+
+                with open(file_path, "wb") as f:
+                    f.write(body)
+
+                db.execute("""
+                    INSERT INTO compliance_resources
+                    (id, title, description, category, resource_type, file_name, file_path, mime_type, file_size, uploaded_by, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                """, (
+                    resource_id,
+                    filename,
+                    "Uploaded via back-office resources library.",
+                    "internal",
+                    "uploaded",
+                    filename,
+                    file_path,
+                    content_type,
+                    len(body),
+                    user.get("sub", ""),
+                ))
+
+                uploaded.append({
+                    "id": resource_id,
+                    "title": filename,
+                    "file_name": filename,
+                    "file_size": len(body),
+                    "mime_type": content_type,
+                })
+
+            db.commit()
+        finally:
+            db.close()
+
+        for resource in uploaded:
+            self.log_audit(user, "Upload", "Resources", f"Compliance resource uploaded: {resource['file_name']}")
+
+        self.success({"uploaded": uploaded, "count": len(uploaded)}, 201)
+
+
+class ComplianceResourceDownloadHandler(BaseHandler):
+    """GET /api/resources/:id/download — download a compliance resource"""
+    def get(self, resource_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        resource = db.execute("SELECT * FROM compliance_resources WHERE id = ? OR slug = ?", (resource_id, resource_id)).fetchone()
+        db.close()
+        if not resource:
+            return self.error("Resource not found", 404)
+
+        file_path = resource["file_path"]
+        if not file_path:
+            return self.error("Resource file is not configured", 404)
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(STATIC_DIR, file_path)
+        if not os.path.exists(file_path):
+            return self.error("Resource file not found on server", 404)
+
+        self.set_header("Content-Type", resource.get("mime_type") or "application/octet-stream")
+        self.set_header("Content-Disposition", f'attachment; filename="{resource["file_name"]}"')
+        with open(file_path, "rb") as f:
+            self.write(f.read())
+        self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {resource['file_name']}")
+        self.finish()
+
+
+# ══════════════════════════════════════════════════════════
+# REGULATORY INTELLIGENCE ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class RegulatoryIntelligenceHandler(BaseHandler):
+    """GET/POST /api/regulatory-intelligence — persisted regulatory document workflow"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        rows = db.execute("""
+            SELECT d.*, u.full_name AS uploaded_by_name
+            FROM regulatory_documents d
+            LEFT JOIN users u ON d.uploaded_by = u.id
+            ORDER BY d.created_at DESC, d.title ASC
+        """).fetchall()
+        db.close()
+
+        documents = []
+        for row in rows:
+            doc = dict(row)
+            for key, default in (("analysis_summary", {}), ("audit_trail", [])):
+                try:
+                    raw_value = doc.get(key)
+                    if raw_value is None:
+                        doc[key] = default
+                    elif isinstance(raw_value, (dict, list)):
+                        doc[key] = raw_value
+                    else:
+                        doc[key] = safe_json_loads(raw_value)
+                except (json.JSONDecodeError, TypeError):
+                    doc[key] = default
+            doc["workflow_state"] = build_regulatory_workflow_state(doc)
+            documents.append(doc)
+
+        self.success({"documents": documents})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("regulatory_upload", max_attempts=10, window_seconds=60):
+            return
+
+        title = (self.get_body_argument("title", "") or "").strip()
+        regulator = (self.get_body_argument("regulator", "") or "").strip()
+        jurisdiction = (self.get_body_argument("jurisdiction", "") or "").strip()
+        doc_type = (self.get_body_argument("doc_type", "") or "").strip()
+        publication_date = (self.get_body_argument("publication_date", "") or "").strip()
+        effective_date = (self.get_body_argument("effective_date", "") or "").strip()
+        source_text = (self.get_body_argument("source_text", "") or "").strip()
+
+        if not title or not regulator or not jurisdiction or not doc_type:
+            return self.error("title, regulator, jurisdiction, and doc_type are required", 400)
+
+        file_info = None
+        files = self.request.files.get("file") or self.request.files.get("files") or []
+        if files:
+            file_info = files[0]
+
+        if not file_info and not source_text:
+            return self.error("Provide a file upload or pasted source_text for analysis", 400)
+
+        file_name = None
+        file_path = None
+        file_size = None
+        mime_type = None
+        s3_key = None
+
+        if file_info:
+            file_name = os.path.basename(file_info.get("filename") or "")
+            file_body = file_info.get("body") or b""
+            mime_type = file_info.get("content_type", "application/octet-stream")
+            if not file_name:
+                return self.error("Uploaded file must include a filename", 400)
+            if len(file_body) > 25 * 1024 * 1024:
+                return self.error("File exceeds 25MB limit", 400)
+
+            # Regulatory Intelligence accepts only PDF and DOCX (matches frontend).
+            reg_allowed_ext = {".pdf", ".docx"}
+            reg_allowed_mime = {
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            ext_check = os.path.splitext(file_name)[1].lower()
+            if ext_check not in reg_allowed_ext:
+                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only (got {ext_check})", 400)
+            if mime_type not in reg_allowed_mime:
+                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only", 400)
+
+            is_valid, upload_error = FileUploadValidator.validate(file_name, mime_type, file_body)
+            if not is_valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            doc_id = uuid.uuid4().hex[:16]
+            ext = os.path.splitext(file_name)[1]
+            safe_name = f"{doc_id}{ext}"
+            file_path = os.path.join(REGULATORY_UPLOAD_DIR, safe_name)
+            with open(file_path, "wb") as f:
+                f.write(file_body)
+            file_size = len(file_body)
+
+            if not source_text and mime_type.startswith("text/"):
+                try:
+                    source_text = file_body.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    source_text = ""
+
+            if HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, key_or_error = s3.upload_document(
+                        file_data=file_body,
+                        client_id="regulatory-intelligence",
+                        doc_type="regulatory_intelligence",
+                        filename=safe_name,
+                        metadata={"content_type": mime_type, "original_name": file_name}
+                    )
+                    if success:
+                        s3_key = key_or_error
+                    else:
+                        logger.warning("Regulatory intelligence S3 upload failed: %s", key_or_error)
+                except Exception as e:
+                    logger.warning("Regulatory intelligence S3 upload failed: %s", e)
+
+            if ENVIRONMENT == "production" and not s3_key and file_info:
+                try:
+                    if file_path and os.path.exists(file_path):
+                        os.remove(file_path)
+                except OSError as cleanup_err:
+                    logger.warning("Failed to clean up regulatory upload after storage error: %s", cleanup_err)
+                return self.error("Regulatory document storage is temporarily unavailable. Please retry once durable storage is restored.", 503)
+        else:
+            doc_id = uuid.uuid4().hex[:16]
+
+        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        audit_trail = [{"time": created_at, "action": f"Document uploaded by {user.get('name', 'Compliance Officer')}"}]
+
+        if source_text:
+            analysis_summary = build_regulatory_analysis({
+                "title": title,
+                "regulator": regulator,
+                "jurisdiction": jurisdiction,
+                "doc_type": doc_type,
+                "effective_date": effective_date,
+                "source_text": source_text,
+            })
+            status = "analysed"
+            audit_trail.append({
+                "time": analysis_summary["analysedAt"],
+                "action": f"Backend analysis completed — {len(analysis_summary.get('suggestions', []))} suggestions generated (confidence: {analysis_summary.get('confidence', 0)}%)"
+            })
+            analysis_source = analysis_summary.get("analysisSource", "backend_rule_assisted")
+        else:
+            analysis_summary = {
+                "summary": "Source document stored. Manual text extraction is required before structured regulatory analysis can be generated in this environment.",
+                "keyObligations": [],
+                "affectedAreas": {
+                    "onboarding": False, "kyc": False, "sanctions": False, "riskScoring": False,
+                    "edd": False, "monitoring": False, "reporting": False
+                },
+                "suggestions": [],
+                "affectedClientTypes": [],
+                "confidence": 0,
+                "analysedAt": None,
+                "analysisSource": "manual_review_required",
+                "humanReviewRequired": True,
+            }
+            status = "review_required"
+            analysis_source = "manual_review_required"
+            audit_trail.append({
+                "time": created_at,
+                "action": "Stored without text analysis — manual source text entry required before structured review."
+            })
+
+        db = get_db()
+        try:
+            db.execute("""
+                INSERT INTO regulatory_documents
+                (id, title, regulator, jurisdiction, doc_type, publication_date, effective_date,
+                 file_name, file_path, s3_key, mime_type, file_size, source_text, status,
+                 analysis_source, analysis_summary, audit_trail, uploaded_by, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            """, (
+                doc_id,
+                title,
+                regulator,
+                jurisdiction,
+                doc_type,
+                publication_date or None,
+                effective_date or None,
+                file_name,
+                file_path,
+                s3_key,
+                mime_type,
+                file_size,
+                source_text or None,
+                status,
+                analysis_source,
+                json.dumps(analysis_summary),
+                json.dumps(audit_trail),
+                user.get("sub", ""),
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        self.log_audit(user, "Upload", "Regulatory Intelligence", f"Regulatory document uploaded: {title} ({status})")
+        self.success({
+            "id": doc_id,
+            "title": title,
+            "status": status,
+            "workflow_state": build_regulatory_workflow_state({
+                "status": status,
+                "analysis_source": analysis_source,
+                "source_text": source_text,
+                "file_name": file_name,
+            }),
+            "analysis_source": analysis_source,
+            "analysis_summary": analysis_summary,
+            "audit_trail": audit_trail,
+        }, 201)
+
+
+class RegulatoryIntelligenceReviewHandler(BaseHandler):
+    """POST /api/regulatory-intelligence/:id/review — persist suggestion review decisions"""
+    def post(self, document_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        suggestion_id = (data.get("suggestion_id") or "").strip()
+        decision = (data.get("decision") or "").strip().lower()
+        note = (data.get("note") or "").strip()
+
+        if not suggestion_id or decision not in ("approved", "rejected", "deferred"):
+            return self.error("suggestion_id and valid decision are required", 400)
+
+        db = get_db()
+        row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
+        if not row:
+            db.close()
+            return self.error("Regulatory document not found", 404)
+
+        try:
+            raw_analysis = row.get("analysis_summary")
+            if raw_analysis is None:
+                analysis_summary = {}
+            elif isinstance(raw_analysis, dict):
+                analysis_summary = raw_analysis
+            else:
+                analysis_summary = safe_json_loads(raw_analysis)
+        except (json.JSONDecodeError, TypeError):
+            analysis_summary = {}
+        try:
+            raw_audit = row.get("audit_trail")
+            if raw_audit is None:
+                audit_trail = []
+            elif isinstance(raw_audit, list):
+                audit_trail = raw_audit
+            else:
+                audit_trail = safe_json_loads(raw_audit)
+        except (json.JSONDecodeError, TypeError):
+            audit_trail = []
+
+        suggestions = analysis_summary.get("suggestions") or []
+        suggestion = next((s for s in suggestions if s.get("id") == suggestion_id), None)
+        if not suggestion:
+            db.close()
+            return self.error("Suggestion not found on this regulatory document", 404)
+
+        reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        suggestion["status"] = decision
+        suggestion["reviewedBy"] = user.get("name", "Compliance Officer")
+        suggestion["reviewedAt"] = reviewed_at
+        suggestion["notes"] = note or suggestion.get("notes") or ""
+
+        audit_trail.append({
+            "time": reviewed_at,
+            "action": f"Suggestion {suggestion_id} {decision} by {user.get('name', 'Compliance Officer')}" + (f' — "{note}"' if note else "")
+        })
+
+        db.execute(
+            "UPDATE regulatory_documents SET analysis_summary = ?, audit_trail = ?, updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(analysis_summary), json.dumps(audit_trail), document_id)
+        )
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "Review", "Regulatory Intelligence", f"Suggestion {suggestion_id} {decision} for document {document_id}")
+        self.success({"status": "recorded", "document_id": document_id, "suggestion": suggestion})
+
+
+class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
+    """POST /api/regulatory-intelligence/:id/source-text — attach manual source text and run structured review"""
+    def post(self, document_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        source_text = (data.get("source_text") or "").strip()
+        note = (data.get("note") or "").strip()
+        if not source_text:
+            return self.error("source_text is required", 400)
+
+        db = get_db()
+        row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
+        if not row:
+            db.close()
+            return self.error("Regulatory document not found", 404)
+
+        row_dict = dict(row)
+        try:
+            raw_audit = row_dict.get("audit_trail")
+            if raw_audit is None:
+                audit_trail = []
+            elif isinstance(raw_audit, list):
+                audit_trail = raw_audit
+            else:
+                audit_trail = safe_json_loads(raw_audit)
+        except (json.JSONDecodeError, TypeError):
+            audit_trail = []
+
+        reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        analysis_summary = build_regulatory_analysis({
+            "title": row_dict.get("title"),
+            "regulator": row_dict.get("regulator"),
+            "jurisdiction": row_dict.get("jurisdiction"),
+            "doc_type": row_dict.get("doc_type"),
+            "effective_date": row_dict.get("effective_date"),
+            "source_text": source_text,
+        })
+        analysis_source = analysis_summary.get("analysisSource", "backend_rule_assisted")
+        prior_source_text = bool(row_dict.get("source_text"))
+
+        audit_trail.append({
+            "time": reviewed_at,
+            "action": (
+                f"Manual source text {'updated' if prior_source_text else 'added'} by {user.get('name', 'Compliance Officer')}" +
+                (f' — "{note}"' if note else "")
+            )
+        })
+        audit_trail.append({
+            "time": analysis_summary["analysedAt"],
+            "action": f"Structured review re-run using manual source text — {len(analysis_summary.get('suggestions', []))} suggestions generated (confidence: {analysis_summary.get('confidence', 0)}%)"
+        })
+
+        db.execute("""
+            UPDATE regulatory_documents
+            SET source_text = ?, status = ?, analysis_source = ?, analysis_summary = ?, audit_trail = ?, updated_at = datetime('now')
+            WHERE id = ?
+        """, (
+            source_text,
+            "analysed",
+            analysis_source,
+            json.dumps(analysis_summary),
+            json.dumps(audit_trail),
+            document_id,
+        ))
+        db.commit()
+        db.close()
+
+        self.log_audit(
+            user,
+            "Update",
+            "Regulatory Intelligence",
+            f"Manual source text {'updated' if prior_source_text else 'added'} and structured review re-run for document {document_id}"
+        )
+        self.success({
+            "id": document_id,
+            "status": "analysed",
+            "workflow_state": build_regulatory_workflow_state({
+                "status": "analysed",
+                "analysis_source": analysis_source,
+                "source_text": source_text,
+                "file_name": row_dict.get("file_name"),
+            }),
+            "analysis_source": analysis_source,
+            "analysis_summary": analysis_summary,
+            "audit_trail": audit_trail,
+            "source_text": source_text,
+        })
+
+
+class RegulatoryIntelligenceDownloadHandler(BaseHandler):
+    """GET /api/regulatory-intelligence/:id/download — download source document when a file exists"""
+    def get(self, document_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
+        db.close()
+        if not row:
+            return self.error("Regulatory document not found", 404)
+
+        s3_key = row.get("s3_key")
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, url_or_error = s3.get_presigned_url(
+                    key=s3_key,
+                    expiry=900,
+                    response_filename=row.get("file_name") or f"{document_id}.bin"
+                )
+                if success:
+                    self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document via S3: {row.get('title')}")
+                    return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
+            except Exception as e:
+                logger.warning("Regulatory intelligence download via S3 failed: %s", e)
+
+        file_path = row.get("file_path")
+        if not file_path:
+            return self.error("No source file is stored for this regulatory document", 404)
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(REGULATORY_UPLOAD_DIR, os.path.basename(file_path))
+        if not os.path.exists(file_path):
+            return self.error("Regulatory document file not found on server", 404)
+
+        self.set_header("Content-Type", row.get("mime_type") or "application/octet-stream")
+        self.set_header("Content-Disposition", f'attachment; filename="{row.get("file_name") or (document_id + ".bin")}"')
+        with open(file_path, "rb") as f:
+            self.write(f.read())
+        self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
+        self.finish()
 
 
 # ══════════════════════════════════════════════════════════
@@ -2017,6 +8140,8 @@ class UsersHandler(BaseHandler):
         db.close()
         self.success({"users": [dict(r) for r in rows]})
 
+    VALID_ROLES = ("admin", "sco", "co", "analyst")
+
     def post(self):
         user = self.require_auth(roles=["admin"])
         if not user:
@@ -2024,24 +8149,45 @@ class UsersHandler(BaseHandler):
 
         data = self.get_json()
         email = data.get("email", "").strip().lower()
-        name = data.get("full_name", "")
+        name = data.get("full_name", "").strip()
         role = data.get("role", "analyst")
-        password = data.get("password", "Welcome@123")
+        password = data.get("password", "")
 
         if not email or not name:
             return self.error("Email and full name required")
+
+        # Validate email format
+        if "@" not in email or "." not in email.split("@")[-1]:
+            return self.error("Invalid email format", 400)
+
+        # Validate role
+        if role not in self.VALID_ROLES:
+            return self.error(f"Invalid role. Must be one of: {', '.join(self.VALID_ROLES)}", 400)
+
+        if not password:
+            password = PasswordPolicy.generate_temporary()
+            must_change_password = True
+        else:
+            must_change_password = False
+            is_valid, pw_error = PasswordPolicy.validate(password)
+            if not is_valid:
+                return self.error(f"Password policy violation: {pw_error}", 400)
 
         db = get_db()
         exists = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if exists:
             db.close()
-            return self.error("Email already exists")
+            return self.error("Email already exists", 400)
 
         user_id = uuid.uuid4().hex[:16]
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
-                    (user_id, email, pw_hash, name, role))
-        db.commit()
+        try:
+            db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
+                        (user_id, email, pw_hash, name, role))
+            db.commit()
+        except Exception:
+            db.close()
+            return self.error("Failed to create user", 500)
         db.close()
 
         self.log_audit(user, "Create User", name, f"New user added as {role}")
@@ -2050,25 +8196,60 @@ class UsersHandler(BaseHandler):
 
 class UserDetailHandler(BaseHandler):
     """PUT /api/users/:id — update user"""
+
+    VALID_ROLES = ("admin", "sco", "co", "analyst")
+    VALID_STATUSES = ("active", "inactive")
+
     def put(self, user_id):
         user = self.require_auth(roles=["admin"])
         if not user:
             return
 
+        # Prevent self-modification (avoid admin lockout)
+        if user_id == user.get("sub"):
+            return self.error("Cannot modify your own account", 403)
+
         data = self.get_json()
+
+        # Reject unsupported password field — password changes are not
+        # implemented via this endpoint.  Return 400 rather than silently
+        # ignoring the field.
+        if "password" in data:
+            return self.error(
+                "Password changes are not supported via this endpoint. "
+                "Use the dedicated password-change flow.", 400)
+
+        # Validate role
+        new_role = data.get("role")
+        if new_role and new_role not in self.VALID_ROLES:
+            return self.error(f"Invalid role. Must be one of: {', '.join(self.VALID_ROLES)}", 400)
+
+        # Validate status
+        new_status = data.get("status")
+        if new_status and new_status not in self.VALID_STATUSES:
+            return self.error(f"Invalid status. Must be one of: {', '.join(self.VALID_STATUSES)}", 400)
+
         db = get_db()
         u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         if not u:
             db.close()
             return self.error("User not found", 404)
 
-        db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
-                   (data.get("full_name", u["full_name"]), data.get("role", u["role"]),
-                    data.get("status", u["status"]), user_id))
-        db.commit()
+        updated_name = data.get("full_name", u["full_name"])
+        updated_role = new_role or u["role"]
+        updated_status = new_status or u["status"]
+
+        try:
+            db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
+                       (updated_name, updated_role, updated_status, user_id))
+            db.commit()
+        except Exception:
+            db.close()
+            return self.error("Failed to update user", 500)
         db.close()
 
-        self.log_audit(user, "Update User", u["full_name"], f"Updated: role={data.get('role')}, status={data.get('status')}")
+        self.log_audit(user, "Update User", u["full_name"],
+                       f"Updated: role={u['role']}→{updated_role}, status={u['status']}→{updated_status}, name={u['full_name']}→{updated_name}")
         self.success({"status": "updated"})
 
 
@@ -2086,11 +8267,160 @@ class RiskConfigHandler(BaseHandler):
         config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
         db.close()
         if config:
-            self.success({"dimensions": json.loads(config["dimensions"]),
-                         "thresholds": json.loads(config["thresholds"]),
-                         "updated_at": config["updated_at"]})
+            result = {
+                "dimensions": safe_json_loads(config["dimensions"]),
+                "thresholds": safe_json_loads(config["thresholds"]),
+                "updated_at": config["updated_at"],
+            }
+            # Include scoring config columns (may not exist in older schemas)
+            for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+                try:
+                    val = config[col]
+                    result[col] = safe_json_loads(val) if val else {}
+                except (KeyError, IndexError):
+                    result[col] = {}
+            self.success(result)
         else:
-            self.success({"dimensions": [], "thresholds": []})
+            self.success({"dimensions": [], "thresholds": [],
+                         "country_risk_scores": {}, "sector_risk_scores": {}, "entity_type_scores": {}})
+
+    def put(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
+        data = self.get_json()
+
+        # Schema-validate before saving — reject malformed config
+        config_to_validate = {
+            "dimensions": data.get("dimensions", []),
+            "thresholds": data.get("thresholds", []),
+            "country_risk_scores": data.get("country_risk_scores", {}),
+            "sector_risk_scores": data.get("sector_risk_scores", {}),
+            "entity_type_scores": data.get("entity_type_scores", {}),
+        }
+        validated, errors = validate_risk_config(config_to_validate)
+        if errors:
+            # Sanitize error messages — they may contain user-supplied type names
+            safe_errors = [str(e)[:200] for e in errors]
+            self.set_status(400)
+            self.set_header("Content-Type", "application/json")
+            self.write(json.dumps({
+                "status": "error",
+                "message": "Risk config validation failed",
+                "errors": safe_errors,
+            }))
+            return
+
+        db = get_db()
+
+        # EX-05: Capture full before-state of risk config for audit trail
+        _risk_before = None
+        try:
+            old_cfg = db.execute("SELECT dimensions, thresholds, country_risk_scores, sector_risk_scores, entity_type_scores FROM risk_config WHERE id=1").fetchone()
+            if old_cfg:
+                _risk_before = {
+                    "dimensions": safe_json_loads(old_cfg["dimensions"]),
+                    "thresholds": safe_json_loads(old_cfg["thresholds"]),
+                    "country_risk_scores": safe_json_loads(old_cfg["country_risk_scores"]) if old_cfg["country_risk_scores"] else {},
+                    "sector_risk_scores": safe_json_loads(old_cfg["sector_risk_scores"]) if old_cfg["sector_risk_scores"] else {},
+                    "entity_type_scores": safe_json_loads(old_cfg["entity_type_scores"]) if old_cfg["entity_type_scores"] else {},
+                }
+        except Exception:
+            pass  # Non-critical: proceed without before-state
+
+        db.execute(
+            "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
+            (json.dumps(validated.get("dimensions", [])),
+             json.dumps(validated.get("thresholds", [])),
+             json.dumps(validated.get("country_risk_scores", {})),
+             json.dumps(validated.get("sector_risk_scores", {})),
+             json.dumps(validated.get("entity_type_scores", {})),
+             user["sub"]))
+        db.commit()
+
+        # EX-09: Recompute risk for all active applications after config change
+        recomp_results = recompute_risk_for_active_apps(
+            db, "risk_config_updated", user=user, log_audit_fn=self.log_audit)
+        if recomp_results:
+            db.commit()
+
+        db.close()
+
+        _risk_after = {
+            "dimensions": validated.get("dimensions", []),
+            "thresholds": validated.get("thresholds", []),
+            "country_risk_scores": validated.get("country_risk_scores", {}),
+            "sector_risk_scores": validated.get("sector_risk_scores", {}),
+            "entity_type_scores": validated.get("entity_type_scores", {}),
+        }
+        self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated",
+                       before_state=_risk_before, after_state=_risk_after)
+
+        changed_count = sum(1 for r in recomp_results if r.get("changed"))
+        self.success({
+            "status": "saved",
+            "risk_recomputed_apps": len(recomp_results),
+            "risk_changed_apps": changed_count,
+        })
+
+
+class EnvironmentInfoHandler(BaseHandler):
+    """GET /api/config/environment — return environment info for frontend"""
+    def get(self):
+        self.success(get_environment_info())
+
+
+def get_build_metadata():
+    git_sha = os.environ.get("GIT_SHA") or "unknown"
+    build_time = os.environ.get("BUILD_TIME") or "unknown"
+    image_tag = os.environ.get("IMAGE_TAG") or git_sha
+    return {
+        "git_sha": git_sha,
+        "git_sha_short": git_sha[:7] if git_sha != "unknown" else "unknown",
+        "build_time": build_time,
+        "image_tag": image_tag,
+        "environment": ENVIRONMENT,
+        "service": "regmind-backend",
+    }
+
+
+class VersionHandler(BaseHandler):
+    """GET /api/version — build identification for authenticated sessions.
+
+    Auth-gated: returns 401 for unauthenticated requests.
+    No DB calls, no secrets, no PII.  Values from env vars only.
+    """
+
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        self.success(get_build_metadata())
+
+
+class SystemSettingsHandler(BaseHandler):
+    """GET/PUT /api/config/system-settings"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        db = get_db()
+        row = db.execute("""
+            SELECT s.*, u.full_name as updated_by_name
+            FROM system_settings s
+            LEFT JOIN users u ON s.updated_by = u.id
+            WHERE s.id = 1
+        """).fetchone()
+        db.close()
+        if not row:
+            return self.success({
+                "company_name": "Onboarda Ltd",
+                "licence_number": "FSC-PIS-2024-001",
+                "default_retention_years": 7,
+                "auto_approve_max_score": 40,
+                "edd_threshold_score": 55,
+            })
+        self.success(dict(row))
 
     def put(self):
         user = self.require_auth(roles=["admin"])
@@ -2098,12 +8428,606 @@ class RiskConfigHandler(BaseHandler):
             return
         data = self.get_json()
         db = get_db()
-        db.execute("UPDATE risk_config SET dimensions=?, thresholds=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
-                   (json.dumps(data.get("dimensions",[])), json.dumps(data.get("thresholds",[])), user["sub"]))
+        current = db.execute("SELECT * FROM system_settings WHERE id=1").fetchone()
+        if current:
+            db.execute("""
+                UPDATE system_settings SET
+                    company_name=?,
+                    licence_number=?,
+                    default_retention_years=?,
+                    auto_approve_max_score=?,
+                    edd_threshold_score=?,
+                    updated_by=?,
+                    updated_at=datetime('now')
+                WHERE id=1
+            """, (
+                data.get("company_name", current["company_name"]),
+                data.get("licence_number", current["licence_number"]),
+                int(data.get("default_retention_years", current["default_retention_years"])),
+                int(data.get("auto_approve_max_score", current["auto_approve_max_score"])),
+                int(data.get("edd_threshold_score", current["edd_threshold_score"])),
+                user["sub"],
+            ))
+        else:
+            db.execute("""
+                INSERT INTO system_settings
+                (id, company_name, licence_number, default_retention_years, auto_approve_max_score, edd_threshold_score, updated_by, updated_at)
+                VALUES (1,?,?,?,?,?,?,datetime('now'))
+            """, (
+                data.get("company_name", "Onboarda Ltd"),
+                data.get("licence_number", "FSC-PIS-2024-001"),
+                int(data.get("default_retention_years", 7)),
+                int(data.get("auto_approve_max_score", 40)),
+                int(data.get("edd_threshold_score", 55)),
+                user["sub"],
+            ))
         db.commit()
         db.close()
-        self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated")
+        self.log_audit(user, "Config", "System Settings", "System settings updated")
         self.success({"status": "saved"})
+
+
+ENHANCED_REQUIREMENT_READ_ROLES = ["admin", "sco", "co"]
+ENHANCED_REQUIREMENT_WRITE_ROLES = ["admin", "sco"]
+APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES = ["admin", "sco", "co"]
+
+
+def _enhanced_rule_audit_payload(rule, actor):
+    rule = rule or {}
+    return {
+        "rule_id": rule.get("id"),
+        "trigger_key": rule.get("trigger_key"),
+        "requirement_key": rule.get("requirement_key"),
+        "actor": actor.get("sub") if actor else None,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _load_enhanced_requirement_rule(db, rule_id):
+    row = db.execute(
+        "SELECT * FROM enhanced_requirement_rules WHERE id = ?",
+        (rule_id,),
+    ).fetchone()
+    return serialize_enhanced_requirement_rule(row) if row else None
+
+
+def _enhanced_requirement_meta():
+    return {
+        "audiences": list(ALLOWED_AUDIENCES),
+        "requirement_types": list(ALLOWED_REQUIREMENT_TYPES),
+        "subject_scopes": list(ALLOWED_SUBJECT_SCOPES),
+        "waiver_roles": list(ALLOWED_WAIVER_ROLES),
+        "read_roles": ENHANCED_REQUIREMENT_READ_ROLES,
+        "write_roles": ENHANCED_REQUIREMENT_WRITE_ROLES,
+    }
+
+
+class EnhancedRequirementRulesHandler(BaseHandler):
+    """GET/POST /api/settings/enhanced-requirements."""
+
+    def get(self):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_READ_ROLES)
+        if not user:
+            return
+
+        trigger_key = (self.get_argument("trigger_key", "") or "").strip()
+        audience = (self.get_argument("audience", "") or "").strip()
+        active = (self.get_argument("active", "") or "").strip().lower()
+
+        query = "SELECT * FROM enhanced_requirement_rules WHERE 1=1"
+        params = []
+        if trigger_key:
+            query += " AND trigger_key = ?"
+            params.append(trigger_key)
+        if audience:
+            query += " AND audience = ?"
+            params.append(audience)
+        if active in ("true", "1", "false", "0"):
+            query += " AND active = ?"
+            params.append(1 if active in ("true", "1") else 0)
+        query += " ORDER BY trigger_category, trigger_label, sort_order, id"
+
+        db = get_db()
+        rows = db.execute(query, tuple(params)).fetchall()
+        db.close()
+
+        rules = [serialize_enhanced_requirement_rule(r) for r in rows]
+        grouped = {}
+        for rule in rules:
+            grouped.setdefault(rule["trigger_key"], {
+                "trigger_key": rule["trigger_key"],
+                "trigger_label": rule["trigger_label"],
+                "trigger_category": rule["trigger_category"],
+                "rules": [],
+            })["rules"].append(rule)
+        self.success({"rules": rules, "grouped": grouped, "total": len(rules), "meta": _enhanced_requirement_meta()})
+
+    def post(self):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+
+        data = self.get_json()
+        normalized, error = validate_enhanced_requirement_rule_payload(data)
+        if error:
+            return self.error(error, 400)
+
+        db = get_db()
+        existing = db.execute(
+            "SELECT id FROM enhanced_requirement_rules WHERE trigger_key=? AND requirement_key=?",
+            (normalized["trigger_key"], normalized["requirement_key"]),
+        ).fetchone()
+        if existing:
+            db.close()
+            return self.error("Rule already exists for trigger_key and requirement_key", 409)
+
+        insert_params = (
+            normalized["trigger_key"],
+            normalized["trigger_label"],
+            normalized["trigger_category"],
+            normalized["requirement_key"],
+            normalized["requirement_label"],
+            normalized["requirement_description"],
+            normalized["audience"],
+            normalized["requirement_type"],
+            normalized["subject_scope"],
+            1 if normalized["blocking_approval"] else 0,
+            1 if normalized["waivable"] else 0,
+            json.dumps(normalized["waiver_roles"]),
+            1 if normalized["mandatory"] else 0,
+            1 if normalized["active"] else 0,
+            normalized["sort_order"],
+            json.dumps(normalized["applies_when"]),
+            normalized["client_safe_label"],
+            normalized["client_safe_description"],
+            normalized["internal_notes"],
+            user["sub"],
+            user["sub"],
+        )
+        if db.is_postgres:
+            row = db.execute("""
+                INSERT INTO enhanced_requirement_rules
+                (trigger_key, trigger_label, trigger_category, requirement_key,
+                 requirement_label, requirement_description, audience,
+                 requirement_type, subject_scope, blocking_approval, waivable,
+                 waiver_roles, mandatory, active, sort_order, applies_when,
+                 client_safe_label, client_safe_description, internal_notes,
+                 created_by, updated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                RETURNING id
+            """, insert_params).fetchone()
+            rule_id = row["id"]
+        else:
+            db.execute("""
+                INSERT INTO enhanced_requirement_rules
+                (trigger_key, trigger_label, trigger_category, requirement_key,
+                 requirement_label, requirement_description, audience,
+                 requirement_type, subject_scope, blocking_approval, waivable,
+                 waiver_roles, mandatory, active, sort_order, applies_when,
+                 client_safe_label, client_safe_description, internal_notes,
+                 created_by, updated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, insert_params)
+            rule_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+
+        created = _load_enhanced_requirement_rule(db, rule_id)
+        self.log_audit(
+            user,
+            "enhanced_requirement_rule.created",
+            "Enhanced Requirement Rules",
+            json.dumps(_enhanced_rule_audit_payload(created, user), sort_keys=True),
+            db=db,
+            after_state=created,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+        self.success({"rule": created, "status": "created"}, 201)
+
+
+class EnhancedRequirementRuleDetailHandler(BaseHandler):
+    """GET/PATCH /api/settings/enhanced-requirements/:id."""
+
+    def get(self, rule_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_READ_ROLES)
+        if not user:
+            return
+        db = get_db()
+        rule = _load_enhanced_requirement_rule(db, rule_id)
+        db.close()
+        if not rule:
+            return self.error("Rule not found", 404)
+        self.success({"rule": rule, "meta": _enhanced_requirement_meta()})
+
+    def patch(self, rule_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+
+        db = get_db()
+        before = _load_enhanced_requirement_rule(db, rule_id)
+        if not before:
+            db.close()
+            return self.error("Rule not found", 404)
+
+        normalized, error = validate_enhanced_requirement_rule_payload(self.get_json(), existing=before)
+        if error:
+            db.close()
+            return self.error(error, 400)
+
+        duplicate = db.execute(
+            "SELECT id FROM enhanced_requirement_rules WHERE trigger_key=? AND requirement_key=? AND id <> ?",
+            (normalized["trigger_key"], normalized["requirement_key"], rule_id),
+        ).fetchone()
+        if duplicate:
+            db.close()
+            return self.error("Rule already exists for trigger_key and requirement_key", 409)
+
+        db.execute("""
+            UPDATE enhanced_requirement_rules SET
+                trigger_key=?,
+                trigger_label=?,
+                trigger_category=?,
+                requirement_key=?,
+                requirement_label=?,
+                requirement_description=?,
+                audience=?,
+                requirement_type=?,
+                subject_scope=?,
+                blocking_approval=?,
+                waivable=?,
+                waiver_roles=?,
+                mandatory=?,
+                active=?,
+                sort_order=?,
+                applies_when=?,
+                client_safe_label=?,
+                client_safe_description=?,
+                internal_notes=?,
+                updated_by=?,
+                updated_at=datetime('now')
+            WHERE id=?
+        """, (
+            normalized["trigger_key"],
+            normalized["trigger_label"],
+            normalized["trigger_category"],
+            normalized["requirement_key"],
+            normalized["requirement_label"],
+            normalized["requirement_description"],
+            normalized["audience"],
+            normalized["requirement_type"],
+            normalized["subject_scope"],
+            1 if normalized["blocking_approval"] else 0,
+            1 if normalized["waivable"] else 0,
+            json.dumps(normalized["waiver_roles"]),
+            1 if normalized["mandatory"] else 0,
+            1 if normalized["active"] else 0,
+            normalized["sort_order"],
+            json.dumps(normalized["applies_when"]),
+            normalized["client_safe_label"],
+            normalized["client_safe_description"],
+            normalized["internal_notes"],
+            user["sub"],
+            rule_id,
+        ))
+        after = _load_enhanced_requirement_rule(db, rule_id)
+        self.log_audit(
+            user,
+            "enhanced_requirement_rule.updated",
+            "Enhanced Requirement Rules",
+            json.dumps(_enhanced_rule_audit_payload(after, user), sort_keys=True),
+            db=db,
+            before_state=before,
+            after_state=after,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+        self.success({"rule": after, "status": "updated"})
+
+
+class EnhancedRequirementRuleStateHandler(BaseHandler):
+    """POST /api/settings/enhanced-requirements/:id/(disable|enable)."""
+
+    def post(self, rule_id, action):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+        action = (action or "").strip().lower()
+        if action not in ("disable", "enable"):
+            return self.error("Invalid rule state action", 404)
+
+        db = get_db()
+        before = _load_enhanced_requirement_rule(db, rule_id)
+        if not before:
+            db.close()
+            return self.error("Rule not found", 404)
+        active = 1 if action == "enable" else 0
+        db.execute(
+            "UPDATE enhanced_requirement_rules SET active=?, updated_by=?, updated_at=datetime('now') WHERE id=?",
+            (active, user["sub"], rule_id),
+        )
+        after = _load_enhanced_requirement_rule(db, rule_id)
+        audit_action = f"enhanced_requirement_rule.{action}d"
+        self.log_audit(
+            user,
+            audit_action,
+            "Enhanced Requirement Rules",
+            json.dumps(_enhanced_rule_audit_payload(after, user), sort_keys=True),
+            db=db,
+            before_state=before,
+            after_state=after,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+        self.success({"rule": after, "status": action + "d"})
+
+
+class EnhancedRequirementDiagnosticsHandler(BaseHandler):
+    """GET /api/settings/enhanced-requirements/diagnostics."""
+
+    def get(self):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+        db = get_db()
+        try:
+            diagnostics = diagnose_enhanced_requirement_config(db)
+        finally:
+            db.close()
+        self.success({"diagnostics": diagnostics})
+
+
+class ApplicationEnhancedRequirementsHandler(BaseHandler):
+    """GET /api/applications/:id/enhanced-requirements."""
+
+    def get(self, app_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_READ_ROLES)
+        if not user:
+            return
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            rows = db.execute(
+                """
+                SELECT * FROM application_enhanced_requirements
+                WHERE application_id = ?
+                ORDER BY trigger_category, trigger_label, requirement_label, id
+                """,
+                (app["id"],),
+            ).fetchall()
+            requirements = [serialize_application_requirement(row) for row in rows]
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "requirements": requirements,
+                "enhanced_review_summary": build_enhanced_requirement_operational_summary(
+                    db,
+                    app["id"],
+                    app_row=app,
+                ),
+                "total": len(requirements),
+            })
+        finally:
+            db.close()
+
+
+class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
+    """PATCH /api/applications/:id/enhanced-requirements/:requirement_id."""
+
+    def patch(self, app_id, requirement_id):
+        user = self.require_auth(roles=APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES)
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            result, error, status_code = update_application_enhanced_requirement(
+                db,
+                app_id,
+                requirement_id,
+                data,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(error, status_code)
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if app:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="enhanced_requirement_status_changed",
+                    reason="Enhanced requirement status or review metadata changed after memo generation.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    after_state=result,
+                )
+            db.commit()
+            self.success(result)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "application enhanced requirement update failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to update enhanced requirement", 500)
+        finally:
+            db.close()
+
+
+class ApplicationEnhancedRequirementRequestHandler(BaseHandler):
+    """POST /api/applications/:id/enhanced-requirements/:requirement_id/request."""
+
+    def post(self, app_id, requirement_id):
+        user = self.require_auth(roles=APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES)
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            result, error, status_code = request_application_enhanced_requirement_from_client(
+                db,
+                app_id,
+                requirement_id,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(error, status_code)
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if app:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="enhanced_requirement_requested",
+                    reason="Enhanced requirement request state changed after memo generation.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    after_state=result,
+                )
+            db.commit()
+            self.success(result)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "application enhanced requirement request failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to request enhanced requirement from client", 500)
+        finally:
+            db.close()
+
+
+class ApplicationEnhancedRequirementsGenerateHandler(BaseHandler):
+    """POST /api/applications/:id/enhanced-requirements/generate."""
+
+    def post(self, app_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+        data = self.get_json() or {}
+        generation_source = str(data.get("generation_source") or "manual_api").strip()
+        if not re.match(r"^[a-z0-9_:-]{1,80}$", generation_source):
+            return self.error("generation_source must be a stable lowercase key", 400)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            result = generate_application_enhanced_requirements(
+                db,
+                app["id"],
+                app_row=app,
+                actor=user,
+                generation_source=generation_source,
+            )
+            if int(result.get("generated_count") or 0) > 0:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="enhanced_requirements_generated",
+                    reason="Enhanced requirement generation changed memo requirements.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    after_state=result,
+                )
+            db.commit()
+            self.success(result)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "application enhanced requirements generation failed: app_id=%s error=%s",
+                app_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to generate enhanced requirements", 500)
+        finally:
+            db.close()
+
+
+ROLE_PERMISSION_MATRIX = [
+    {"id": "view_dashboard", "label": "View dashboard", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_all_applications", "label": "View all applications", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_application_details", "label": "View application details", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "approve_low_medium", "label": "Approve applications (Low/Medium)", "roles": ["admin", "sco", "co"]},
+    {"id": "approve_high_very_high", "label": "Approve applications (High/Very High)", "roles": ["admin", "sco"]},
+    {"id": "reject_applications", "label": "Reject applications", "roles": ["admin", "sco", "co"]},
+    {"id": "request_more_information", "label": "Request more information", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "assign_reassign_cases", "label": "Assign / reassign cases", "roles": ["admin", "sco"]},
+    {"id": "escalate_to_sco", "label": "Escalate to Senior CO", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_compliance_memo", "label": "View compliance memo", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "override_ai_risk_score", "label": "Override AI risk score", "roles": ["admin", "sco"]},
+    {"id": "edd_review_signoff", "label": "EDD review & sign-off", "roles": ["admin", "sco"]},
+    {"id": "view_screening_results", "label": "View screening results", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_reports_analytics", "label": "View reports & analytics", "roles": ["admin", "sco", "co"]},
+    {"id": "manage_users", "label": "Manage users", "roles": ["admin"]},
+    {"id": "manage_roles_permissions", "label": "Manage roles & permissions", "roles": ["admin"]},
+    {"id": "view_audit_trail", "label": "View audit trail", "roles": ["admin", "sco"]},
+    {"id": "system_settings", "label": "System settings", "roles": ["admin"]},
+    {"id": "manage_enhanced_requirements", "label": "Manage Enhanced / EDD requirements", "roles": ["admin", "sco"]},
+    {"id": "view_enhanced_requirements", "label": "View Enhanced / EDD requirements", "roles": ["admin", "sco", "co"]},
+]
+
+
+class RolesPermissionsHandler(BaseHandler):
+    """GET /api/config/roles-permissions — backend-owned RBAC matrix for UI/reference"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        self.success({
+            "roles": [
+                {"id": "admin", "label": "Administrator"},
+                {"id": "sco", "label": "Senior CO"},
+                {"id": "co", "label": "Compliance Officer"},
+                {"id": "analyst", "label": "Analyst"},
+            ],
+            "permissions": ROLE_PERMISSION_MATRIX,
+            "source": "backend_policy",
+        })
 
 
 # ══════════════════════════════════════════════════════════
@@ -2122,7 +9046,7 @@ class AIAgentsHandler(BaseHandler):
         agents = []
         for r in rows:
             a = dict(r)
-            a["checks"] = json.loads(a["checks"]) if a["checks"] else []
+            a["checks"] = safe_json_loads(a["checks"]) if a["checks"] else []
             a["enabled"] = bool(a["enabled"])
             agents.append(a)
         self.success({"agents": agents})
@@ -2152,14 +9076,42 @@ class AIAgentDetailHandler(BaseHandler):
             return
         data = self.get_json()
         db = get_db()
+
+        # P2-1: Read old state for audit diff
+        old_agent = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        if not old_agent:
+            db.close()
+            return self.error("Agent not found", 404)
+
+        # P2-3: Conflict detection — reject stale updates
+        if data.get("expected_updated_at"):
+            if old_agent["updated_at"] and old_agent["updated_at"] != data["expected_updated_at"]:
+                db.close()
+                return self.error("Configuration was modified by another user. Please refresh and try again.", 409)
+
         db.execute("""UPDATE ai_agents SET name=?, icon=?, stage=?, description=?,
                       enabled=?, checks=?, updated_at=datetime('now') WHERE id=?""",
                    (data.get("name",""), data.get("icon",""), data.get("stage",""),
                     data.get("description",""), 1 if data.get("enabled",True) else 0,
                     json.dumps(data.get("checks",[])), agent_id))
         db.commit()
+
+        # P2-1: Build audit detail with old/new values
+        changes = []
+        if "enabled" in data and (1 if data["enabled"] else 0) != old_agent["enabled"]:
+            changes.append(f"enabled: {bool(old_agent['enabled'])} -> {data['enabled']}")
+        if "name" in data and data["name"] != old_agent["name"]:
+            changes.append(f"name: '{old_agent['name']}' -> '{data['name']}'")
+        if "stage" in data and data["stage"] != old_agent["stage"]:
+            changes.append(f"stage: '{old_agent['stage']}' -> '{data['stage']}'")
+        detail = f"Agent {agent_id} updated: {data.get('name', old_agent['name'])}. Changes: "
+        detail += ", ".join(changes) if changes else "no field changes"
+
+        # Return updated_at for conflict detection
+        updated_row = db.execute("SELECT updated_at FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
         db.close()
-        self.success({"status": "updated"})
+        self.log_audit(user, "Config Update", "AI Agents", detail)
+        self.success({"status": "updated", "updated_at": updated_row["updated_at"] if updated_row else None})
 
     def delete(self, agent_id):
         user = self.require_auth(roles=["admin"])
@@ -2174,8 +9126,352 @@ class AIAgentDetailHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# AI VERIFICATION CHECKS CONFIG ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class VerificationChecksHandler(BaseHandler):
+    """GET/PUT /api/config/verification-checks"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        db = get_db()
+        rows = db.execute("SELECT * FROM ai_checks ORDER BY category, id").fetchall()
+        db.close()
+        entity = []
+        person = []
+        for r in rows:
+            item = {
+                "id": r["id"],
+                "doc_type": r["doc_type"],
+                "doc_name": r["doc_name"],
+                "checks": safe_json_loads(r["checks"]) if r["checks"] else [],
+                "updated_at": r["updated_at"],
+            }
+            if r["category"] == "entity":
+                entity.append(item)
+            else:
+                person.append(item)
+        self.success({"entity": entity, "person": person})
+
+    def put(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
+        data = self.get_json()
+        doc_type = data.get("doc_type")
+        category = data.get("category")
+        checks = data.get("checks", [])
+        if not doc_type or not category:
+            return self.error("doc_type and category are required", 400)
+
+        db = get_db()
+
+        # P2-1: Read old state for audit diff
+        old_row = db.execute("SELECT checks FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
+        old_checks_count = len(safe_json_loads(old_row["checks"])) if old_row and old_row["checks"] else 0
+
+        # Update existing row or insert if new
+        existing = db.execute("SELECT id FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE ai_checks SET checks=?, updated_at=datetime('now') WHERE doc_type=? AND category=?",
+                (json.dumps(checks), doc_type, category)
+            )
+        else:
+            doc_name = data.get("doc_name", doc_type)
+            db.execute(
+                "INSERT INTO ai_checks (category, doc_type, doc_name, checks) VALUES (?,?,?,?)",
+                (category, doc_type, doc_name, json.dumps(checks))
+            )
+
+        # Auto-update Agent 1's checks list from all ai_checks
+        all_rows = db.execute("SELECT doc_name, checks FROM ai_checks ORDER BY category, id").fetchall()
+        all_labels = []
+        for row in all_rows:
+            row_checks = safe_json_loads(row["checks"]) if row["checks"] else []
+            for ch in row_checks:
+                all_labels.append(f"{row['doc_name']}: {ch.get('label', '')}")
+        db.execute(
+            "UPDATE ai_agents SET checks=?, updated_at=datetime('now') WHERE agent_number=1",
+            (json.dumps(all_labels),)
+        )
+
+        db.commit()
+        db.close()
+        # P2-1: Audit log with old/new check counts
+        new_checks_count = len(checks)
+        detail = f"Checks updated for {category}/{doc_type}: {old_checks_count} -> {new_checks_count} checks"
+        self.log_audit(user, "Config Update", "AI Checks", detail)
+        self.success({"status": "saved"})
+
+
+# ══════════════════════════════════════════════════════════
 # REPORT GENERATION ENDPOINTS
 # ══════════════════════════════════════════════════════════
+
+_REPORT_PENDING_STATUSES = (
+    "draft", "pending", "submitted", "prescreening_submitted",
+    "pre_approval_review", "pre_approved", "pricing_review", "pricing_accepted",
+    "in_review", "under_review", "compliance_review", "kyc_submitted",
+    "kyc_documents", "rmi_sent",
+)
+
+_REPORT_EDD_ROUTED_STATUSES = (
+    "edd_required",
+)
+
+_REPORT_ALLOWED_FIELDS = {
+    "id", "ref", "company_name", "status", "status_label", "risk_level",
+    "risk_score", "risk_lane", "country", "sector", "entity_type",
+    "created_at", "submitted_at", "assigned_to", "assigned_name",
+    "director_count", "ubo_count", "document_count",
+}
+
+_REPORT_DEFAULT_FIELDS = (
+    "ref", "company_name", "status", "risk_level", "risk_score",
+    "country", "entity_type", "created_at", "assigned_to",
+)
+
+_REPORT_EXPORT_FIELDS = (
+    "ref", "company_name", "status", "risk_level", "risk_score",
+    "sector", "country", "entity_type", "created_at", "assigned_to",
+    "director_count", "ubo_count", "document_count",
+)
+
+_REPORT_EXPORT_FILENAME_PREFIX = "regmind_applications_report"
+
+_CANONICAL_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
+
+_PERIODIC_REVIEW_COMPLETED_STATES = ("completed",)
+
+_REPORT_APPLICATION_SELECT_COLUMNS = (
+    "a.id AS id",
+    "a.ref AS ref",
+    "a.company_name AS company_name",
+    "a.status AS status",
+    "a.risk_level AS risk_level",
+    "a.risk_score AS risk_score",
+    "a.country AS country",
+    "a.sector AS sector",
+    "a.entity_type AS entity_type",
+    "a.created_at AS created_at",
+    "a.submitted_at AS submitted_at",
+    "a.assigned_to AS assigned_to",
+    "a.onboarding_lane AS onboarding_lane",
+    "a.risk_dimensions AS risk_dimensions",
+)
+
+
+def _report_scope_from_request(handler, user):
+    """Canonical application-report scope used by analytics and exports."""
+    from fixture_filter import (
+        fixture_app_exclude_clause,
+        fixture_request_opt_in,
+        should_show_fixtures,
+    )
+
+    filters = {
+        "date_from": handler.get_argument("date_from", None),
+        "date_to": handler.get_argument("date_to", None),
+        "status": handler.get_argument("status", None),
+        "risk_level": handler.get_argument("risk_level", None),
+        "jurisdiction": handler.get_argument("jurisdiction", None),
+        "entity_type": handler.get_argument("entity_type", None),
+        "assigned_to": handler.get_argument("assigned_to", None),
+    }
+
+    conditions = []
+    params = []
+    show_fixtures = should_show_fixtures(user, fixture_request_opt_in(handler))
+    if not show_fixtures:
+        fx_excl, fx_params = fixture_app_exclude_clause()
+        conditions.append(fx_excl)
+        params.extend(fx_params)
+
+    mapping = (
+        ("date_from", "a.created_at >= ?"),
+        ("date_to", "a.created_at <= ?"),
+        ("status", "a.status = ?"),
+        ("risk_level", "a.risk_level = ?"),
+        ("jurisdiction", "a.country = ?"),
+        ("entity_type", "a.entity_type = ?"),
+        ("assigned_to", "a.assigned_to = ?"),
+    )
+    for key, clause in mapping:
+        value = filters.get(key)
+        if value:
+            if key == "risk_level" and str(value).strip().upper() == "UNKNOWN":
+                conditions.append("(a.risk_level IS NULL OR a.risk_level='' OR a.risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))")
+                continue
+            conditions.append(clause)
+            params.append(value)
+
+    return {
+        "where": " AND ".join(conditions) if conditions else "1=1",
+        "params": params,
+        "filters": {k: v for k, v in filters.items() if v},
+        "show_fixtures": show_fixtures,
+        "pending_statuses": list(_REPORT_PENDING_STATUSES),
+        "edd_routed_statuses": list(_REPORT_EDD_ROUTED_STATUSES),
+    }
+
+
+def _report_field_list(fields):
+    requested = [f.strip() for f in (fields or "").split(",") if f.strip()]
+    if not requested:
+        requested = list(_REPORT_DEFAULT_FIELDS)
+    allowed = [f for f in requested if f in _REPORT_ALLOWED_FIELDS]
+    ignored = [f for f in requested if f not in _REPORT_ALLOWED_FIELDS]
+    return (allowed or list(_REPORT_DEFAULT_FIELDS)), ignored
+
+
+def _report_record(row):
+    record = dict(row)
+    record["status_label"] = get_status_label(record.get("status"))
+    raw_score = record.get("risk_score")
+    record["risk_score"] = raw_score if raw_score not in (None, "") else None
+    raw_level = str(record.get("risk_level") or "").strip().upper()
+    record["risk_level"] = raw_level if raw_level in _CANONICAL_RISK_LEVELS else "UNKNOWN"
+    record["risk_lane"] = record.get("onboarding_lane") or ""
+    if record.get("risk_dimensions") and isinstance(record["risk_dimensions"], str):
+        try:
+            record["risk_dimensions"] = safe_json_loads(record["risk_dimensions"])
+        except Exception:
+            record["risk_dimensions"] = {}
+    return record
+
+
+def _periodic_review_active_states():
+    """Return the lifecycle active-review vocabulary used for reports."""
+    try:
+        from lifecycle_queue import ACTIVE_REVIEW_STATES
+        return tuple(ACTIVE_REVIEW_STATES)
+    except Exception:
+        return (
+            "pending", "in_progress", "awaiting_information",
+            "pending_senior_review",
+        )
+
+
+def _periodic_review_canonical_stats(db, *, app_where="1=1", app_params=None, today=None):
+    """Canonical periodic-review counts for reports/monitoring.
+
+    Counts are sourced from ``periodic_reviews`` only and join applications
+    solely for report-scope filters. This keeps each review counted once and
+    aligns reports with Lifecycle active/completed state semantics.
+    """
+    active_states = _periodic_review_active_states()
+    completed_states = _PERIODIC_REVIEW_COMPLETED_STATES
+    today_iso = today or datetime.utcnow().date().isoformat()
+    params = list(app_params or [])
+
+    active_ph = ",".join(["?"] * len(active_states))
+    completed_ph = ",".join(["?"] * len(completed_states))
+    if getattr(db, "is_postgres", False):
+        review_date_expr = """
+            CASE
+                WHEN NULLIF(pr.next_review_date::text, '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                THEN LEFT(NULLIF(pr.next_review_date::text, ''), 10)::date
+                WHEN NULLIF(pr.due_date::text, '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                THEN LEFT(NULLIF(pr.due_date::text, ''), 10)::date
+                ELSE NULL
+            END
+        """
+    else:
+        review_date_expr = "COALESCE(NULLIF(pr.next_review_date, ''), NULLIF(pr.due_date, ''))"
+    state_expr = "COALESCE(NULLIF(pr.status, ''), 'pending')"
+
+    row = db.execute(f"""
+        SELECT
+            COUNT(DISTINCT pr.id) AS total,
+            SUM(CASE WHEN {state_expr} = 'pending' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN {state_expr} IN ({active_ph}) THEN 1 ELSE 0 END) AS active,
+            SUM(CASE WHEN {state_expr} IN ({completed_ph}) THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE
+                    WHEN {state_expr} IN ({active_ph})
+                     AND {review_date_expr} IS NOT NULL
+                     AND {review_date_expr} <= ?
+                    THEN 1 ELSE 0
+                END) AS due,
+            SUM(CASE
+                    WHEN {state_expr} IN ({active_ph})
+                     AND {review_date_expr} IS NOT NULL
+                     AND {review_date_expr} < ?
+                    THEN 1 ELSE 0
+                END) AS overdue
+        FROM periodic_reviews pr
+        JOIN applications a ON a.id = pr.application_id
+        WHERE {app_where}
+    """, [
+        *active_states,
+        *completed_states,
+        *active_states, today_iso,
+        *active_states, today_iso,
+        *params,
+    ]).fetchone()
+
+    by_status_rows = db.execute(f"""
+        SELECT {state_expr} AS status, COUNT(DISTINCT pr.id) AS count
+        FROM periodic_reviews pr
+        JOIN applications a ON a.id = pr.application_id
+        WHERE {app_where}
+        GROUP BY {state_expr}
+    """, params).fetchall()
+
+    values = dict(row) if row else {}
+    by_status = {
+        (r.get("status") if hasattr(r, "get") else r["status"]) or "pending":
+        (r.get("count") if hasattr(r, "get") else r["count"]) or 0
+        for r in by_status_rows
+    }
+    total = values.get("total") or 0
+    return {
+        "total": total,
+        # Backwards-compatible legacy bucket: exact pending state only.
+        "pending": values.get("pending") or 0,
+        "active": values.get("active") or 0,
+        "completed": values.get("completed") or 0,
+        "due": values.get("due") or 0,
+        "overdue": values.get("overdue") or 0,
+        "by_status": by_status,
+        "active_states": list(active_states),
+        "completed_states": list(completed_states),
+        "date_basis": "next_review_date_fallback_due_date",
+        "canonical_source": "periodic_reviews",
+        "counting_rule": "count_distinct_periodic_reviews_id",
+        "reconciles": sum(by_status.values()) == total,
+    }
+
+
+def _csv_safe_value(value):
+    """Prevent spreadsheet formula execution while preserving CSV readability."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, sort_keys=True, default=str)
+    else:
+        text = str(value)
+    if text.startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
+
+
+def _write_csv_response(handler, filename, field_list, rows):
+    import csv
+    import io
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=field_list, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: _csv_safe_value(row.get(field, "")) for field in field_list})
+
+    handler.set_header("Content-Type", "text/csv; charset=utf-8")
+    handler.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+    handler.set_header("Cache-Control", "no-store")
+    handler.write("\ufeff" + output.getvalue())
+
 
 class ReportHandler(BaseHandler):
     """GET /api/reports/generate — generate filtered report data"""
@@ -2186,81 +9482,526 @@ class ReportHandler(BaseHandler):
 
         db = get_db()
 
-        # Get filter parameters
-        status = self.get_argument("status", None)
-        risk_level = self.get_argument("risk_level", None)
-        date_from = self.get_argument("date_from", None)
-        date_to = self.get_argument("date_to", None)
+        scope = _report_scope_from_request(self, user)
         fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
+        output_format = (self.get_argument("format", "json") or "json").strip().lower()
+        if output_format not in ("json", "csv"):
+            db.close()
+            return self.error("Unsupported report format. Use json or csv.", 400)
 
-        # Build query
-        conditions = []
-        params = []
-        if status:
-            conditions.append("a.status=?")
-            params.append(status)
-        if risk_level:
-            conditions.append("a.risk_level=?")
-            params.append(risk_level)
-        if date_from:
-            conditions.append("a.created_at >= ?")
-            params.append(date_from)
-        if date_to:
-            conditions.append("a.created_at <= ?")
-            params.append(date_to)
-
-        where = " AND ".join(conditions) if conditions else "1=1"
-
+        application_columns = ",\n                   ".join(_REPORT_APPLICATION_SELECT_COLUMNS)
         query = f"""
-            SELECT a.*,
+            SELECT {application_columns}, u.full_name AS assigned_name,
                    (SELECT COUNT(*) FROM directors WHERE application_id=a.id) as director_count,
                    (SELECT COUNT(*) FROM ubos WHERE application_id=a.id) as ubo_count,
-                   (SELECT COUNT(*) FROM documents WHERE application_id=a.id) as document_count
+                   (SELECT COUNT(*) FROM documents WHERE application_id=a.id AND {ACTIVE_DOCUMENT_SQL}) as document_count
             FROM applications a
-            WHERE {where}
+            LEFT JOIN users u ON a.assigned_to = u.id
+            WHERE {scope["where"]}
             ORDER BY a.created_at DESC
         """
 
-        rows = db.execute(query, params).fetchall()
+        rows = db.execute(query, scope["params"]).fetchall()
         db.close()
 
         # Parse field selection
-        field_list = [f.strip() for f in fields.split(",")]
+        field_list, ignored_fields = _report_field_list(fields)
 
         results = []
         for row in rows:
-            record = dict(row)
-            # Parse prescreening_data for risk info
-            prescreening = json.loads(record.get("prescreening_data") or "{}")
-            risk_info = prescreening.get("risk_assessment", {})
-            record["risk_score"] = risk_info.get("score", 0)
-            record["risk_level"] = risk_info.get("level", record.get("risk_level", ""))
-            record["risk_lane"] = risk_info.get("lane", "")
-
+            record = _report_record(row)
             # Filter to requested fields
             filtered = {}
             for f in field_list:
-                if f in record:
-                    filtered[f] = record[f]
-                elif f == "director_count":
-                    filtered[f] = record.get("director_count", 0)
-                elif f == "ubo_count":
-                    filtered[f] = record.get("ubo_count", 0)
-                elif f == "document_count":
-                    filtered[f] = record.get("document_count", 0)
+                filtered[f] = record.get(f, "")
             results.append(filtered)
 
-        self.log_audit(user, "Report", "Generate", f"Report generated: {len(results)} records, fields: {fields}")
+        generated_at = datetime.now(timezone.utc).isoformat()
+        self.log_audit(
+            user,
+            "Report",
+            "Generate",
+            f"Report generated: {len(results)} records, format={output_format}, fields={','.join(field_list)}",
+        )
+
+        if output_format == "csv":
+            safe_date = generated_at[:10]
+            filename = f"{_REPORT_EXPORT_FILENAME_PREFIX}_{safe_date}.csv"
+            self.set_header("X-Report-Record-Count", str(len(results)))
+            self.set_header("X-Report-Show-Fixtures", "true" if scope["show_fixtures"] else "false")
+            self.set_header("X-Report-Canonical-View", "applications_report_v1")
+            self.set_header("X-Report-Field-List", ",".join(field_list))
+            self.set_header("X-Report-Filename", filename)
+            _write_csv_response(self, filename, field_list, results)
+            return
+
         self.success({
             "total": len(results),
             "fields": field_list,
-            "data": results
+            "ignored_fields": ignored_fields,
+            "data": results,
+            "report": {
+                "scope": "applications",
+                "generated_at": generated_at,
+                "filters": scope["filters"],
+                "show_fixtures": scope["show_fixtures"],
+                "pending_statuses": scope["pending_statuses"],
+                "edd_routed_statuses": scope["edd_routed_statuses"],
+                "canonical_view": "applications_report_v1",
+                "record_count": len(results),
+                "field_list": field_list,
+                "ignored_fields": ignored_fields,
+                "filename_prefix": _REPORT_EXPORT_FILENAME_PREFIX,
+            },
         })
+
+class ReportAnalyticsHandler(BaseHandler):
+    """GET /api/reports/analytics — analytics data for the Reports page"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        try:
+            scope = _report_scope_from_request(self, user)
+            filters = scope["filters"]
+            date_from = filters.get("date_from")
+            date_to = filters.get("date_to")
+            status = filters.get("status")
+            risk_level = filters.get("risk_level")
+            jurisdiction = filters.get("jurisdiction")
+            entity_type = filters.get("entity_type")
+            assigned_to = filters.get("assigned_to")
+            show_fx = scope["show_fixtures"]
+            where = scope["where"]
+            params = scope["params"]
+            from fixture_filter import fixture_app_exclude_clause
+
+            # --- summary ---
+            summary = {
+                "total": 0, "approved": 0, "rejected": 0, "pending": 0,
+                "edd_required": 0, "withdrawn": 0,
+                "avg_risk_score": 0.0, "approval_rate": 0.0, "rejection_rate": 0.0
+            }
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                        SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected,
+                        SUM(CASE WHEN a.status IN ({",".join(["?"] * len(_REPORT_PENDING_STATUSES))}) THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN a.status IN ({",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))}) THEN 1 ELSE 0 END) as edd_required,
+                        SUM(CASE WHEN a.status='withdrawn' THEN 1 ELSE 0 END) as withdrawn,
+                        AVG(CASE WHEN a.risk_score IS NOT NULL THEN a.risk_score ELSE NULL END) as avg_risk_score
+                    FROM applications a WHERE {where}
+                """, [*_REPORT_PENDING_STATUSES, *_REPORT_EDD_ROUTED_STATUSES, *params]).fetchone()
+                if row:
+                    r = dict(row)
+                    total = r.get("total") or 0
+                    approved = r.get("approved") or 0
+                    rejected = r.get("rejected") or 0
+                    summary = {
+                        "total": total,
+                        "approved": approved,
+                        "rejected": rejected,
+                        "pending": r.get("pending") or 0,
+                        "edd_required": r.get("edd_required") or 0,
+                        "withdrawn": r.get("withdrawn") or 0,
+                        "avg_risk_score": round(r.get("avg_risk_score") or 0.0, 2),
+                        "approval_rate": round((approved / total * 100) if total > 0 else 0.0, 2),
+                        "rejection_rate": round((rejected / total * 100) if total > 0 else 0.0, 2),
+                    }
+            except Exception:
+                pass
+
+            # --- risk_distribution ---
+            risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "UNKNOWN": 0}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.risk_level, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.risk_level
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    level = str(r.get("risk_level") or "").strip().upper()
+                    if level not in _CANONICAL_RISK_LEVELS:
+                        level = "UNKNOWN"
+                    risk_distribution[level] = risk_distribution.get(level, 0) + (r.get("cnt") or 0)
+            except Exception:
+                pass
+
+            # --- status_distribution ---
+            status_distribution = {}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.status, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.status
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    s = r.get("status") or "unknown"
+                    status_distribution[s] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- monthly_trends ---
+            monthly_trends = []
+            try:
+                rows = db.execute(f"""
+                    SELECT strftime('%Y-%m', a.created_at) as month,
+                           COUNT(*) as submitted,
+                           SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                           SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM applications a WHERE {where}
+                    GROUP BY strftime('%Y-%m', a.created_at)
+                    ORDER BY month ASC
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    monthly_trends.append({
+                        "month": r.get("month") or "",
+                        "submitted": r.get("submitted") or 0,
+                        "approved": r.get("approved") or 0,
+                        "rejected": r.get("rejected") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- jurisdiction_breakdown ---
+            jurisdiction_breakdown = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.country, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.country
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    jurisdiction_breakdown.append({
+                        "country": r.get("country") or "Unknown",
+                        "count": r.get("cnt") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- entity_type_breakdown ---
+            entity_type_breakdown = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.entity_type, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.entity_type
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    entity_type_breakdown.append({
+                        "entity_type": r.get("entity_type") or "Unknown",
+                        "count": r.get("cnt") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- pipeline_stages ---
+            pipeline_stages = {}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.status, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.status
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    pipeline_stages[r.get("status") or "unknown"] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- edd_stats ---
+            edd_stats = {"total": 0, "active": 0, "completed": 0, "by_stage": {}}
+            try:
+                # EDD stats respect all active filters via application join
+                edd_conditions = []
+                edd_params = []
+                # Fixture exclusion (mirrors the main conditions block)
+                if not show_fx:
+                    fx_excl2, fx_params2 = fixture_app_exclude_clause()
+                    edd_conditions.append(fx_excl2)
+                    edd_params.extend(fx_params2)
+                if date_from:
+                    edd_conditions.append("a.created_at >= ?")
+                    edd_params.append(date_from)
+                if date_to:
+                    edd_conditions.append("a.created_at <= ?")
+                    edd_params.append(date_to)
+                if status:
+                    edd_conditions.append("a.status = ?")
+                    edd_params.append(status)
+                if risk_level:
+                    edd_conditions.append("a.risk_level = ?")
+                    edd_params.append(risk_level)
+                if jurisdiction:
+                    edd_conditions.append("a.country = ?")
+                    edd_params.append(jurisdiction)
+                if entity_type:
+                    edd_conditions.append("a.entity_type = ?")
+                    edd_params.append(entity_type)
+                if assigned_to:
+                    edd_conditions.append("a.assigned_to = ?")
+                    edd_params.append(assigned_to)
+                edd_where = " AND ".join(edd_conditions) if edd_conditions else "1=1"
+
+                edd_query = f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
+                        SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                """
+                row = db.execute(edd_query, edd_params).fetchone()
+                if row:
+                    r = dict(row)
+                    edd_stats["total"] = r.get("total") or 0
+                    edd_stats["active"] = r.get("active") or 0
+                    edd_stats["completed"] = r.get("completed") or 0
+
+                # by_stage
+                stage_rows = db.execute(f"""
+                    SELECT e.stage, COUNT(*) as cnt
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                    GROUP BY e.stage
+                """, edd_params).fetchall()
+                by_stage = {}
+                for row in stage_rows:
+                    r = dict(row)
+                    by_stage[r.get("stage") or "unknown"] = r.get("cnt") or 0
+                edd_stats["by_stage"] = by_stage
+            except Exception:
+                pass
+
+            # --- screening_stats ---
+            screening_stats = {"total_reviews": 0, "cleared": 0, "escalated": 0, "follow_up": 0}
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total_reviews,
+                        SUM(CASE WHEN sr.disposition='cleared' THEN 1 ELSE 0 END) as cleared,
+                        SUM(CASE WHEN sr.disposition='escalated' THEN 1 ELSE 0 END) as escalated,
+                        SUM(CASE WHEN sr.disposition='follow_up_required' THEN 1 ELSE 0 END) as follow_up
+                    FROM screening_reviews sr
+                    JOIN applications a ON a.id = sr.application_id
+                    WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    screening_stats = {
+                        "total_reviews": r.get("total_reviews") or 0,
+                        "cleared": r.get("cleared") or 0,
+                        "escalated": r.get("escalated") or 0,
+                        "follow_up": r.get("follow_up") or 0,
+                    }
+            except Exception:
+                pass
+
+            # --- periodic_review_stats ---
+            periodic_review_stats = {
+                "total": 0, "pending": 0, "active": 0, "completed": 0,
+                "due": 0, "overdue": 0, "by_status": {},
+                "canonical_source": "periodic_reviews",
+            }
+            try:
+                periodic_review_stats = _periodic_review_canonical_stats(
+                    db,
+                    app_where=where,
+                    app_params=params,
+                )
+            except Exception:
+                pass
+
+            # --- reviewer_workload ---
+            reviewer_workload = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.assigned_to,
+                           COUNT(*) as cnt,
+                           SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                           SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM applications a
+                    WHERE {where} AND a.assigned_to IS NOT NULL AND a.assigned_to != ''
+                    GROUP BY a.assigned_to
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    reviewer_workload.append({
+                        "assigned_to": r.get("assigned_to") or "",
+                        "count": r.get("cnt") or 0,
+                        "approved": r.get("approved") or 0,
+                        "rejected": r.get("rejected") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- recent_decisions ---
+            recent_decisions = []
+            try:
+                rows = db.execute(f"""
+                    SELECT d.application_ref, d.decision_type,
+                           d.risk_level, d.timestamp, d.source,
+                           a.company_name
+                    FROM decision_records d
+                    LEFT JOIN applications a ON a.ref = d.application_ref
+                    WHERE {where}
+                    ORDER BY d.timestamp DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    recent_decisions.append({
+                        "ref": r.get("application_ref") or "",
+                        "company_name": r.get("company_name") or "",
+                        "decision_type": r.get("decision_type") or "",
+                        "risk_level": r.get("risk_level") or "",
+                        "timestamp": r.get("timestamp") or "",
+                        "source": r.get("source") or "",
+                    })
+            except Exception:
+                pass
+
+            filter_desc = ", ".join(f"{k}={v}" for k, v in [
+                ("date_from", date_from), ("date_to", date_to),
+                ("status", status), ("risk_level", risk_level),
+                ("jurisdiction", jurisdiction), ("entity_type", entity_type),
+                ("assigned_to", assigned_to),
+            ] if v)
+            self.log_audit(user, "Report", "Analytics",
+                           f"Analytics report generated with filters: {filter_desc or 'none'}")
+
+            self.success({
+                "summary": summary,
+                "risk_distribution": risk_distribution,
+                "status_distribution": status_distribution,
+                "monthly_trends": monthly_trends,
+                "jurisdiction_breakdown": jurisdiction_breakdown,
+                "entity_type_breakdown": entity_type_breakdown,
+                "pipeline_stages": pipeline_stages,
+                "edd_stats": edd_stats,
+                "screening_stats": screening_stats,
+                "periodic_review_stats": periodic_review_stats,
+                "reviewer_workload": reviewer_workload,
+                "recent_decisions": recent_decisions,
+                "report": {
+                    "scope": "applications",
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "filters": scope["filters"],
+                    "show_fixtures": scope["show_fixtures"],
+                    "pending_statuses": scope["pending_statuses"],
+                    "edd_routed_statuses": scope["edd_routed_statuses"],
+                    "canonical_view": "applications_report_v1",
+                },
+            })
+        finally:
+            db.close()
 
 
 # ══════════════════════════════════════════════════════════
 # AUDIT TRAIL ENDPOINTS
 # ══════════════════════════════════════════════════════════
+
+def _parse_audit_date(value):
+    """Parse an ISO-8601 date/datetime string for audit filters."""
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return None
+
+
+def _bounded_int(value, default, min_value=0, max_value=1000):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(parsed, max_value))
+
+
+def _audit_target_values_for_ref(ref):
+    """Return both audit target conventions used for an application ref."""
+    ref = str(ref or "").strip()
+    if not ref:
+        return []
+    if ref.startswith("application:"):
+        bare_ref = ref.split("application:", 1)[1]
+        return [ref, bare_ref]
+    return [ref, f"application:{ref}"]
+
+
+def _append_audit_filters(handler, query, params, *, exclude_fixtures=False):
+    """Append safe audit_log filters shared by list/export endpoints."""
+    start_date = handler.get_argument("from", None) or handler.get_argument("start_date", None)
+    end_date = handler.get_argument("to", None) or handler.get_argument("end_date", None)
+    actor_user_id = (
+        handler.get_argument("user_id", None)
+        or handler.get_argument("actor_user_id", None)
+        or handler.get_argument("user", None)
+    )
+    action_filter = handler.get_argument("action", None)
+    ref_filter = (
+        handler.get_argument("ref", None)
+        or handler.get_argument("application_ref", None)
+        or handler.get_argument("target", None)
+    )
+    actor_user_id = str(actor_user_id).strip() if actor_user_id is not None else None
+    action_filter = str(action_filter).strip() if action_filter is not None else None
+    ref_filter = str(ref_filter).strip() if ref_filter is not None else None
+
+    if start_date:
+        parsed = _parse_audit_date(start_date)
+        if parsed is None:
+            raise ValueError("from/start_date must be a valid ISO-8601 date")
+        query += " AND timestamp >= ?"
+        params.append(parsed)
+    if end_date:
+        parsed = _parse_audit_date(end_date)
+        if parsed is None:
+            raise ValueError("to/end_date must be a valid ISO-8601 date")
+        query += " AND timestamp <= ?"
+        params.append(parsed)
+    if actor_user_id:
+        query += " AND user_id = ?"
+        params.append(actor_user_id)
+    if action_filter:
+        query += " AND action = ?"
+        params.append(action_filter)
+    if ref_filter:
+        targets = _audit_target_values_for_ref(ref_filter)
+        if targets:
+            query += " AND (target = ? OR target = ?)"
+            params.extend(targets)
+    if exclude_fixtures:
+        from fixture_filter import fixture_audit_target_exclude_clause
+
+        fx_excl, fx_params = fixture_audit_target_exclude_clause("target")
+        query += f" AND {fx_excl}"
+        params.extend(fx_params)
+
+    return query, params
+
 
 class AuditHandler(BaseHandler):
     """GET /api/audit"""
@@ -2269,12 +10010,565 @@ class AuditHandler(BaseHandler):
         if not user:
             return
         db = get_db()
-        limit = int(self.get_argument("limit", 100))
-        offset = int(self.get_argument("offset", 0))
-        rows = db.execute("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-        total = db.execute("SELECT COUNT(*) as c FROM audit_log").fetchone()["c"]
+        limit = _bounded_int(self.get_argument("limit", 100), 100, min_value=1, max_value=1000)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
+        try:
+            from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+            query = "SELECT * FROM audit_log WHERE 1=1"
+            params = []
+            query, params = _append_audit_filters(self, query, params, exclude_fixtures=not show_fx)
+            rows = db.execute(
+                query + " ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                tuple(params + [limit, offset])
+            ).fetchall()
+            total = db.execute(
+                "SELECT COUNT(*) as c FROM (" + query + ") filtered",
+                tuple(params)
+            ).fetchone()["c"]
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
+        db.close()
+        self.success({"entries": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset, "show_fixtures": show_fx})
+
+
+class ApplicationAuditLogHandler(BaseHandler):
+    """GET /api/applications/:id/audit-log — audit trail for a single application."""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        limit = min(int(self.get_argument("limit", "200")), 500)
+        offset = max(0, int(self.get_argument("offset", "0")))
+        targets = _audit_target_values_for_ref(app["ref"])
+        rows = db.execute(
+            "SELECT * FROM audit_log WHERE target IN (?, ?) ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (*targets, limit, offset)
+        ).fetchall()
+        total = db.execute(
+            "SELECT COUNT(*) as c FROM audit_log WHERE target IN (?, ?)",
+            tuple(targets)
+        ).fetchone()["c"]
         db.close()
         self.success({"entries": [dict(r) for r in rows], "total": total})
+
+
+class ApplicationEvidencePackHandler(BaseHandler):
+    """GET /api/applications/:id/evidence-pack — consolidated case reconstruction packet."""
+
+    @staticmethod
+    def _parse_json_if_structured(value):
+        if value is None or isinstance(value, (dict, list)):
+            return value
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text or text[0] not in ("{", "["):
+            return None
+        try:
+            return safe_json_loads(text)
+        except Exception:
+            return None
+
+    @classmethod
+    def _dict_rows(cls, rows, json_fields=()):
+        result = []
+        for row in rows:
+            item = dict(row)
+            for field in json_fields:
+                if field in item:
+                    item[field] = parse_json_field(item.get(field), {} if field.endswith("_data") else [])
+            result.append(item)
+        return result
+
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        app_dict = dict(app)
+        app_dict["status_label"] = get_status_label(app_dict.get("status"))
+        app_dict["risk_level_label"] = get_risk_label(app_dict.get("risk_level"))
+        app_dict["final_risk_level_label"] = get_risk_label(app_dict.get("final_risk_level") or app_dict.get("risk_level"))
+        app_dict["assigned_name"] = resolve_user_display_name(db, app_dict.get("assigned_to"))
+        app_dict["decision_by_name"] = resolve_user_display_name(db, app_dict.get("decision_by"))
+        app_dict["prescreening_data"] = merge_prescreening_sources(
+            parse_json_field(app_dict.get("prescreening_data"), {}),
+            load_saved_session_prescreening(db, app_dict),
+        )
+        if app_dict.get("risk_dimensions"):
+            app_dict["risk_dimensions"] = parse_json_field(app_dict.get("risk_dimensions"), {})
+
+        directors, ubos, intermediaries = get_application_parties(db, app_dict["id"])
+        documents = self._dict_rows(
+            db.execute(
+                f"SELECT * FROM documents WHERE application_id = ? AND {ACTIVE_DOCUMENT_SQL} ORDER BY uploaded_at DESC, id DESC",
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("verification_results",),
+        )
+        for doc in documents:
+            doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+
+        include_history = self.get_argument("include_history", "false").lower() == "true"
+        document_history = []
+        if include_history:
+            document_history = self._dict_rows(
+                db.execute(
+                    "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
+                    (app_dict["id"],)
+                ).fetchall(),
+                json_fields=("verification_results",),
+            )
+            for doc in document_history:
+                doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+
+        memos = self._dict_rows(
+            db.execute(
+                """
+                SELECT id, application_id, version, memo_version, raw_output_hash, memo_data,
+                       review_status, reviewed_by, review_notes, quality_score, validation_status,
+                       validation_issues, validation_run_at, approved_by, approved_at,
+                       supervisor_status, supervisor_summary, supervisor_contradictions,
+                       rule_violations, rule_engine_status, blocked, block_reason,
+                       pdf_generated_at, created_at
+                FROM compliance_memos
+                WHERE application_id = ?
+                ORDER BY version DESC, id DESC
+                """,
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("memo_data", "validation_issues", "supervisor_contradictions", "rule_violations"),
+        )
+        for memo in memos:
+            memo["reviewed_by_name"] = resolve_user_display_name(db, memo.get("reviewed_by"))
+            memo["approved_by_name"] = resolve_user_display_name(db, memo.get("approved_by"))
+            memo["final_status"] = _memo_final_status(memo)
+
+        decisions = self._dict_rows(
+            db.execute(
+                "SELECT * FROM decision_records WHERE application_ref = ? ORDER BY timestamp DESC",
+                (app_dict["ref"],)
+            ).fetchall(),
+            json_fields=("key_flags", "extra_json"),
+        )
+        periodic_reviews = _list_periodic_review_projections(db, application_id=app_dict["id"])
+        periodic_review_memos = self._dict_rows(
+            db.execute(
+                """
+                SELECT id, periodic_review_id, application_id, version, memo_data,
+                       memo_context, generated_at, generated_by, status
+                FROM periodic_review_memos
+                WHERE application_id = ?
+                ORDER BY periodic_review_id DESC, version DESC, id DESC
+                """,
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("memo_data", "memo_context"),
+        )
+        edd_cases = [
+            _materialise_edd_case(db, row)
+            for row in db.execute(
+                "SELECT * FROM edd_cases WHERE application_id = ? ORDER BY triggered_at DESC, id DESC",
+                (app_dict["id"],)
+            ).fetchall()
+        ]
+        rmi_requests = _load_rmi_requests(db, app_dict["id"])
+        application_notes = self._dict_rows(
+            db.execute(
+                "SELECT * FROM application_notes WHERE application_id = ? ORDER BY created_at DESC, id DESC",
+                (app_dict["id"],)
+            ).fetchall()
+        )
+
+        audit_limit = _bounded_int(self.get_argument("audit_limit", 1000), 1000, min_value=1, max_value=5000)
+        targets = _audit_target_values_for_ref(app_dict["ref"])
+        audit_rows = db.execute(
+            """
+            SELECT * FROM audit_log
+            WHERE target IN (?, ?)
+            ORDER BY timestamp ASC, id ASC
+            LIMIT ?
+            """,
+            (*targets, audit_limit)
+        ).fetchall()
+        audit_total = db.execute(
+            "SELECT COUNT(*) as c FROM audit_log WHERE target IN (?, ?)",
+            tuple(targets)
+        ).fetchone()["c"]
+        audit_entries = []
+        for row in audit_rows:
+            entry = dict(row)
+            parsed_detail = self._parse_json_if_structured(entry.get("detail"))
+            if parsed_detail is not None:
+                entry["detail_json"] = parsed_detail
+            audit_entries.append(entry)
+
+        db.close()
+        self.success({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "build": get_build_metadata(),
+            "scope": {
+                "application_id": app_dict["id"],
+                "application_ref": app_dict["ref"],
+                "audit_targets": targets,
+                "audit_limit": audit_limit,
+            },
+            "application": app_dict,
+            "parties": {
+                "directors": directors,
+                "ubos": ubos,
+                "intermediaries": intermediaries,
+            },
+            "documents": documents,
+            "document_history": document_history if include_history else [],
+            "application_notes": application_notes,
+            "rmi_requests": rmi_requests,
+            "compliance_memos": memos,
+            "decision_records": decisions,
+            "periodic_reviews": periodic_reviews,
+            "periodic_review_memos": periodic_review_memos,
+            "edd_cases": edd_cases,
+            "audit_log": {
+                "entries": audit_entries,
+                "total": audit_total,
+                "returned": len(audit_entries),
+            },
+        })
+
+
+class ApplicationNotesHandler(BaseHandler):
+    """GET/POST /api/applications/:id/notes — internal officer notes."""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        rows = db.execute(
+            "SELECT * FROM application_notes WHERE application_id = ? ORDER BY created_at DESC",
+            (app["id"],)
+        ).fetchall()
+        db.close()
+        self.success({"notes": [dict(r) for r in rows]})
+
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        data = self.get_json()
+        content = (data.get("content") or "").strip()
+        if not content:
+            return self.error("Note content is required", 400)
+        if len(content) > 5000:
+            return self.error("Note content exceeds maximum length (5000 characters)", 400)
+
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        db.execute(
+            "INSERT INTO application_notes (application_id, user_id, user_name, user_role, content) VALUES (?, ?, ?, ?, ?)",
+            (app["id"], user.get("sub", ""), user.get("name", ""), user.get("role", ""), content)
+        )
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            (user.get("sub", ""), user.get("name", ""), user.get("role", ""), "Add Note", app["ref"],
+             "Internal note added (" + str(len(content)) + " chars)", self.get_client_ip())
+        )
+        db.commit()
+        db.close()
+        self.success({"status": "ok"}, 201)
+
+
+class AuditExportHandler(BaseHandler):
+    """GET /api/audit/export — export audit_log entries as JSON or CSV."""
+
+    _BASE_HEADERS = [
+        "id", "timestamp", "user_id", "user_name", "user_role",
+        "action", "target", "detail", "ip_address",
+    ]
+    _DECISION_HEADERS = [
+        "decision_id", "decision_type", "decision_risk_level",
+        "decision_confidence", "decision_source",
+    ]
+
+    MAX_EXPORT_ROWS = 10000
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_date(value):
+        """Parse an ISO-8601 date/datetime string. Returns str or None."""
+        return _parse_audit_date(value)
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        fmt = self.get_argument("format", "json").lower()
+        if fmt not in ("json", "csv"):
+            return self.error("format must be json or csv", 400)
+
+        include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
+        decision_start_date = _parse_audit_date(
+            self.get_argument("from", None) or self.get_argument("start_date", None)
+        )
+        decision_end_date = _parse_audit_date(
+            self.get_argument("to", None) or self.get_argument("end_date", None)
+        )
+        decision_actor_user_id = (
+            self.get_argument("user_id", None)
+            or self.get_argument("actor_user_id", None)
+            or self.get_argument("user", None)
+        )
+        decision_actor_user_id = str(decision_actor_user_id).strip() if decision_actor_user_id is not None else None
+
+        db = get_db()
+        try:
+            from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+            query = "SELECT * FROM audit_log WHERE 1=1"
+            params = []
+            try:
+                query, params = _append_audit_filters(self, query, params, exclude_fixtures=not show_fx)
+            except ValueError as exc:
+                return self.error(str(exc), 400)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(self.MAX_EXPORT_ROWS)
+
+            rows = db.execute(query, tuple(params)).fetchall()
+            entries = [dict(r) for r in rows]
+
+            # Normalize timestamps to ISO format strings
+            for entry in entries:
+                if entry.get("timestamp"):
+                    entry["timestamp"] = str(entry["timestamp"])
+
+            # Optionally merge decision_records keyed by application ref
+            if include_decisions:
+                d_query = "SELECT * FROM decision_records WHERE 1=1"
+                d_params = []
+                if decision_start_date:
+                    d_query += " AND timestamp >= ?"
+                    d_params.append(decision_start_date)
+                if decision_end_date:
+                    d_query += " AND timestamp <= ?"
+                    d_params.append(decision_end_date)
+                if decision_actor_user_id:
+                    d_query += " AND actor_user_id = ?"
+                    d_params.append(decision_actor_user_id)
+                d_query += " ORDER BY timestamp DESC"
+                d_rows = db.execute(d_query, tuple(d_params)).fetchall()
+                decision_map = {}
+                for dr in d_rows:
+                    d = dict(dr)
+                    key = d.get("application_ref", "")
+                    decision_map.setdefault(key, []).append(d)
+
+                for entry in entries:
+                    target = entry.get("target", "")
+                    decisions = decision_map.get(target, [])
+                    if decisions:
+                        best = decisions[0]
+                        entry["decision_id"] = best.get("id", "")
+                        entry["decision_type"] = best.get("decision_type", "")
+                        entry["decision_risk_level"] = best.get("risk_level", "")
+                        entry["decision_confidence"] = best.get("confidence_score", "")
+                        entry["decision_source"] = best.get("source", "")
+                    else:
+                        entry["decision_id"] = ""
+                        entry["decision_type"] = ""
+                        entry["decision_risk_level"] = ""
+                        entry["decision_confidence"] = ""
+                        entry["decision_source"] = ""
+
+            if fmt == "csv":
+                return self._write_csv(entries, include_decisions)
+
+            self.success({"entries": entries, "total": len(entries), "show_fixtures": show_fx})
+        finally:
+            db.close()
+
+    def _write_csv(self, entries, include_decisions):
+        import csv, io as _io
+        headers = self._BASE_HEADERS + self._DECISION_HEADERS if include_decisions else list(self._BASE_HEADERS)
+        buf = _io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow({h: entry.get(h, "") for h in headers})
+        self.set_header("Content-Type", "text/csv; charset=utf-8")
+        self.set_header("Content-Disposition", "attachment; filename=audit_export.csv")
+        self.write(buf.getvalue())
+
+
+class SupervisorAuditExportHandler(BaseHandler):
+    """GET /api/audit/supervisor/export — export supervisor_audit_log entries as JSON or CSV."""
+
+    _BASE_HEADERS = [
+        "id", "timestamp", "event_type", "severity", "pipeline_id",
+        "application_id", "run_id", "agent_type", "actor_type",
+        "actor_id", "actor_name", "actor_role", "action", "detail",
+        "ip_address", "session_id",
+    ]
+    _DECISION_HEADERS = [
+        "decision_id", "decision_type", "decision_risk_level",
+        "decision_confidence", "decision_source",
+    ]
+
+    MAX_EXPORT_ROWS = 10000
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        fmt = self.get_argument("format", "json").lower()
+        if fmt not in ("json", "csv"):
+            return self.error("format must be json or csv", 400)
+
+        start_date = self.get_argument("start_date", None)
+        end_date = self.get_argument("end_date", None)
+        actor_user_id = self.get_argument("actor_user_id", None)
+        action_filter = self.get_argument("action", None)
+        include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
+
+        if start_date:
+            start_date = AuditExportHandler._parse_date(start_date)
+            if start_date is None:
+                return self.error("start_date must be a valid ISO-8601 date", 400)
+        if end_date:
+            end_date = AuditExportHandler._parse_date(end_date)
+            if end_date is None:
+                return self.error("end_date must be a valid ISO-8601 date", 400)
+
+        db = get_db()
+        try:
+            query = "SELECT * FROM supervisor_audit_log WHERE 1=1"
+            params = []
+
+            if start_date:
+                query += " AND timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                query += " AND timestamp <= ?"
+                params.append(end_date)
+            if actor_user_id:
+                query += " AND actor_id = ?"
+                params.append(actor_user_id)
+            if action_filter:
+                query += " AND action = ?"
+                params.append(action_filter)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(self.MAX_EXPORT_ROWS)
+
+            rows = db.execute(query, tuple(params)).fetchall()
+            entries = [dict(r) for r in rows]
+
+            # Normalize timestamps and strip internal hash fields
+            for entry in entries:
+                if entry.get("timestamp"):
+                    entry["timestamp"] = str(entry["timestamp"])
+                entry.pop("previous_hash", None)
+                entry.pop("entry_hash", None)
+                entry.pop("data_json", None)
+
+            # Optionally merge decision_records by application_id → application_ref
+            if include_decisions:
+                # Build a mapping from application id → ref for correct join
+                app_ids = list({e.get("application_id", "") for e in entries if e.get("application_id")})
+                id_to_ref = {}
+                if app_ids:
+                    placeholders = ",".join("?" for _ in app_ids)
+                    app_rows = db.execute(
+                        f"SELECT id, ref FROM applications WHERE id IN ({placeholders}) OR ref IN ({placeholders})",
+                        tuple(app_ids + app_ids),
+                    ).fetchall()
+                    for ar in app_rows:
+                        row = dict(ar)
+                        id_to_ref[row["id"]] = row["ref"]
+                        id_to_ref[row["ref"]] = row["ref"]
+
+                d_query = "SELECT * FROM decision_records WHERE 1=1"
+                d_params = []
+                if start_date:
+                    d_query += " AND timestamp >= ?"
+                    d_params.append(start_date)
+                if end_date:
+                    d_query += " AND timestamp <= ?"
+                    d_params.append(end_date)
+                if actor_user_id:
+                    d_query += " AND actor_user_id = ?"
+                    d_params.append(actor_user_id)
+                d_query += " ORDER BY timestamp DESC"
+                d_rows = db.execute(d_query, tuple(d_params)).fetchall()
+                decision_map = {}
+                for dr in d_rows:
+                    d = dict(dr)
+                    key = d.get("application_ref", "")
+                    decision_map.setdefault(key, []).append(d)
+
+                for entry in entries:
+                    app_id = entry.get("application_id", "")
+                    app_ref = id_to_ref.get(app_id, app_id)
+                    decisions = decision_map.get(app_ref, [])
+                    if decisions:
+                        best = decisions[0]
+                        entry["decision_id"] = best.get("id", "")
+                        entry["decision_type"] = best.get("decision_type", "")
+                        entry["decision_risk_level"] = best.get("risk_level", "")
+                        entry["decision_confidence"] = best.get("confidence_score", "")
+                        entry["decision_source"] = best.get("source", "")
+                    else:
+                        entry["decision_id"] = ""
+                        entry["decision_type"] = ""
+                        entry["decision_risk_level"] = ""
+                        entry["decision_confidence"] = ""
+                        entry["decision_source"] = ""
+
+            if fmt == "csv":
+                return self._write_csv(entries, include_decisions)
+
+            self.success({"entries": entries, "total": len(entries)})
+        finally:
+            db.close()
+
+    def _write_csv(self, entries, include_decisions):
+        import csv, io as _io
+        headers = self._BASE_HEADERS + self._DECISION_HEADERS if include_decisions else list(self._BASE_HEADERS)
+        buf = _io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow({h: entry.get(h, "") for h in headers})
+        self.set_header("Content-Type", "text/csv; charset=utf-8")
+        self.set_header("Content-Disposition", "attachment; filename=supervisor_audit_export.csv")
+        self.write(buf.getvalue())
 
 
 # ══════════════════════════════════════════════════════════
@@ -2288,57 +10582,117 @@ class DashboardHandler(BaseHandler):
         if not user:
             return
 
+        from fixture_filter import (
+            fixture_app_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
         db = get_db()
         stats = {}
 
         if user.get("type") == "client":
             client_id = user["sub"]
-            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
-            stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted') AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
+            client_fx_excl, client_fx_params = fixture_app_exclude_clause(table_alias="")
+            client_fx_clause = f" AND {client_fx_excl}"
+
+            def _client_params(*extra):
+                return tuple(extra) + (client_id, *client_fx_params)
+
+            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
+            stats["early_stage_applications"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}) AND client_id=?{client_fx_clause}",
+                _client_params(*_REPORT_PENDING_STATUSES),
+            ).fetchone()["c"]
+            stats["in_progress_applications"] = stats["early_stage_applications"]
+            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
+            stats["edd"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}) AND client_id=?{client_fx_clause}",
+                _client_params(*_REPORT_EDD_ROUTED_STATUSES),
+            ).fetchone()["c"]
 
             # Risk distribution
-            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_unknown"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE client_id=? AND (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){client_fx_clause}",
+                _client_params()
+            ).fetchone()["c"]
 
             # Recent applications
+            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
             recent = db.execute("""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
                 LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE a.client_id=?
+                WHERE a.client_id=? AND """ + recent_fx_excl + """
                 ORDER BY a.created_at DESC LIMIT 10
-            """, (client_id,)).fetchall()
+            """, (client_id, *recent_fx_params)).fetchall()
             stats["recent"] = [dict(r) for r in recent]
+            stats["show_fixtures"] = False
+            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
+            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
+            stats["canonical_view"] = "applications_report_v1"
         else:
-            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
-            stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted')").fetchone()["c"]
-            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
-            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'").fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
-            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
-            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
-            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
+            # Officer / admin branch: exclude fixtures by default.
+            # Pass show_fixtures=true (admin/sco only) to include them.
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+            fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+            fx_clause = "" if show_fx else f" AND {fx_excl}"
+            fp = [] if show_fx else fx_params
+
+            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE 1=1{fx_clause}", fp).fetchone()["c"]
+            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
+            pending_params = [*_REPORT_PENDING_STATUSES, *fp]
+            stats["early_stage_applications"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}){fx_clause}",
+                pending_params,
+            ).fetchone()["c"]
+            stats["in_progress_applications"] = stats["early_stage_applications"]
+            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review'{fx_clause}", fp).fetchone()["c"]
+            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'{fx_clause}", fp).fetchone()["c"]
+            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted'){fx_clause}", fp).fetchone()["c"]
+            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved'{fx_clause}", fp).fetchone()["c"]
+            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected'{fx_clause}", fp).fetchone()["c"]
+            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
+            edd_params = [*_REPORT_EDD_ROUTED_STATUSES, *fp]
+            stats["edd"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}){fx_clause}",
+                edd_params,
+            ).fetchone()["c"]
 
             # Risk distribution
-            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'").fetchone()["c"]
-            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'").fetchone()["c"]
-            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'").fetchone()["c"]
-            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'").fetchone()["c"]
+            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'{fx_clause}", fp).fetchone()["c"]
+            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'{fx_clause}", fp).fetchone()["c"]
+            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'{fx_clause}", fp).fetchone()["c"]
+            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'{fx_clause}", fp).fetchone()["c"]
+            stats["risk_unknown"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){fx_clause}",
+                fp
+            ).fetchone()["c"]
 
             # Recent applications
-            recent = db.execute("""
+            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
+            fx_where_clause = "" if show_fx else f" AND {recent_fx_excl}"
+            recent_fp = [] if show_fx else recent_fx_params
+            recent = db.execute(f"""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
                 LEFT JOIN users u ON a.assigned_to = u.id
+                WHERE 1=1{fx_where_clause}
                 ORDER BY a.created_at DESC LIMIT 10
-            """).fetchall()
+            """, recent_fp).fetchall()
             stats["recent"] = [dict(r) for r in recent]
+            stats["show_fixtures"] = show_fx
+            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
+            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
+            stats["canonical_view"] = "applications_report_v1"
 
         db.close()
         self.success(stats)
@@ -2349,56 +10703,382 @@ class DashboardHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 
 class SaveResumeHandler(BaseHandler):
-    """POST /api/save-resume — save form progress, GET — restore"""
+    """Portal draft persistence — save / resume / discard a single application's form state.
+
+    Endpoints:
+      POST   /api/save-resume                — create or update the draft for an app
+      GET    /api/save-resume?application_id=… — retrieve the draft for an app
+      DELETE /api/save-resume?application_id=… — discard the draft for an app
+
+    Only portal client users may use this endpoint. Drafts are scoped strictly
+    to the authenticated client_id AND the application_id (which must belong
+    to that client). form_data is encrypted at rest where a PII encryption
+    key is configured; legacy plaintext rows continue to read transparently.
+    """
+
+    # ── Internal helpers ────────────────────────────────────────
+    def _require_portal_client(self):
+        """Restrict draft endpoints to portal client users only."""
+        user = self.require_auth()
+        if not user:
+            return None
+        if user.get("type") != "client":
+            self.error("Draft persistence is only available to portal clients.", 403)
+            return None
+        return user
+
+    def _assert_app_belongs_to_client(self, db, app_id, client_id):
+        """Defence-in-depth: verify that application_id belongs to the calling client.
+
+        Returns the application row on success, sends an error response and
+        returns None on failure. Prevents one client from writing/reading a
+        draft keyed to another client's application_id.
+        """
+        if not app_id:
+            self.error("application_id required", 400)
+            return None
+        row = db.execute(
+            "SELECT id, ref, client_id, status, company_name FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id),
+        ).fetchone()
+        if not row:
+            self.error("Application not found", 404)
+            return None
+        if row["client_id"] != client_id:
+            # Same shape as not-found to avoid enumeration leakage
+            self.error("Application not found", 404)
+            return None
+        return row
+
+    @staticmethod
+    def _normalize_company_key(name):
+        return re.sub(r"\s+", " ", (name or "").strip()).lower()
+
+    @staticmethod
+    def _is_missing_column_error(exc, column_name):
+        msg = str(exc or "").lower()
+        col = str(column_name or "").lower()
+        if not msg or not col:
+            return False
+        return (
+            ("no such column" in msg and col in msg)
+            or ("does not exist" in msg and col in msg)
+        )
+
+    @staticmethod
+    def _is_unique_constraint_error(exc):
+        """Detect UNIQUE constraint violations in both SQLite and PostgreSQL."""
+        msg = str(exc or "").lower()
+        return (
+            "unique constraint failed" in msg       # SQLite
+            or "unique violation" in msg            # PostgreSQL (psycopg2)
+            or "duplicate key value" in msg         # PostgreSQL (detail message)
+            or "already exists" in msg              # PostgreSQL (some messages)
+        )
+
+    def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
+        """Create or reuse a draft application shell before first submit."""
+        normalized_prescreening = SaveResumeHandler._draft_prescreening_from_form_data(form_data)
+
+        company_name = resolve_application_company_name(form_data if isinstance(form_data, dict) else {}, normalized_prescreening)
+        if not company_name:
+            self.error(
+                "Registered entity name is required before saving your first draft.",
+                400
+            )
+            return None
+
+        normalized_name = self._normalize_company_key(company_name)
+        try:
+            existing_drafts = db.execute(
+                "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status='draft' ORDER BY updated_at DESC",
+                (client_id,)
+            ).fetchall()
+        except Exception as exc:
+            if not self._is_missing_column_error(exc, "updated_at"):
+                raise
+            # Legacy-schema fallback: older staging databases can miss applications.updated_at.
+            existing_drafts = db.execute(
+                "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status='draft' ORDER BY created_at DESC, id DESC",
+                (client_id,)
+            ).fetchall()
+        for row in existing_drafts:
+            candidate = self._normalize_company_key(row.get("company_name"))
+            if candidate == normalized_name:
+                return row
+
+        # Insert the new draft application shell.  Retry up to 3 times on the
+        # rare UNIQUE ref collision that can still occur under high concurrency
+        # (the MAX-based generate_ref() already eliminates the deletion-caused
+        # systematic collision; this loop covers the concurrent-create window).
+        app_id = uuid.uuid4().hex[:16]
+        for _ref_attempt in range(3):
+            ref = generate_ref()
+            try:
+                db.execute(
+                    """
+                    INSERT INTO applications (
+                        id, ref, client_id, company_name, brn, country, sector,
+                        entity_type, ownership_structure, prescreening_data, status
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        app_id,
+                        ref,
+                        client_id,
+                        company_name,
+                        first_non_empty(normalized_prescreening.get("brn"), ""),
+                        first_non_empty(normalized_prescreening.get("country_of_incorporation"), ""),
+                        first_non_empty(normalized_prescreening.get("sector"), ""),
+                        first_non_empty(normalized_prescreening.get("entity_type"), ""),
+                        first_non_empty(normalized_prescreening.get("ownership_structure"), ""),
+                        json.dumps(normalized_prescreening),
+                        "draft",
+                    )
+                )
+                break  # INSERT succeeded
+            except Exception as exc:
+                if self._is_unique_constraint_error(exc) and _ref_attempt < 2:
+                    logger.warning(
+                        "generate_ref collision on attempt %d (ref=%s) — retrying",
+                        _ref_attempt + 1, ref,
+                    )
+                    continue
+                raise
+        return {"id": app_id, "ref": ref, "company_name": company_name, "status": "draft"}
+
+    @staticmethod
+    def _draft_prescreening_from_form_data(form_data):
+        normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
+        normalized_prescreening = normalize_prescreening_data(form_data or {})
+        if normalized_from_session:
+            normalized_prescreening = normalize_prescreening_data(
+                {"prescreening_data": normalized_from_session},
+                existing=normalized_prescreening,
+            )
+        if not isinstance(normalized_prescreening, dict):
+            normalized_prescreening = {}
+        return normalized_prescreening
+
+    # ── HTTP methods ────────────────────────────────────────────
+    def get(self):
+        user = self._require_portal_client()
+        if not user:
+            return
+        app_id = self.get_argument("application_id", None)
+        db = get_db()
+        try:
+            app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            if not app_row:
+                return
+            real_id = app_row["id"]
+            session = db.execute(
+                "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (user["sub"], real_id),
+            ).fetchone()
+            if session:
+                self.success({
+                    "form_data": decrypt_draft_form_data(session["form_data"]),
+                    "last_step": session["last_step"],
+                    "application_id": session["application_id"],
+                    "last_saved_at": session["updated_at"],
+                })
+            else:
+                self.success({"form_data": {}, "last_step": 0, "last_saved_at": None})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self._require_portal_client()
+        if not user:
+            return
+        data = self.get_json() or {}
+        app_id = data.get("application_id")
+        form_data = _extract_save_resume_form_data(data)
+        last_step = data.get("last_step", 0)
+
+        # Reject drafts with no meaningful content — prevents noisy empty
+        # autosaves on a freshly opened (untouched) form.
+        if not _draft_payload_is_meaningful(form_data):
+            return self.error("Draft is empty — nothing to save.", 400)
+
+        db = get_db()
+        try:
+            app_row = None
+            if app_id:
+                app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            else:
+                app_row = self._ensure_pre_submit_draft_application(db, user["sub"], form_data)
+            if not app_row:
+                return
+            real_id = app_row["id"]
+            if (app_row.get("status") or "") == "draft":
+                normalized_prescreening = SaveResumeHandler._draft_prescreening_from_form_data(form_data)
+                company_name = resolve_application_company_name(
+                    form_data if isinstance(form_data, dict) else {},
+                    normalized_prescreening,
+                    fallback=app_row.get("company_name") or "",
+                )
+                db.execute(
+                    """
+                    UPDATE applications
+                    SET company_name=?, brn=?, country=?, sector=?,
+                        entity_type=?, ownership_structure=?, prescreening_data=?
+                    WHERE id=? AND status='draft'
+                    """,
+                    (
+                        company_name or app_row.get("company_name") or "",
+                        first_non_empty(normalized_prescreening.get("brn"), ""),
+                        first_non_empty(normalized_prescreening.get("country_of_incorporation"), ""),
+                        first_non_empty(normalized_prescreening.get("sector"), ""),
+                        first_non_empty(normalized_prescreening.get("entity_type"), ""),
+                        first_non_empty(normalized_prescreening.get("ownership_structure"), ""),
+                        json.dumps(normalized_prescreening),
+                        real_id,
+                    ),
+                )
+            stored_form_data = encrypt_draft_form_data(form_data)
+
+            existing = db.execute(
+                "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
+                (user["sub"], real_id),
+            ).fetchone()
+            if existing:
+                # Single active draft per (client, application) — updates in place,
+                # never inserts a duplicate row.
+                try:
+                    db.execute(
+                        "UPDATE client_sessions SET form_data=?, last_step=?, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (stored_form_data, last_step, existing["id"]),
+                    )
+                except Exception as exc:
+                    if not self._is_missing_column_error(exc, "updated_at"):
+                        raise
+                    db.execute(
+                        "UPDATE client_sessions SET form_data=?, last_step=? WHERE id=?",
+                        (stored_form_data, last_step, existing["id"]),
+                    )
+            else:
+                db.execute(
+                    "INSERT INTO client_sessions (client_id, application_id, form_data, last_step) "
+                    "VALUES (?,?,?,?)",
+                    (user["sub"], real_id, stored_form_data, last_step),
+                )
+            db.commit()
+            try:
+                saved_at = db.execute(
+                    "SELECT updated_at FROM client_sessions WHERE client_id=? AND application_id=?",
+                    (user["sub"], real_id),
+                ).fetchone()
+            except Exception as exc:
+                if not self._is_missing_column_error(exc, "updated_at"):
+                    raise
+                saved_at = None
+        finally:
+            db.close()
+        self.success({
+            "status": "saved",
+            "application_id": real_id,
+            "application_ref": app_row.get("ref"),
+            "last_saved_at": saved_at["updated_at"] if saved_at else None,
+        })
+
+    def delete(self):
+        """DELETE /api/save-resume — discard the draft for an application."""
+        user = self._require_portal_client()
+        if not user:
+            return
+        app_id = self.get_argument("application_id", None)
+        db = get_db()
+        try:
+            app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            if not app_row:
+                return
+            real_id = app_row["id"]
+            db.execute(
+                "DELETE FROM client_sessions WHERE client_id=? AND application_id=?",
+                (user["sub"], real_id),
+            )
+            db.commit()
+        finally:
+            db.close()
+        self.success({"status": "deleted"})
+
+
+class ActiveDraftsHandler(BaseHandler):
+    """GET /api/save-resume/active — list the calling client's active in-progress drafts.
+
+    Drives the portal Resume/Discard banner. Returns at most the most recent
+    open (non-terminal) drafts joined with their parent application's metadata
+    so the UI can render a per-draft Resume + Discard control.
+    """
+
+    TERMINAL_STATUSES = ("approved", "rejected", "withdrawn")
+
     def get(self):
         user = self.require_auth()
         if not user:
             return
+        if user.get("type") != "client":
+            return self.error("Draft persistence is only available to portal clients.", 403)
+        client_id = user["sub"]
         db = get_db()
-        session = db.execute(
-            "SELECT * FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-            (user["sub"],)).fetchone()
-        db.close()
-        if session:
-            self.success({"form_data": json.loads(session["form_data"]),
-                         "last_step": session["last_step"],
-                         "application_id": session["application_id"]})
-        else:
-            self.success({"form_data": {}, "last_step": 0})
-
-    def post(self):
-        user = self.require_auth()
-        if not user:
-            return
-        data = self.get_json()
-        db = get_db()
-        existing = db.execute("SELECT id FROM client_sessions WHERE client_id=?", (user["sub"],)).fetchone()
-        if existing:
-            db.execute("UPDATE client_sessions SET form_data=?, last_step=?, application_id=?, updated_at=datetime('now') WHERE id=?",
-                       (json.dumps(data.get("form_data",{})), data.get("last_step",0),
-                        data.get("application_id"), existing["id"]))
-        else:
-            db.execute("INSERT INTO client_sessions (client_id, application_id, form_data, last_step) VALUES (?,?,?,?)",
-                       (user["sub"], data.get("application_id"), json.dumps(data.get("form_data",{})), data.get("last_step",0)))
-        db.commit()
-        db.close()
-        self.success({"status": "saved"})
+        try:
+            placeholders = ",".join("?" * len(self.TERMINAL_STATUSES))
+            rows = db.execute(
+                f"""
+                SELECT cs.application_id, cs.last_step, cs.updated_at AS last_saved_at,
+                       a.ref, a.company_name, a.status
+                FROM client_sessions cs
+                JOIN applications a ON a.id = cs.application_id
+                WHERE cs.client_id = ?
+                  AND a.client_id  = ?
+                  AND a.status NOT IN ({placeholders})
+                ORDER BY cs.updated_at DESC
+                """,
+                (client_id, client_id, *self.TERMINAL_STATUSES),
+            ).fetchall()
+        finally:
+            db.close()
+        drafts = [
+            {
+                "application_id": r["application_id"],
+                "ref": r["ref"],
+                "company_name": r["company_name"],
+                "status": r["status"],
+                "status_label": get_status_label(r["status"]),
+                "last_step": r["last_step"],
+                "last_saved_at": r["last_saved_at"],
+            }
+            for r in rows
+        ]
+        self.success({"drafts": drafts})
 
 
 # ══════════════════════════════════════════════════════════
 # PORTAL FILE SERVING
 # ══════════════════════════════════════════════════════════
 
-PORTAL_DIR = os.path.join(os.path.dirname(__file__), "..")  # outputs/ directory
+# Look for HTML files in parent dir (local dev) or same dir (Docker)
+_parent_dir = os.path.join(os.path.dirname(__file__), "..")
+_same_dir = os.path.dirname(__file__)
+if os.path.exists(os.path.join(_parent_dir, "arie-portal.html")):
+    PORTAL_DIR = _parent_dir
+elif os.path.exists(os.path.join(_same_dir, "arie-portal.html")):
+    PORTAL_DIR = _same_dir
+else:
+    PORTAL_DIR = _parent_dir  # fallback
 
-class PortalHandler(tornado.web.RequestHandler):
+class PortalHandler(BaseHandler):
     """Serve the client portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
         with open(os.path.join(PORTAL_DIR, "arie-portal.html"), "r") as f:
             self.write(f.read())
 
-class BackOfficeHandler(tornado.web.RequestHandler):
+class BackOfficeHandler(BaseHandler):
     """Serve the back-office portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
@@ -2406,9 +11086,1952 @@ class BackOfficeHandler(tornado.web.RequestHandler):
             self.write(f.read())
 
 
+class SecureStaticFileHandler(tornado.web.StaticFileHandler):
+    """Static asset handler with the same browser security posture as HTML."""
+    def set_default_headers(self):
+        self.set_header("Server", "RegMind")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "DENY")
+        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        self.set_header(
+            "Content-Security-Policy",
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        )
+
+
+def _screening_hit_facts(screening_record):
+    results = (screening_record or {}).get("results", []) or []
+    sanctions_hits = sum(1 for hit in results if hit.get("is_sanctioned"))
+    pep_hits = sum(1 for hit in results if hit.get("is_pep"))
+    adverse_hits = sum(1 for hit in results if hit.get("is_adverse_media"))
+    return {
+        "total_hits": len(results),
+        "sanctions_hits": sanctions_hits,
+        "pep_hits": pep_hits,
+        "adverse_media_hits": adverse_hits,
+        "other_hits": max(0, len(results) - sanctions_hits - pep_hits - adverse_hits),
+        "matched": bool((screening_record or {}).get("matched") or results),
+    }
+
+
+def _screening_queue_row_mode(report_mode, state, status_key, entity_context=None, provider_record=None):
+    """Return truthful row-level screening provenance for queue display."""
+    context_text = " ".join(str(x or "") for x in (entity_context or [])).lower()
+    provider_record = provider_record if isinstance(provider_record, dict) else {}
+    truth = derive_screening_truth(provider_record, required=True) if provider_record else {}
+    provider_mode = truth.get("provider_mode")
+    if provider_mode == "sandbox_provider":
+        return "sandbox"
+    if provider_mode == "simulated_fallback":
+        return "simulated"
+    if provider_mode == "not_configured":
+        return "not_configured"
+    if provider_mode == "failed":
+        return "unavailable"
+    if provider_mode == "pending":
+        return "pending"
+    source_text = " ".join(
+        str(provider_record.get(k) or "")
+        for k in ("source", "provider", "api_status")
+    ).lower()
+    combined = f"{context_text} {source_text}"
+
+    if any(token in combined for token in ("codex-smoke", "smoke", "mock", "simulated")):
+        return "simulated"
+    if status_key == "screening_not_configured" or state == _SCR_NOT_CONFIGURED:
+        return "not_configured"
+    if status_key == "screening_unavailable" or state == _SCR_FAILED:
+        return "unavailable"
+    if status_key == "screening_pending" or state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+        return "pending"
+    # OpenCorporates/OpenSanctions are not the Phase 2 source of truth for live
+    # KYB/adverse/ongoing monitoring. CA owns that scope and is still in
+    # progress; rows from simulated legacy enrichment must not show as live.
+    if "opencorporates" in combined and not OPENCORPORATES_API_KEY:
+        return "simulated" if report_mode != "live" else "mixed"
+    if "opensanctions" in combined and not OPENSANCTIONS_API_KEY:
+        return "simulated" if report_mode != "live" else "mixed"
+    return report_mode or "unknown"
+
+
+_SCREENING_DISPOSITION_CODES = {
+    "cleared": {
+        "false_positive_cleared",
+        "false_positive",
+        "identity_mismatch",
+        "provider_no_relevant_match",
+        "duplicate_or_irrelevant",
+        "low_risk_context_accepted",
+    },
+    "escalated": {
+        "true_match",
+        "material_concern",
+        "escalated_to_edd",
+        "potential_sanctions_match",
+        "potential_pep_match",
+        "adverse_media_match",
+        "director_ubo_sensitive_hit",
+        "high_risk_jurisdiction",
+        "provider_unresolved",
+    },
+    "follow_up_required": {
+        "needs_more_information",
+        "client_clarification_required",
+        "missing_identity_data",
+        "provider_pending_or_unavailable",
+        "documentation_required",
+    },
+}
+
+_SCREENING_CANONICAL_DISPOSITION_STORAGE = {
+    "false_positive_cleared": "cleared",
+    "true_match": "escalated",
+    "material_concern": "escalated",
+    "needs_more_information": "follow_up_required",
+    "escalated_to_edd": "escalated",
+}
+
+_SCREENING_LEGACY_CODE_TO_CANONICAL = {
+    "false_positive": "false_positive_cleared",
+    "identity_mismatch": "false_positive_cleared",
+    "provider_no_relevant_match": "false_positive_cleared",
+    "duplicate_or_irrelevant": "false_positive_cleared",
+    "low_risk_context_accepted": "false_positive_cleared",
+    "potential_sanctions_match": "true_match",
+    "potential_pep_match": "true_match",
+    "adverse_media_match": "material_concern",
+    "director_ubo_sensitive_hit": "material_concern",
+    "high_risk_jurisdiction": "material_concern",
+    "provider_unresolved": "material_concern",
+    "client_clarification_required": "needs_more_information",
+    "missing_identity_data": "needs_more_information",
+    "provider_pending_or_unavailable": "needs_more_information",
+    "documentation_required": "needs_more_information",
+}
+
+_SCREENING_WORKFLOW_EDD_DISPOSITIONS = {
+    "true_match",
+    "material_concern",
+    "needs_more_information",
+    "escalated_to_edd",
+}
+_SCREENING_WORKFLOW_RISK_DISPOSITIONS = (
+    _SCREENING_WORKFLOW_EDD_DISPOSITIONS | {"false_positive_cleared"}
+)
+_SCREENING_WORKFLOW_TERMINAL_STATUSES = {
+    "approved",
+    "rejected",
+    "withdrawn",
+    "edd_approved",
+}
+
+_SCREENING_REVIEW_RATIONALE_MIN_CHARS = 12
+_SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40
+_SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8
+
+_SCREENING_SUBJECT_TYPES = {"entity", "director", "ubo", "applicant", "client"}
+_SCREENING_SUBJECT_ALIASES = {"company": "entity"}
+
+
+def _screening_rationale_word_count(value):
+    words = str(value or "").replace("-", " ").replace("/", " ").split()
+    return len([part for part in words if any(ch.isalnum() for ch in part)])
+
+
+def _screening_review_rationale_error(disposition, rationale):
+    if len(rationale) < _SCREENING_REVIEW_RATIONALE_MIN_CHARS:
+        return f"Screening review rationale must be at least {_SCREENING_REVIEW_RATIONALE_MIN_CHARS} characters"
+    if disposition == "cleared":
+        if (
+            len(rationale) < _SCREENING_CLEAR_RATIONALE_MIN_CHARS
+            or _screening_rationale_word_count(rationale) < _SCREENING_CLEAR_RATIONALE_MIN_WORDS
+        ):
+            return (
+                "Cleared screening rationale must be at least "
+                f"{_SCREENING_CLEAR_RATIONALE_MIN_CHARS} characters and "
+                f"{_SCREENING_CLEAR_RATIONALE_MIN_WORDS} words, citing the evidence reviewed"
+            )
+    return None
+
+
+def _normalise_screening_review_disposition(disposition, disposition_code):
+    disposition = (disposition or "").strip().lower()
+    disposition_code = (disposition_code or "").strip().lower()
+    if disposition in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
+        canonical = disposition
+        storage = _SCREENING_CANONICAL_DISPOSITION_STORAGE[canonical]
+        return storage, canonical, canonical
+    if disposition in _SCREENING_DISPOSITION_CODES:
+        canonical = (
+            disposition_code
+            if disposition_code in _SCREENING_CANONICAL_DISPOSITION_STORAGE
+            else _SCREENING_LEGACY_CODE_TO_CANONICAL.get(disposition_code)
+        )
+        return disposition, disposition_code, canonical
+    return disposition, disposition_code, None
+
+
+def _screening_review_canonical_disposition(review):
+    if not review:
+        return None
+    code = (review.get("disposition_code") or "").strip().lower()
+    disposition = (review.get("disposition") or "").strip().lower()
+    if code in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
+        return code
+    if disposition in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
+        return disposition
+    return _SCREENING_LEGACY_CODE_TO_CANONICAL.get(code)
+
+
+def _screening_review_artifact_present(review, *keys):
+    return any(review.get(key) not in (None, "", [], {}) for key in keys)
+
+
+def _escape_like_literal(value):
+    text = str(value or "")
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _screening_review_false_positive_clearance_contract(review):
+    if not review:
+        return False
+    requires_four_eyes = _truthy_review_flag(review.get("requires_four_eyes"))
+    second_reviewer = review.get("second_reviewer_id")
+    return bool(
+        _screening_review_canonical_disposition(review) == "false_positive_cleared"
+        and review.get("disposition") == "cleared"
+        and _screening_review_artifact_present(review, "reviewer_id", "reviewer_name")
+        and _screening_review_artifact_present(review, "created_at", "updated_at", "reviewed_at", "review_updated_at")
+        and _screening_review_artifact_present(review, "rationale")
+        and _screening_review_artifact_present(review, "evidence_reference", "review_evidence_reference")
+        and _truthy_review_flag(review.get("audit_confirmed"))
+        and (not requires_four_eyes or bool(second_reviewer))
+    )
+
+
+def _screening_review_audit_targets(app_ref, review):
+    targets = []
+    for value in (app_ref, review.get("application_ref"), review.get("application_id")):
+        if value not in (None, "", [], {}) and str(value) not in targets:
+            targets.append(str(value))
+    return targets
+
+
+def _screening_review_audit_detail_payload(detail):
+    parsed = safe_json_loads(detail)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _screening_review_audit_detail_matches(review, detail):
+    detail = str(detail or "")
+    payload = _screening_review_audit_detail_payload(detail)
+    subject_name = str(review.get("subject_name") or "")
+    disposition_code = str(review.get("disposition_code") or "")
+    if payload:
+        payload_subject = str(payload.get("subject_name") or "")
+        payload_code = str(payload.get("disposition_code") or payload.get("canonical_disposition") or "")
+        return bool(
+            (not subject_name or payload_subject == subject_name)
+            and (not disposition_code or payload_code == disposition_code)
+        )
+    return bool(
+        detail
+        and (not subject_name or subject_name in detail)
+        and (not disposition_code or disposition_code in detail)
+    )
+
+
+def _screening_review_evidence_from_audit_detail(detail):
+    payload = _screening_review_audit_detail_payload(detail)
+    if not payload:
+        return None
+    for key in ("evidence_reference", "review_evidence_reference", "evidence", "reference", "source_reference"):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _load_screening_review_audit_lookup(db, reviews, app_ref_by_id=None):
+    targets = []
+    app_ref_by_id = app_ref_by_id or {}
+    for review in reviews or []:
+        app_ref = app_ref_by_id.get(review.get("application_id")) or review.get("application_ref")
+        for target in _screening_review_audit_targets(app_ref, review):
+            if target not in targets:
+                targets.append(target)
+    if not db or not targets:
+        return {}
+    try:
+        placeholders = ",".join("?" for _ in targets)
+        rows = db.execute(
+            f"""
+            SELECT target, detail
+            FROM audit_log
+            WHERE action = 'Screening Review'
+              AND target IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            targets,
+        ).fetchall()
+    except Exception:
+        logger.warning("Could not preload screening review audit rows", exc_info=True)
+        return {}
+    lookup = {}
+    for row in rows:
+        lookup.setdefault(str(row["target"]), []).append(dict(row))
+    return lookup
+
+
+def _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=None):
+    if not db or not review:
+        return None
+    targets = _screening_review_audit_targets(app_ref, review)
+    if audit_rows_by_target is not None:
+        for target in targets:
+            for row in audit_rows_by_target.get(str(target), []):
+                if _screening_review_audit_detail_matches(review, row.get("detail")):
+                    return row
+        return None
+    target = targets[0] if targets else None
+    subject_name = review.get("subject_name") or ""
+    disposition_code = review.get("disposition_code") or ""
+    try:
+        row = db.execute(
+            """
+            SELECT id, detail FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+              AND detail LIKE ? ESCAPE '\\'
+              AND detail LIKE ? ESCAPE '\\'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (target, f"%{_escape_like_literal(subject_name)}%", f"%{_escape_like_literal(disposition_code)}%"),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        logger.warning("Could not confirm screening review audit for %s/%s", target, subject_name, exc_info=True)
+        return None
+
+
+def _screening_review_audit_confirmed(db, app_ref, review, audit_rows_by_target=None):
+    if _truthy_review_flag(review.get("audit_confirmed")):
+        return True
+    return bool(_screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target))
+
+
+def _screening_review_audit_evidence_reference(db, app_ref, review, audit_rows_by_target=None):
+    row = _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target)
+    if not row:
+        return None
+    return _screening_review_evidence_from_audit_detail(row.get("detail"))
+
+
+def _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_target=None):
+    review = dict(review or {})
+    audit_row = _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target)
+    review["audit_confirmed"] = _truthy_review_flag(review.get("audit_confirmed")) or bool(audit_row)
+    if not review.get("review_evidence_reference") and not review.get("evidence_reference") and audit_row:
+        evidence_reference = _screening_review_evidence_from_audit_detail(audit_row.get("detail"))
+        if evidence_reference:
+            review["review_evidence_reference"] = evidence_reference
+    return review
+
+
+def _load_screening_reviews_for_truth(db, application_id, app_ref=None):
+    rows = db.execute(
+        """
+        SELECT * FROM screening_reviews
+        WHERE application_id = ?
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        """,
+        (application_id,),
+    ).fetchall()
+    reviews = [dict(row) for row in rows]
+    audit_lookup = _load_screening_review_audit_lookup(db, reviews, {application_id: app_ref})
+    return [
+        _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_target=audit_lookup)
+        for review in reviews
+    ]
+
+
+def _truthy_review_flag(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "t", "yes", "y")
+
+
+def _screening_review_payload_fields(review):
+    if not review:
+        return {
+            "review_disposition": None,
+            "review_disposition_code": None,
+            "canonical_disposition": None,
+            "review_rationale": None,
+            "review_notes": None,
+            "reviewed_by": None,
+            "reviewed_at": None,
+            "review_updated_at": None,
+            "requires_four_eyes": False,
+            "review_four_eyes_status": "not_required",
+            "review_resolved": False,
+            "audit_confirmed": False,
+            "sensitivity_flags": [],
+            "second_reviewed_by": None,
+            "second_reviewed_at": None,
+            "second_disposition_code": None,
+            "second_rationale": None,
+        }
+
+    requires_four_eyes = _truthy_review_flag(review.get("requires_four_eyes"))
+    second_reviewer = review.get("second_reviewer_id")
+    four_eyes_status = "not_required"
+    if requires_four_eyes:
+        four_eyes_status = "complete" if second_reviewer else "pending_second_review"
+    disposition = review.get("disposition")
+    canonical_disposition = _screening_review_canonical_disposition(review)
+    review_resolved = _screening_review_false_positive_clearance_contract(review)
+    sensitivity_flags = safe_json_loads(review.get("sensitivity_flags")) or []
+    if not isinstance(sensitivity_flags, list):
+        sensitivity_flags = []
+    return {
+        "review_disposition": disposition,
+        "review_disposition_code": review.get("disposition_code"),
+        "canonical_disposition": canonical_disposition,
+        "review_rationale": review.get("rationale") or review.get("notes"),
+        "review_notes": review.get("notes"),
+        "reviewed_by": review.get("reviewer_name"),
+        "reviewed_at": review.get("created_at") or review.get("updated_at"),
+        "review_updated_at": review.get("updated_at") or review.get("created_at"),
+        "requires_four_eyes": requires_four_eyes,
+        "review_four_eyes_status": four_eyes_status,
+        "review_resolved": review_resolved,
+        "audit_confirmed": _truthy_review_flag(review.get("audit_confirmed")),
+        "sensitivity_flags": sensitivity_flags,
+        "second_reviewed_by": review.get("second_reviewer_name"),
+        "second_reviewed_at": review.get("second_reviewed_at"),
+        "second_disposition_code": review.get("second_disposition_code"),
+        "second_rationale": review.get("second_rationale"),
+    }
+
+
+def _screening_review_is_resolved(review):
+    return _screening_review_payload_fields(review)["review_resolved"]
+
+
+def _screening_disposition_edd_trigger_flags(canonical_disposition):
+    code = str(canonical_disposition or "").strip().lower()
+    if code == "needs_more_information":
+        return ["screening_needs_more_information"]
+    if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        return ["material_screening_concern"]
+    return []
+
+
+def _screening_disposition_routing_summary(canonical_disposition):
+    code = str(canonical_disposition or "").strip().lower()
+    if code == "needs_more_information":
+        return {
+            "terminal": False,
+            "has_terminal_match": False,
+            "has_non_terminal": True,
+            "has_failed": False,
+            "has_not_configured": False,
+            "approval_blocking": True,
+            "blocking_reasons": ["screening:needs_more_information"],
+        }
+    if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        return {
+            "terminal": True,
+            "has_terminal_match": True,
+            "has_non_terminal": False,
+            "has_failed": False,
+            "has_not_configured": False,
+            "approval_blocking": True,
+            "blocking_reasons": [f"screening:{code}"],
+        }
+    return {
+        "terminal": False,
+        "has_terminal_match": False,
+        "has_non_terminal": False,
+        "has_failed": False,
+        "has_not_configured": False,
+        "approval_blocking": False,
+        "blocking_reasons": [],
+    }
+
+
+def _screening_workflow_snapshot(app):
+    app = dict(app or {})
+    return {
+        "status": app.get("status"),
+        "onboarding_lane": app.get("onboarding_lane"),
+        "risk_level": app.get("risk_level"),
+        "final_risk_level": app.get("final_risk_level"),
+        "base_risk_level": app.get("base_risk_level"),
+        "pre_approval_decision": app.get("pre_approval_decision"),
+    }
+
+
+def _normalise_screening_disposition_workflow_state(
+    db,
+    app_id,
+    app_ref,
+    canonical_disposition,
+    user,
+    ip_address,
+    *,
+    review_complete=True,
+    before_state=None,
+    routing_outcome=None,
+):
+    """Keep application.status/onboarding_lane aligned with screening review truth.
+
+    Policy:
+    * unresolved raw/material screening concerns route to EDD;
+    * needs_more_information is explicitly treated as unresolved and EDD-routed;
+    * a completed false_positive_cleared review may exit edd_required only when
+      recomputed lane/risk no longer require EDD.
+    """
+    code = str(canonical_disposition or "").strip().lower()
+    if code not in _SCREENING_WORKFLOW_RISK_DISPOSITIONS:
+        return {"changed": False, "reason": None}
+
+    row = db.execute(
+        """
+        SELECT id, ref, status, onboarding_lane, risk_level, final_risk_level,
+               base_risk_level, pre_approval_decision
+        FROM applications WHERE id = ?
+        """,
+        (app_id,),
+    ).fetchone()
+    if not row:
+        return {"changed": False, "reason": "application_not_found"}
+
+    current = dict(row)
+    previous = _screening_workflow_snapshot(before_state or current)
+    current_snapshot = _screening_workflow_snapshot(current)
+    target_status = current.get("status")
+    target_lane = current.get("onboarding_lane")
+    reason = None
+    terminal = str(target_status or "").strip().lower() in _SCREENING_WORKFLOW_TERMINAL_STATUSES
+
+    if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        target_lane = "EDD"
+        if not terminal:
+            target_status = "edd_required"
+        reason = f"screening_disposition_{code}_requires_edd_workflow"
+    elif code == "false_positive_cleared" and review_complete:
+        current_lane = str(current.get("onboarding_lane") or "").strip().upper()
+        current_status = str(current.get("status") or "").strip().lower()
+        if current_status == "edd_required" and current_lane != "EDD":
+            target_status = "in_review"
+            reason = "false_positive_clearance_removed_screening_edd_trigger"
+
+    update_needed = (
+        target_status != current.get("status")
+        or target_lane != current.get("onboarding_lane")
+    )
+    if update_needed:
+        db.execute(
+            "UPDATE applications SET status = ?, onboarding_lane = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (target_status, target_lane, app_id),
+        )
+
+    after_row = db.execute(
+        """
+        SELECT id, ref, status, onboarding_lane, risk_level, final_risk_level,
+               base_risk_level, pre_approval_decision
+        FROM applications WHERE id = ?
+        """,
+        (app_id,),
+    ).fetchone()
+    after = dict(after_row) if after_row else current
+    after_snapshot = _screening_workflow_snapshot(after)
+    changed = (
+        previous.get("status") != after_snapshot.get("status")
+        or previous.get("onboarding_lane") != after_snapshot.get("onboarding_lane")
+    )
+
+    result = {
+        "changed": changed,
+        "updated_by_normalizer": update_needed,
+        "disposition_code": code,
+        "reason": reason,
+        "previous_status": previous.get("status"),
+        "previous_lane": previous.get("onboarding_lane"),
+        "new_status": after_snapshot.get("status"),
+        "new_lane": after_snapshot.get("onboarding_lane"),
+    }
+    if changed:
+        try:
+            db.execute(
+                """
+                INSERT INTO audit_log
+                    (user_id, user_name, user_role, action, target, detail,
+                     ip_address, before_state, after_state)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    (user or {}).get("sub") or "system",
+                    (user or {}).get("name") or "system",
+                    (user or {}).get("role") or "system",
+                    "screening.status_lane_normalized",
+                    "application:" + str(app_ref or current.get("ref") or app_id),
+                    json.dumps({
+                        "disposition_code": code,
+                        "reason": reason,
+                        "previous_status": previous.get("status"),
+                        "previous_lane": previous.get("onboarding_lane"),
+                        "new_status": after_snapshot.get("status"),
+                        "new_lane": after_snapshot.get("onboarding_lane"),
+                        "actor": (user or {}).get("sub") or "system",
+                        "actor_role": (user or {}).get("role") or "system",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "routing_outcome": routing_outcome,
+                    }, default=str, sort_keys=True),
+                    ip_address or "",
+                    json.dumps(previous, default=str, sort_keys=True),
+                    json.dumps(after_snapshot, default=str, sort_keys=True),
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Failed to audit screening status/lane normalization for %s: %s", app_ref, exc)
+    return result
+
+
+def _screening_structured_adverse_media_hit(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_lc = str(key).lower()
+            if key_lc in ("has_adverse_media_hit", "adverse_media_hit") and item is True:
+                return True
+            if key_lc in ("adverse_media_hits", "adverse_media_results") and isinstance(item, list) and item:
+                return True
+            if key_lc in ("categories", "category") and isinstance(item, (list, tuple, str)):
+                text = " ".join(item) if isinstance(item, (list, tuple)) else item
+                if "adverse" in str(text).lower():
+                    return True
+            if _screening_structured_adverse_media_hit(item):
+                return True
+    elif isinstance(value, list):
+        return any(_screening_structured_adverse_media_hit(item) for item in value)
+    return False
+
+
+def _decode_monitoring_source_reference(value):
+    """Return structured CA monitoring alert identifiers when available."""
+    decoded = safe_json_loads(value) if isinstance(value, str) else value
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _monitoring_subject_scope_from_report(report):
+    provider = (report or {}).get("provider_specific", {}).get("complyadvantage", {})
+    customer_input = provider.get("customer_input") or {}
+    if isinstance(customer_input, dict):
+        if isinstance(customer_input.get("company"), dict):
+            return "entity"
+        if isinstance(customer_input.get("person"), dict):
+            return "person"
+    company = (report or {}).get("company_screening") or {}
+    if isinstance(company, dict) and (
+        company.get("matched")
+        or ((company.get("adverse_media") or {}).get("matched"))
+        or ((company.get("sanctions") or {}).get("matched"))
+    ):
+        return "entity"
+    if (report or {}).get("director_screenings") or (report or {}).get("ubo_screenings"):
+        return "person"
+    return None
+
+
+def _monitoring_subject_scope_from_source_reference(source_ref):
+    for key in ("subject_scope", "subject_type", "screening_subject_kind", "customer_type", "entity_type"):
+        value = str((source_ref or {}).get(key) or "").strip().lower()
+        if value in ("entity", "company", "business", "organisation", "organization", "legal_entity"):
+            return "entity"
+        if value in ("person", "individual", "director", "ubo", "subject"):
+            return "person"
+    if (source_ref or {}).get("person_key"):
+        return "person"
+    if (source_ref or {}).get("company_identifier") or (source_ref or {}).get("company_name"):
+        return "entity"
+    return None
+
+
+def _monitoring_subject_scope_from_normalized_record(db, application_id, source_ref):
+    record_id = (source_ref or {}).get("normalized_record_id")
+    if not record_id:
+        return None
+    try:
+        row = db.execute(
+            """
+            SELECT normalized_report_json
+            FROM screening_reports_normalized
+            WHERE id = ? AND application_id = ? AND provider = ?
+            """,
+            (record_id, application_id, "complyadvantage"),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    report = safe_json_loads(row["normalized_report_json"])
+    return _monitoring_subject_scope_from_report(report if isinstance(report, dict) else {})
+
+
+def _monitoring_subject_scope(db, application_id, alert):
+    source_ref = alert.get("source_reference_json") or {}
+    return (
+        _monitoring_subject_scope_from_source_reference(source_ref)
+        or _monitoring_subject_scope_from_normalized_record(db, application_id, source_ref)
+    )
+
+
+def _load_application_monitoring_alerts(db, application_id):
+    rows = db.execute(
+        """
+        SELECT id, provider, case_identifier, alert_type, severity, summary,
+               source_reference, discovered_via, discovered_at, created_at
+        FROM monitoring_alerts
+        WHERE application_id = ?
+        ORDER BY id ASC
+        """,
+        (application_id,),
+    ).fetchall()
+    alerts = []
+    for row in rows:
+        alert = dict(row)
+        alert["source_reference_json"] = _decode_monitoring_source_reference(alert.get("source_reference"))
+        alert["subject_scope"] = _monitoring_subject_scope(db, application_id, alert)
+        alerts.append(alert)
+    return alerts
+
+
+def _monitoring_company_media_facts(alerts):
+    media_alerts = []
+    for alert in alerts or []:
+        alert_type = str(alert.get("alert_type") or "").strip().lower()
+        provider = str(alert.get("provider") or "").strip().lower()
+        if (
+            provider == "complyadvantage"
+            and alert_type in ("media", "adverse_media", "adverse media")
+            and alert.get("subject_scope") == "entity"
+        ):
+            media_alerts.append(alert)
+    results = []
+    for alert in media_alerts:
+        source_ref = alert.get("source_reference_json") or {}
+        media_detail = _screening_media_detail_from_payload(source_ref)
+        results.append({
+            "name": alert.get("summary") or "ComplyAdvantage media alert",
+            "match_category": "adverse media",
+            "match_categories": ["adverse media"],
+            "risk_type_labels": ["Adverse media"],
+            "is_adverse_media": True,
+            "provider": alert.get("provider"),
+            "subject_scope": "entity",
+            "screening_subject": source_ref.get("screening_subject"),
+            "provider_case_identifier": alert.get("case_identifier") or source_ref.get("case_identifier"),
+            "provider_alert_identifier": source_ref.get("alert_identifier"),
+            "provider_risk_identifier": source_ref.get("risk_identifier"),
+            "discovered_via": alert.get("discovered_via"),
+            "discovered_at": alert.get("discovered_at") or alert.get("created_at"),
+            "summary": alert.get("summary"),
+            "media_title": media_detail.get("title"),
+            "media_url": media_detail.get("url"),
+            "media_snippet": media_detail.get("snippet"),
+            "source_reference": alert.get("source_reference"),
+            "source_reference_json": source_ref,
+        })
+    return {
+        "matched": bool(media_alerts),
+        "total_hits": len(media_alerts),
+        "results": results,
+        "alerts": media_alerts,
+    }
+
+
+def _declared_pep_from_screening_item(item, fallback_value="No"):
+    if isinstance(item, dict) and "declared_pep" in item:
+        return normalize_is_pep(item.get("declared_pep")) == "Yes"
+    return normalize_is_pep(fallback_value) == "Yes"
+
+
+def _first_non_empty(*values):
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _screening_media_detail_from_payload(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    candidates = [
+        payload,
+        payload.get("media") if isinstance(payload.get("media"), dict) else None,
+        payload.get("article") if isinstance(payload.get("article"), dict) else None,
+        payload.get("source") if isinstance(payload.get("source"), dict) else None,
+    ]
+    media_items = payload.get("media") or payload.get("articles") or payload.get("sources")
+    if isinstance(media_items, list):
+        candidates.extend(item for item in media_items if isinstance(item, dict))
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        canonical = candidate.get("canonical_url")
+        canonical_url = canonical.get("url") if isinstance(canonical, dict) else canonical
+        snippets = candidate.get("snippets")
+        snippet = None
+        if isinstance(snippets, list) and snippets:
+            first = snippets[0]
+            snippet = first.get("text") if isinstance(first, dict) else str(first)
+        detail = {
+            "title": _first_non_empty(candidate.get("media_title"), candidate.get("title"), candidate.get("headline")),
+            "url": _first_non_empty(candidate.get("media_url"), candidate.get("url"), canonical_url, candidate.get("source_url")),
+            "snippet": _first_non_empty(candidate.get("media_snippet"), candidate.get("snippet"), snippet, candidate.get("summary")),
+        }
+        if any(detail.values()):
+            return detail
+    return {}
+
+
+def _screening_media_detail_from_indicators(indicators):
+    for indicator in indicators or []:
+        if not isinstance(indicator, dict):
+            continue
+        value = indicator.get("value") if isinstance(indicator.get("value"), dict) else {}
+        detail = _screening_media_detail_from_payload(value)
+        if detail:
+            return detail
+    return {}
+
+
+def _screening_provider_evidence(results):
+    evidence = []
+    for result in results or []:
+        if not isinstance(result, dict):
+            continue
+        source_ref = _decode_monitoring_source_reference(result.get("source_reference"))
+        source_ref.update(result.get("source_reference_json") or {})
+        media_detail = _screening_media_detail_from_payload(result) or _screening_media_detail_from_indicators(result.get("indicators"))
+        evidence.append({
+            "provider": result.get("provider") or result.get("source") or ("complyadvantage" if (
+                result.get("provider_risk_identifier")
+                or result.get("provider_alert_identifier")
+                or result.get("provider_profile_identifier")
+            ) else None),
+            "subject_scope": _first_non_empty(
+                result.get("subject_scope"),
+                source_ref.get("subject_scope"),
+            ),
+            "screening_subject": _first_non_empty(
+                result.get("screening_subject"),
+                source_ref.get("screening_subject"),
+            ),
+            "provider_case_identifier": _first_non_empty(
+                result.get("provider_case_identifier"),
+                result.get("case_identifier"),
+                source_ref.get("case_identifier"),
+            ),
+            "provider_alert_identifier": _first_non_empty(
+                result.get("provider_alert_identifier"),
+                result.get("alert_identifier"),
+                source_ref.get("alert_identifier"),
+            ),
+            "provider_risk_identifier": _first_non_empty(
+                result.get("provider_risk_identifier"),
+                result.get("risk_id"),
+                result.get("risk_identifier"),
+                source_ref.get("risk_identifier"),
+            ),
+            "provider_profile_identifier": _first_non_empty(
+                result.get("provider_profile_identifier"),
+                result.get("profile_identifier"),
+                source_ref.get("profile_identifier"),
+            ),
+            "matched_name": result.get("name"),
+            "match_category": result.get("match_category"),
+            "match_categories": result.get("match_categories") or [],
+            "risk_type_labels": result.get("risk_type_labels") or [],
+            "risk_type_keys": result.get("risk_type_keys") or [],
+            "summary": result.get("summary"),
+            "media_title": media_detail.get("title"),
+            "media_url": media_detail.get("url"),
+            "media_snippet": media_detail.get("snippet"),
+            "discovered_at": result.get("discovered_at"),
+            "discovered_via": result.get("discovered_via"),
+            "authority": _first_non_empty(result.get("authority"), result.get("program"), source_ref.get("authority")),
+            "list_name": _first_non_empty(result.get("list_name"), result.get("sanctions_list"), source_ref.get("list_name")),
+        })
+    return evidence
+
+
+def _screening_result_identity(hit):
+    if not isinstance(hit, dict):
+        return repr(hit)
+    for key in (
+        "provider_risk_identifier",
+        "risk_id",
+        "risk_identifier",
+        "provider_profile_identifier",
+        "profile_identifier",
+    ):
+        if hit.get(key):
+            return f"{key}:{hit.get(key)}"
+    return json.dumps(hit, sort_keys=True, default=str)
+
+
+def _dedup_screening_results(results):
+    deduped = []
+    seen = set()
+    for hit in results or []:
+        marker = _screening_result_identity(hit)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(hit)
+    return deduped
+
+
+def _screening_combined_company_facts(company_screening):
+    company = company_screening or {}
+    sanctions = company.get("sanctions") or {}
+    adverse = company.get("adverse_media") or {}
+    records = [company, sanctions, adverse]
+    all_results = _dedup_screening_results(
+        result
+        for record in records
+        for result in ((record or {}).get("results") or [])
+    )
+    totals = {
+        "total_hits": len(all_results),
+        "sanctions_hits": sum(1 for hit in all_results if hit.get("is_sanctioned")),
+        "pep_hits": sum(1 for hit in all_results if hit.get("is_pep")),
+        "other_hits": 0,
+        "matched": bool(all_results),
+        "adverse_media_hit": any(hit.get("is_adverse_media") for hit in all_results),
+        "screened_at": company.get("screened_at"),
+    }
+    classified_hits = totals["sanctions_hits"] + totals["pep_hits"] + sum(1 for hit in all_results if hit.get("is_adverse_media"))
+    totals["other_hits"] = max(0, totals["total_hits"] - classified_hits)
+    for record in records:
+        totals["matched"] = totals["matched"] or bool(record.get("matched"))
+        totals["adverse_media_hit"] = totals["adverse_media_hit"] or bool(
+            _screening_structured_adverse_media_hit(record)
+            or record.get("is_adverse_media")
+        )
+        if not totals["screened_at"]:
+            totals["screened_at"] = record.get("screened_at")
+    totals["adverse_media_hit"] = totals["adverse_media_hit"] or bool(adverse.get("matched"))
+    totals["matched"] = totals["matched"] or bool(adverse.get("matched"))
+    if not totals["screened_at"]:
+        totals["screened_at"] = company.get("screened_at")
+    return totals
+
+
+def _screening_review_subject_context(db, app, subject_type, subject_name):
+    prescreening = safe_json_loads(app.get("prescreening_data"))
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    report = prescreening.get("screening_report") or {}
+    if not isinstance(report, dict):
+        report = {}
+
+    if subject_type == "entity":
+        monitoring_media = _monitoring_company_media_facts(
+            _load_application_monitoring_alerts(db, app["id"])
+        )
+        company_screening = report.get("company_screening") or {}
+        company_sanctions = company_screening.get("sanctions") or {}
+        company_adverse = company_screening.get("adverse_media") or {}
+        company_state = derive_screening_state(company_sanctions)
+        company_subject = derive_subject_state(company_sanctions)
+        facts = _screening_combined_company_facts(company_screening)
+        has_company_match = bool(facts["matched"] or company_adverse.get("matched") or monitoring_media["matched"])
+        if company_state == _SCR_COMPLETED_CLEAR and has_company_match:
+            company_state = _SCR_COMPLETED_MATCH
+        company_ip = report.get("ip_geolocation") or {}
+        context = []
+        if company_ip.get("risk_level"):
+            context.append("IP risk: " + str(company_ip.get("risk_level")))
+        if facts["adverse_media_hit"] or company_adverse.get("matched") or monitoring_media["matched"]:
+            context.append("Company adverse media match")
+        return {
+            "watchlist_status": _screening_legacy_status(
+                company_state,
+                company_subject["has_provider_sanctions_hit"] or has_company_match,
+            ),
+            "pep_declared_status": "not_applicable",
+            "pep_screening_status": "not_applicable",
+            "screening_state": company_state,
+            "total_hits": max(int(facts["total_hits"] or 0), int(monitoring_media["total_hits"] or 0)) or (report or {}).get("total_hits", 0),
+            "entity_context": context,
+            "provider": company_sanctions.get("provider") or company_screening.get("provider"),
+            "source": company_sanctions.get("source") or company_screening.get("source"),
+            "api_status": company_sanctions.get("api_status") or company_screening.get("api_status"),
+            "adverse_media_hit": bool(
+                facts["adverse_media_hit"]
+                or monitoring_media["matched"]
+                or _screening_structured_adverse_media_hit(report)
+            ),
+        }
+
+    if subject_type in ("director", "ubo"):
+        table = "directors" if subject_type == "director" else "ubos"
+        pii_fields = PII_FIELDS_DIRECTORS if subject_type == "director" else PII_FIELDS_UBOS
+        people = [
+            decrypt_pii_fields(dict(p), pii_fields)
+            for p in db.execute(f"SELECT * FROM {table} WHERE application_id = ?", (app["id"],)).fetchall()
+        ]
+        person = next((p for p in people if (p.get("full_name") or "") == subject_name), {})
+        combined = (report.get("director_screenings") or []) + (report.get("ubo_screenings") or [])
+        item = next((i for i in combined if (i.get("person_name") or i.get("name")) == subject_name), {})
+        declared_pep = _declared_pep_from_screening_item(item, person.get("is_pep", "No"))
+        screening = (item or {}).get("screening") or {}
+        facts = _screening_hit_facts(screening)
+        person_state = derive_screening_state(screening)
+        subject = derive_subject_state(screening, declared_pep=declared_pep)
+        has_pep_hit = subject["has_provider_pep_hit"] or bool((item or {}).get("undeclared_pep"))
+        context = []
+        if declared_pep:
+            context.append("Declared PEP")
+        if (item or {}).get("undeclared_pep"):
+            context.append("Undeclared PEP")
+        if facts.get("adverse_media_hits", 0) > 0:
+            context.append("Adverse media")
+        return {
+            "watchlist_status": _screening_legacy_status(
+                person_state,
+                subject["has_provider_sanctions_hit"],
+            ),
+            "pep_declared_status": "declared" if declared_pep else "not_declared",
+            "pep_screening_status": _screening_legacy_status(person_state, has_pep_hit),
+            "screening_state": person_state,
+            "total_hits": facts["total_hits"],
+            "entity_context": context,
+            "provider": screening.get("provider"),
+            "source": screening.get("source"),
+            "api_status": screening.get("api_status"),
+            "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
+        }
+
+    return {
+        "watchlist_status": None,
+        "pep_declared_status": None,
+        "pep_screening_status": None,
+        "screening_state": None,
+        "total_hits": 0,
+        "entity_context": [],
+        "provider": None,
+        "source": None,
+        "api_status": None,
+        "adverse_media_hit": False,
+    }
+
+
+def _screening_sensitive_flags(app, row, subject_type, disposition, context_error=False):
+    # Four-eyes is intentionally scoped to clearing a sensitive hit. Escalate
+    # and follow-up dispositions preserve the concern rather than clearing it.
+    if disposition != "cleared":
+        return []
+
+    flags = []
+
+    def add(flag):
+        if flag not in flags:
+            flags.append(flag)
+
+    if subject_type in ("director", "ubo"):
+        add("director_or_ubo")
+    elif subject_type not in ("entity", "director", "ubo"):
+        add("legacy_subject_type")
+
+    if context_error:
+        add("sensitivity_context_unavailable")
+
+    if row:
+        if row.get("watchlist_status") in ("match", "hit", "failed", "possible_match", "review"):
+            add("sanctions_or_watchlist_hit")
+        if row.get("pep_screening_status") in ("match", "hit", "failed", "possible_match", "review"):
+            add("pep_screening_hit")
+        if row.get("pep_declared_status") == "declared":
+            add("declared_pep")
+        if row.get("screening_state") == _SCR_COMPLETED_MATCH:
+            add("provider_match")
+        try:
+            if int(row.get("total_hits") or 0) > 0:
+                add("provider_hit")
+        except (TypeError, ValueError):
+            pass
+        context_text = " ".join(str(v) for v in (row.get("entity_context") or [])).lower()
+        if row.get("adverse_media_hit"):
+            add("adverse_media")
+        if "adverse" in context_text:
+            add("adverse_media")
+        if "ip risk: high" in context_text or "ip risk: very_high" in context_text:
+            add("high_risk_jurisdiction")
+
+    country = (app or {}).get("country")
+    country_lc = str(country or "").strip().lower()
+    if country and (
+        country in HIGH_RISK_COUNTRIES
+        or country_lc in FATF_BLACK
+        or country_lc in SANCTIONED
+        or country_lc in SANCTIONED_COUNTRIES_FULL
+    ):
+        add("high_risk_jurisdiction")
+
+    return flags
+
+
+def upsert_screening_review(
+    db, application_id, subject_type, subject_name, disposition, notes, reviewer_id, reviewer_name,
+    disposition_code=None, rationale=None, sensitivity_flags=None, requires_four_eyes=False,
+    second_reviewer_id=None, second_reviewer_name=None, second_disposition_code=None,
+    second_rationale=None, second_reviewed_at=None,
+):
+    sensitivity_flags_json = json.dumps(sensitivity_flags or [])
+    db.execute(
+        """
+        INSERT INTO screening_reviews
+        (application_id, subject_type, subject_name, disposition, notes, disposition_code, rationale,
+         sensitivity_flags, requires_four_eyes, reviewer_id, reviewer_name, second_reviewer_id,
+         second_reviewer_name, second_disposition_code, second_rationale, second_reviewed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(application_id, subject_type, subject_name)
+        DO UPDATE SET
+            disposition=excluded.disposition,
+            notes=CASE
+                WHEN excluded.second_reviewer_id IS NOT NULL AND screening_reviews.reviewer_id IS NOT NULL
+                THEN screening_reviews.notes ELSE excluded.notes END,
+            disposition_code=CASE
+                WHEN excluded.second_reviewer_id IS NOT NULL AND screening_reviews.reviewer_id IS NOT NULL
+                THEN screening_reviews.disposition_code ELSE excluded.disposition_code END,
+            rationale=CASE
+                WHEN excluded.second_reviewer_id IS NOT NULL AND screening_reviews.reviewer_id IS NOT NULL
+                THEN screening_reviews.rationale ELSE excluded.rationale END,
+            sensitivity_flags=excluded.sensitivity_flags,
+            requires_four_eyes=excluded.requires_four_eyes,
+            reviewer_id=CASE
+                WHEN excluded.second_reviewer_id IS NOT NULL AND screening_reviews.reviewer_id IS NOT NULL
+                THEN screening_reviews.reviewer_id ELSE excluded.reviewer_id END,
+            reviewer_name=CASE
+                WHEN excluded.second_reviewer_id IS NOT NULL AND screening_reviews.reviewer_name IS NOT NULL
+                THEN screening_reviews.reviewer_name ELSE excluded.reviewer_name END,
+            second_reviewer_id=CASE
+                WHEN excluded.requires_four_eyes THEN COALESCE(excluded.second_reviewer_id, screening_reviews.second_reviewer_id)
+                ELSE NULL END,
+            second_reviewer_name=CASE
+                WHEN excluded.requires_four_eyes THEN COALESCE(excluded.second_reviewer_name, screening_reviews.second_reviewer_name)
+                ELSE NULL END,
+            second_disposition_code=CASE
+                WHEN excluded.requires_four_eyes THEN COALESCE(excluded.second_disposition_code, screening_reviews.second_disposition_code)
+                ELSE NULL END,
+            second_rationale=CASE
+                WHEN excluded.requires_four_eyes THEN COALESCE(excluded.second_rationale, screening_reviews.second_rationale)
+                ELSE NULL END,
+            second_reviewed_at=CASE
+                WHEN excluded.requires_four_eyes THEN COALESCE(excluded.second_reviewed_at, screening_reviews.second_reviewed_at)
+                ELSE NULL END,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (
+            application_id, subject_type, subject_name, disposition, notes, disposition_code, rationale,
+            sensitivity_flags_json, bool(requires_four_eyes), reviewer_id, reviewer_name,
+            second_reviewer_id, second_reviewer_name, second_disposition_code, second_rationale,
+            second_reviewed_at,
+        ),
+    )
+
+
+def _build_screening_queue_payload(db, user, *, show_fixtures=False):
+    query = "SELECT * FROM applications WHERE 1=1"
+    params = []
+    if user["type"] == "client":
+        query += " AND client_id = ?"
+        params.append(user["sub"])
+    if not show_fixtures:
+        from fixture_filter import fixture_app_exclude_clause
+
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        query += f" AND {fx_excl}"
+        params.extend(fx_params)
+    query += " ORDER BY created_at DESC LIMIT 200"
+
+    apps = [dict(r) for r in db.execute(query, params).fetchall()]
+    rows = []
+    metrics = {
+        "applications_awaiting_screening": 0,
+        "applications_screened": 0,
+        "applications_requiring_review": 0,
+        "subject_rows": 0,
+    }
+
+    for app in apps:
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
+            "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
+            "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
+        review_map = {}
+        for review in _load_screening_reviews_for_truth(db, app["id"], app.get("ref")):
+            review_map[(review.get("subject_type"), review.get("subject_name"))] = review
+        monitoring_alerts = _load_application_monitoring_alerts(db, app["id"])
+        company_media_alerts = _monitoring_company_media_facts(monitoring_alerts)
+
+        prescreening = safe_json_loads(app.get("prescreening_data"))
+        report = prescreening.get("screening_report") or None
+        overall_flags = report.get("overall_flags", []) if report else []
+        screening_mode = report.get("screening_mode") if report else None
+        screened_at = (report or {}).get("screened_at") or prescreening.get("last_screened_at")
+        screened_by = prescreening.get("screened_by")
+
+        if report:
+            metrics["applications_screened"] += 1
+        else:
+            metrics["applications_awaiting_screening"] += 1
+
+        person_screenings = {}
+        if report:
+            for item in (report.get("director_screenings") or []) + (report.get("ubo_screenings") or []):
+                person_screenings[item.get("person_name")] = item
+
+        company_screening = (report or {}).get("company_screening") or {}
+        company_sanctions = company_screening.get("sanctions") or {}
+        company_adverse = company_screening.get("adverse_media") or {}
+        company_ip = (report or {}).get("ip_geolocation") or {}
+        company_kyc = (report or {}).get("kyc_applicants") or []
+        company_registry_found = company_screening.get("found")
+        company_facts = _screening_combined_company_facts(company_screening)
+
+        # Priority A: derive canonical company sanctions state from provider
+        # api_status. Never coerce pending/not_configured/error/unavailable
+        # into "clear".
+        company_sanctions_state = derive_screening_state(company_sanctions)
+        company_sanctions_subject = derive_subject_state(company_sanctions)
+        company_has_provider_match = bool(
+            company_facts["matched"] or company_adverse.get("matched") or company_media_alerts["matched"]
+        )
+        company_state = _SCR_COMPLETED_MATCH if company_sanctions_state == _SCR_COMPLETED_CLEAR and company_has_provider_match else company_sanctions_state
+        company_watchlist_status = _screening_legacy_status(
+            company_state,
+            company_sanctions_subject["has_provider_sanctions_hit"] or company_has_provider_match,
+        )
+
+        company_context = []
+        if report:
+            company_context.append(
+                "Registry found" if company_registry_found else "Registry not found"
+            )
+            if company_ip.get("risk_level"):
+                company_context.append("IP risk: " + company_ip.get("risk_level"))
+            if company_ip.get("is_vpn"):
+                company_context.append("VPN detected")
+            if company_ip.get("is_proxy"):
+                company_context.append("Proxy detected")
+            if company_ip.get("is_tor"):
+                company_context.append("Tor detected")
+            rejected_kyc = [a.get("person_name") for a in company_kyc if a.get("review_answer") == "RED"]
+            if rejected_kyc:
+                company_context.append("KYC RED: " + ", ".join(rejected_kyc))
+            if company_facts["adverse_media_hit"] or company_adverse.get("matched") or company_media_alerts["matched"]:
+                company_context.append("Company adverse media match")
+            company_provider_record = {
+                "source": " ".join(str(x or "") for x in (
+                    company_screening.get("source"),
+                    company_sanctions.get("source"),
+                )),
+                "provider": " ".join(str(x or "") for x in (
+                    company_screening.get("provider"),
+                    company_sanctions.get("provider"),
+                )),
+                "api_status": " ".join(str(x or "") for x in (
+                    company_screening.get("api_status"),
+                    company_sanctions.get("api_status"),
+                )),
+            }
+            company_screening_truth = derive_screening_truth(
+                company_sanctions or company_provider_record,
+                name="company_watchlist",
+                required=True,
+            )
+            company_provider_mode = company_screening_truth.get("provider_mode")
+            # Surface explicit non-terminal sanctions state so officers cannot
+            # mistake "we did not get a real answer" for "clear".
+            if company_provider_mode == "simulated_fallback":
+                company_context.append("Company sanctions screening simulated fallback")
+            elif company_provider_mode == "sandbox_provider":
+                company_context.append("Company sanctions screening sandbox provider")
+            elif company_sanctions_state == _SCR_NOT_CONFIGURED:
+                company_context.append("Company sanctions screening not configured")
+            elif company_sanctions_state == _SCR_FAILED:
+                company_context.append("Company sanctions screening unavailable")
+            elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                company_context.append("Company sanctions screening pending")
+        else:
+            company_provider_record = {}
+            company_screening_truth = {}
+            company_provider_mode = None
+
+        # Fail-closed: any non-terminal company sanctions state requires
+        # officer review. Previously only ``matched`` triggered review,
+        # which silently passed not_configured / pending / unavailable.
+        # Equivalent to "anything that is not completed_clear", expressed
+        # explicitly so the intent is auditable.
+        company_sanctions_requires_review = company_sanctions_state != _SCR_COMPLETED_CLEAR
+
+        company_requires_review = False
+        if report:
+            company_requires_review = (
+                company_sanctions_requires_review or
+                company_has_provider_match or
+                company_registry_found is False or
+                company_ip.get("risk_level") in ("HIGH", "VERY_HIGH") or
+                company_ip.get("is_vpn") or
+                company_ip.get("is_proxy") or
+                company_ip.get("is_tor") or
+                any(a.get("review_answer") == "RED" for a in company_kyc)
+            )
+
+        application_requires_review = company_requires_review
+
+        company_review = review_map.get(("entity", app["company_name"])) or review_map.get(("company", app["company_name"]))
+        company_review_fields = _screening_review_payload_fields(company_review)
+        if directors or ubos or report:
+            # Priority A: explicit, truthful entity status_label / status_key.
+            # Provider-derived states drive the label so non-terminal cases
+            # cannot masquerade as "No Provider Match".
+            if not report:
+                entity_status_key = "awaiting_screening"
+                entity_status_label = "Awaiting Screening"
+            elif company_review_fields.get("review_resolved"):
+                entity_status_key = "reviewed_false_positive_cleared"
+                entity_status_label = "Reviewed - False Positive Cleared"
+            elif company_state == _SCR_COMPLETED_MATCH:
+                entity_status_key = "review_required"
+                entity_status_label = "Review Required"
+            elif company_provider_mode == "simulated_fallback":
+                entity_status_key = "screening_simulated"
+                entity_status_label = "Simulated Screening — Not Live"
+            elif company_provider_mode == "sandbox_provider":
+                entity_status_key = "screening_sandbox"
+                entity_status_label = "Sandbox Screening — Not Production Live"
+            elif company_sanctions_state == _SCR_NOT_CONFIGURED:
+                entity_status_key = "screening_not_configured"
+                entity_status_label = "Screening Not Configured"
+            elif company_sanctions_state == _SCR_FAILED:
+                entity_status_key = "screening_unavailable"
+                entity_status_label = "Screening Unavailable"
+            elif company_has_provider_match:
+                entity_status_key = "review_required"
+                entity_status_label = "Review Required"
+            elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                entity_status_key = "screening_pending"
+                entity_status_label = "Screening Pending Provider"
+            elif company_requires_review:
+                # Terminal-clear sanctions but other entity-level signal
+                # (registry not found, IP risk, KYC RED) requires review.
+                entity_status_key = "review_required"
+                entity_status_label = "Review Required"
+            else:
+                entity_status_key = "screened_no_match"
+                entity_status_label = "No Provider Match"
+
+            entity_screening_mode = _screening_queue_row_mode(
+                screening_mode,
+                    company_state,
+                    entity_status_key,
+                    company_context,
+                company_provider_record,
+            )
+            company_results = []
+            for record in (company_screening, company_sanctions, company_adverse):
+                company_results.extend((record or {}).get("results") or [])
+            company_results.extend(company_media_alerts.get("results") or [])
+            company_results = _dedup_screening_results(company_results)
+
+            rows.append({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "subject_name": app["company_name"],
+                "subject_type": "entity",
+                "watchlist_status": company_watchlist_status,
+                "pep_declared_status": "not_applicable",
+                "pep_screening_status": "not_applicable",
+                "screening_state": company_state,
+                "screening_truth_state": company_screening_truth.get("canonical_state"),
+                "provider_mode": company_screening_truth.get("provider_mode"),
+                "provider_availability": company_screening_truth.get("provider_availability"),
+                "screening_result": company_screening_truth.get("screening_result"),
+                "terminal": company_screening_truth.get("terminal"),
+                "defensible_clear": company_screening_truth.get("defensible_clear"),
+                "screening_truth_reason": company_screening_truth.get("reason"),
+                "entity_context": company_context,
+                "status_key": entity_status_key,
+                "status_label": entity_status_label,
+                "screening_mode": entity_screening_mode,
+                "screened_at": company_facts.get("screened_at") or screened_at,
+                "screened_by": screened_by,
+                "flag_count": len(overall_flags),
+                "total_hits": max(
+                    int(company_facts["total_hits"] or 0),
+                    int(company_media_alerts["total_hits"] or 0),
+                ) or (report or {}).get("total_hits", 0),
+                "provider_evidence": _screening_provider_evidence(company_results),
+                "review_required": company_requires_review and not company_review_fields.get("review_resolved"),
+                **company_review_fields,
+            })
+
+        for person, subject_type in [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]:
+            person_name = person.get("full_name", "")
+            item = person_screenings.get(person_name)
+            screening = (item or {}).get("screening") or {}
+            facts = _screening_hit_facts(screening)
+            # Priority A.2: declared PEP must survive any non-canonical
+            # truthy form ("Yes"/"yes"/True/"true"/"1"). Falling back to the
+            # raw == "Yes" check silently flattened declared PEP into
+            # "Not Declared" on the queue chip whenever stored data did
+            # not exactly match "Yes".
+            declared_pep = _declared_pep_from_screening_item(item, person.get("is_pep", "No"))
+            provider_other = facts["other_hits"] > 0
+            provider_adverse = facts.get("adverse_media_hits", 0) > 0
+
+            # Priority A: derive canonical state from api_status. Never let
+            # pending/init/created/error/unavailable/not_configured collapse
+            # into "clear". Declared PEP is preserved as a separate signal.
+            person_state = derive_screening_state(screening)
+            subject_envelope = derive_subject_state(screening, declared_pep=declared_pep)
+            has_pep_hit = subject_envelope["has_provider_pep_hit"]
+            has_sanctions_hit = subject_envelope["has_provider_sanctions_hit"]
+            provider_sanctions = facts.get("sanctions_hits", 0) > 0
+            provider_pep = facts.get("pep_hits", 0) > 0
+            # ``undeclared_pep`` is computed by run_full_screening and only
+            # set when results contain a PEP hit — i.e. terminal. It is
+            # therefore safe to treat it as a provider PEP hit.
+            if (item or {}).get("undeclared_pep"):
+                has_pep_hit = True
+            person_screening_truth = derive_screening_truth(
+                screening,
+                name=f"{subject_type}_screening",
+                required=True,
+            )
+            person_provider_mode = person_screening_truth.get("provider_mode")
+            person_review = review_map.get((subject_type, person_name))
+            person_review_fields = _screening_review_payload_fields(person_review)
+
+            if not report:
+                person_state = _SCR_NOT_STARTED
+                watchlist_status = "pending"
+                pep_screening_status = "pending"
+            elif not item:
+                # We have a report but no screening sub-record for this
+                # person — fail-closed: treat as incomplete, never clear.
+                person_state = _SCR_NOT_STARTED
+                watchlist_status = "pending"
+                pep_screening_status = "pending"
+            else:
+                watchlist_status = _screening_legacy_status(person_state, has_sanctions_hit)
+                pep_screening_status = _screening_legacy_status(person_state, has_pep_hit)
+
+            # Status key/label — declared PEP must remain visible even when
+            # the provider is non-terminal.
+            if not report:
+                status_key = "awaiting_screening"
+                status_label = "Awaiting Screening"
+            elif not item:
+                status_key = "incomplete_record"
+                status_label = "Incomplete Screening Record"
+            elif person_review_fields.get("review_resolved"):
+                status_key = "reviewed_false_positive_cleared"
+                status_label = "Reviewed - False Positive Cleared"
+            elif (
+                person_state == _SCR_COMPLETED_MATCH
+                or has_sanctions_hit
+                or has_pep_hit
+                or provider_sanctions
+                or provider_pep
+                or provider_other
+                or provider_adverse
+            ):
+                status_key = "review_required"
+                status_label = "Review Required"
+            elif person_provider_mode == "simulated_fallback":
+                status_key = "screening_simulated"
+                status_label = "Declared PEP — Simulated Screening" if declared_pep else "Simulated Screening — Not Live"
+            elif person_provider_mode == "sandbox_provider":
+                status_key = "screening_sandbox"
+                status_label = "Declared PEP — Sandbox Screening" if declared_pep else "Sandbox Screening — Not Production Live"
+            elif person_state == _SCR_NOT_CONFIGURED:
+                status_key = "screening_not_configured"
+                status_label = "Declared PEP — Screening Not Configured" if declared_pep else "Screening Not Configured"
+            elif person_state == _SCR_FAILED:
+                status_key = "screening_unavailable"
+                status_label = "Declared PEP — Screening Unavailable" if declared_pep else "Screening Unavailable"
+            elif person_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                status_key = "screening_pending"
+                status_label = "Declared PEP — Screening Pending Provider" if declared_pep else "Screening Pending Provider"
+            elif declared_pep:
+                # Terminal-clear provider, but declared PEP must still be
+                # surfaced for officer review.
+                status_key = "declared_pep_review"
+                status_label = "Declared PEP Review"
+            else:
+                status_key = "screened_no_match"
+                status_label = "No Provider Match"
+
+            # Fail-closed review requirement: any non-terminal state, any
+            # match, any declared PEP, any not_configured/failed.
+            requires_review = (
+                status_key in (
+                    "review_required", "declared_pep_review", "incomplete_record",
+                    "screening_pending", "screening_not_configured",
+                    "screening_unavailable", "screening_simulated",
+                    "screening_sandbox", "awaiting_screening",
+                )
+            )
+            review_disposition = person_review_fields["review_disposition"]
+            review_resolved = person_review_fields["review_resolved"]
+            if requires_review and not review_resolved:
+                application_requires_review = True
+
+            entity_context = []
+            if screening.get("source"):
+                entity_context.append("Source: " + screening.get("source"))
+            if screening.get("api_status"):
+                entity_context.append("API: " + screening.get("api_status"))
+            if (item or {}).get("undeclared_pep"):
+                entity_context.append("Undeclared PEP")
+            if provider_adverse:
+                entity_context.append("Adverse media")
+            if declared_pep:
+                # Always surface declared PEP separately from provider state
+                # so it cannot be lost behind a "Pending" or "Clear" label.
+                entity_context.append("Declared PEP")
+            if person_state == _SCR_NOT_CONFIGURED:
+                entity_context.append("Provider not configured")
+            elif person_state == _SCR_FAILED:
+                entity_context.append("Provider unavailable")
+            elif person_provider_mode == "simulated_fallback":
+                entity_context.append("Simulated fallback screening")
+            elif person_provider_mode == "sandbox_provider":
+                entity_context.append("Sandbox provider screening")
+            elif person_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED) and report and item:
+                entity_context.append("Provider result pending")
+
+            person_screening_mode = _screening_queue_row_mode(
+                screening_mode,
+                person_state,
+                status_key,
+                entity_context,
+                screening,
+            )
+            rows.append({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "subject_name": person_name,
+                "subject_type": subject_type,
+                "watchlist_status": watchlist_status,
+                "pep_declared_status": "declared" if declared_pep else "not_declared",
+                "pep_screening_status": pep_screening_status,
+                "screening_state": person_state,
+                "screening_truth_state": person_screening_truth.get("canonical_state"),
+                "provider_mode": person_screening_truth.get("provider_mode"),
+                "provider_availability": person_screening_truth.get("provider_availability"),
+                "screening_result": person_screening_truth.get("screening_result"),
+                "terminal": person_screening_truth.get("terminal"),
+                "defensible_clear": person_screening_truth.get("defensible_clear"),
+                "screening_truth_reason": person_screening_truth.get("reason"),
+                "entity_context": entity_context,
+                "status_key": status_key,
+                "status_label": status_label,
+                "screening_mode": person_screening_mode,
+                "screened_at": screening.get("screened_at") or screened_at,
+                "screened_by": screened_by,
+                "flag_count": len(overall_flags),
+                "total_hits": facts["total_hits"],
+                "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
+                "review_required": requires_review and not review_resolved,
+                **person_review_fields,
+            })
+
+        if company_requires_review and not _screening_review_is_resolved(company_review):
+            application_requires_review = True
+        if application_requires_review:
+            metrics["applications_requiring_review"] += 1
+
+    metrics["subject_rows"] = len(rows)
+    return {
+        "metrics": metrics,
+        "rows": rows,
+        "show_fixtures": show_fixtures,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 # ══════════════════════════════════════════════════════════
 # SCREENING ENDPOINTS (Real API Integrations)
 # ══════════════════════════════════════════════════════════
+
+class ScreeningQueueHandler(BaseHandler):
+    """GET /api/screening/queue — authoritative screening queue payload"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        db = get_db()
+        payload = _build_screening_queue_payload(db, user, show_fixtures=show_fx)
+        db.close()
+        self.success(payload)
+
+
+class ScreeningReviewHandler(BaseHandler):
+    """POST /api/screening/review — persist reviewer disposition for a screening queue row"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        data = self.get_json()
+        app_id = data.get("application_id")
+        raw_subject_type = (data.get("subject_type") or "").strip().lower()
+        subject_type = _SCREENING_SUBJECT_ALIASES.get(raw_subject_type, raw_subject_type)
+        if raw_subject_type and raw_subject_type != subject_type:
+            logger.debug("Normalized screening review subject_type %s -> %s", raw_subject_type, subject_type)
+        subject_name = (data.get("subject_name") or "").strip()
+        raw_disposition = (data.get("disposition") or "").strip().lower()
+        notes = (data.get("notes") or "").strip()
+        raw_disposition_code = (data.get("disposition_code") or "").strip().lower()
+        disposition, disposition_code, canonical_disposition = _normalise_screening_review_disposition(
+            raw_disposition,
+            raw_disposition_code,
+        )
+        rationale = (data.get("rationale") or "").strip()
+        evidence_reference = (
+            data.get("evidence_reference")
+            or data.get("evidence")
+            or data.get("reference")
+            or data.get("source_reference")
+            or ""
+        )
+        evidence_reference = str(evidence_reference or "").strip()
+        if not notes and rationale:
+            notes = rationale
+        attempt_summary = _governance_summary(
+            {
+                "application_id": app_id,
+                "subject_type": subject_type,
+                "subject_name": subject_name,
+                "disposition": raw_disposition,
+                "disposition_code": disposition_code,
+                "canonical_disposition": canonical_disposition,
+                "rationale": rationale,
+                "notes": notes,
+                "evidence_reference": evidence_reference,
+            },
+            (
+                "application_id", "subject_type", "subject_name", "disposition",
+                "disposition_code", "canonical_disposition", "rationale", "notes",
+                "evidence_reference",
+            ),
+        )
+
+        if not app_id or not subject_type or not subject_name or not raw_disposition:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id or "screening-review",
+                "rejected", 400,
+                "application_id, subject_type, subject_name, and disposition are required",
+                attempt_summary)
+            return self.error("application_id, subject_type, subject_name, and disposition are required")
+
+        if subject_type not in _SCREENING_SUBJECT_TYPES:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                "Unsupported screening subject type", attempt_summary)
+            return self.error("Unsupported screening subject type", 400)
+
+        if disposition not in ("cleared", "escalated", "follow_up_required"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                "Unsupported screening review disposition", attempt_summary)
+            return self.error("Unsupported screening review disposition", 400)
+
+        allowed_codes = _SCREENING_DISPOSITION_CODES.get(disposition, set())
+        if not disposition_code or disposition_code not in allowed_codes:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                "Valid disposition_code is required for screening review", attempt_summary)
+            return self.error("Valid disposition_code is required for screening review", 400)
+
+        rationale_error = _screening_review_rationale_error(disposition, rationale)
+        if rationale_error:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                rationale_error, attempt_summary)
+            return self.error(rationale_error, 400)
+
+        if canonical_disposition == "false_positive_cleared" and not evidence_reference:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                "False-positive clearance requires evidence_reference", attempt_summary)
+            return self.error("False-positive clearance requires evidence_reference", 400)
+
+        if evidence_reference and evidence_reference not in notes:
+            notes = (notes + "\n\nEvidence/reference: " + evidence_reference).strip()
+
+        db = get_db()
+        app = db.execute(
+            "SELECT * FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id),
+        ).fetchone()
+        if not app:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
+            db.close()
+            return self.error("Application not found", 404)
+
+        app = dict(app)
+        workflow_before = dict(app)
+        existing_review = db.execute(
+            """
+            SELECT * FROM screening_reviews
+            WHERE application_id=? AND subject_type=? AND subject_name=?
+            """,
+            (app["id"], subject_type, subject_name),
+        ).fetchone()
+
+        row_context = None
+        context_error = False
+        try:
+            row_context = _screening_review_subject_context(db, app, subject_type, subject_name)
+        except Exception as e:
+            context_error = True
+            logger.warning("Could not derive screening review sensitivity context for %s/%s: %s", app["ref"], subject_name, e)
+
+        sensitivity_flags = _screening_sensitive_flags(
+            app,
+            row_context,
+            subject_type,
+            disposition,
+            context_error=context_error,
+        )
+        requires_four_eyes = bool(sensitivity_flags)
+        existing_requires_four_eyes = _truthy_review_flag((existing_review or {}).get("requires_four_eyes"))
+        existing_second_reviewer = (existing_review or {}).get("second_reviewer_id")
+        is_second_review = (
+            requires_four_eyes
+            and existing_review
+            and (existing_review.get("disposition") == "cleared")
+            and existing_requires_four_eyes
+            and not existing_second_reviewer
+        )
+
+        if requires_four_eyes and existing_second_reviewer:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 409,
+                "Sensitive screening disposition already has two reviewer sign-offs",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("Sensitive screening disposition already has two reviewer sign-offs", 409)
+
+        if is_second_review and existing_review.get("reviewer_id") == user.get("sub"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 409,
+                "Second screening reviewer must be distinct from first reviewer",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("Second screening reviewer must be distinct from first reviewer", 409)
+
+        if canonical_disposition == "false_positive_cleared" and user.get("role") not in ("admin", "sco", "co"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 403,
+                "False-positive screening clearance requires CO, SCO, or admin role",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("False-positive screening clearance requires CO, SCO, or admin role", 403)
+
+        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        reviewer_name = user.get("name") or user.get("full_name") or user["sub"]
+        upsert_screening_review(
+            db,
+            app["id"],
+            subject_type,
+            subject_name,
+            disposition,
+            notes,
+            user["sub"],
+            reviewer_name,
+            disposition_code=disposition_code,
+            rationale=rationale,
+            sensitivity_flags=sensitivity_flags,
+            requires_four_eyes=requires_four_eyes,
+            second_reviewer_id=user["sub"] if is_second_review else None,
+            second_reviewer_name=reviewer_name if is_second_review else None,
+            second_disposition_code=disposition_code if is_second_review else None,
+            second_rationale=rationale if is_second_review else None,
+            second_reviewed_at=now_utc if is_second_review else None,
+        )
+
+        def _screening_audit_in_tx(audit_user, action, target, detail, **kwargs):
+            kwargs["commit"] = False
+            self.log_audit(audit_user, action, target, detail, **kwargs)
+
+        review_status = "second_review_complete" if is_second_review else "second_review_required" if requires_four_eyes else "complete"
+        review_complete = not (requires_four_eyes and not is_second_review)
+
+        # EX-09: Recompute risk when screening review changes canonical
+        # screening truth. Blocking dispositions explicitly route to EDD;
+        # valid false-positive clearance can remove a stale EDD workflow state.
+        risk_recomputed = False
+        routing_outcome = None
+        if canonical_disposition in _SCREENING_WORKFLOW_RISK_DISPOSITIONS:
+            explicit_edd_routing = canonical_disposition in _SCREENING_WORKFLOW_EDD_DISPOSITIONS
+            rr = recompute_risk(
+                db,
+                app["id"],
+                "screening_review_disposition_changed",
+                user=user,
+                log_audit_fn=_screening_audit_in_tx,
+                apply_routing_policy=not explicit_edd_routing,
+            )
+            risk_recomputed = rr.get("recomputed", False)
+            if explicit_edd_routing:
+                try:
+                    from routing_actuator import apply_routing_decision, SOURCE_SCREENING_UPDATE
+
+                    routing_app = db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone()
+                    risk_dict = {
+                        "score": rr.get("new_score"),
+                        "level": rr.get("new_level"),
+                        "final_risk_level": rr.get("final_risk_level") or rr.get("new_level"),
+                        "base_risk_level": rr.get("base_risk_level") or rr.get("new_level"),
+                    }
+                    routing_outcome = apply_routing_decision(
+                        db=db,
+                        app_row=dict(routing_app) if routing_app else app,
+                        risk_dict=risk_dict,
+                        screening_summary=_screening_disposition_routing_summary(
+                            canonical_disposition
+                        ),
+                        edd_trigger_flags=_screening_disposition_edd_trigger_flags(canonical_disposition),
+                        user=user,
+                        client_ip=self.get_client_ip(),
+                        source=SOURCE_SCREENING_UPDATE,
+                    )
+                except Exception as exc:
+                    routing_outcome = {"ran": False, "route": None, "errors": [str(exc)]}
+                    logger.warning("Screening EDD escalation routing failed for %s: %s", app["ref"], exc)
+                if (
+                    not isinstance(routing_outcome, dict)
+                    or routing_outcome.get("route") != "edd"
+                    or routing_outcome.get("errors")
+                ):
+                    reason = "EDD escalation routing failed for screening disposition"
+                    db.rollback()
+                    self.log_governance_attempt(
+                        user,
+                        "screening.review_disposition",
+                        app["ref"],
+                        "rejected",
+                        500,
+                        reason,
+                        attempt_summary,
+                    )
+                    db.close()
+                    return self.error(reason, 500)
+
+        workflow_normalization = _normalise_screening_disposition_workflow_state(
+            db,
+            app["id"],
+            app["ref"],
+            canonical_disposition,
+            user,
+            self.get_client_ip(),
+            review_complete=review_complete,
+            before_state=workflow_before,
+            routing_outcome=routing_outcome,
+        )
+        review = dict(db.execute(
+            """
+            SELECT application_id, subject_type, subject_name, disposition, notes,
+                   disposition_code, rationale, sensitivity_flags, requires_four_eyes,
+                   reviewer_id, reviewer_name, second_reviewer_id, second_reviewer_name,
+                   second_disposition_code, second_rationale, second_reviewed_at,
+                   created_at, updated_at
+            FROM screening_reviews WHERE application_id=? AND subject_type=? AND subject_name=?
+            """,
+            (app["id"], subject_type, subject_name),
+        ).fetchone())
+        audit_detail = json.dumps({
+            "subject_type": subject_type,
+            "subject_name": subject_name,
+            "disposition": disposition,
+            "disposition_code": disposition_code,
+            "canonical_disposition": canonical_disposition,
+            "rationale": rationale[:1000],
+            "evidence_reference": evidence_reference,
+            "provider": (row_context or {}).get("provider"),
+            "source": (row_context or {}).get("source"),
+            "api_status": (row_context or {}).get("api_status"),
+            "screening_state": (row_context or {}).get("screening_state"),
+            "requires_four_eyes": requires_four_eyes,
+            "four_eyes_status": review_status,
+            "sensitivity_flags": sensitivity_flags,
+            "routing_outcome": routing_outcome,
+            "workflow_normalization": workflow_normalization,
+        }, default=str, sort_keys=True)
+        self.log_audit(
+            user, "Screening Review", app["ref"],
+            audit_detail, db=db, commit=False,
+            before_state=dict(existing_review) if existing_review else None,
+            after_state=review)
+        review["audit_confirmed"] = True
+        if evidence_reference:
+            review["review_evidence_reference"] = evidence_reference
+        status_code = 202 if (requires_four_eyes and not is_second_review) else 200
+        self.log_governance_attempt(
+            user, "screening.review_disposition", app["ref"], "accepted", status_code,
+            "", attempt_summary, db=db, commit=False)
+        _mark_latest_memo_stale(
+            db,
+            app["id"],
+            trigger="screening_disposition_changed",
+            reason="Screening review disposition changed after memo generation.",
+            actor=user,
+            app_ref=app["ref"],
+            ip_address=self.get_client_ip(),
+            before_state=dict(existing_review) if existing_review else None,
+            after_state=review,
+        )
+        db.commit()
+        db.close()
+        review.update(_screening_review_payload_fields(review))
+        response = {
+            "review": review,
+            "status": review_status,
+            "requires_four_eyes": requires_four_eyes,
+            "sensitivity_flags": sensitivity_flags,
+        }
+        if risk_recomputed:
+            response["risk_recomputed"] = True
+        if routing_outcome is not None:
+            response["routing_outcome"] = routing_outcome
+        if workflow_normalization.get("changed"):
+            response["workflow_normalization"] = workflow_normalization
+        self.success(response, status=status_code)
+
 
 class ScreeningHandler(BaseHandler):
     """POST /api/screening/run — run full screening for an application"""
@@ -2416,6 +13039,25 @@ class ScreeningHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+
+        if not self.check_rate_limit("screening", max_attempts=20, window_seconds=60):
+            return
+
+        # P0-3: Check if Agent 3 (screening) is enabled before executing
+        db = get_db()
+        agent3 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=3").fetchone()
+        if agent3 and not agent3["enabled"]:
+            db.close()
+            self.log_audit(user, "Agent Skipped", "Agent 3", "Screening skipped — agent disabled")
+            self.success({
+                "status": "skipped",
+                "message": "Screening agent is currently disabled",
+                "total_hits": 0,
+                "overall_flags": [],
+                "requires_review": True
+            })
+            return
+        db.close()
 
         data = self.get_json()
         app_id = data.get("application_id")
@@ -2429,8 +13071,8 @@ class ScreeningHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         real_id = app["id"]
-        directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
 
         app_data = {
             "company_name": app["company_name"],
@@ -2439,22 +13081,82 @@ class ScreeningHandler(BaseHandler):
             "entity_type": app["entity_type"],
         }
 
-        report = run_full_screening(app_data, directors, ubos, client_ip=self.get_client_ip())
+        report = run_full_screening(
+            app_data, directors, ubos, client_ip=self.get_client_ip(), db=db
+        )
+        screening_mode = determine_screening_mode(report)
+        report["screening_mode"] = screening_mode
+        store_screening_mode(db, real_id, screening_mode)
 
         # Store screening report
-        prescreening = json.loads(app["prescreening_data"]) if app["prescreening_data"] else {}
+        prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
-        prescreening["last_screened_at"] = datetime.utcnow().isoformat()
-        prescreening["screened_by"] = user["sub"]
-        db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
+        screening_freshness = populate_screening_freshness_metadata(
+            prescreening,
+            report,
+            screened_by=user["sub"],
+        )
+
+        db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now'), inputs_updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
+        _mark_latest_memo_stale(
+            db,
+            real_id,
+            trigger="screening_result_changed",
+            reason="Screening result changed after memo generation.",
+            actor=user,
+            app_ref=app["ref"],
+            ip_address=self.get_client_ip(),
+            before_state={"prescreening_data": safe_json_loads(app.get("prescreening_data"))},
+            after_state={"screening_report": report, "screening_freshness": screening_freshness},
+        )
+
+        # SCR-010: Dual-write normalized screening report (non-authoritative)
+        try:
+            _persist_normalized_screening_report_if_enabled(
+                db, app.get("client_id", ""), real_id, report
+            )
+        except Exception as _norm_exc:
+            logger.warning(
+                "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",
+                real_id, app.get("client_id", ""), type(_norm_exc).__name__,
+            )
+            try:
+                from screening_storage import (
+                    ensure_normalized_table, persist_normalization_failure,
+                    compute_report_hash,
+                )
+                ensure_normalized_table(db)
+                persist_normalization_failure(
+                    db, app.get("client_id", ""), real_id,
+                    compute_report_hash(report),
+                    type(_norm_exc).__name__,
+                )
+            except Exception:
+                pass  # Do not block onboarding flow
+
+        # EX-09: Recompute risk after screening re-run — screening hits affect risk score
+        rr = recompute_risk(db, real_id, "screening_rerun", user=user,
+                            log_audit_fn=self.log_audit)
+        risk_recomputed = rr.get("recomputed", False)
+
+        self.log_audit(
+            user,
+            "Screening",
+            app["ref"],
+            f"Full screening run — {report['total_hits']} hit(s), {len(report['overall_flags'])} flag(s)",
+            db=db,
+            commit=False,
+        )
         db.commit()
         db.close()
 
-        self.log_audit(user, "Screening", app["ref"],
-                       f"Full screening run — {report['total_hits']} hit(s), {len(report['overall_flags'])} flag(s)")
-
-        self.success(report)
+        response = dict(report)
+        if risk_recomputed:
+            response["risk_recomputed"] = True
+        response["screening_valid_until"] = screening_freshness["screening_valid_until"]
+        response["screening_validity_days"] = prescreening["screening_validity_days"]
+        self.success(response)
 
 
 class SanctionsCheckHandler(BaseHandler):
@@ -2473,7 +13175,7 @@ class SanctionsCheckHandler(BaseHandler):
         nationality = data.get("nationality")
         birth_date = data.get("birth_date")
 
-        result = screen_opensanctions(name, birth_date=birth_date, nationality=nationality, entity_type=entity_type)
+        result = screen_sumsub_aml(name, birth_date=birth_date, nationality=nationality, entity_type=entity_type)
         self.log_audit(user, "Sanctions Check", name,
                        f"Ad-hoc sanctions check — {'MATCH' if result['matched'] else 'CLEAR'} ({result['source']})")
         self.success(result)
@@ -2536,7 +13238,13 @@ class APIStatusHandler(BaseHandler):
             "sumsub": {
                 "configured": bool(SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY),
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
-                "description": "KYC identity verification (document + selfie + liveness)"
+                "description": "IDV and KYC screening (document + selfie + liveness)"
+            },
+            "complyadvantage": _complyadvantage_runtime_status(),
+            "anthropic": {
+                "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
+                "description": "Claude-backed document verification and optional analysis paths; the live compliance memo approval path remains deterministic"
             },
             "environment": ENVIRONMENT,
         })
@@ -2569,9 +13277,149 @@ class SumsubApplicantHandler(BaseHandler):
             level_name=data.get("level_name"),
         )
 
-        self.log_audit(user, "KYC Applicant Created", external_user_id,
-                       f"Sumsub applicant created — ID: {result.get('applicant_id')} ({result['source']})")
+        # Finding 12: Store applicant→application mapping for deterministic webhook linking
+        applicant_id = result.get("applicant_id", "")
+        application_id = data.get("application_id", "")
+        if applicant_id and application_id:
+            db = get_db()
+            try:
+                db.execute("""
+                    INSERT OR IGNORE INTO sumsub_applicant_mappings
+                    (application_id, applicant_id, external_user_id, person_name, person_type)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (application_id, applicant_id, external_user_id,
+                      (data.get("first_name", "") + " " + data.get("last_name", "")).strip(),
+                      data.get("person_type", "")))
+
+                # Also store applicant_id in prescreening_data so the legacy fallback
+                # substring scan in the webhook handler can find it even if the
+                # mapping table lookup fails (e.g. pre-migration or missing row).
+                # application_id may be a primary-key id (sent by the portal) or a
+                # ref string (sent by the back office), so we resolve both.
+                app_row = db.execute(
+                    "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
+                    (application_id, application_id)
+                ).fetchone()
+                if app_row:
+                    pdict = safe_json_loads(app_row["prescreening_data"] or "{}")
+                    if "sumsub_applicant_ids" not in pdict:
+                        pdict["sumsub_applicant_ids"] = {}
+                    pdict["sumsub_applicant_ids"][external_user_id] = applicant_id
+                    db.execute(
+                        "UPDATE applications SET prescreening_data=? WHERE id=?",
+                        (json.dumps(pdict), app_row["id"])
+                    )
+
+                db.commit()
+            except Exception as e:
+                logger.debug(f"Applicant mapping insert: {e}")
+            finally:
+                db.close()
+
+        # Only write "KYC Applicant Created" audit entry when applicantId is real
+        # and non-empty.  Log failure explicitly otherwise.
+        if applicant_id:
+            self.log_audit(user, "KYC Applicant Created", external_user_id,
+                           f"Sumsub applicant created — ID: {applicant_id} ({result.get('source', 'unknown')})")
+        else:
+            self.log_audit(user, "KYC Applicant Creation Failed", external_user_id,
+                           f"Sumsub applicant creation failed — "
+                           f"api_status={result.get('api_status', 'unknown')} "
+                           f"error={result.get('error', 'no applicant_id returned')}")
         self.success(result)
+
+
+class SumsubDiagnosticsHandler(BaseHandler):
+    """GET /api/admin/sumsub-diagnostics?application_id=... — Per-person Sumsub state"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        app_id = self.get_query_argument("application_id", "")
+        if not app_id:
+            return self.error("application_id query parameter required")
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, prescreening_data FROM applications WHERE id=? OR ref=?",
+                (app_id, app_id)
+            ).fetchone()
+            if not app:
+                db.close()
+                return self.error("Application not found", 404)
+
+            real_id = app["id"]
+            prescreening = safe_json_loads(app["prescreening_data"] or "{}")
+            screening_report = prescreening.get("screening_report", {})
+            sumsub_applicant_ids = prescreening.get("sumsub_applicant_ids", {})
+
+            # Collect applicant mapping rows for this application
+            mappings = db.execute(
+                "SELECT applicant_id, external_user_id, person_name, person_type, created_at "
+                "FROM sumsub_applicant_mappings WHERE application_id=?",
+                (real_id,)
+            ).fetchall()
+            mapping_list = [dict(m) for m in mappings]
+
+            # Collect audit entries for applicant creation for this application
+            # Use exact match on target with all known identifiers (app_id + ext_ids)
+            ext_ids = [m["external_user_id"] for m in mapping_list]
+            all_targets = [real_id] + ext_ids
+            placeholders = ",".join("?" for _ in all_targets)
+            audit_entries = db.execute(
+                "SELECT action, target, detail, created_at FROM audit_log "
+                "WHERE action IN ('KYC Applicant Created', 'KYC Applicant Creation Failed') "
+                f"AND target IN ({placeholders}) "
+                "ORDER BY created_at DESC LIMIT 50",
+                tuple(all_targets)
+            ).fetchall()
+
+            unique_audits = [dict(a) for a in audit_entries]
+
+            # Build per-person diagnostics
+            persons = []
+            # From KYC applicants in screening report
+            for kyc in screening_report.get("kyc_applicants", []):
+                persons.append({
+                    "person_name": kyc.get("person_name", ""),
+                    "person_type": kyc.get("person_type", ""),
+                    "sumsub_applicant_id": kyc.get("applicant_id", ""),
+                    "applicant_creation_status": kyc.get("api_status", "unknown"),
+                    "source": kyc.get("source", "unknown"),
+                })
+            # From director screenings
+            for ds in screening_report.get("director_screenings", []):
+                scr = ds.get("screening", {})
+                persons.append({
+                    "person_name": ds.get("person_name", ""),
+                    "person_type": "director",
+                    "screening_api_status": scr.get("api_status", "unknown"),
+                    "screening_source": scr.get("source", "unknown"),
+                })
+            # From UBO screenings
+            for us in screening_report.get("ubo_screenings", []):
+                scr = us.get("screening", {})
+                persons.append({
+                    "person_name": us.get("person_name", ""),
+                    "person_type": "ubo",
+                    "screening_api_status": scr.get("api_status", "unknown"),
+                    "screening_source": scr.get("source", "unknown"),
+                })
+
+            self.success({
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "sumsub_applicant_ids": sumsub_applicant_ids,
+                "applicant_mappings": mapping_list,
+                "audit_entries": unique_audits,
+                "persons": persons,
+                "screening_mode": screening_report.get("screening_mode", "unknown"),
+                "last_screened_at": prescreening.get("last_screened_at", ""),
+            })
+        finally:
+            db.close()
 
 
 class SumsubAccessTokenHandler(BaseHandler):
@@ -2600,6 +13448,21 @@ class SumsubStatusHandler(BaseHandler):
         if not user:
             return
 
+        # Ownership check: officers can query any applicant; clients can only query their own.
+        user_role = user.get("role", "client")
+        if user_role == "client":
+            db = get_db()
+            try:
+                user_id = user.get("sub", user.get("id", ""))
+                app = db.execute(
+                    "SELECT id FROM applications WHERE client_id = ? AND prescreening_data LIKE ?",
+                    (user_id, f"%{applicant_id}%")
+                ).fetchone()
+                if not app:
+                    return self.error("Not authorised to view this applicant", 403)
+            finally:
+                db.close()
+
         result = sumsub_get_applicant_status(applicant_id)
         self.success(result)
 
@@ -2621,8 +13484,18 @@ class SumsubDocumentHandler(BaseHandler):
 
         # Support base64 file data or a reference to an uploaded file
         file_data = data.get("file_data")
-        file_path = data.get("file_path")
         file_name = data.get("file_name", "document.pdf")
+
+        # Security: restrict file_path to uploads directory only (Finding S-15)
+        file_path = data.get("file_path")
+        if file_path:
+            import pathlib
+            allowed_dir = pathlib.Path(os.path.join(os.path.dirname(__file__), "uploads")).resolve()
+            requested = pathlib.Path(file_path).resolve()
+            if not str(requested).startswith(str(allowed_dir)):
+                logger.warning(f"SumsubDocumentHandler: blocked path traversal attempt: {file_path}")
+                return self.error("file_path must be within the uploads directory", 400)
+            file_path = str(requested)
 
         result = sumsub_add_document(
             applicant_id=applicant_id,
@@ -2638,29 +13511,90 @@ class SumsubDocumentHandler(BaseHandler):
         self.success(result)
 
 
-class SumsubWebhookHandler(tornado.web.RequestHandler):
-    """POST /api/kyc/webhook — Receive Sumsub verification webhooks"""
+class SumsubWebhookHandler(BaseHandler):
+    """POST /api/kyc/webhook — Receive Sumsub verification webhooks.
 
-    def set_default_headers(self):
-        self.set_header("Content-Type", "application/json")
+    PR 14 hardening (Rev 3):
+      * F-2  Digest algorithm allowlist — when X-App-Access-Sig is absent and
+             X-Payload-Digest with X-Payload-Digest-Alg is used, the algorithm
+             is passed through to ``sumsub_verify_webhook`` where it is gated
+             fail-closed against a known set. Unknown algorithms are rejected.
+      * F-7  Legacy substring scan removed. Unmatched deliveries (no row in
+             ``sumsub_applicant_mappings``) are routed to the
+             ``sumsub_unmatched_webhooks`` dead-letter queue for manual
+             triage. The scan could cross-link records whose prescreening_data
+             happened to contain the applicant_id as a substring — a silent
+             multi-tenancy break.
+      * F-8  Applicant ID format validation. Sumsub IDs are hex strings; we
+             reject anything outside ``[0-9a-fA-F]{16,64}`` with 400 before
+             any DB open, and mask the value in all log lines.
+      * Event-type gate. ``applicantReviewed`` is the only event we treat as
+             mutating. Other known events are acknowledged with INFO and a
+             200. Unknown event types are acknowledged with WARN and a 200.
+             Both non-mutating branches short-circuit BEFORE the DB is opened
+             — no audit_log row is written for them (see
+             utils/sumsub_validation.py for the rationale; tested in T14/T14b).
+      * DLQ insert failure returns 503. If we cannot persist an unmatched
+             delivery to the DLQ, Sumsub must retry — we never silently drop.
+    """
 
     def post(self):
-        body = self.request.body
-        signature = self.request.headers.get("X-Payload-Digest", "")
+        # Lazy import to avoid circular dependency at module-import time.
+        from utils.sumsub_validation import (
+            validate_applicant_id,
+            mask_applicant_id,
+            SUMSUB_MUTATING_EVENT_TYPES,
+            SUMSUB_ACKNOWLEDGED_EVENT_TYPES,
+        )
 
-        # Verify webhook signature
-        if SUMSUB_WEBHOOK_SECRET and not sumsub_verify_webhook(body, signature):
-            logger.warning("Sumsub webhook: Invalid signature")
-            self.set_status(401)
-            self.write(json.dumps({"error": "Invalid signature"}))
-            return
+        body = self.request.body
+
+        # Support both signature header formats safely:
+        # Primary: X-App-Access-Sig (original Sumsub format)
+        # Fallback: X-Payload-Digest (observed on staging — digest-style format)
+        _primary_sig = self.request.headers.get("X-App-Access-Sig", "")
+        _digest_sig = self.request.headers.get("X-Payload-Digest", "")
+        _digest_alg = self.request.headers.get("X-Payload-Digest-Alg", "")
+
+        if _primary_sig:
+            signature = _primary_sig
+            _sig_source = "X-App-Access-Sig"
+        elif _digest_sig:
+            signature = _digest_sig
+            _sig_source = "X-Payload-Digest"
+        else:
+            signature = ""
+            _sig_source = "none"
+
+        # Staging-safe diagnostic logging — partial values only, never full secrets
+        _header_names = list(self.request.headers.keys())
+        _sig_present = bool(signature)
+        logger.info(
+            "Sumsub webhook diagnostic: env=%s body_len=%d "
+            "sig_header_present=%s sig_source=%s sig_empty=%s "
+            "digest_alg=%s header_names=%s",
+            ENVIRONMENT,
+            len(body),
+            _sig_present,
+            _sig_source,
+            signature == "",
+            _digest_alg or "n/a",
+            _header_names,
+        )
+        if signature:
+            logger.info("Sumsub webhook: received sig prefix=%s source=%s", signature[:8], _sig_source)
+
+        # Verify webhook signature — always verify, never skip (Finding S-16).
+        # F-2: pass the advertised algorithm through to the verifier, which
+        # hard-gates against ALLOWED_DIGEST_ALGS fail-closed.
+        if not sumsub_verify_webhook(body, signature, digest_alg=_digest_alg or None):
+            logger.warning("Sumsub webhook: Invalid or missing signature")
+            return self.error("Invalid signature", 401)
 
         try:
             payload = json.loads(body)
         except Exception:
-            self.set_status(400)
-            self.write(json.dumps({"error": "Invalid JSON"}))
-            return
+            return self.error("Invalid JSON", 400)
 
         event_type = payload.get("type", "")
         applicant_id = payload.get("applicantId", "")
@@ -2668,61 +13602,220 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
         review_result = payload.get("reviewResult", {})
         review_answer = review_result.get("reviewAnswer", "")
 
-        logger.info(f"Sumsub webhook: {event_type} — applicant={applicant_id}, answer={review_answer}")
+        # F-8: validate applicant_id format BEFORE any DB open or log line that
+        # would include it. Rejects hex-format violations and guards against
+        # log-poisoning / SQL-context injection via the identifier.
+        if not validate_applicant_id(applicant_id):
+            logger.warning(
+                "Sumsub webhook: malformed applicant_id rejected (event_type=%s, sig_source=%s)",
+                event_type,
+                _sig_source,
+            )
+            return self.error("Invalid applicantId", 400)
 
-        # Handle applicantReviewed event
-        if event_type == "applicantReviewed":
-            db = get_db()
+        _masked_id = mask_applicant_id(applicant_id)
+        logger.info(
+            "Sumsub webhook: event=%s applicant=%s answer=%s",
+            event_type,
+            _masked_id,
+            review_answer,
+        )
+
+        # ── Event-type gate ──────────────────────────────────────────────
+        # Unknown events and known-but-non-mutating events short-circuit here,
+        # BEFORE we open the database. No audit_log row is written. The
+        # audit trail for these deliveries is this log line. See
+        # utils/sumsub_validation.py for the Rev 3 rationale.
+        if event_type not in SUMSUB_MUTATING_EVENT_TYPES:
+            if event_type in SUMSUB_ACKNOWLEDGED_EVENT_TYPES:
+                logger.info(
+                    "Sumsub webhook: acknowledged non-mutating event=%s applicant=%s — no DB write",
+                    event_type,
+                    _masked_id,
+                )
+            else:
+                logger.warning(
+                    "Sumsub webhook: unknown event_type=%r applicant=%s — acknowledged, no DB write",
+                    event_type,
+                    _masked_id,
+                )
+            self.set_status(200)
+            self.write(json.dumps({"status": "ok"}))
+            return
+
+        # ── Mutating path (applicantReviewed) ────────────────────────────
+        matched_app_ids = set()  # SCR-013: hoisted; post-commit renorm block reads this
+        db = get_db()
+        try:
+            # ── EX-04: Idempotency guard ────────────────────────────────
+            # Derive a canonical dedup key from immutable payload fields.
+            # Sumsub does not provide a stable unique event ID; the most
+            # reliable combination is (applicantId, type, reviewAnswer,
+            # createdAtMs). createdAtMs is the millisecond epoch timestamp
+            # assigned by Sumsub when the event was created — it is stable
+            # across retries of the same event.
+            _created_at_ms = str(payload.get("createdAtMs", ""))
+            _dedup_input = f"{applicant_id}:{event_type}:{review_answer}:{_created_at_ms}"
+            _event_digest = hashlib.sha256(_dedup_input.encode("utf-8")).hexdigest()
+
+            _now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
             try:
-                # Find the application linked to this external user
-                # The external user ID may be a client email or director ID
-                kyc_data = json.dumps({
-                    "sumsub_applicant_id": applicant_id,
-                    "external_user_id": external_user_id,
-                    "review_answer": review_answer,
-                    "rejection_labels": review_result.get("rejectLabels", []),
-                    "moderation_comment": review_result.get("moderationComment", ""),
-                    "event_type": event_type,
-                    "received_at": datetime.utcnow().isoformat(),
-                })
-
-                # Store webhook data in audit log
                 db.execute("""
-                    INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail)
+                    INSERT INTO webhook_processed_events
+                        (event_digest, event_type, applicant_id, external_user_id, review_answer, received_at)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, ("system", "Sumsub Webhook", "system", f"KYC {event_type}: {review_answer}", applicant_id, kyc_data))
+                """, (_event_digest, event_type, applicant_id, external_user_id, review_answer, _now_utc))
+            except Exception:
+                # UNIQUE constraint violation — this event was already processed.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.info(
+                    "Sumsub webhook: duplicate delivery skipped (already processed) "
+                    "applicant=%s event=%s digest=%s",
+                    _masked_id, event_type, _event_digest[:16],
+                )
+                self.set_status(200)
+                self.write(json.dumps({"status": "already_processed"}))
+                return
 
-                # Try to update application status if we can find it
-                # Look for applications where prescreening_data contains this applicant
-                apps = db.execute("SELECT id, prescreening_data FROM applications").fetchall()
-                for app in apps:
-                    pdata = app["prescreening_data"] or ""
-                    if applicant_id in pdata or external_user_id in pdata:
-                        # Update the prescreening data with new KYC result
-                        try:
-                            pdict = json.loads(pdata) if pdata else {}
-                            if "screening_report" not in pdict:
-                                pdict["screening_report"] = {}
-                            pdict["screening_report"]["sumsub_webhook"] = json.loads(kyc_data)
+            kyc_data = json.dumps({
+                "sumsub_applicant_id": applicant_id,
+                "external_user_id": external_user_id,
+                "review_answer": review_answer,
+                "rejection_labels": review_result.get("rejectLabels", []),
+                "moderation_comment": review_result.get("moderationComment", ""),
+                "event_type": event_type,
+                "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            })
 
-                            # If verification failed, add a flag
-                            if review_answer == "RED":
-                                flags = pdict["screening_report"].get("overall_flags", [])
-                                flags.append(f"Sumsub KYC verification REJECTED for {external_user_id}")
-                                pdict["screening_report"]["overall_flags"] = flags
+            # Audit log — mutating branch only (Rev 3: audit_log is a
+            # state-change record, not a webhook-arrival record).
+            db.execute("""
+                INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, ("system", "Sumsub Webhook", "system", f"KYC {event_type}: {review_answer}", applicant_id, kyc_data))
 
-                            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                                      (json.dumps(pdict), app["id"]))
-                            logger.info(f"Sumsub webhook: Updated application {app['id']}")
-                        except Exception as e:
-                            logger.error(f"Failed to update application: {e}")
+            # Finding 12: Deterministic applicant→application lookup via mapping table.
+            # F-7: the legacy substring scan has been removed — unmatched
+            # deliveries go to the DLQ for manual triage.
+            mapping_lookup_failed = False
 
-                db.commit()
-            finally:
-                db.close()
+            try:
+                mappings = db.execute(
+                    "SELECT application_id FROM sumsub_applicant_mappings WHERE applicant_id = ? OR external_user_id = ?",
+                    (applicant_id, external_user_id)
+                ).fetchall()
+                for m in mappings:
+                    matched_app_ids.add(m["application_id"])
+            except Exception as e:
+                # Don't silently swallow — route this delivery to the DLQ with
+                # a diagnostic resolution_note so an operator can investigate.
+                logger.error(
+                    "Sumsub webhook: mapping table lookup failed for applicant=%s — routing to DLQ: %s",
+                    _masked_id, e,
+                )
+                mapping_lookup_failed = True
 
-        elif event_type == "applicantPending":
-            logger.info(f"Sumsub: Applicant {applicant_id} pending review")
+            if not matched_app_ids:
+                # ── Dead-letter queue path ──────────────────────────────
+                resolution_note = (
+                    "auto:mapping_lookup_failed" if mapping_lookup_failed
+                    else "auto:no_mapping_found"
+                )
+                try:
+                    db.execute("""
+                        INSERT INTO sumsub_unmatched_webhooks
+                            (applicant_id, external_user_id, event_type, review_answer,
+                             payload, status, resolution_note, received_at)
+                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                    """, (
+                        applicant_id,
+                        external_user_id,
+                        event_type,
+                        review_answer,
+                        kyc_data,
+                        resolution_note,
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                    ))
+                    db.commit()
+                    logger.warning(
+                        "Sumsub webhook: unmatched delivery queued to DLQ applicant=%s note=%s",
+                        _masked_id, resolution_note,
+                    )
+                    self.set_status(200)
+                    self.write(json.dumps({"status": "queued"}))
+                    return
+                except Exception as dlq_err:
+                    # DLQ insert failure must NOT be silently swallowed.
+                    # Return 503 so Sumsub retries the delivery.
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    logger.error(
+                        "Sumsub webhook: DLQ insert FAILED for applicant=%s — returning 503: %s",
+                        _masked_id, dlq_err,
+                    )
+                    return self.error("Webhook persistence failure", 503)
+
+            # Update matched applications
+            for app_id in matched_app_ids:
+                try:
+                    # app_id from the mapping table may be a ref or an id
+                    row = db.execute(
+                        "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
+                        (app_id, app_id)
+                    ).fetchone()
+                    if not row:
+                        continue
+                    pdict = safe_json_loads(row["prescreening_data"] or "{}")
+                    if "screening_report" not in pdict:
+                        pdict["screening_report"] = {}
+                    pdict["screening_report"]["sumsub_webhook"] = safe_json_loads(kyc_data)
+
+                    # If verification failed, add a flag
+                    if review_answer == "RED":
+                        flags = pdict["screening_report"].get("overall_flags", [])
+                        flag_msg = f"Sumsub KYC verification REJECTED for {external_user_id}"
+                        if flag_msg not in flags:
+                            flags.append(flag_msg)
+                        pdict["screening_report"]["overall_flags"] = flags
+
+                    db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                              (json.dumps(pdict), row["id"]))
+                    logger.info("Sumsub webhook: updated application id=%s applicant=%s",
+                                row["id"], _masked_id)
+                except Exception as e:
+                    logger.error(
+                        "Sumsub webhook: failed to update application %s applicant=%s: %s",
+                        app_id, _masked_id, e,
+                    )
+
+            db.commit()
+        finally:
+            db.close()
+
+        # SCR-013: Post-commit re-normalization. Helper enforces narrow-except;
+        # operational errors are swallowed, programmer errors propagate.
+        import sqlite3 as _sqlite3
+        try:
+            import psycopg2 as _psycopg2
+            _renorm_operational_errors = (_sqlite3.Error, _psycopg2.Error)
+        except ImportError:
+            _renorm_operational_errors = (_sqlite3.Error,)
+        try:
+            from screening_config import is_abstraction_enabled
+            if matched_app_ids and is_abstraction_enabled():
+                from screening_storage import webhook_renormalize_from_committed_legacy
+                for app_id in matched_app_ids:
+                    webhook_renormalize_from_committed_legacy(db, app_id)
+        except _renorm_operational_errors as outer_op_err:
+            logger.warning(
+                "Webhook renorm: outer operational error error_type=%s",
+                type(outer_op_err).__name__,
+            )
 
         self.set_status(200)
         self.write(json.dumps({"status": "ok"}))
@@ -2739,6 +13832,8 @@ class MonitoringDashboardHandler(BaseHandler):
         if not user:
             return
 
+        from fixture_filter import fixture_app_exclude_clause
+
         db = get_db()
         stats = {
             "files_due": 0,
@@ -2749,21 +13844,40 @@ class MonitoringDashboardHandler(BaseHandler):
             "periodic_review_due": 0
         }
 
-        # Count applications pending compliance review
-        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+
+        # Count applications pending compliance review (excluding fixtures)
+        compliance_review = db.execute(
+            f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND {fx_excl}",
+            fx_params,
+        ).fetchone()["c"]
         stats["clients_under_review"] = compliance_review
 
-        # Count high-risk alerts
-        high_risk = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level IN ('HIGH','VERY_HIGH')").fetchone()["c"]
+        # Count high-risk alerts (excluding fixtures)
+        high_risk = db.execute(
+            f"SELECT COUNT(*) as c FROM applications WHERE risk_level IN ('HIGH','VERY_HIGH') AND {fx_excl}",
+            fx_params,
+        ).fetchone()["c"]
         stats["alerts"] = high_risk
 
-        # Get recent high-risk applications for alert summary
-        recent_alerts = db.execute("""
+        # Get recent high-risk applications for alert summary (excluding fixtures)
+        recent_alerts = db.execute(f"""
             SELECT ref, company_name, risk_level, risk_score, created_at FROM applications
-            WHERE risk_level IN ('HIGH','VERY_HIGH')
+            WHERE risk_level IN ('HIGH','VERY_HIGH') AND {fx_excl}
             ORDER BY created_at DESC LIMIT 10
-        """).fetchall()
+        """, fx_params).fetchall()
         stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
+
+        review_fx_excl, review_fx_params = fixture_app_exclude_clause(table_alias="a")
+        review_stats = _periodic_review_canonical_stats(
+            db,
+            app_where=review_fx_excl,
+            app_params=review_fx_params,
+        )
+        stats["periodic_review_due"] = review_stats["due"]
+        stats["periodic_review_overdue"] = review_stats["overdue"]
+        stats["periodic_review_active"] = review_stats["active"]
+        stats["periodic_review_total"] = review_stats["total"]
 
         db.close()
         self.success(stats)
@@ -2776,30 +13890,104 @@ class MonitoringClientsHandler(BaseHandler):
         if not user:
             return
 
+        from fixture_filter import fixture_app_exclude_clause
+
         db = get_db()
 
-        # Get all applications grouped by status/stage
-        applications = db.execute("""
+        # Get all applications grouped by status/stage (excluding fixtures)
+        fx_excl, fx_params = fixture_app_exclude_clause()
+        applications = db.execute(f"""
             SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score,
                    a.created_at, u.full_name as assigned_to
             FROM applications a
             LEFT JOIN users u ON a.assigned_to = u.id
+            WHERE {fx_excl}
             ORDER BY a.created_at DESC
-        """).fetchall()
+        """, fx_params).fetchall()
 
         clients = {}
         for app in applications:
+            app_dict = dict(app)
+            app_dict["periodic_review"] = _latest_monitoring_review_summary(db, app_dict["id"])
+            app_dict["monitoring_enrolled"] = bool(app_dict["periodic_review"])
             status = app["status"]
             if status not in clients:
                 clients[status] = []
-            clients[status].append(dict(app))
+            clients[status].append(app_dict)
 
         db.close()
         self.success({"clients_by_status": clients})
 
 
-class MonitoringAlertsHandler(BaseHandler):
-    """POST /api/monitoring/alerts — create monitoring alert"""
+_MONITORING_ALERT_DISCOVERY_SOURCES = {
+    "webhook_live",
+    "webhook_backfill",
+    "manual_backfill",
+    "manual",
+    "officer_created",
+    "document_health",
+}
+
+
+def _normalize_monitoring_alert_source(value):
+    source = str(value or "").strip().lower()
+    aliases = {
+        "manual entry": "manual",
+        "manual_entry": "manual",
+        "officer": "officer_created",
+        "officer-created": "officer_created",
+        "officer created": "officer_created",
+        "document-health": "document_health",
+        "document health": "document_health",
+    }
+    source = aliases.get(source, source)
+    if source in _MONITORING_ALERT_DISCOVERY_SOURCES:
+        return source
+    return "manual"
+
+
+class MonitoringAlertCreateHandler(BaseHandler):
+    """GET/POST /api/monitoring/alerts — List and create monitoring alerts"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        from fixture_filter import fixture_app_id_exclude_clause
+
+        severity = self.get_argument("severity", None)
+        alert_type = self.get_argument("type", None)
+        status_filter = self.get_argument("status", None)
+        client_id = self.get_argument("client", None)
+
+        db = get_db()
+        try:
+            # Exclude fixture-linked alerts by default (application_id NOT LIKE 'f1xed%')
+            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+            query = f"SELECT * FROM monitoring_alerts WHERE {fx_excl}"
+            params = list(fx_params)
+
+            if severity:
+                query += " AND severity = ?"
+                params.append(severity)
+            if alert_type:
+                query += " AND alert_type = ?"
+                params.append(alert_type)
+            if status_filter:
+                query += " AND status = ?"
+                params.append(status_filter)
+            if client_id:
+                query += " AND application_id = ?"
+                params.append(client_id)
+
+            query += " ORDER BY created_at DESC"
+            alerts = db.execute(query, params).fetchall()
+
+            result = [dict(a) for a in alerts]
+            self.success({"alerts": result, "total": len(result)})
+        finally:
+            db.close()
+
     def post(self):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
@@ -2807,18 +13995,5339 @@ class MonitoringAlertsHandler(BaseHandler):
 
         data = self.get_json()
         db = get_db()
+        try:
+            # Insert the alert into monitoring_alerts
+            alert_type = data.get("alert_type", data.get("type", "Manual"))
+            severity = data.get("severity", "Medium")
+            client_name = data.get("client_name", "")
+            application_id = data.get("application_id")
+            summary = data.get("summary", data.get("message", ""))
+            detected_by = data.get("detected_by", user.get("name", "Officer"))
+            source_reference = data.get("source_reference", "Manual entry")
+            ai_recommendation = data.get("ai_recommendation", "")
+            discovered_via = _normalize_monitoring_alert_source(
+                data.get("discovered_via") or data.get("source") or "manual"
+            )
 
-        # Create notification for relevant users
-        alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
-        for u in alert_users:
-            db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                      (u["id"], data.get("title", "Monitoring Alert"),
-                       data.get("message", "")))
+            db.execute("""
+                INSERT INTO monitoring_alerts
+                    (application_id, client_name, alert_type, severity, detected_by,
+                     summary, source_reference, ai_recommendation, status, discovered_via)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                application_id, client_name, alert_type, severity, detected_by,
+                summary, source_reference, ai_recommendation, "open", discovered_via,
+            ))
+            created = db.execute(
+                "SELECT id, discovered_via FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+            # Create notification for relevant users
+            title = data.get("title", f"Monitoring Alert: {alert_type}")
+            alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
+            for u in alert_users:
+                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                          (u["id"], title, summary))
+
+            self.log_audit(
+                user,
+                "Alert",
+                "Monitoring",
+                f"Alert created: {alert_type} — {severity}",
+                db=db,
+                commit=False,
+            )
+            db.commit()
+            self.success({
+                "status": "created",
+                "id": created["id"] if created else None,
+                "discovered_via": created["discovered_via"] if created else discovered_via,
+            }, 201)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring alert create failed")
+            self.error("Failed to create monitoring alert.", 500)
+        finally:
+            db.close()
+
+
+# ══════════════════════════════════════════════════════════
+# COMPLIANCE MEMO ENDPOINT (Step 5)
+# ══════════════════════════════════════════════════════════
+
+_MEMO_APP_FINGERPRINT_FIELDS = (
+    "id", "ref", "company_name", "brn", "country", "sector", "entity_type",
+    "source_of_funds", "expected_volume", "ownership_structure", "risk_level",
+    "risk_score", "risk_escalations", "operating_countries",
+    "incorporation_date", "business_activity", "assigned_to",
+    "prescreening_data", "screening_reviews",
+)
+_MEMO_PARTY_FINGERPRINT_FIELDS = (
+    "id", "person_key", "full_name", "nationality", "date_of_birth",
+    "ownership_pct", "is_pep",
+)
+_MEMO_DOCUMENT_FINGERPRINT_FIELDS = (
+    "id", "doc_type", "person_id", "filename", "verification_status",
+    "verification_results", "review_notes", "reviewed_at", "updated_at",
+)
+
+
+def _normalise_memo_fingerprint_value(value):
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped[0] in "[{":
+            try:
+                return _normalise_memo_fingerprint_value(json.loads(stripped))
+            except Exception:
+                return value
+        return value
+    if isinstance(value, dict):
+        return {
+            str(k): _normalise_memo_fingerprint_value(value[k])
+            for k in sorted(value.keys(), key=lambda x: str(x))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalise_memo_fingerprint_value(v) for v in value]
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    return value
+
+
+def _memo_row_subset(row, fields):
+    data = {}
+    source = dict(row or {})
+    for field in fields:
+        data[field] = _normalise_memo_fingerprint_value(source.get(field))
+    return data
+
+
+def _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_review_summary=None):
+    """Stable input fingerprint for idempotent memo generation."""
+    payload = {
+        "fingerprint_version": "phase3_v1",
+        "application": _memo_row_subset(app, _MEMO_APP_FINGERPRINT_FIELDS),
+        "directors": sorted(
+            [_memo_row_subset(d, _MEMO_PARTY_FINGERPRINT_FIELDS) for d in directors],
+            key=lambda d: (str(d.get("person_key") or ""), str(d.get("id") or ""), str(d.get("full_name") or "")),
+        ),
+        "ubos": sorted(
+            [_memo_row_subset(u, _MEMO_PARTY_FINGERPRINT_FIELDS) for u in ubos],
+            key=lambda u: (str(u.get("person_key") or ""), str(u.get("id") or ""), str(u.get("full_name") or "")),
+        ),
+        "documents": sorted(
+            [_memo_row_subset(d, _MEMO_DOCUMENT_FINGERPRINT_FIELDS) for d in documents],
+            key=lambda d: (str(d.get("id") or ""), str(d.get("doc_type") or ""), str(d.get("person_id") or "")),
+        ),
+        "enhanced_review_summary": _normalise_memo_fingerprint_value(
+            enhanced_review_summary or app.get("enhanced_review_summary") or {}
+        ),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return "memo-input-v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _memo_stale_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y", "stale")
+
+
+def _memo_now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_memo_timestamp(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    text = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _memo_timestamp_stale(app_row, memo_row):
+    if not app_row or not memo_row:
+        return False
+    app_updated = (app_row.get("inputs_updated_at") if hasattr(app_row, "get") else app_row["inputs_updated_at"]) or (
+        app_row.get("updated_at") if hasattr(app_row, "get") else app_row["updated_at"]
+    )
+    memo_created = memo_row.get("created_at") if hasattr(memo_row, "get") else memo_row["created_at"]
+    app_ts = _parse_memo_timestamp(app_updated)
+    memo_ts = _parse_memo_timestamp(memo_created)
+    return bool(app_ts and memo_ts and app_ts > memo_ts)
+
+
+def _memo_stale_entries(value):
+    entries = safe_json_loads(value or "[]")
+    return entries if isinstance(entries, list) else []
+
+
+def _memo_staleness_view(app_row, memo_row):
+    if not memo_row:
+        return {
+            "is_stale": False,
+            "reason": "",
+            "trigger": "",
+            "marked_at": None,
+            "reasons": [],
+        }
+    row = dict(memo_row)
+    reasons = _memo_stale_entries(row.get("stale_reasons"))
+    if _memo_stale_bool(row.get("is_stale")):
+        return {
+            "is_stale": True,
+            "reason": row.get("stale_reason") or "Material facts changed after the memo was generated.",
+            "trigger": row.get("stale_trigger") or "memo_marked_stale",
+            "marked_at": row.get("stale_marked_at"),
+            "reasons": reasons,
+        }
+    if _memo_timestamp_stale(app_row, row):
+        reason = "Application input data changed after the latest memo was generated."
+        return {
+            "is_stale": True,
+            "reason": reason,
+            "trigger": "application_inputs_changed_after_memo",
+            "marked_at": None,
+            "reasons": reasons or [{"trigger": "application_inputs_changed_after_memo", "reason": reason}],
+        }
+    return {
+        "is_stale": False,
+        "reason": "",
+        "trigger": "",
+        "marked_at": None,
+        "reasons": reasons,
+    }
+
+
+def _memo_fingerprint_source(db, app_row):
+    app = dict(app_row or {})
+    app_id = app.get("id")
+    directors = [
+        decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS)
+        for d in db.execute("SELECT * FROM directors WHERE application_id=?", (app_id,)).fetchall()
+    ]
+    ubos = [
+        decrypt_pii_fields(dict(u), PII_FIELDS_UBOS)
+        for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (app_id,)).fetchall()
+    ]
+    documents = [
+        dict(d)
+        for d in db.execute(
+            f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (app_id,),
+        ).fetchall()
+    ]
+    screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref"))
+    ps = parse_json_field(app.get("prescreening_data"), {})
+    ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
+    app["prescreening_data"] = ps
+    app["screening_reviews"] = screening_reviews
+    app["source_of_funds"] = ps.get("source_of_funds", "")
+    if not app["source_of_funds"]:
+        sof_parts = []
+        if ps.get("source_of_funds_initial_type"):
+            sof_parts.append("Initial: " + ps["source_of_funds_initial_type"])
+        if ps.get("source_of_funds_initial_detail"):
+            sof_parts.append(ps["source_of_funds_initial_detail"])
+        if ps.get("source_of_funds_ongoing_type"):
+            sof_parts.append("Ongoing: " + ps["source_of_funds_ongoing_type"])
+        if ps.get("source_of_funds_ongoing_detail"):
+            sof_parts.append(ps["source_of_funds_ongoing_detail"])
+        app["source_of_funds"] = "; ".join(sof_parts)
+    app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
+    app["operating_countries"] = (
+        ps.get("operating_countries")
+        or ps.get("countries_of_operation")
+        or ps.get("target_markets")
+        or ""
+    )
+    app["incorporation_date"] = ps.get("incorporation_date") or ""
+    app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
+    try:
+        app["enhanced_review_summary"] = build_enhanced_review_memo_summary(db, app_id)
+    except Exception as exc:
+        logger.error("Failed to build enhanced review memo summary for staleness check %s: %s", app_id, exc, exc_info=True)
+        app["enhanced_review_summary"] = {}
+    return app, directors, ubos, documents, app.get("enhanced_review_summary")
+
+
+def _current_memo_input_hash(db, app_row):
+    app, directors, ubos, documents, enhanced_summary = _memo_fingerprint_source(db, app_row)
+    return _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_summary)
+
+
+def _memo_status_snapshot(memo_row):
+    row = dict(memo_row or {})
+    return {
+        "memo_id": row.get("id"),
+        "review_status": row.get("review_status"),
+        "validation_status": row.get("validation_status"),
+        "supervisor_status": row.get("supervisor_status"),
+        "approved_by": row.get("approved_by"),
+        "approved_at": row.get("approved_at"),
+        "is_stale": _memo_stale_bool(row.get("is_stale")),
+        "stale_reason": row.get("stale_reason"),
+        "stale_trigger": row.get("stale_trigger"),
+    }
+
+
+def _mark_latest_memo_stale(
+    db,
+    application_id,
+    *,
+    trigger,
+    reason,
+    actor=None,
+    app_ref=None,
+    ip_address="",
+    before_state=None,
+    after_state=None,
+):
+    latest = db.execute(
+        "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY version DESC, id DESC LIMIT 1",
+        (application_id,),
+    ).fetchone()
+    if not latest:
+        return {"marked": False, "reason": reason, "trigger": trigger}
+    row = dict(latest)
+    marked_at = _memo_now_iso()
+    reason_text = str(reason or "Material facts changed after the memo was generated.").strip()
+    trigger_key = str(trigger or "material_fact_changed").strip()
+    reasons = _memo_stale_entries(row.get("stale_reasons"))
+    reason_entry = {
+        "trigger": trigger_key,
+        "reason": reason_text,
+        "marked_at": marked_at,
+    }
+    if before_state is not None:
+        reason_entry["before_state"] = before_state
+    if after_state is not None:
+        reason_entry["after_state"] = after_state
+    if not any(
+        item.get("trigger") == trigger_key and item.get("reason") == reason_text
+        for item in reasons
+        if isinstance(item, dict)
+    ):
+        reasons.append(reason_entry)
+
+    before_memo = _memo_status_snapshot(row)
+    after_memo = {
+        **before_memo,
+        "review_status": "draft",
+        "validation_status": "pending",
+        "supervisor_status": "pending",
+        "approved_by": None,
+        "approved_at": None,
+        "is_stale": True,
+        "stale_reason": reason_text,
+        "stale_trigger": trigger_key,
+    }
+    db.execute(
+        """
+        UPDATE compliance_memos
+        SET is_stale = ?,
+            stale_reason = ?,
+            stale_reasons = ?,
+            stale_trigger = ?,
+            stale_marked_at = ?,
+            review_status = 'draft',
+            reviewed_by = NULL,
+            review_notes = NULL,
+            validation_status = 'pending',
+            validation_issues = '[]',
+            validation_run_at = NULL,
+            supervisor_status = 'pending',
+            supervisor_summary = NULL,
+            supervisor_contradictions = '[]',
+            approved_by = NULL,
+            approved_at = NULL,
+            approval_reason = NULL
+        WHERE id = ?
+        """,
+        (
+            True if getattr(db, "is_postgres", False) else 1,
+            reason_text,
+            json.dumps(reasons, default=str, sort_keys=True),
+            trigger_key,
+            marked_at,
+            row["id"],
+        ),
+    )
+    try:
+        audit_actor = actor or {}
+        detail = json.dumps({
+            "event": "compliance_memo.marked_stale",
+            "application_id": application_id,
+            "application_ref": app_ref,
+            "memo_id": row.get("id"),
+            "trigger": trigger_key,
+            "reason": reason_text,
+            "marked_at": marked_at,
+            "requires": [
+                "regenerate_memo",
+                "rerun_validation",
+                "rerun_supervisor",
+                "officer_reapproval",
+            ],
+        }, default=str, sort_keys=True)
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                audit_actor.get("sub", ""),
+                audit_actor.get("name", ""),
+                audit_actor.get("role", ""),
+                "Memo Marked Stale",
+                app_ref or application_id,
+                detail,
+                ip_address or "",
+                _safe_json(before_state if before_state is not None else before_memo),
+                _safe_json(after_state if after_state is not None else after_memo),
+            ),
+        )
+    except Exception as audit_exc:
+        logger.error(
+            "memo_staleness_audit_failed=true app_id=%s memo_id=%s trigger=%s error=%s",
+            application_id,
+            row.get("id"),
+            trigger_key,
+            audit_exc,
+            exc_info=True,
+        )
+    return {
+        "marked": True,
+        "memo_id": row.get("id"),
+        "reason": reason_text,
+        "trigger": trigger_key,
+        "marked_at": marked_at,
+    }
+
+
+def _ensure_memo_fresh_or_mark_stale(db, app_row, memo_row, *, actor=None, ip_address="", context="memo_control"):
+    if not app_row or not memo_row:
+        return {"is_stale": False, "reason": "", "trigger": ""}
+    app = dict(app_row)
+    memo = dict(memo_row)
+    view = _memo_staleness_view(app, memo)
+    if view["is_stale"]:
+        if _memo_stale_bool(memo.get("is_stale")):
+            return view
+        _mark_latest_memo_stale(
+            db,
+            app["id"],
+            trigger=view.get("trigger") or context,
+            reason=view.get("reason") or "Material facts changed after the memo was generated.",
+            actor=actor,
+            app_ref=app.get("ref"),
+            ip_address=ip_address,
+        )
+        return view
+
+    stored_hash = memo.get("raw_output_hash")
+    if stored_hash:
+        try:
+            current_hash = _current_memo_input_hash(db, app)
+        except Exception as exc:
+            logger.error("Failed to compute current memo input hash for %s: %s", app.get("id"), exc, exc_info=True)
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="memo_freshness_unverified",
+                reason="Could not verify memo freshness. Regenerate the memo before approval.",
+                actor=actor,
+                app_ref=app.get("ref"),
+                ip_address=ip_address,
+            )
+            return {
+                "is_stale": True,
+                "reason": "Could not verify memo freshness. Regenerate the memo before approval.",
+                "trigger": "memo_freshness_unverified",
+            }
+        if current_hash != stored_hash:
+            reason = "Material facts changed after the memo was generated."
+            result = _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="memo_input_hash_changed",
+                reason=reason,
+                actor=actor,
+                app_ref=app.get("ref"),
+                ip_address=ip_address,
+                before_state={"raw_output_hash": stored_hash},
+                after_state={"raw_output_hash": current_hash},
+            )
+            return {"is_stale": True, **result}
+
+    return {"is_stale": False, "reason": "", "trigger": ""}
+
+
+def _latest_compliance_memo_row(db, application_id):
+    return db.execute(
+        """
+        SELECT id, version, memo_data, review_status, validation_status, blocked,
+               block_reason, quality_score, memo_version, raw_output_hash, created_at,
+               is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
+        FROM compliance_memos
+        WHERE application_id = ?
+        ORDER BY version DESC, id DESC
+        LIMIT 1
+        """,
+        (application_id,),
+    ).fetchone()
+
+
+def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
+    if not latest_row or not fingerprint:
+        return None
+    row = dict(latest_row)
+    if _memo_stale_bool(row.get("is_stale")):
+        return None
+    if row.get("raw_output_hash") != fingerprint:
+        return None
+    try:
+        memo = safe_json_loads(row.get("memo_data") or "{}")
+    except Exception:
+        memo = {}
+    if not isinstance(memo, dict):
+        return None
+    memo.setdefault("metadata", {})
+    memo["metadata"]["idempotency"] = {
+        "reused_existing_memo": True,
+        "memo_id": row.get("id"),
+        "version": row.get("version"),
+        "raw_output_hash": fingerprint,
+        "created_at": row.get("created_at"),
+    }
+    memo["review_status"] = row.get("review_status")
+    memo["validation_status"] = row.get("validation_status")
+    memo["memo_version"] = row.get("memo_version") or row.get("version")
+    memo["metadata"]["quality_score"] = row.get("quality_score")
+    memo["metadata"]["blocked"] = bool(row.get("blocked"))
+    memo["metadata"]["block_reason"] = row.get("block_reason")
+    memo["metadata"]["is_stale"] = _memo_stale_bool(row.get("is_stale"))
+    memo["metadata"]["stale_reason"] = row.get("stale_reason")
+    return memo
+
+
+def _locked_memo_application_row(db, app_id):
+    """Fetch the memo source application under a per-application generation lock."""
+    if db.is_postgres:
+        return db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
+            (app_id, app_id),
+        ).fetchone()
+
+    # SQLite: acquire a write lock before the source read so concurrent local
+    # requests cannot both calculate the same next memo version.
+    try:
+        db.execute("BEGIN IMMEDIATE")
+    except Exception:
+        pass  # Already in a transaction.
+    return db.execute(
+        "SELECT * FROM applications WHERE id = ? OR ref = ?",
+        (app_id, app_id),
+    ).fetchone()
+
+
+class ComplianceMemoHandler(BaseHandler):
+    """POST /api/applications/:id/memo — Generate compliance memo from application data"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("memo", max_attempts=10, window_seconds=60):
+            return
+
+        # P0-3: Check if Agent 5 (compliance memo) is enabled before executing
+        db = get_db()
+        agent5 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=5").fetchone()
+        if agent5 and not agent5["enabled"]:
+            db.close()
+            self.log_audit(user, "Agent Skipped", "Agent 5", "Compliance memo generation skipped — agent disabled")
+            self.success({
+                "status": "skipped",
+                "message": "Compliance memo agent is currently disabled",
+                "requires_review": True
+            })
+            return
+
+        app = _locked_memo_application_row(db, app_id)
+        if not app:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+        risk_error = _application_risk_integrity_error(app, "generate compliance memo")
+        if risk_error:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(risk_error, 400)
+
+        # Fetch related data — C-02: decrypt PII fields on read
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        documents = [dict(d) for d in db.execute(
+            f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (real_id,),
+        ).fetchall()]
+        screening_reviews = _load_screening_reviews_for_truth(db, real_id, app["ref"])
+
+        # Enrich app with prescreening fields for memo_handler
+        # prescreening_data is a JSON column; memo_handler expects source_of_funds and expected_volume as top-level keys
+        app = dict(app)
+        app["screening_reviews"] = screening_reviews
+        ps_raw = app.get("prescreening_data") or "{}"
+        ps = ps_raw if isinstance(ps_raw, dict) else json.loads(ps_raw)
+        ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
+        app["prescreening_data"] = ps
+        sof = ps.get("source_of_funds", "")
+        if not sof:
+            sof_parts = []
+            if ps.get("source_of_funds_initial_type"):
+                sof_parts.append("Initial: " + ps["source_of_funds_initial_type"])
+            if ps.get("source_of_funds_initial_detail"):
+                sof_parts.append(ps["source_of_funds_initial_detail"])
+            if ps.get("source_of_funds_ongoing_type"):
+                sof_parts.append("Ongoing: " + ps["source_of_funds_ongoing_type"])
+            if ps.get("source_of_funds_ongoing_detail"):
+                sof_parts.append(ps["source_of_funds_ongoing_detail"])
+            sof = "; ".join(sof_parts)
+        app["source_of_funds"] = sof
+        app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
+        # Enrich with operating countries and incorporation date for memo narrative
+        app["operating_countries"] = ps.get("operating_countries") or ps.get("countries_of_operation") or ps.get("target_markets") or ""
+        app["incorporation_date"] = ps.get("incorporation_date") or ""
+        app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
+        try:
+            app["enhanced_review_summary"] = build_enhanced_review_memo_summary(db, real_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to build enhanced review memo summary for %s: %s",
+                real_id,
+                exc,
+                exc_info=True,
+            )
+            app["enhanced_review_summary"] = {
+                "triggered": False,
+                "total_requirements": 0,
+                "by_trigger": [],
+                "requested": [],
+                "submitted": [],
+                "accepted": [],
+                "rejected": [],
+                "waived": [],
+                "outstanding": [],
+                "mandatory_outstanding_count": 0,
+                "blocking_outstanding_count": 0,
+                "client_facing_count": 0,
+                "backoffice_only_count": 0,
+                "document_submissions_count": 0,
+                "text_responses_count": 0,
+                "waiver_count": 0,
+                "senior_review_items": [],
+                "overall_status": "not_triggered",
+                "warnings": ["enhanced_review_summary_unavailable"],
+            }
+
+        memo_input_hash = _memo_generation_fingerprint(
+            app,
+            directors,
+            ubos,
+            documents,
+            app.get("enhanced_review_summary"),
+        )
+        latest_memo_row = _latest_compliance_memo_row(db, real_id)
+        reused_memo = _memo_payload_if_fingerprint_unchanged(latest_memo_row, memo_input_hash)
+        if reused_memo:
+            reused_blocked = bool(reused_memo.get("metadata", {}).get("blocked"))
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Generate Memo",
+                    app["ref"],
+                    "Compliance memo generation reused existing memo "
+                    + str(reused_memo.get("metadata", {}).get("idempotency", {}).get("memo_id"))
+                    + " because source inputs were unchanged"
+                    + (" | reused_blocked_memo=true" if reused_blocked else ""),
+                    self.get_client_ip(),
+                ),
+            )
+            db.commit()
+            db.close()
+            self.success(reused_memo)
+            return
+
+        # Build compliance memo (pure computation — extracted to memo_handler.py)
+        try:
+            memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
+                app, directors, ubos, documents
+            )
+            edd_completion = _collect_edd_completion_status(
+                db,
+                real_id,
+                routing=(memo.get("metadata", {}) or {}).get("edd_routing") or {},
+            )
+            if _edd_completion_satisfies_route(edd_completion):
+                app["edd_completion"] = edd_completion
+                memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
+                    app, directors, ubos, documents
+                )
+        except Exception as e:
+            logger.error("Failed to build compliance memo for %s: %s", real_id, e, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to generate compliance memo", 500)
+        rule_violations = rule_engine_result.get("violations", [])
+        latest_version = int((dict(latest_memo_row).get("version") if latest_memo_row else 0) or 0)
+        next_version = latest_version + 1
+        memo.setdefault("metadata", {})
+        memo["metadata"]["memo_input_hash"] = memo_input_hash
+        memo["metadata"]["memo_version"] = "v" + str(next_version)
+        memo["metadata"]["model_version"] = "v1.1"
+        memo["metadata"]["build"] = get_build_metadata()
+
+        # Store memo in compliance_memos table.  EDD findings, closure
+        # evidence, and enhanced-requirement review metadata can include native
+        # PostgreSQL datetime/date/Decimal values; normalize recursively rather
+        # than dropping evidence or relying on default=str at random call sites.
+        try:
+            memo = _json_ready_value(memo)
+            rule_violations_json = (
+                _json_dumps_strict(rule_violations, sort_keys=True) if rule_violations else None
+            )
+            memo_json = _json_dumps_strict(memo)
+            db.execute(
+                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
+                 validation_result["quality_score"], validation_result["validation_status"],
+                 supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
+                 memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version)
+            )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
+                        "Compliance memo generated for " + app["company_name"]
+                        + " | Supervisor: " + supervisor_result["verdict"]
+                        + " | Quality: " + str(validation_result["quality_score"]) + "/10"
+                        + " | Rule Engine: " + rule_engine_result["engine_status"]
+                        + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
+                        self.get_client_ip()))
+        except Exception as e:
+            logger.error("Failed to persist compliance memo/audit for %s: %s", real_id, e, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to persist compliance memo", 500)
+
+        # ── Priority B / Workstream C: audit-log the EDD routing decision ──
+        try:
+            _routing = memo.get("metadata", {}).get("edd_routing")
+            if _routing:
+                _emit_edd_routing_audit(db, user, app["ref"], _routing, self.get_client_ip())
+        except Exception as _re:
+            logger.error("Failed to emit EDD routing audit row for %s: %s", app["ref"], _re)
+
+        # ── Priority B.2 / Workstream A: Actuate EDD routing ──
+        # When policy says route=edd, this is where the policy decision
+        # becomes workflow reality: an EDD case is upserted and the
+        # application status flips to edd_required. Idempotent on
+        # re-generation.
+        try:
+            _routing_actuate = memo.get("metadata", {}).get("edd_routing")
+            if _routing_actuate and _routing_actuate.get("route") == "edd":
+                _actuation = _actuate_edd_routing(
+                    db, app, _routing_actuate, supervisor_result, user,
+                    client_ip=self.get_client_ip(),
+                )
+                memo.setdefault("metadata", {})["edd_routing_actuation"] = _actuation
+        except Exception as _ae:
+            logger.error(
+                "Failed to actuate EDD routing for %s: %s",
+                app.get("ref"), _ae, exc_info=True,
+            )
+
+        try:
+            db.commit()
+        except Exception as e:
+            logger.error("Failed to commit compliance memo transaction for %s: %s", real_id, e, exc_info=True)
+            _rollback_and_close(db)
+            return self.error("Failed to persist compliance memo", 500)
+        db.close()
+
+        self.success(memo)
+
+
+class SupervisorRunHandler(BaseHandler):
+    """POST /api/applications/:id/supervisor/run — Trigger full supervisor pipeline for an application"""
+    async def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not SUPERVISOR_AVAILABLE:
+            return self.error("Supervisor framework not available", 503)
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        db.close()
+
+        data = self.get_json()
+        trigger_type = data.get("trigger_type", "onboarding") if data else "onboarding"
+
+        trigger_source = f"backoffice:{user.get('sub', user.get('id', 'unknown'))}"
+        try:
+            supervisor = get_supervisor()
+            result = await asyncio.wait_for(
+                supervisor.run_pipeline(
+                    application_id=app["id"],
+                    trigger_type=__import__("supervisor.schemas", fromlist=["TriggerType"]).TriggerType(trigger_type),
+                    context_data={"app_ref": app["ref"], "company_name": app["company_name"]},
+                    trigger_source=trigger_source,
+                ),
+                timeout=120.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Supervisor pipeline timed out after 120s for app %s", app_id)
+            return self.error("Pipeline execution timed out after 120 seconds", 504)
+        except Exception as e:
+            import traceback
+            logger.error("Supervisor pipeline execution failed for app %s: %s (%s)\n%s",
+                         app_id, e, type(e).__name__, traceback.format_exc())
+            return self.error(f"Pipeline execution failed: {type(e).__name__}: {str(e)}", 500)
+
+        # Persist to database (survives restarts)
+        try:
+            from supervisor.api import persist_pipeline_result
+            persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
+        except Exception as persist_err:
+            logger.error("Failed to persist pipeline result: %s", persist_err)
+
+        # Serialize and return results — separate try/except for clearer diagnostics
+        try:
+            self.success({
+                "pipeline_id": result.pipeline_id,
+                "status": result.status,
+                "started_at": result.started_at,
+                "completed_at": result.completed_at,
+                "agent_count": len(result.agent_outputs),
+                "failed_agents": len(result.failed_agents),
+                "contradictions": len(result.contradictions),
+                "rules_triggered": sum(1 for r in result.rule_evaluations if r.triggered),
+                "requires_human_review": result.requires_human_review,
+                "review_reasons": result.review_reasons,
+                "blocking_issues": result.blocking_issues,
+                "case_aggregate": result.case_aggregate.model_dump() if result.case_aggregate else None,
+                "contradictions_detail": [c.model_dump() for c in result.contradictions],
+                "triggered_rules": [r.model_dump() for r in result.rule_evaluations if r.triggered],
+                "escalations": [e.model_dump() for e in result.escalations],
+                "agent_results": [
+                    {
+                        "agent_type": at.value,
+                        "agent_name": out.agent_name,
+                        "status": out.status.value,
+                        "confidence": out.confidence_score,
+                        "findings_count": len(out.findings),
+                        "issues_count": len(out.detected_issues),
+                        "escalation_flag": out.escalation_flag,
+                        "recommendation": out.recommendation,
+                    }
+                    for at, out in result.agent_outputs.items()
+                ],
+                "failed_agent_details": result.failed_agents,
+            })
+        except Exception as ser_err:
+            import traceback
+            logger.error("Supervisor result serialization failed for app %s: %s (%s)\n%s",
+                         app_id, ser_err, type(ser_err).__name__, traceback.format_exc())
+            # Return minimal result without complex serialization
+            self.success({
+                "pipeline_id": result.pipeline_id,
+                "status": result.status,
+                "started_at": result.started_at,
+                "completed_at": result.completed_at,
+                "agent_count": len(result.agent_outputs),
+                "failed_agents": len(result.failed_agents),
+                "requires_human_review": result.requires_human_review,
+                "review_reasons": result.review_reasons,
+                "blocking_issues": result.blocking_issues,
+                "_serialization_error": f"{type(ser_err).__name__}: {str(ser_err)}",
+            })
+
+
+class SupervisorResultHandler(BaseHandler):
+    """GET /api/applications/:id/supervisor/result — Get latest pipeline result"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        if not SUPERVISOR_AVAILABLE:
+            return self.error("Supervisor framework not available", 503)
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        db.close()
+
+        # Return from memory cache first, then fall back to database
+        try:
+            from supervisor.api import _pipeline_cache, load_latest_pipeline_result
+            # 1. Check in-memory cache (fast path)
+            latest = None
+            for pid, result in _pipeline_cache.items():
+                if result.application_id == app["id"]:
+                    if latest is None or (result.completed_at or "") > (latest.completed_at or ""):
+                        latest = result
+            if latest:
+                self.success(latest.to_dict())
+                return
+
+            # 2. Fall back to database (survives restarts)
+            db_result = load_latest_pipeline_result(app["id"])
+            if db_result:
+                self.success(db_result)
+            else:
+                self.success({"status": "no_pipeline_run", "message": "No supervisor pipeline has been run for this application."})
+        except Exception as e:
+            return self.error(f"Failed to fetch result: {str(e)}", 500)
+
+
+class MemoValidateHandler(BaseHandler):
+    """POST /api/applications/:id/memo/validate — Run validation engine on stored memo"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        # Fetch latest memo for this application
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found for this application. Generate a memo first.", 404)
+        app_row = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app_row,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_validation",
+        )
+        if stale.get("is_stale"):
+            db.commit()
+            db.close()
+            return self.error(
+                "Compliance memo is stale: "
+                + stale.get("reason", "regenerate the memo before validation."),
+                409,
+            )
+
+        try:
+            memo_data = safe_json_loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            db.close()
+            return self.error("Memo data is corrupt or unreadable.", 500)
+
+        # Run validation engine
+        validation = validate_compliance_memo(memo_data)
+
+        # Store results
+        try:
+            db.execute(
+                "UPDATE compliance_memos SET quality_score = ?, validation_status = ?, validation_issues = ?, validation_run_at = ? WHERE id = ?",
+                (validation["quality_score"], validation["validation_status"], json.dumps(validation["issues"]), validation["validated_at"], memo_row["id"])
+            )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Validate Memo", app_id, f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)", self.get_client_ip()))
+            db.commit()
+        except Exception as e:
+            logger.error(f"Failed to store memo validation results for {app_id}: {e}", exc_info=True)
+        db.close()
+
+        self.success(validation)
+
+
+# ── EX-11: Officer sign-off validation & audit helpers ──
+
+_VALID_SIGNOFF_SCOPES = {"decision", "override", "memo"}
+
+
+def _governance_summary(payload, keys, max_total_chars=1200):
+    """Build a compact, non-secret payload summary for governance audit rows."""
+    summary = {}
+    if not isinstance(payload, dict):
+        return summary
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str):
+            summary[key] = value[:160]
+        elif isinstance(value, (list, tuple)):
+            summary[key] = {"count": len(value)}
+        elif isinstance(value, dict):
+            summary[key] = {"keys": sorted(str(k) for k in value.keys())[:12]}
+        elif value is not None:
+            summary[key] = value
+    encoded = json.dumps(summary, default=str)
+    if len(encoded) > max_total_chars:
+        summary = {
+            "truncated": True,
+            "keys": sorted(str(k) for k in summary.keys()),
+            "original_summary_bytes": len(encoded),
+        }
+    return summary
+
+
+DOCUMENT_TYPE_NORMALIZE = {
+    "doc-coi": "cert_inc",
+    "certificate-incorporation": "cert_inc",
+    "certificate incorporation": "cert_inc",
+    "certificate_of_incorporation": "cert_inc",
+    "certificate of incorporation": "cert_inc",
+    "incorporation_certificate": "cert_inc",
+    "incorporation certificate": "cert_inc",
+    "proof_of_address": "poa",
+    "proof of address": "poa",
+    "address_proof": "poa",
+    "financial_statements": "fin_stmt",
+    "financial statements": "fin_stmt",
+    "source_of_wealth": "source_wealth",
+    "source of wealth": "source_wealth",
+    "source_of_funds": "source_funds",
+    "source of funds": "source_funds",
+    "doc-memarts": "memarts",
+    "memorandum_of_association": "memarts",
+    "memorandum of association": "memarts",
+    "memorandum_and_articles": "memarts",
+    "memorandum and articles": "memarts",
+    "memorandum_articles": "memarts",
+    "articles_of_association": "memarts",
+    "articles of association": "memarts",
+    "doc-shareholders": "reg_sh",
+    "register_of_shareholders": "reg_sh",
+    "register of shareholders": "reg_sh",
+    "shareholder_register": "reg_sh",
+    "shareholder register": "reg_sh",
+    "doc-directors-reg": "reg_dir",
+    "register_of_directors": "reg_dir",
+    "register of directors": "reg_dir",
+    "director_register": "reg_dir",
+    "director register": "reg_dir",
+    "doc-financials": "fin_stmt",
+    "doc-proof-address": "poa",
+    "doc-board-res": "board_res",
+    "board_resolution": "board_res",
+    "board resolution": "board_res",
+    "doc-structure-chart": "structure_chart",
+    "structure chart": "structure_chart",
+    "ownership_structure_chart": "structure_chart",
+    "doc-bank-ref": "bankref",
+    "bank_reference": "bankref",
+    "bank reference": "bankref",
+    "doc-license-cert": "licence",
+    "license": "licence",
+    "licence_certificate": "licence",
+    "license_certificate": "licence",
+    "doc-contracts": "contracts",
+    "doc-source-wealth-proof": "source_wealth",
+    "doc-source-funds-proof": "source_funds",
+    "doc-bank-statements": "bank_statements",
+    "bank statements": "bank_statements",
+    "doc-aml-policy": "aml_policy",
+    "aml policy": "aml_policy",
+    "general": "supporting_document",
+}
+
+DOCUMENT_TYPE_ALLOWLIST = {
+    "aml_policy",
+    "bank_statements",
+    "bankref",
+    "board_res",
+    "cert_gs",
+    "cert_inc",
+    "contracts",
+    "cv",
+    "director_id",
+    "drivers_license",
+    "fin_stmt",
+    "general",
+    "id_card",
+    "licence",
+    "memarts",
+    "national_id",
+    "passport",
+    "pep_declaration",
+    "poa",
+    "reg_dir",
+    "reg_sh",
+    "regulatory_intelligence",
+    "sow",
+    "source_funds",
+    "source_wealth",
+    "structure_chart",
+    "supporting_document",
+    "trust_deed",
+    "ubo_id",
+}
+
+
+def _is_enhanced_requirement_gate_error(message):
+    return "enhanced review requirement" in str(message or "").lower()
+
+
+def _audit_enhanced_requirement_approval_block_if_applicable(db, app, user, gate_error):
+    """Audit approval attempts blocked by Step 7 enhanced requirement control."""
+    if not _is_enhanced_requirement_gate_error(gate_error):
+        return
+    try:
+        validation = validate_enhanced_requirements_for_approval(
+            db,
+            app.get("id") if isinstance(app, dict) else app["id"],
+            app_row=app,
+        )
+        if validation.get("passed"):
+            return
+        audit_enhanced_requirements_approval_block(db, app, validation, actor=user)
+    except Exception as exc:  # pragma: no cover - audit must not replace user-facing block
+        logger.error(
+            "Failed to audit enhanced requirements approval block for %s: %s",
+            (app or {}).get("ref") if isinstance(app, dict) else "unknown",
+            exc,
+            exc_info=True,
+        )
+
+
+def _normalize_document_type(value):
+    """Return a canonical, bounded document type suitable for DB matching."""
+    raw = str(value or "general").strip()
+    raw_lower = raw.lower()
+    candidate = re.sub(r"[^a-zA-Z0-9_-]+", "_", raw_lower).strip("_")
+    normalized = DOCUMENT_TYPE_NORMALIZE.get(
+        raw,
+        DOCUMENT_TYPE_NORMALIZE.get(
+            raw_lower,
+            DOCUMENT_TYPE_NORMALIZE.get(candidate, candidate),
+        ),
+    )
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", normalized).strip("_").lower()
+    return (normalized or "general")[:80]
+
+
+def _document_type_base(doc_type):
+    """Strip dynamic party suffixes before allowlist checks."""
+    base = str(doc_type or "")
+    if base.startswith("intermediary_"):
+        base = base[len("intermediary_"):]
+    return re.sub(r"_(dir|ubo|inter)\d+$", "", base)
+
+
+def _validate_document_type(value, *, allow_general=False):
+    """Normalize and validate a document type against the canonical allowlist."""
+    normalized = _normalize_document_type(value)
+    base = _document_type_base(normalized)
+    allowed = base in DOCUMENT_TYPE_ALLOWLIST or normalized in DOCUMENT_TYPE_ALLOWLIST
+    if normalized == "general" and not allow_general:
+        allowed = False
+    if not allowed:
+        return normalized, (
+            "Invalid doc_type. Use one of the configured document types or "
+            "'supporting_document' for custom RMI evidence."
+        )
+    return normalized, None
+
+
+ACTIVE_DOCUMENT_SQL = "COALESCE(is_current, TRUE) = TRUE"
+
+
+def _document_slot_key(doc_type, person_id=None, *, person_type=None, rmi_item_id=None, enhanced_requirement_id=None):
+    """Stable logical key for a single current document upload slot."""
+    if rmi_item_id:
+        return f"rmi:{str(rmi_item_id).strip()}"
+    if enhanced_requirement_id:
+        return f"enhanced_requirement:{str(enhanced_requirement_id).strip()}"
+    normalized = _normalize_document_type(doc_type)
+    person = str(person_id or "").strip()
+    if person:
+        typed_person = normalize_person_type(person_type) or "unknown"
+        return f"person:{typed_person}:{person}:{normalized}"
+    return f"entity:{normalized}"
+
+
+def _document_legacy_person_slot_key(doc_type, person_id):
+    person = str(person_id or "").strip()
+    if not person:
+        return None
+    return f"person:{person}:{_normalize_document_type(doc_type)}"
+
+
+def _truthy_db_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in ("0", "false", "f", "no", "n", "")
+
+
+def _lock_document_slot_transaction(db, application_id, slot_key):
+    """Serialize replacements within a logical document slot for this transaction."""
+    lock_key = f"{application_id}:{slot_key}"
+    if db.is_postgres:
+        db.execute("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", (lock_key,))
+        return
+    try:
+        db.execute("BEGIN IMMEDIATE")
+    except Exception:
+        pass
+
+
+def _load_document_slot_rows(db, application_id, doc_type, person_id, slot_key, extra_document_ids=None):
+    """Load all rows that belong to a logical document slot.
+
+    The fallback doc_type/person predicate keeps legacy rows in scope until
+    their slot_key has been backfilled.
+    """
+    legacy_slot_key = _document_legacy_person_slot_key(doc_type, person_id)
+    rows = db.execute(
+        """
+        SELECT id, doc_name, doc_type, person_id, slot_key, is_current, version,
+               uploaded_at, verification_status
+          FROM documents
+         WHERE application_id = ?
+           AND (
+                slot_key = ?
+                OR (? IS NOT NULL AND slot_key = ?)
+                OR ((slot_key IS NULL OR slot_key = '')
+                    AND doc_type = ?
+                    AND COALESCE(person_id, '') = ?)
+           )
+        """,
+        (application_id, slot_key, legacy_slot_key, legacy_slot_key, doc_type, str(person_id or "")),
+    ).fetchall()
+    by_id = {row["id"]: dict(row) for row in rows}
+    extra_ids = [doc_id for doc_id in (extra_document_ids or []) if doc_id and doc_id not in by_id]
+    if extra_ids:
+        placeholders = ",".join("?" for _ in extra_ids)
+        extra_rows = db.execute(
+            f"""
+            SELECT id, doc_name, doc_type, person_id, slot_key, is_current, version,
+                   uploaded_at, verification_status
+              FROM documents
+             WHERE application_id = ? AND id IN ({placeholders})
+            """,
+            tuple([application_id] + extra_ids),
+        ).fetchall()
+        for row in extra_rows:
+            by_id[row["id"]] = dict(row)
+    return list(by_id.values())
+
+
+def _prepare_document_slot_replacement(
+    db,
+    *,
+    application_id,
+    new_document_id,
+    doc_type,
+    person_id=None,
+    person_type=None,
+    slot_key=None,
+    actor_user=None,
+    replaced_reason="document_replaced",
+    extra_document_ids=None,
+):
+    """Mark prior current rows in this logical slot as superseded.
+
+    The caller must insert ``new_document_id`` and then call
+    ``_finalize_document_slot_replacement`` before committing.
+    """
+    slot_key = slot_key or _document_slot_key(doc_type, person_id, person_type=person_type)
+    _lock_document_slot_transaction(db, application_id, slot_key)
+    slot_rows = _load_document_slot_rows(
+        db,
+        application_id,
+        doc_type,
+        person_id,
+        slot_key,
+        extra_document_ids=extra_document_ids,
+    )
+    max_version = 0
+    previous_current = []
+    for row in slot_rows:
+        try:
+            max_version = max(max_version, int(row.get("version") or 1))
+        except (TypeError, ValueError):
+            max_version = max(max_version, 1)
+        if row.get("id") != new_document_id and _truthy_db_bool(row.get("is_current"), default=True):
+            previous_current.append(row)
+
+    actor_id = (actor_user or {}).get("sub") or "system"
+    for row in previous_current:
+        db.execute(
+            """
+            UPDATE documents
+               SET is_current = ?,
+                   superseded_at = datetime('now'),
+                   superseded_by_document_id = NULL,
+                   replaced_reason = ?,
+                   replaced_by_user_id = ?
+             WHERE id = ? AND application_id = ?
+            """,
+            (False, replaced_reason, actor_id, row["id"], application_id),
+        )
+
+    return {
+        "slot_key": slot_key,
+        "version": max_version + 1,
+        "previous_documents": previous_current,
+    }
+
+
+def _finalize_document_slot_replacement(db, application_id, previous_documents, new_document_id):
+    if not previous_documents:
+        return
+    for row in previous_documents:
+        db.execute(
+            """
+            UPDATE documents
+               SET superseded_by_document_id = ?
+             WHERE id = ? AND application_id = ?
+            """,
+            (new_document_id, row["id"], application_id),
+        )
+
+
+def _normalize_rmi_text(value, max_len=1000):
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:max_len]
+
+
+def _normalize_rmi_deadline(value):
+    deadline = _normalize_rmi_text(value, 32)
+    if not deadline or not re.match(r"^\d{4}-\d{2}-\d{2}$", deadline):
+        return "", "rmi_deadline is required in YYYY-MM-DD format"
+    try:
+        parsed = datetime.strptime(deadline, "%Y-%m-%d").date()
+    except ValueError:
+        return "", "rmi_deadline must be a valid calendar date"
+    if parsed < datetime.now(timezone.utc).date():
+        return "", "rmi_deadline cannot be in the past"
+    return deadline, None
+
+
+def _normalize_rmi_items(data, errors=None):
+    """Normalize structured RMI items from rmi_items or legacy documents_list."""
+    raw_items = data.get("rmi_items") if isinstance(data.get("rmi_items"), list) else None
+    if raw_items is None:
+        raw_items = []
+        for item in data.get("documents_list") or []:
+            if isinstance(item, dict):
+                raw_items.append(item)
+            else:
+                raw_items.append({"label": str(item or "")})
+
+    items = []
+    seen = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            raw = {"label": str(raw or ""), "doc_type": str(raw or "")}
+        label = _normalize_rmi_text(raw.get("label") or raw.get("name") or raw.get("doc_type"), 160)
+        raw_doc_type = raw.get("doc_type")
+        if raw_doc_type:
+            doc_type, doc_type_error = _validate_document_type(raw_doc_type, allow_general=False)
+            if doc_type_error:
+                if errors is not None:
+                    errors.append(f"Invalid RMI doc_type for '{label or raw_doc_type}'")
+                continue
+        else:
+            doc_type = "supporting_document"
+        description = _normalize_rmi_text(raw.get("description") or raw.get("reason") or "", 500)
+        if not label:
+            continue
+        key = (doc_type, label.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({"doc_type": doc_type, "label": label, "description": description})
+    return items[:25]
+
+
+def _load_rmi_requests_for_apps(db, app_ids):
+    """Return structured RMI requests grouped by application id."""
+    result = {app_id: [] for app_id in app_ids}
+    if not app_ids:
+        return result
+    placeholders = ",".join("?" for _ in app_ids)
+    request_rows = db.execute(
+        f"""SELECT * FROM rmi_requests
+            WHERE application_id IN ({placeholders})
+            ORDER BY created_at DESC, id DESC""",
+        list(app_ids),
+    ).fetchall()
+    request_ids = [row["id"] for row in request_rows]
+    items_by_request = {request_id: [] for request_id in request_ids}
+    if request_ids:
+        item_placeholders = ",".join("?" for _ in request_ids)
+        item_rows = db.execute(
+            f"""SELECT * FROM rmi_request_items
+                WHERE request_id IN ({item_placeholders})
+                ORDER BY created_at ASC, id ASC""",
+            request_ids,
+        ).fetchall()
+        for item in item_rows:
+            items_by_request.setdefault(item["request_id"], []).append(dict(item))
+    for row in request_rows:
+        req = dict(row)
+        req["items"] = items_by_request.get(req["id"], [])
+        result.setdefault(req["application_id"], []).append(req)
+    return result
+
+
+def _load_rmi_requests(db, application_id):
+    return _load_rmi_requests_for_apps(db, [application_id]).get(application_id, [])
+
+
+def _load_client_rmi_requests(db, client_id):
+    rows = db.execute(
+        """SELECT r.* FROM rmi_requests r
+           JOIN applications a ON a.id = r.application_id
+           WHERE r.client_id = ? OR a.client_id = ?
+           ORDER BY r.created_at DESC, r.id DESC""",
+        (client_id, client_id),
+    ).fetchall()
+    app_ids = sorted({row["application_id"] for row in rows})
+    grouped = _load_rmi_requests_for_apps(db, app_ids)
+    ordered = []
+    seen = {row["id"] for row in rows}
+    for row in rows:
+        for req in grouped.get(row["application_id"], []):
+            if req["id"] == row["id"] and req["id"] in seen:
+                ordered.append(req)
+                seen.remove(req["id"])
+                break
+    return ordered
+
+
+def _sync_rmi_request_status(db, request_id):
+    items = db.execute(
+        "SELECT status FROM rmi_request_items WHERE request_id = ?",
+        (request_id,),
+    ).fetchall()
+    if not items:
+        return
+    statuses = [str(item.get("status") or "requested") for item in items]
+    accepted = {"accepted"}
+    submitted_for_review = {"uploaded", "accepted"}
+    if all(status in accepted for status in statuses):
+        new_status = "fulfilled"
+        db.execute(
+            "UPDATE rmi_requests SET status = ?, fulfilled_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+            (new_status, request_id),
+        )
+    elif any(status in submitted_for_review for status in statuses):
+        new_status = (
+            "pending_review"
+            if all(status in submitted_for_review for status in statuses)
+            else "partially_fulfilled"
+        )
+        db.execute(
+            "UPDATE rmi_requests SET status = ?, fulfilled_at = NULL, updated_at = datetime('now') WHERE id = ?",
+            (new_status, request_id),
+        )
+    else:
+        new_status = "open"
+        db.execute(
+            "UPDATE rmi_requests SET status = ?, fulfilled_at = NULL, updated_at = datetime('now') WHERE id = ?",
+            (new_status, request_id),
+        )
+
+
+def _create_structured_rmi_request(db, app, user, reason, deadline, items):
+    request_id = uuid.uuid4().hex[:16]
+    db.execute(
+        """INSERT INTO rmi_requests
+           (id, application_id, client_id, status, reason, deadline, created_by, created_by_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            request_id,
+            app["id"],
+            app.get("client_id"),
+            "open",
+            reason,
+            deadline,
+            user.get("sub", ""),
+            user.get("name", ""),
+        ),
+    )
+    for item in items:
+        db.execute(
+            """INSERT INTO rmi_request_items
+               (id, request_id, doc_type, label, description, status)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                uuid.uuid4().hex[:16],
+                request_id,
+                item["doc_type"],
+                item["label"],
+                item.get("description", ""),
+                "requested",
+            ),
+        )
+
+    if app.get("client_id"):
+        # documents_list is a legacy notification mirror for older clients.
+        # rmi_request_items is the authoritative source for request state.
+        docs_list = [item["label"] for item in items]
+        message = (
+            f"Our compliance team requires additional documents for application {app['ref']} "
+            f"by {deadline}. Reason: {reason}"
+        )
+        db.execute(
+            """INSERT INTO client_notifications
+               (client_id, application_id, title, message, notification_type, documents_list, rmi_request_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                app["client_id"],
+                app["id"],
+                "Additional Documents Required",
+                message,
+                "documents_required",
+                json.dumps(docs_list),
+                request_id,
+            ),
+        )
+    return request_id
+
+
+def _validate_rmi_upload_target(db, application_id, rmi_item_id):
+    if not rmi_item_id:
+        return None, None
+    row = db.execute(
+        """SELECT i.*, r.application_id, r.status AS request_status
+           FROM rmi_request_items i
+           JOIN rmi_requests r ON r.id = i.request_id
+           WHERE i.id = ?""",
+        (rmi_item_id,),
+    ).fetchone()
+    if not row or row.get("application_id") != application_id:
+        return None, "Requested document slot not found for this application"
+    if row.get("request_status") == "cancelled":
+        return None, "Requested document slot is no longer active"
+    if row.get("status") == "accepted":
+        return None, "Requested document slot has already been accepted"
+    return row, None
+
+
+def _mark_rmi_item_uploaded(db, application_id, doc_id, doc_type, rmi_item_id=None):
+    """Mark an explicitly selected RMI item as uploaded.
+
+    RMI fulfillment is intentionally slot-based. Generic document uploads do not
+    auto-match open RMI items by doc_type because concurrent requests can ask
+    for the same document type.
+    """
+    item = None
+    if rmi_item_id:
+        item, error = _validate_rmi_upload_target(db, application_id, rmi_item_id)
+        if error:
+            return None, error
+        if item and item.get("doc_type") and item.get("doc_type") != doc_type:
+            return None, "Uploaded document type does not match the requested document slot"
+    if not item:
+        return None, None
+
+    db.execute(
+        """UPDATE rmi_request_items
+           SET status = 'uploaded', document_id = ?, uploaded_at = datetime('now')
+           WHERE id = ?""",
+        (doc_id, item["id"]),
+    )
+    _sync_rmi_request_status(db, item["request_id"])
+    return item["id"], None
+
+
+def _validate_officer_signoff(signoff, expected_scope):
+    """Validate the officer_signoff object in a request payload.
+
+    Returns an error message string if invalid, or None if valid.
+    Fail-closed: missing or malformed sign-off is rejected.
+    """
+    if signoff is None:
+        return (
+            "officer_signoff is required. Officers must acknowledge AI-generated advisory "
+            "outputs before this action can proceed."
+        )
+    if not isinstance(signoff, dict):
+        return "officer_signoff must be an object with acknowledged, scope, and source_context fields."
+
+    acknowledged = signoff.get("acknowledged")
+    if acknowledged is not True:
+        return (
+            "officer_signoff.acknowledged must be true. Officers must confirm they have "
+            "reviewed the AI-generated advisory content."
+        )
+
+    scope = signoff.get("scope", "")
+    if scope not in _VALID_SIGNOFF_SCOPES:
+        return (
+            f"officer_signoff.scope must be one of: {', '.join(sorted(_VALID_SIGNOFF_SCOPES))}. "
+            f"Received: '{scope}'."
+        )
+    if scope != expected_scope:
+        return (
+            f"officer_signoff.scope mismatch: expected '{expected_scope}', received '{scope}'."
+        )
+
+    source_context = signoff.get("source_context", "")
+    if source_context != "ai_advisory":
+        return "officer_signoff.source_context must be 'ai_advisory'."
+
+    return None
+
+
+def _persist_signoff_audit(db, user, target_ref, scope, signoff_obj, ip_address, user_agent):
+    """Persist officer sign-off event to the audit_log table.
+
+    Records server-side context (IP, user agent, timestamp) independently
+    of any client-side audit log. This is the authoritative compliance record.
+    """
+    detail = json.dumps({
+        "signoff_acknowledged": signoff_obj.get("acknowledged", False),
+        "signoff_scope": scope,
+        "source_context": "ai_advisory",
+        "user_agent": user_agent,
+    }, default=str)
+
+    db.execute(
+        "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+         f"Officer Sign-Off ({scope})", target_ref, detail, ip_address)
+    )
+
+
+class MemoApproveHandler(BaseHandler):
+    """POST /api/applications/:id/memo/approve — Approve memo (requires validation pass)"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        db = get_db()
+        app_row = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        attempt_target = app_row["ref"] if app_row else app_id
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+
+        body = {}
+        try:
+            body = json.loads(self.request.body or b"{}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        attempt_summary = _governance_summary(
+            body,
+            ("approval_reason", "officer_signoff"),
+        )
+
+        def reject_memo_approval(reason, status_code):
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "rejected", status_code,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, status_code)
+
+        if not memo_row:
+            return reject_memo_approval("No compliance memo found.", 404)
+        if not app_row:
+            return reject_memo_approval("Application not found.", 404)
+
+        risk_error = _application_risk_integrity_error(app_row, "approve compliance memo")
+        if risk_error:
+            return reject_memo_approval(risk_error, 400)
+
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app_row,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_approval",
+        )
+        if stale.get("is_stale"):
+            reason = (
+                "Cannot approve stale memo. "
+                + stale.get("reason", "Regenerate the memo, rerun validation and supervisor, then re-approve.")
+            )
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db, commit=False)
+            db.commit()
+            db.close()
+            return self.error(reason, 409)
+
+        # The supervisor_verdict gate below remains mandatory; stale memo
+        # enforcement runs first because stale facts invalidate that verdict.
+        # ── EX-11: Backend enforcement of officer sign-off for memo approval ──
+        signoff_error = _validate_officer_signoff(body.get("officer_signoff"), "memo")
+        if signoff_error:
+            return reject_memo_approval(signoff_error, 400)
+
+        # ── SERVER-SIDE 5-GATE APPROVAL ENFORCEMENT ──
+        # Gate 1: Check if memo is blocked by rule engine
+        is_blocked = memo_row.get("blocked") or False
+        block_reason = memo_row.get("block_reason") or ""
+        if is_blocked:
+            return reject_memo_approval(
+                f"Cannot approve blocked memo. Block reason: {block_reason}", 400)
+
+        # Gate 2: Check validation status
+        val_status = memo_row.get("validation_status") or "pending"
+        if val_status == "pass":
+            pass  # Standard approval — no additional requirements
+        elif val_status == "pass_with_fixes":
+            # Senior-approval-with-findings policy (EX-06):
+            # Only admin or SCO may approve a memo that passed with outstanding findings.
+            # A documented reason is mandatory.
+            approver_role = user.get("role", "")
+            if approver_role not in ("admin", "sco"):
+                return reject_memo_approval(
+                    "Cannot approve memo with validation status 'pass_with_fixes'. "
+                    "Only admin or Senior Compliance Officer (SCO) may approve memos with outstanding findings.",
+                    403
+                )
+            # body parsed at EX-11 sign-off validation gate (before Gate 1)
+            approval_reason = (body.get("approval_reason") or "").strip()
+            if not approval_reason:
+                return reject_memo_approval(
+                    "approval_reason is required when approving a memo with validation status 'pass_with_fixes'. "
+                    "Provide a documented reason for approving despite outstanding findings.",
+                    400
+                )
+        else:
+            return reject_memo_approval(
+                f"Cannot approve memo with validation status '{val_status}'. "
+                "Validation must be PASS before memo approval.",
+                400
+            )
+
+        # Gate 3: Check supervisor verdict from memo content
+        # BUGFIX: column is memo_data, not memo_content
+        memo_data_raw = memo_row.get("memo_data") or "{}"
+        try:
+            memo_data = safe_json_loads(memo_data_raw)
+        except (json.JSONDecodeError, TypeError):
+            memo_data = {}
+        metadata = memo_data.get("metadata", {})
+        # Gate 3a: Reject fallback memos — AI pipeline must have succeeded
+        if metadata.get("is_fallback") is True:
+            return reject_memo_approval(
+                "Cannot approve a fallback memo. AI pipeline was unavailable when this memo was generated. "
+                "Re-generate the memo with a working AI pipeline before approval.", 400)
+
+        supervisor_result = memo_data.get("supervisor") or metadata.get("supervisor", {})
+        supervisor_verdict = supervisor_result.get("verdict", "")
+        can_approve = supervisor_result.get("can_approve", False)  # Default to False (fail-closed)
+        requires_sco = supervisor_result.get("requires_sco_review", False)
+
+        # ── Priority B / Workstream B: mandatory_escalation gate ──
+        # The supervisor is the single authoritative verdict; when it
+        # has raised mandatory_escalation, the approval API MUST refuse
+        # regardless of CONSISTENT verdict. This protects against UI
+        # paths that surface only the verdict string and against
+        # legacy embedded memo-only signals.
+        if supervisor_result.get("mandatory_escalation"):
+            reasons = supervisor_result.get("mandatory_escalation_reasons") or []
+            return reject_memo_approval(
+                "Cannot approve memo: supervisor mandatory_escalation is set "
+                "(reasons: " + ", ".join(reasons[:6]) + "). "
+                "Case must be routed to EDD / senior review before approval.",
+                400
+            )
+
+        # ── Priority B / Workstream C: server-side EDD routing gate ──
+        # If the deterministic routing policy says EDD and the
+        # application status is not already on the EDD path, the
+        # standard memo-approval API must refuse. The application can
+        # only be approved through the EDD-completion flow.
+        edd_routing = metadata.get("edd_routing") or {}
+        if edd_routing.get("route") == "edd":
+            app_row = db.execute(
+                "SELECT id, status FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id)
+            ).fetchone()
+            current_status = (app_row["status"] if app_row else "") or ""
+            edd_completion = metadata.get("edd_completion") or {}
+            if not _edd_completion_satisfies_route(edd_completion) and app_row:
+                edd_completion = _collect_edd_completion_status(
+                    db,
+                    app_row["id"],
+                    routing=edd_routing,
+                )
+            if _edd_completion_satisfies_route(edd_completion):
+                metadata["edd_completion"] = edd_completion
+            elif current_status not in ("edd_required", "edd_approved"):
+                return reject_memo_approval(
+                    "Cannot approve memo: deterministic EDD routing policy ("
+                    + str(edd_routing.get("policy_version", "")) + ") routes this "
+                    "case to EDD (triggers: "
+                    + ", ".join(edd_routing.get("triggers", [])[:6])
+                    + "). Application status is '" + current_status
+                    + "'. Route the case via /api/edd/cases or set status to "
+                    "'edd_required' before memo approval.",
+                    400
+                )
+
+        supervisor_warnings_approval = False
+        if supervisor_verdict == "CONSISTENT" and can_approve:
+            pass  # Standard approval — no additional requirements
+        elif supervisor_verdict == "CONSISTENT_WITH_WARNINGS" and can_approve:
+            # Supervisor-warnings approval policy (EX-06 B2):
+            # Only admin or SCO may approve a memo whose supervisor flagged warnings.
+            # A documented reason is mandatory.
+            approver_role = user.get("role", "")
+            if approver_role not in ("admin", "sco"):
+                return reject_memo_approval(
+                    "Cannot approve memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
+                    "Only admin or Senior Compliance Officer (SCO) may approve memos with supervisor warnings.",
+                    403
+                )
+            # Parse approval_reason if not already parsed by Gate 2.
+            # When val_status == "pass_with_fixes", Gate 2 has already validated
+            # and set approval_reason to a non-empty string (empty is rejected).
+            # body parsed at EX-11 sign-off validation gate (before Gate 1)
+            if val_status != "pass_with_fixes":
+                approval_reason = (body.get("approval_reason") or "").strip()
+            if not approval_reason:
+                return reject_memo_approval(
+                    "approval_reason is required when approving a memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
+                    "Provide a documented reason for approving despite supervisor warnings.",
+                    400
+                )
+            supervisor_warnings_approval = True
+        else:
+            return reject_memo_approval(
+                f"Cannot approve memo with supervisor verdict '{supervisor_verdict or 'pending'}'. "
+                "Supervisor verdict must be CONSISTENT before memo approval.",
+                400
+            )
+
+        # Gate 4: SCO review enforcement — if requires_sco_review, only SCO or admin can approve
+        if requires_sco and user.get("role") not in ["sco", "admin"]:
+            return reject_memo_approval(
+                "This memo requires Senior Compliance Officer review before approval.", 403)
+
+        now_ts = datetime.now().isoformat()
+        needs_reason = val_status == "pass_with_fixes" or supervisor_warnings_approval
+        try:
+            if needs_reason:
+                # Store approval with reason — validation_status and supervisor verdict stay unchanged
+                db.execute(
+                    "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
+                    (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
+                )
+                # Build context-aware audit detail
+                context_parts = []
+                if val_status == "pass_with_fixes":
+                    context_parts.append("outstanding findings")
+                if supervisor_warnings_approval:
+                    context_parts.append("supervisor warnings")
+                context_desc = " and ".join(context_parts)
+                audit_detail = (
+                    f"Compliance memo approved with {context_desc} by {user.get('name', 'Unknown')} "
+                    f"(role: {user.get('role', 'unknown')}). "
+                )
+                if val_status == "pass_with_fixes":
+                    audit_detail += f"Validation status: pass_with_fixes. "
+                if supervisor_warnings_approval:
+                    audit_detail += f"Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
+                audit_detail += f"Approval reason: {approval_reason}"
+            else:
+                db.execute(
+                    "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ? WHERE id = ?",
+                    (user.get("sub", ""), now_ts, user.get("sub", ""), memo_row["id"])
+                )
+                audit_detail = f"Compliance memo approved by {user.get('name', 'Unknown')}"
+
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, audit_detail, self.get_client_ip()))
+
+            # ── EX-11: Persist officer sign-off audit record ──
+            _persist_signoff_audit(db, user, app_id, "memo",
+                                   body.get("officer_signoff", {}),
+                                   self.get_client_ip(),
+                                   self.request.headers.get("User-Agent", ""))
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "accepted", 200,
+                "", attempt_summary, db=db, commit=False)
+
+            db.commit()
+        except Exception as e:
+            logger.error(f"Failed to store memo approval for {app_id}: {e}", exc_info=True)
+        db.close()
+
+        response = {"status": "approved", "approved_by": user.get("name", ""), "approved_at": now_ts}
+        if val_status == "pass_with_fixes":
+            response["validation_status"] = "pass_with_fixes"
+            response["approval_reason"] = approval_reason
+            response["senior_approval"] = True
+        if supervisor_warnings_approval:
+            response["supervisor_verdict"] = "CONSISTENT_WITH_WARNINGS"
+            response["approval_reason"] = approval_reason
+            response["supervisor_warnings_approval"] = True
+        self.success(response)
+
+
+class MemoValidationResultsHandler(BaseHandler):
+    """GET /api/applications/:id/memo/validation — Fetch latest validation results"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT quality_score, validation_status, validation_issues, validation_run_at, "
+            "review_status, approved_by, approved_at, memo_version, is_stale, stale_reason, "
+            "stale_reasons, stale_trigger, stale_marked_at FROM compliance_memos "
+            "WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) "
+            "ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+        db.close()
+
+        if not memo_row:
+            return self.error("No memo found.", 404)
+
+        try:
+            issues = safe_json_loads(memo_row["validation_issues"])
+        except (json.JSONDecodeError, TypeError):
+            issues = []
+        memo_dict = dict(memo_row)
+
+        self.success({
+            "quality_score": memo_row["quality_score"],
+            "validation_status": memo_row["validation_status"] or "pending",
+            "issues": issues,
+            "validated_at": memo_row["validation_run_at"],
+            "review_status": memo_row["review_status"],
+            "approved_by": memo_row["approved_by"],
+            "approved_at": memo_row["approved_at"],
+            "memo_version": memo_row["memo_version"],
+            "is_stale": _memo_stale_bool(memo_dict.get("is_stale")),
+            "stale_reason": memo_dict.get("stale_reason") or "",
+            "stale_trigger": memo_dict.get("stale_trigger") or "",
+            "stale_reasons": _memo_stale_entries(memo_dict.get("stale_reasons")),
+            "stale_marked_at": memo_dict.get("stale_marked_at"),
+        })
+
+
+class MemoPDFDownloadHandler(BaseHandler):
+    """GET /api/applications/:id/memo/pdf — Generate and download compliance memo as PDF"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        if not HAS_PDF_GENERATOR:
+            return self.error("PDF generation not available. Install weasyprint.", 503)
+
+        db = get_db()
+        # Fetch application
+        app = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+
+        # Fetch latest memo
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
+            (real_id,)
+        ).fetchone()
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found. Generate a memo first.", 404)
+
+        # Parse memo data
+        try:
+            memo_data = safe_json_loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            db.close()
+            return self.error("Memo data is corrupt or unparseable.", 500)
+
+        # Build validation/supervisor context from memo metadata
+        metadata = memo_data.get("metadata", {})
+        validation_result = {
+            "validation_status": memo_row.get("validation_status") or metadata.get("validation_status", "pending"),
+            "quality_score": memo_row.get("quality_score") or metadata.get("quality_score", 0),
+        }
+        stored_supervisor = memo_data.get("supervisor") or metadata.get("supervisor", {})
+        supervisor_result = {
+            "verdict": memo_row.get("supervisor_status") or stored_supervisor.get("verdict", "N/A"),
+        }
+
+        approved_by = memo_row.get("approved_by")
+        approved_at = memo_row.get("approved_at")
+
+        # If approved_by is user ID, try to resolve to name
+        if approved_by:
+            approver = db.execute("SELECT email FROM users WHERE id = ?", (approved_by,)).fetchone()
+            if approver:
+                approved_by = approver["email"]
+
+        # Generate PDF
+        try:
+            pdf_bytes = generate_memo_pdf(
+                memo_data=memo_data,
+                application=dict(app),
+                validation_result=validation_result,
+                supervisor_result=supervisor_result,
+                approved_by=approved_by,
+                approved_at=approved_at,
+            )
+        except Exception as e:
+            logger.error("PDF generation failed for %s: %s", app_id, str(e))
+            db.close()
+            return self.error(f"PDF generation failed: {str(e)}", 500)
+
+        pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+        pdf_generated_at = datetime.now(timezone.utc).isoformat()
+        memo_version = memo_row.get("memo_version") or (metadata or {}).get("memo_version") or str(memo_row.get("version") or "")
+        renderer_build = get_build_metadata()
+        memo_build = metadata.get("build") if isinstance(metadata.get("build"), dict) else {}
+        memo_build_sha = memo_build.get("git_sha") or renderer_build["git_sha"]
+        memo_build_sha_short = memo_build.get("git_sha_short") or (
+            memo_build_sha[:7] if memo_build_sha != "unknown" else "unknown"
+        )
+
+        # Update pdf_generated_at timestamp
+        try:
+            db.execute(
+                "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
+                (pdf_generated_at, memo_row["id"])
+            )
+            audit_detail = json.dumps({
+                "event": "memo_pdf_generated",
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "memo_id": memo_row["id"],
+                "memo_version": memo_version,
+                "pdf_sha256": pdf_sha256,
+                "pdf_bytes": len(pdf_bytes),
+                "build": renderer_build,
+                "renderer_build": renderer_build,
+                "memo_build": memo_build or None,
+                "validation_status": validation_result.get("validation_status"),
+                "quality_score": validation_result.get("quality_score"),
+                "supervisor_status": supervisor_result.get("verdict"),
+                "generated_at": pdf_generated_at,
+            })
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (user.get("sub",""), user.get("name",""), user.get("role",""), "Download Memo PDF", app["ref"],
+                 audit_detail, self.get_client_ip())
+            )
+            db.commit()
+        except Exception as e:
+            logger.error(f"Failed to store PDF generation audit for {app_id}: {e}", exc_info=True)
+        db.close()
+
+        # Return PDF as binary download
+        safe_ref = re.sub(r'[^a-zA-Z0-9_-]', '_', app.get("ref", "memo"))
+        filename = f"compliance_memo_{safe_ref}.pdf"
+        self.set_header("Content-Type", "application/pdf")
+        self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.set_header("Content-Length", str(len(pdf_bytes)))
+        self.set_header("X-Memo-Id", str(memo_row["id"]))
+        self.set_header("X-Memo-Version", str(memo_version))
+        self.set_header("X-PDF-SHA256", pdf_sha256)
+        self.set_header("X-Build-Git-Sha", renderer_build["git_sha"])
+        self.set_header("X-Build-Git-Sha-Short", renderer_build["git_sha_short"])
+        self.set_header("X-Memo-Build-Git-Sha", memo_build_sha)
+        self.set_header("X-Memo-Build-Git-Sha-Short", memo_build_sha_short)
+        self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.write(pdf_bytes)
+
+
+class MemoSupervisorHandler(BaseHandler):
+    """POST /api/applications/:id/memo/supervisor — Run supervisor on stored memo"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found for this application.", 404)
+        app_row = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app_row,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_supervisor",
+        )
+        if stale.get("is_stale"):
+            db.commit()
+            db.close()
+            return self.error(
+                "Compliance memo is stale: "
+                + stale.get("reason", "regenerate the memo before running supervisor."),
+                409,
+            )
+
+        try:
+            memo_data = safe_json_loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            db.close()
+            return self.error("Memo data is corrupt or unreadable.", 500)
+
+        # Run memo supervisor
+        supervisor_result = run_memo_supervisor(memo_data)
+
+        # Update memo with supervisor results
+        _persist_ok = False
+        try:
+            memo_data["supervisor"] = supervisor_result
+            memo_data["metadata"]["supervisor_status"] = supervisor_result["verdict"]
+            memo_data["metadata"]["supervisor_confidence"] = supervisor_result["supervisor_confidence"]
+            # ── Priority B / Workstream C: re-evaluate EDD routing ──
+            # The supervisor verdict (and mandatory_escalation) may
+            # have changed; the routing decision must reflect that.
+            try:
+                _contract = (memo_data.get("metadata") or {}).get("agent5_input_contract") or {}
+                _facts = dict(_contract)
+                _facts["supervisor_mandatory_escalation"] = bool(
+                    supervisor_result.get("mandatory_escalation", False)
+                )
+                _facts["supervisor_mandatory_escalation_reasons"] = list(
+                    supervisor_result.get("mandatory_escalation_reasons") or []
+                )
+                _routing = _evaluate_edd_routing(_facts)
+                memo_data["metadata"]["edd_routing"] = _routing
+                _emit_edd_routing_audit(db, user, app_id, _routing, self.get_client_ip())
+                # ── Priority B.2 / Workstream A: Actuate EDD routing ──
+                # Re-running the supervisor may surface mandatory_escalation
+                # that the original memo generation missed; if the
+                # re-evaluated route is edd, actuate it here too.
+                if _routing.get("route") == "edd":
+                    try:
+                        _app_for_actuate = db.execute(
+                            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                            (app_id, app_id),
+                        ).fetchone()
+                        _actuation = _actuate_edd_routing(
+                            db, _app_for_actuate, _routing,
+                            supervisor_result, user,
+                            client_ip=self.get_client_ip(),
+                        )
+                        memo_data["metadata"]["edd_routing_actuation"] = _actuation
+                    except Exception as _ae2:
+                        logger.error(
+                            "Failed to actuate EDD routing in supervisor run for %s: %s",
+                            app_id, _ae2, exc_info=True,
+                        )
+            except Exception as _re:
+                logger.error("Failed to re-evaluate EDD routing for %s: %s", app_id, _re)
+            db.execute(
+                "UPDATE compliance_memos SET memo_data = ?, supervisor_status = ?, supervisor_summary = ? WHERE id = ?",
+                (json.dumps(memo_data), supervisor_result["verdict"], supervisor_result["recommendation"], memo_row["id"])
+            )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Run Memo Supervisor", app_id,
+                        "Supervisor verdict: " + supervisor_result["verdict"] + " | Contradictions: " + str(supervisor_result["contradiction_count"]),
+                        self.get_client_ip()))
+
+            # ── Record normalized supervisor decision record ──
+            try:
+                app_row = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                    (app_id, app_id)
+                ).fetchone()
+                if app_row:
+                    sup_record = build_from_supervisor_verdict(
+                        app=dict(app_row),
+                        supervisor_result=supervisor_result,
+                        user=user,
+                    )
+                    save_decision_record(db, sup_record)
+            except Exception as rec_err:
+                logger.error("Failed to record supervisor decision record for %s: %s", app_id, rec_err)
+
+            # ── Append hash-chain audit entry (fail-closed) ──
+            # This call uses the same open DB connection so the INSERT
+            # participates in the current transaction.  If it raises,
+            # the exception propagates out of the try-block and db.commit()
+            # is never reached, preventing a verdict-without-chain-entry.
+            from supervisor.audit import append_verdict_chain_entry
+            append_verdict_chain_entry(
+                db=db,
+                application_id=app_id,
+                verdict=supervisor_result["verdict"],
+                contradiction_count=supervisor_result.get("contradiction_count", 0),
+                supervisor_confidence=supervisor_result.get("supervisor_confidence", 0.0),
+                memo_id=str(memo_row["id"]),
+                actor_id=user.get("sub", ""),
+                actor_name=user.get("name", ""),
+                actor_role=user.get("role", ""),
+                ip_address=self.get_client_ip(),
+            )
+
+            db.commit()
+            _persist_ok = True
+        except Exception as e:
+            logger.error(
+                "AUDIT CHAIN WRITE FAILURE for %s: verdict and chain entry were NOT persisted. "
+                "Error: %s",
+                app_id, e, exc_info=True,
+            )
+            _persist_ok = False
+        db.close()
+
+        if not _persist_ok:
+            return self.error(
+                "Supervisor verdict could not be persisted: the memo update and audit-chain "
+                "entry were rolled back. Please retry.",
+                500,
+            )
+        self.success(supervisor_result)
+
+
+class MemoSupervisorResultHandler(BaseHandler):
+    """GET /api/applications/:id/memo/supervisor — Get supervisor results for stored memo"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT memo_data FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+        db.close()
+
+        if not memo_row:
+            return self.error("No memo found.", 404)
+
+        try:
+            memo_data = safe_json_loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            return self.error("Memo data is corrupt.", 500)
+
+        supervisor = memo_data.get("supervisor")
+        if not supervisor:
+            return self.error("Supervisor has not been run on this memo yet.", 404)
+
+        self.success(supervisor)
+
+
+# ══════════════════════════════════════════════════════════
+# DECISION WORKFLOW ENDPOINTS (Step 7)
+# ══════════════════════════════════════════════════════════
+
+class ApplicationDecisionHandler(BaseHandler):
+    """POST /api/applications/:id/decision — Submit application decision with override support"""
+    # Static governance guards assert these decision-path invariants remain in
+    # this handler: _validate_officer_signoff, signoff_error, and
+    # "override_reason is required when override_ai is true";
+    # "decision_reason is required".
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("decision", max_attempts=10, window_seconds=60):
+            return
+
+        data = self.get_json()
+        db = get_db()
+        attempt_summary = _governance_summary(
+            data,
+            # Dict values, including officer_signoff, are summarized by key names only.
+            ("decision", "override_ai", "documents_list", "rmi_items", "rmi_deadline", "officer_signoff"),
+        )
+        attempt_target = app_id
+
+        # ── EX-06: Row-level locking for approval path ──
+        # PostgreSQL: SELECT ... FOR UPDATE serializes concurrent approval attempts.
+        # SQLite: BEGIN IMMEDIATE acquires a write lock before the read.
+        try:
+            if db.is_postgres:
+                app = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
+                    (app_id, app_id)
+                ).fetchone()
+            else:
+                # SQLite: acquire write lock early to prevent TOCTOU race
+                try:
+                    db.execute("BEGIN IMMEDIATE")
+                except Exception:
+                    pass  # Already in a transaction
+                app = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                    (app_id, app_id)
+                ).fetchone()
+        except Exception as lock_error:
+            status_code = 409 if _is_lock_timeout_error(lock_error) else 500
+            reason = (
+                "Approval blocked: application decision is temporarily locked by another transaction. "
+                "Retry after the in-flight workflow completes."
+                if status_code == 409
+                else "Approval blocked: could not acquire application decision lock."
+            )
+            logger.error(
+                "Application decision lock/read failed for %s: %s",
+                app_id,
+                lock_error,
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+                self.log_governance_attempt(
+                    user,
+                    "application.decision",
+                    attempt_target,
+                    "rejected",
+                    status_code,
+                    reason,
+                    attempt_summary,
+                    db=db,
+                    commit=False,
+                )
+                db.commit()
+            except Exception:
+                logger.exception("decision_lock_failure_audit_write_failed app_id=%s", app_id)
+            finally:
+                db.close()
+            return self.error(reason, status_code)
+
+        if not app:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+        attempt_target = app["ref"]
+
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
+
+        # ── C-03 FIX: Prevent decision replay on terminal-state applications ──
+        terminal_states = ("approved", "rejected")
+        if app["status"] in terminal_states:
+            reason = (
+                f"Decision replay blocked: application {app['ref']} is already in terminal state "
+                f"'{app['status']}'. Decisions cannot be replayed once an application has reached a final state."
+            )
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 409)
+
+        # Validate required fields
+        decision = data.get("decision")
+        decision_reason = data.get("decision_reason")
+        override_ai = data.get("override_ai", False)
+        override_reason = data.get("override_reason", "")
+
+        valid_decisions = ["approve", "reject", "escalate_edd", "request_documents"]
+        if decision not in valid_decisions:
+            reason = f"Invalid decision. Must be one of: {', '.join(valid_decisions)}"
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 400)
+
+        if not decision_reason:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                "decision_reason is required", attempt_summary, db=db)
+            db.close()
+            return self.error("decision_reason is required", 400)
+
+        if override_ai and not override_reason:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                "override_reason is required when override_ai is true", attempt_summary, db=db)
+            db.close()
+            return self.error("override_reason is required when override_ai is true", 400)
+
+        # ── OVERRIDE GOVERNANCE: Only SCO or Admin may override the AI recommendation ──
+        if override_ai and user.get("role") not in ("sco", "admin"):
+            reason = (
+                "AI override requires Senior Compliance Officer or Admin role. "
+                f"Your role '{user.get('role')}' is not permitted to submit override_ai=true."
+            )
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 403,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 403)
+
+        # ── EX-11: Backend enforcement of officer sign-off for AI advisory ──
+        signoff_scope = "override" if override_ai else "decision"
+        signoff_error = _validate_officer_signoff(data.get("officer_signoff"), signoff_scope)
+        if signoff_error:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                signoff_error, attempt_summary, db=db)
+            db.close()
+            return self.error(signoff_error, 400)
+
+        if decision in ("approve", "reject"):
+            risk_error = _application_risk_integrity_error(app, "submit final decision")
+            if risk_error:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    risk_error, attempt_summary, db=db)
+                db.close()
+                return self.error(risk_error, 400)
+
+        # ── SECURITY: Enforce approval preconditions (mandatory) ──
+        if decision == "approve":
+            # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
+            if user.get("role") == "co" and app["risk_level"] in ("HIGH", "VERY_HIGH"):
+                reason = (
+                    "Approval blocked: Compliance Officers cannot approve HIGH or VERY_HIGH risk applications. "
+                    "Only Admin or Senior Compliance Officer roles may approve at this risk level."
+                )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 403,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 403)
+
+            # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
+            memo_exists = db.execute(
+                "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", (real_id,)
+            ).fetchone()
+            if not memo_exists:
+                reason = (
+                    "Approval blocked: compliance memo must be generated before approval. "
+                    "Generate a memo via POST /api/applications/{id}/memo first."
+                )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 400)
+            stale = _ensure_memo_fresh_or_mark_stale(
+                db,
+                app,
+                memo_exists,
+                actor=user,
+                ip_address=self.get_client_ip(),
+                context="application_decision_approval",
+            )
+            if stale.get("is_stale"):
+                reason = (
+                    "Approval blocked: Compliance memo is stale: "
+                    + stale.get("reason", "Regenerate the memo before approval.")
+                )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db, commit=False)
+                db.commit()
+                db.close()
+                return self.error(reason, 400)
+
+            can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
+            if not can_approve:
+                reason = f"Approval blocked: {gate_error}"
+                _audit_enhanced_requirement_approval_block_if_applicable(
+                    db, app, user, gate_error
+                )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 400)
+
+            # ── EX-06: Dual-approval for high-risk cases using structured fields ──
+            if app["risk_level"] in ("HIGH", "VERY_HIGH"):
+                can_approve, dual_error = ApprovalGateValidator.validate_high_risk_dual_approval(app, user, db)
+                if not can_approve:
+                    # Distinguish: same-officer retry vs genuine first approval
+                    if dual_error == "DUAL_SAME_OFFICER":
+                        reason = (
+                            "Dual-approval conflict: you already recorded the first approval. "
+                            "A different authorized officer must complete the second approval."
+                        )
+                        self.log_governance_attempt(
+                            user, "application.decision", attempt_target, "rejected", 409,
+                            reason, attempt_summary, db=db)
+                        db.close()
+                        return self.error(reason, 409)
+                    # Record first approval in structured application fields
+                    db.execute(
+                        "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now'), "
+                        "updated_at = datetime('now') WHERE id = ?",
+                        (user.get("sub", ""), real_id)
+                    )
+                    _first_after = {"status": app["status"], "decision": "approve",
+                                    "note": "awaiting_second_approver",
+                                    "first_approver_id": user.get("sub", "")}
+                    db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
+                                 VALUES (?,?,?,?,?,?,?,?,?)""",
+                               (user.get("sub",""), user.get("name",""), user.get("role",""),
+                                "First Approval (Pending Second)", app["ref"],
+                                f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
+                                self.get_client_ip(), _safe_json(_before), _safe_json(_first_after)))
+                    self.log_governance_attempt(
+                        user, "application.decision", attempt_target, "accepted", 202,
+                        "First approval recorded; awaiting second approver", attempt_summary,
+                        db=db, commit=False)
+                    db.commit()
+                    db.close()
+                    return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)
+
+        # Handle request_documents
+        required_documents = []
+        rmi_items = []
+        rmi_deadline = ""
+        rmi_request_id = None
+        if decision == "request_documents":
+            rmi_item_errors = []
+            rmi_items = _normalize_rmi_items(data, errors=rmi_item_errors)
+            required_documents = [item["label"] for item in rmi_items]
+            if rmi_item_errors:
+                reason = "; ".join(rmi_item_errors[:3])
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 400)
+            if not rmi_items:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    "At least one requested document item is required for request_documents decision",
+                    attempt_summary, db=db)
+                db.close()
+                return self.error("At least one requested document item is required", 400)
+            rmi_deadline, deadline_error = _normalize_rmi_deadline(
+                data.get("rmi_deadline") or data.get("deadline") or data.get("due_date"),
+            )
+            if deadline_error:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    f"{deadline_error} for request_documents decision",
+                    attempt_summary, db=db)
+                db.close()
+                return self.error(deadline_error, 400)
+
+        # Update application status
+        new_status = {
+            "approve": "approved",
+            "reject": "rejected",
+            "escalate_edd": "edd_required",
+            "request_documents": "rmi_sent"
+        }[decision]
+
+        edd_trigger_flags = []
+        risk_integrity_warnings = []
+        if decision == "escalate_edd":
+            edd_trigger_flags = ["officer_escalate_edd"]
+            risk_level_snapshot, risk_score_snapshot = _application_risk_snapshot(app)
+            if risk_level_snapshot is None or risk_score_snapshot is None or risk_score_snapshot == 0:
+                risk_integrity_warnings.append(_RISK_UNAVAILABLE_WARNING)
+                risk_integrity_warnings.append(_EDD_ZERO_SCORE_WARNING)
+
+        detail_info = {
+            "decision": decision,
+            "decision_reason": decision_reason,
+            "override_ai": override_ai,
+            "override_reason": override_reason if override_ai else None,
+            "override_reviewed_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") if override_ai else None,
+            "override_by_role": user.get("role") if override_ai else None,
+            "required_documents": required_documents if decision == "request_documents" else None,
+            "rmi_deadline": rmi_deadline if decision == "request_documents" else None,
+            "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
+            "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
+        }
+
+        if decision == "request_documents":
+            rmi_request_id = _create_structured_rmi_request(
+                db,
+                app,
+                user,
+                decision_reason,
+                rmi_deadline,
+                rmi_items,
+            )
+            detail_info["rmi_request_id"] = rmi_request_id
+
+        db.execute("""
+            UPDATE applications SET
+                status=?, decided_at=datetime('now'), decision_by=?, decision_notes=?,
+                updated_at=datetime('now')
+            WHERE id=?
+        """, (new_status, user["sub"], json.dumps(detail_info), real_id))
+
+        monitoring_enrollment = None
+        if decision == "approve":
+            try:
+                approved_app_row = db.execute(
+                    "SELECT * FROM applications WHERE id = ?",
+                    (real_id,),
+                ).fetchone()
+                approved_app = dict(approved_app_row) if approved_app_row else {}
+                if not approved_app:
+                    raise RuntimeError("Approved application row was not found")
+                monitoring_enrollment = _enroll_approved_application_for_monitoring(
+                    db,
+                    approved_app,
+                    user=user,
+                    audit_writer=self.log_audit,
+                    approved_at=approved_app.get("decided_at"),
+                    previous_status=app.get("status"),
+                )
+                if monitoring_enrollment.get("status") not in ("created", "updated", "skipped"):
+                    raise RuntimeError(
+                        "Unexpected monitoring enrollment result: "
+                        + str(monitoring_enrollment.get("status"))
+                    )
+            except Exception as enrollment_error:
+                logger.error(
+                    "Failed to enroll approved application %s into monitoring: %s",
+                    app.get("ref"),
+                    enrollment_error,
+                    exc_info=True,
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                db.close()
+                return self.error(
+                    "Approval failed: could not enroll approved client into ongoing monitoring.",
+                    500,
+                )
+
+        # Log audit trail with full detail
+        audit_detail = f"Decision: {decision} | Reason: {decision_reason}"
+        if override_ai:
+            audit_detail += f" | AI Override: {override_reason}"
+        if required_documents:
+            audit_detail += f" | Documents Required: {', '.join(required_documents)}"
+        if rmi_request_id:
+            audit_detail += f" | RMI Request: {rmi_request_id} | Deadline: {rmi_deadline}"
+
+        _after = {"status": new_status, "decision": decision, "decision_reason": decision_reason,
+                  "override_ai": override_ai, "rmi_request_id": rmi_request_id,
+                  "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
+                  "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
+                  "decision_by": user.get("sub"),
+                  "first_approver_id": app.get("first_approver_id") if app.get("risk_level") in ("HIGH", "VERY_HIGH") else None,
+                  "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None}
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
+                    _safe_json(_before), _safe_json(_after)))
+
+        # ── EX-11: Persist officer sign-off audit record ──
+        _persist_signoff_audit(db, user, app["ref"],
+                               "override" if override_ai else "decision",
+                               data.get("officer_signoff", {}),
+                               self.get_client_ip(),
+                               self.request.headers.get("User-Agent", ""))
+
+        # ── Record normalized decision record ──
+        try:
+            # Try to derive confidence from supervisor result in the compliance memo
+            supervisor_result = None
+            try:
+                memo_row = db.execute(
+                    "SELECT memo_data FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
+                    (real_id,)
+                ).fetchone()
+                if memo_row:
+                    memo_data = json.loads(memo_row["memo_data"]) if memo_row["memo_data"] else {}
+                    supervisor_result = memo_data.get("supervisor")
+            except Exception:
+                pass  # Non-critical: proceed without supervisor data
+
+            decision_record = build_from_application_decision(
+                app=dict(app),
+                decision=decision,
+                decision_reason=decision_reason,
+                user=user,
+                override_ai=override_ai,
+                override_reason=override_reason,
+                supervisor_result=supervisor_result,
+            )
+            save_decision_record(db, decision_record)
+        except Exception as e:
+            logger.error("Failed to record decision record for app %s: %s", app["ref"], e)
+
+        try:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "accepted", 201,
+                "", attempt_summary, db=db, commit=False)
+            db.commit()
+        except Exception as decision_commit_error:
+            logger.error(
+                "Failed to commit application decision transaction for %s: %s",
+                app.get("ref"),
+                decision_commit_error,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
+            return self.error("Decision failed: could not persist final decision safely.", 500)
+        db.close()
+
+        self.success({
+            "status": "decision_recorded",
+            "decision": decision,
+            "application_status": new_status,
+            "rmi_request_id": rmi_request_id,
+            "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None,
+        }, 201)
+
+
+class DecisionRecordsHandler(BaseHandler):
+    """GET /api/applications/:id/decision-records — Retrieve normalized decision records"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        decision_type = self.get_argument("decision_type", None)
+        raw_limit = self.get_argument("limit", "50")
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            db.close()
+            return self.error("Invalid 'limit' parameter: must be a positive integer", 400)
+
+        if limit <= 0:
+            db.close()
+            return self.error("Invalid 'limit' parameter: must be a positive integer", 400)
+
+        limit = min(limit, 200)
+
+        try:
+            records = get_decision_records(db, app["ref"], decision_type=decision_type, limit=limit)
+        except Exception as e:
+            db.close()
+            logger.error("Failed to retrieve decision records for %s: %s", app_id, e)
+            return self.error("Failed to retrieve decision records", 500)
+
+        db.close()
+        self.success({"records": records, "count": len(records)})
+
+
+# ══════════════════════════════════════════════════════════
+# CLIENT NOTIFICATION ENDPOINTS (Step 9)
+# ══════════════════════════════════════════════════════════
+
+class ClientNotificationHandler(BaseHandler):
+    """POST /api/applications/:id/notify — Send notification to client"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        notification_type = data.get("notification_type")
+        message = data.get("message")
+        documents_list = data.get("documents_list", [])
+
+        valid_types = ["approved", "documents_required", "request_documents", "rejected"]
+        if notification_type not in valid_types:
+            db.close()
+            return self.error(f"Invalid notification_type. Must be one of: {', '.join(valid_types)}", 400)
+
+        if not message:
+            db.close()
+            return self.error("message is required", 400)
+
+        if not app.get("client_id"):
+            db.close()
+            return self.error("Cannot send notification: no client associated with this application", 400)
+
+        # Create notification
+        title_map = {
+            "approved": "Application Approved",
+            "documents_required": "Documents Required",
+            "rejected": "Application Rejected"
+        }
+
+        db.execute("""
+            INSERT INTO client_notifications (application_id, client_id, notification_type, title, message, documents_list, read_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
+        """, (app["id"], app.get("client_id"), notification_type, title_map.get(notification_type, "Documents Required"), message,
+              json.dumps(documents_list) if documents_list else None))
+
+        # Log audit trail
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Notify Client", app["ref"],
+                    f"Sent {notification_type} notification to client", self.get_client_ip()))
 
         db.commit()
         db.close()
-        self.log_audit(user, "Alert", "Monitoring", f"Alert created: {data.get('title','')}")
-        self.success({"status": "created"}, 201)
+
+        self.success({"status": "notification_sent", "notification_type": notification_type}, 201)
+
+
+class GetClientNotificationsHandler(BaseHandler):
+    """GET /api/notifications — Get notifications for logged-in client"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        # Only clients can retrieve their notifications
+        if user.get("type") != "client":
+            return self.error("Only clients can retrieve notifications", 403)
+
+        db = get_db()
+        notifications = db.execute("""
+            SELECT id, application_id, notification_type, title, message, documents_list, rmi_request_id, read_status, created_at
+            FROM client_notifications
+            WHERE client_id = ?
+            ORDER BY created_at DESC
+        """, (user["sub"],)).fetchall()
+
+        result = [dict(n) for n in notifications]
+        rmi_requests = _load_client_rmi_requests(db, user["sub"])
+        rmi_by_id = {req["id"]: req for req in rmi_requests}
+        for n in result:
+            if n["documents_list"]:
+                n["documents_list"] = safe_json_loads(n["documents_list"])
+            if n.get("rmi_request_id"):
+                n["rmi_request"] = rmi_by_id.get(n["rmi_request_id"])
+
+        db.close()
+        self.success({"notifications": result, "rmi_requests": rmi_requests})
+
+
+class MarkNotificationReadHandler(BaseHandler):
+    """PATCH /api/notifications/:id/read — Mark notification as read"""
+    def patch(self, notif_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        notif = db.execute("SELECT * FROM client_notifications WHERE id = ?", (notif_id,)).fetchone()
+        if not notif:
+            db.close()
+            return self.error("Notification not found", 404)
+
+        if notif["client_id"] != user["sub"]:
+            db.close()
+            return self.error("Unauthorized", 403)
+
+        db.execute("UPDATE client_notifications SET read_status=1, read_at=datetime('now') WHERE id=?", (notif_id,))
+        db.commit()
+        db.close()
+
+        self.success({"status": "marked_read"})
+
+
+class ApplicationRMIRequestsHandler(BaseHandler):
+    """GET /api/applications/:id/rmi — Structured RMI requests for an application."""
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute(
+            "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        requests = _load_rmi_requests(db, app["id"])
+        db.close()
+        self.success({"requests": requests, "count": len(requests)})
+
+
+STATUS_LOOKUP_PUBLIC_FIELDS = ("ref", "status", "updated_at")
+
+
+def lookup_application_status_record(db, ref="", email="", current_user=None):
+    """
+    Resolve a status-lookup request with a public-safe contract.
+
+    Anonymous lookup requires both reference number and email so that the endpoint
+    does not become an enumeration surface. Authenticated client lookups are
+    restricted to the caller's own applications.
+    """
+    ref = (ref or "").strip()
+    email = (email or "").strip().lower()
+
+    if current_user and current_user.get("type") == "client":
+        query = """
+            SELECT a.ref, a.status, a.updated_at
+            FROM applications a
+            LEFT JOIN clients c ON c.id = a.client_id
+            WHERE a.client_id = ?
+        """
+        params = [current_user["sub"]]
+
+        if ref:
+            query += " AND a.ref = ?"
+            params.append(ref)
+        elif email:
+            query += " AND LOWER(c.email) = ?"
+            params.append(email)
+        else:
+            raise ValueError("Reference number or email is required.")
+    else:
+        if not ref or not email:
+            raise ValueError("Reference number and email are required for public status lookup.")
+
+        query = """
+            SELECT a.ref, a.status, a.updated_at
+            FROM applications a
+            LEFT JOIN clients c ON c.id = a.client_id
+            WHERE a.ref = ? AND LOWER(c.email) = ?
+        """
+        params = [ref, email]
+
+    query += " ORDER BY a.updated_at DESC, a.created_at DESC LIMIT 1"
+    return db.execute(query, params).fetchone()
+
+
+def build_status_lookup_payload(app_row):
+    """Return the minimal public-safe status payload."""
+    if not app_row:
+        return None
+    payload = {
+        field: app_row[field]
+        for field in STATUS_LOOKUP_PUBLIC_FIELDS
+        if field in app_row.keys()
+    }
+    payload["status_label"] = get_status_label(payload.get("status"))
+    return payload
+
+
+class ClientStatusLookupHandler(BaseHandler):
+    """GET /api/status-lookup — Look up latest application status by reference and/or email"""
+    def get(self):
+        ref = self.get_argument("ref", "").strip()
+        email = self.get_argument("email", "").strip().lower()
+
+        if not ref and not email:
+            return self.error("ref or email is required", 400)
+
+        current_user = self.get_current_user_token()
+        db = get_db()
+        try:
+            app = lookup_application_status_record(db, ref=ref, email=email, current_user=current_user)
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
+        db.close()
+
+        if not app:
+            return self.error("Application not found", 404)
+
+        self.success({"application": build_status_lookup_payload(app)})
+
+
+# ══════════════════════════════════════════════════════════
+# MONITORING ENDPOINTS (Ongoing Monitoring)
+# ══════════════════════════════════════════════════════════
+
+class MonitoringAlertDetailHandler(BaseHandler):
+    """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
+        if not alert:
+            db.close()
+            return self.error("Alert not found", 404)
+
+        result = dict(alert)
+        db.close()
+        self.success(result)
+
+    def patch(self, alert_id):
+        """Update alert state and route it to a downstream object.
+
+        PR-02 supported actions:
+          - triage
+          - assign
+          - dismiss              (requires `dismissal_reason`)
+          - route_to_periodic_review
+          - route_to_edd
+
+        Legacy aliases (kept for back-compat with existing UI/tests):
+          - escalate         -> route_to_edd
+          - trigger_review   -> route_to_periodic_review
+        """
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+
+        action = data.get("action")
+        reason = data.get("reason") or ""
+
+        # Back-compat aliases. Kept narrow so legacy callers still work
+        # while new explicit verbs are the documented contract.
+        legacy_alias = {
+            "escalate": "route_to_edd",
+            "trigger_review": "route_to_periodic_review",
+        }
+        canonical_action = legacy_alias.get(action, action)
+
+        valid_actions = [
+            "triage", "assign", "dismiss",
+            "route_to_periodic_review", "route_to_edd",
+        ]
+        valid_for_error = valid_actions + list(legacy_alias.keys())
+        if canonical_action not in valid_actions:
+            return self.error(
+                f"Invalid action. Must be one of: {', '.join(valid_for_error)}",
+                400,
+            )
+
+        import monitoring_routing as mr
+
+        db = get_db()
+        try:
+            try:
+                if canonical_action == "triage":
+                    result = mr.triage_alert(
+                        db, alert_id, user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "assign":
+                    result = mr.assign_alert(
+                        db, alert_id, user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "dismiss":
+                    dismissal_reason = data.get("dismissal_reason")
+                    if not dismissal_reason:
+                        return self.error(
+                            "dismissal_reason is required for action=dismiss "
+                            f"(one of: {', '.join(mr.VALID_DISMISSAL_REASONS)})",
+                            400,
+                        )
+                    result = mr.dismiss_alert(
+                        db, alert_id,
+                        dismissal_reason=dismissal_reason,
+                        dismissal_notes=reason or data.get("dismissal_notes"),
+                        user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "route_to_periodic_review":
+                    result = mr.route_alert_to_periodic_review(
+                        db, alert_id,
+                        review_reason=reason or data.get("review_reason"),
+                        priority=data.get("priority"),
+                        user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "route_to_edd":
+                    result = mr.route_alert_to_edd(
+                        db, alert_id,
+                        trigger_notes=reason or data.get("trigger_notes"),
+                        priority=data.get("priority"),
+                        user=user, audit_writer=self.log_audit,
+                    )
+            except mr.AlertNotFound:
+                return self.error("Alert not found", 404)
+            except mr.InvalidDismissalReason as e:
+                return self.error(str(e), 400)
+            except mr.AlertAlreadyTerminal as e:
+                return self.error(str(e), 409)
+            except mr.MonitoringRoutingError as e:
+                return self.error(str(e), 400)
+
+            self.success({
+                "status": "alert_updated",
+                "action": canonical_action,
+                "result": result,
+                # Back-compat field for existing UI consumers.
+                "new_status": result.get("status"),
+            })
+        finally:
+            db.close()
+
+
+class MonitoringAgentsHandler(BaseHandler):
+    """GET /api/monitoring/agents — Get status of monitoring agents"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        agents = db.execute("""
+            SELECT id, agent_name, agent_type, last_run, next_run, run_frequency, clients_monitored, alerts_generated, status
+            FROM monitoring_agent_status
+            ORDER BY agent_name
+        """).fetchall()
+
+        result = [_serialize_monitoring_agent(db, dict(a)) for a in agents]
+        if not any(a.get("key") == "document_health" for a in result):
+            result.append(_document_health_agent_payload(db))
+        db.close()
+        self.success({"agents": result})
+
+
+def _document_health_agent_payload(db, row=None):
+    import document_health_monitor as dhm
+
+    payload = dict(row or {})
+    payload.setdefault("id", "document_health")
+    payload["key"] = "document_health"
+    payload["label"] = "Document Health Monitor"
+    payload["agent_name"] = "Document Health Monitor"
+    payload["agent_type"] = "document_health"
+    payload["status"] = payload.get("status") or "enabled"
+    payload["run_frequency"] = payload.get("run_frequency") or "Manual / daily"
+    payload["types"] = [dhm.ALERT_TYPE_EXPIRED, dhm.ALERT_TYPE_EXPIRING_SOON]
+    try:
+        row_count = db.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM monitoring_alerts
+             WHERE detected_by = ?
+               AND alert_type IN (?, ?)
+               AND COALESCE(status, 'open') NOT IN ('resolved','dismissed','closed')
+            """,
+            (
+                dhm.DOCUMENT_HEALTH_DETECTED_BY,
+                dhm.ALERT_TYPE_EXPIRED,
+                dhm.ALERT_TYPE_EXPIRING_SOON,
+            ),
+        ).fetchone()
+        payload["open_alerts"] = row_count["c"] if row_count else 0
+    except Exception:
+        payload["open_alerts"] = 0
+    return payload
+
+
+def _serialize_monitoring_agent(db, agent):
+    agent_type = str(agent.get("agent_type") or "").strip().lower()
+    agent_name = str(agent.get("agent_name") or "").strip()
+    if agent_type == "document_health" or agent_name == "Document Health Monitor":
+        return _document_health_agent_payload(db, agent)
+    agent.setdefault("key", agent_type or agent_name)
+    agent.setdefault("label", agent_name)
+    agent.setdefault("types", [])
+    return agent
+
+
+def _is_document_health_monitor_agent(agent_row):
+    agent_type = str(agent_row.get("agent_type") or "").strip().lower()
+    agent_name = str(agent_row.get("agent_name") or "").strip()
+    return (
+        agent_type in {
+            "document_health",
+            "periodic_review_preparation",
+            "ongoing_compliance_review",
+            "registry",
+        }
+        or agent_name in {
+            "Document Health Monitor",
+            "Periodic Review Preparation Agent",
+            "Ongoing Compliance Review Agent",
+            "Registry Monitoring Agent",
+        }
+    )
+
+
+class MonitoringAgentRunHandler(BaseHandler):
+    """POST /api/monitoring/agents/:id/run — Manually trigger agent run"""
+    def post(self, agent_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            agent_key = str(agent_id or "").strip().lower()
+            agent = None
+            if agent_key == "document_health":
+                row = db.execute(
+                    """
+                    SELECT *
+                      FROM monitoring_agent_status
+                     WHERE agent_type = ? OR agent_name = ?
+                     ORDER BY id
+                     LIMIT 1
+                    """,
+                    ("document_health", "Document Health Monitor"),
+                ).fetchone()
+                agent = dict(row) if row else {
+                    "id": None,
+                    "agent_name": "Document Health Monitor",
+                    "agent_type": "document_health",
+                    "alerts_generated": 0,
+                    "status": "enabled",
+                }
+            elif agent_key.isdigit():
+                row = db.execute("SELECT * FROM monitoring_agent_status WHERE id = ?", (int(agent_key),)).fetchone()
+                agent = dict(row) if row else None
+            if not agent:
+                return self.error("Agent not found", 404)
+
+            now = datetime.now().isoformat()
+            alerts_generated_delta = 0
+            run_summary = None
+            if _is_document_health_monitor_agent(agent):
+                import document_health_monitor as dhm
+                run_summary = dhm.sync_document_health_alerts(
+                    db,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+                run_summary["triggered"] = True
+                alerts_generated_delta = run_summary.get("created", 0)
+            else:
+                run_summary = {
+                    "triggered": False,
+                    "reason": "agent_not_configured_for_document_health_sync",
+                    "applications": 0,
+                    "created": 0,
+                    "updated": 0,
+                    "resolved": 0,
+                }
+            if agent.get("id") is not None:
+                db.execute("""
+                    UPDATE monitoring_agent_status
+                       SET last_run=?,
+                           alerts_generated=COALESCE(alerts_generated, 0)+?
+                     WHERE id=?
+                """, (now, alerts_generated_delta, agent["id"]))
+
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Agent Run", agent["agent_name"],
+                        f"Manual run triggered for {agent['agent_name']}", self.get_client_ip()))
+
+            db.commit()
+
+            payload = {"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now}
+            if _is_document_health_monitor_agent(agent):
+                payload["agent_key"] = "document_health"
+            payload["document_health_sync"] = run_summary
+            self.success(payload)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring agent run failed: agent_id=%s", agent_id)
+            self.error("Failed to run monitoring agent.", 500)
+        finally:
+            db.close()
+
+
+class PeriodicReviewsListHandler(BaseHandler):
+    """GET /api/monitoring/reviews — List periodic reviews"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        status_filter = self.get_argument("status", None)
+        db = get_db()
+
+        query = "SELECT * FROM periodic_reviews WHERE 1=1"
+        params = []
+
+        if status_filter:
+            query += " AND status = ?"
+            params.append(status_filter)
+
+        query += " ORDER BY due_date ASC"
+        reviews = db.execute(query, params).fetchall()
+
+        projections = {
+            projection["review_id"]: projection
+            for projection in _list_periodic_review_projections(db)
+        }
+        result = []
+        for review in reviews:
+            payload = _serialize_periodic_review_row(db, review)
+            payload["projection"] = projections.get(payload["id"])
+            result.append(payload)
+        db.close()
+        self.success({"reviews": result})
+
+
+class PeriodicReviewDetailHandler(BaseHandler):
+    """GET /api/monitoring/reviews/:id — Get review detail"""
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        review = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (review_id,)).fetchone()
+        if not review:
+            db.close()
+            return self.error("Review not found", 404)
+
+        result = _serialize_periodic_review_row(db, review)
+        result["projection"] = _get_periodic_review_projection(db, result["id"])
+        if result["review_memo"]:
+            result["review_memo"] = safe_json_loads(result["review_memo"])
+
+        db.close()
+        self.success(result)
+
+
+class PeriodicReviewAssignmentHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/assignment — assign or reassign review."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        assigned_officer = data.get("assigned_officer")
+        if not assigned_officer:
+            return self.error("assigned_officer is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _assign_periodic_review(
+                    db,
+                    review_id,
+                    assigned_officer=assigned_officer,
+                    priority=data.get("priority"),
+                    reassigned_reason=data.get("reassigned_reason"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError, _UnauthorizedPeriodicReviewOverride) as exc:
+                return self.error(str(exc), 400 if isinstance(exc, (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError)) else 403)
+            db.commit()
+            self.success({"status": "assignment_updated", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewImportSetupHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/import-setup — save imported legacy review metadata."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("last_review_date"):
+            return self.error("last_review_date is required", 400)
+        if not data.get("source_type"):
+            return self.error("source_type is required", 400)
+        if not data.get("confidence"):
+            return self.error("confidence is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_import_setup(
+                    db,
+                    review_id,
+                    last_review_date=data.get("last_review_date"),
+                    source_type=data.get("source_type"),
+                    source_note=data.get("source_note"),
+                    confidence=data.get("confidence"),
+                    assigned_officer=data.get("assigned_officer"),
+                    override_reason=data.get("override_reason"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _UnauthorizedPeriodicReviewOverride as exc:
+                return self.error(str(exc), 403)
+            except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "import_setup_saved", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewImportAcknowledgementHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/import-acknowledgement."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            try:
+                result = _acknowledge_periodic_review_import(
+                    db,
+                    review_id,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "import_acknowledged", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewRationaleHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/officer-rationale."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_rationale(
+                    db,
+                    review_id,
+                    rationale=data.get("officer_rationale"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "officer_rationale_saved", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewMaterialChangeHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/material-change-attestation."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_material_change(
+                    db,
+                    review_id,
+                    attestation=data.get("material_change_attestation"),
+                    categories=data.get("material_change_categories") or [],
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "material_change_attested", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewRiskChangeHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/risk-change."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("new_risk_level"):
+            return self.error("new_risk_level is required", 400)
+        if not data.get("reason_code"):
+            return self.error("reason_code is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _record_periodic_review_risk_change(
+                    db,
+                    review_id,
+                    new_risk_level=data.get("new_risk_level"),
+                    reason_code=data.get("reason_code"),
+                    officer_note=data.get("officer_note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "risk_change_recorded", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewEvidenceLinksHandler(BaseHandler):
+    """GET/POST /api/monitoring/reviews/:id/evidence-links."""
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            projection = _get_periodic_review_projection(db, review_id)
+            if projection is None:
+                return self.error("Review not found", 404)
+            self.success({"review_id": review_id, "evidence_links": projection.get("evidence_links", [])})
+        finally:
+            db.close()
+
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("document_id"):
+            return self.error("document_id is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _add_periodic_review_evidence_link(
+                    db,
+                    review_id,
+                    requirement_id=data.get("requirement_id"),
+                    document_id=data.get("document_id"),
+                    link_type=data.get("link_type"),
+                    note=data.get("note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _PeriodicReviewEvidenceLinkError as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "evidence_link_added", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewDecisionHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/decision — legacy decision writer.
+
+    Legacy compatibility only. New periodic-review flows must persist
+    ``periodic_reviews.outcome`` via ``PeriodicReviewCompleteHandler`` and must
+    not co-write the deprecated ``decision`` field.
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        review = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (review_id,)).fetchone()
+        if not review:
+            db.close()
+            return self.error("Review not found", 404)
+
+        # ── C-03 FIX: Prevent decision replay on completed reviews ──
+        if review["status"] == "completed":
+            db.close()
+            return self.error(
+                f"Decision replay blocked: review {review_id} is already completed.",
+                409
+            )
+
+        decision = data.get("decision")
+        decision_reason = data.get("decision_reason")
+
+        valid_decisions = ["continue", "enhanced_monitoring", "request_info", "exit_relationship"]
+        if decision not in valid_decisions:
+            db.close()
+            return self.error(f"Invalid decision. Must be one of: {', '.join(valid_decisions)}", 400)
+
+        if not decision_reason:
+            db.close()
+            return self.error("decision_reason is required", 400)
+
+        db.execute("""
+            UPDATE periodic_reviews SET
+                status='completed', decision=?, decision_reason=?, decided_by=?, completed_at=datetime('now')
+            WHERE id=?
+        """, (decision, decision_reason, user["sub"], review_id))
+
+        # Log audit
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Review Decision", f"Review {review_id}",
+                    f"Decision: {decision}, Reason: {decision_reason}", self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "decision_recorded", "decision": decision, "legacy": True})
+
+
+class PeriodicReviewScheduleHandler(BaseHandler):
+    """POST /api/monitoring/reviews/schedule — Backfill approved-client schedules"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            result = _backfill_monitoring_enrollment(
+                db,
+                user=user,
+                audit_writer=self.log_audit,
+            )
+            db.commit()
+        except Exception as exc:
+            logger.error("Failed to backfill monitoring enrollment: %s", exc, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to backfill monitoring enrollment", 500)
+        db.close()
+
+        self.success({
+            "status": "schedule_check_complete",
+            "reviews_created": result["created"],
+            "reviews_updated": result["updated"],
+            "reviews_skipped": result["skipped"],
+            "enrollments": result["items"],
+        })
+
+
+# ──────────────────────────────────────────────────────────
+# PR-03: Periodic Review Operating Model -- additive handlers
+# ──────────────────────────────────────────────────────────
+# These handlers are additive and do NOT replace the legacy
+# PeriodicReviewDecisionHandler above (kept for back-compat). They
+# delegate all state, generation, escalation and outcome logic to the
+# provider-agnostic ``periodic_review_engine`` module so that server.py
+# stays thin and the operating model is unit-testable in isolation.
+#
+# PR-03a hardening: every PR-03 handler validates ``review_id`` at the
+# HTTP boundary via ``_parse_review_id`` BEFORE calling the engine /
+# touching the database. This prevents a non-numeric path segment from
+# bubbling down into a Postgres type error and surfacing as a 500 to
+# clients. The path regex is permissive (``[^/]+``) so the validation
+# must live in code, not in the URL spec.
+def _parse_review_id(handler, raw_review_id):
+    """Validate / coerce a path-segment review_id to a positive int.
+
+    Returns the int on success; on failure writes a 400 response and
+    returns ``None`` so the caller can early-return without ever
+    invoking the engine or the DB.
+    """
+    try:
+        rid = int(raw_review_id)
+    except (TypeError, ValueError):
+        handler.error("review_id must be a positive integer", 400)
+        return None
+    if rid < 1:
+        handler.error("review_id must be a positive integer", 400)
+        return None
+    return rid
+
+
+def _serialize_periodic_review_row(db, review_row):
+    import document_health_monitor as dhm
+    import monitoring_routing as mr
+    import periodic_review_engine as pre
+
+    result = dict(review_row)
+    projection = _get_periodic_review_projection(db, result["id"]) or {}
+    items = pre.get_required_items(db, result["id"])
+    result["required_items"] = items
+    result["required_items_count"] = len(items)
+    result["assigned_officer"] = projection.get("assigned_officer")
+    result["linked_edd_case_id"] = projection.get("linked_edd_case_id", result.get("linked_edd_case_id"))
+    result["status_label"] = projection.get("status_label")
+    result["blocker_count"] = projection.get("blocker_count", 0)
+    result["blocker_summary"] = projection.get("blocker_summary", [])
+    result["completion_blocker_count"] = projection.get("completion_blocker_count", 0)
+    result["completion_blocker_summary"] = projection.get("completion_blocker_summary", [])
+    result["completion_ready"] = projection.get("completion_ready", False)
+    result["completion_readiness_applicable"] = projection.get("completion_readiness_applicable", True)
+    result["last_review_date"] = projection.get("last_review_date")
+    result["next_review_date"] = projection.get("next_review_date")
+    result["memo_status"] = projection.get("memo_status")
+    result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
+    result["evidence_links"] = projection.get("evidence_links", [])
+    alert_rows = db.execute(
+        "SELECT id, alert_type, status, resolved_at "
+        "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
+        (result.get("application_id"),),
+    ).fetchall()
+    unresolved_alerts = [row for row in alert_rows if mr.is_alert_unresolved(row)]
+    result["open_document_issues_count"] = len([
+        row for row in unresolved_alerts
+        if row["alert_type"] in dhm.DOCUMENT_ALERT_TYPES
+    ])
+    result["open_alerts_count"] = len([
+        row for row in unresolved_alerts
+        if row["alert_type"] not in dhm.DOCUMENT_ALERT_TYPES
+    ])
+    screening_items = [it for it in items if it.get("item_type") == "screening_refresh"]
+    if screening_items:
+        result["screening_status"] = screening_items[0].get("label")
+    elif result.get("status") == "completed":
+        result["screening_status"] = "Completed"
+    else:
+        result["screening_status"] = "Pending review"
+
+    raw_status = str(result.get("status") or "").strip().lower()
+    ui_status = "due"
+    ui_status_label = "Due"
+    if raw_status == "in_progress":
+        ui_status = "in_review"
+        ui_status_label = "In Review"
+    elif raw_status == "awaiting_information":
+        ui_status = "waiting_for_info"
+        ui_status_label = "Waiting for Info"
+    elif raw_status == "pending_senior_review":
+        ui_status = "senior_review"
+        ui_status_label = "Senior Review"
+    elif raw_status == "completed":
+        ui_status = "completed"
+        ui_status_label = "Completed"
+    elif result.get("linked_edd_case_id"):
+        ui_status = "escalated_to_edd"
+        ui_status_label = "Escalated to EDD"
+    result["ui_status"] = ui_status
+    result["ui_status_label"] = projection.get("status_label") or ui_status_label
+    result["legacy_decision"] = result.get("decision")
+    return result
+
+
+class PeriodicReviewStateHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/state -- transition review state.
+
+    Body: {"state": "<one of in_progress|awaiting_information|"
+                       "pending_senior_review>",
+           "reason": "<optional rationale>"}
+
+    Use POST /complete to move a review to 'completed' (completion
+    must carry an explicit outcome).
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json()
+        new_state = data.get("state")
+        reason = data.get("reason")
+        if not new_state:
+            return self.error("state is required", 400)
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                result = pre.transition_review_state(
+                    db, review_id,
+                    new_state=new_state, reason=reason,
+                    user=user, audit_writer=self.log_audit,
+                )
+                generated_items = None
+                if new_state == pre.STATE_IN_PROGRESS:
+                    generated_items = pre.generate_required_items(
+                        db, review_id, user=user, audit_writer=self.log_audit,
+                    )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.InvalidReviewState as e:
+                return self.error(str(e), 400)
+            except pre.InvalidReviewTransition as e:
+                return self.error(str(e), 409)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            payload = {"status": "state_changed", "result": result}
+            if generated_items is not None:
+                payload["generated_checklist_count"] = len(generated_items)
+            self.success(payload)
+        finally:
+            db.close()
+
+
+class PeriodicReviewRequiredItemsHandler(BaseHandler):
+    """GET /api/monitoring/reviews/:id/required-items -- list items.
+
+    POST /api/monitoring/reviews/:id/required-items/generate -- (re)generate.
+    """
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                items = pre.get_required_items(db, review_id)
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            self.success({"review_id": review_id, "items": items})
+        finally:
+            db.close()
+
+
+class PeriodicReviewCustomRequiredItemHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/required-items/custom."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                item = pre.add_custom_required_item(
+                    db,
+                    review_id,
+                    label=data.get("label"),
+                    rationale=data.get("rationale"),
+                    severity=data.get("severity") or "high",
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({
+                "status": "required_item_added",
+                "review_id": review_id,
+                "item": item,
+            })
+        finally:
+            db.close()
+
+
+class PeriodicReviewRequiredItemsGenerateHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/required-items/generate."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                items = pre.generate_required_items(
+                    db, review_id,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            self.success({
+                "status": "required_items_generated",
+                "review_id": review_id,
+                "count": len(items),
+                "items": items,
+            })
+        finally:
+            db.close()
+
+
+class PeriodicReviewRequiredItemDetailHandler(BaseHandler):
+    """PATCH /api/monitoring/reviews/:id/required-items/:item_id."""
+    def patch(self, review_id, item_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        status = data.get("status")
+        if not status:
+            return self.error("status is required", 400)
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                item = pre.update_required_item(
+                    db,
+                    review_id,
+                    item_id,
+                    status=status,
+                    officer_note=data.get("officer_note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.RequiredItemNotFound as e:
+                return self.error(str(e), 404)
+            except pre.InvalidRequiredItemStatus as e:
+                return self.error(str(e), 400)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({"status": "required_item_updated", "item": item})
+        finally:
+            db.close()
+
+
+class PeriodicReviewScreeningRefreshHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/run-screening-refresh.
+
+    This endpoint resolves the periodic-review screening checklist item
+    only after the application's stored screening freshness is current.
+    The actual screening run remains owned by the existing screening
+    endpoint; this handler gives review users a deterministic closure
+    action after that evidence exists.
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                item = pre.resolve_screening_refresh_item_if_current(
+                    db, review_id, user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.RequiredItemNotFound as e:
+                return self.error(str(e), 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                self.set_status(409)
+                return self.finish({
+                    "error": str(e),
+                    "next_action": (
+                        "Run the application screening refresh, then retry "
+                        "this periodic-review action."
+                    ),
+                })
+            self.success({"status": "screening_refresh_resolved", "item": item})
+        finally:
+            db.close()
+
+
+class PeriodicReviewEscalateHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/escalate -- escalate to EDD.
+
+    Body: {"trigger_notes": "<optional>", "priority": "<optional>"}.
+
+    Reuses any active EDD case linked to the review or to the
+    application; otherwise creates a new EDD case via the same
+    duplicate-prevention predicate as ``EDDCreateHandler.post``.
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                result = pre.escalate_review_to_edd(
+                    db, review_id,
+                    trigger_notes=data.get("trigger_notes"),
+                    priority=data.get("priority"),
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({"status": "escalated_to_edd", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewCompleteHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/complete -- record outcome and close.
+
+    Body: {"outcome": "<one of no_change|enhanced_monitoring|"
+                       "edd_required|exit_recommended>",
+           "outcome_reason": "<rationale>"}
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        outcome = data.get("outcome")
+        outcome_reason = data.get("outcome_reason")
+        if not outcome:
+            return self.error("outcome is required", 400)
+        if not outcome_reason:
+            return self.error("outcome_reason is required", 400)
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                result = pre.record_review_outcome(
+                    db, review_id,
+                    outcome=outcome, outcome_reason=outcome_reason,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.InvalidReviewOutcome as e:
+                return self.error(str(e), 400)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.ReviewCompletionBlocked as e:
+                self.set_status(409)
+                return self.finish({
+                    "error": "Periodic review cannot be completed",
+                    "blocking_items": e.blocking_items,
+                })
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+
+            # PR-D: generate the lightweight periodic review memo AFTER
+            # the outcome commit. Deterministic, template-driven, no AI.
+            # Failure here MUST NOT roll back the outcome -- the review
+            # remains completed; a status='generation_failed' row is
+            # persisted by the generator so the read endpoint and UI can
+            # differentiate "not yet completed" (no row) from "completed
+            # but generation failed" (row with failure status). See
+            # periodic_review_memo.py docstring for the failure contract.
+            memo_result = None
+            try:
+                import periodic_review_memo as prm
+                memo_result = prm.generate_periodic_review_memo(db, review_id)
+            except Exception:
+                # Generator already logged with full traceback. Swallow
+                # here so the outcome commit is the authoritative result
+                # surfaced to the caller.
+                memo_result = {"status": "generation_failed"}
+
+            self.success({
+                "status": "outcome_recorded",
+                "result": result,
+                "memo": memo_result,
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Periodic review completion failed: review_id=%s", review_id)
+            self.error("Failed to complete periodic review.", 500)
+        finally:
+            db.close()
+
+
+class PeriodicReviewMemoHandler(BaseHandler):
+    """GET /api/periodic-reviews/:id/memo — Lightweight periodic review memo.
+
+    Returns the latest memo row for the given periodic review. If the
+    review exists but no memo has been persisted yet, the memo is
+    generated on demand so existing reviews do not produce a misleading
+    404.
+
+    * 200 with ``status='generated'`` and full ``memo_data`` when the
+      memo was generated successfully.
+    * 200 with ``status='generation_failed'`` when a failure-indicator
+      row exists.
+    * 404 only when the periodic review itself does not exist.
+
+    Auth gating mirrors ``PeriodicReviewDetailHandler`` (admin|sco|co).
+    Explicitly NOT ``compliance_memos``: this endpoint never reads or
+    writes the onboarding memo table.
+    """
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            import periodic_review_memo as prm
+            review = db.execute(
+                "SELECT id FROM periodic_reviews WHERE id = ?",
+                (review_id,),
+            ).fetchone()
+            if review is None:
+                return self.error("Review not found", 404)
+            memo = prm.fetch_latest_memo(db, review_id)
+            if memo is None:
+                generated_on_demand = True
+                try:
+                    prm.generate_periodic_review_memo(db, review_id)
+                except Exception:
+                    # The generator persists a generation_failed row before
+                    # re-raising. Return that row if available so the UI has
+                    # actionable state instead of a 404.
+                    pass
+                memo = prm.fetch_latest_memo(db, review_id)
+                if memo is None:
+                    return self.error("Memo generation failed", 500)
+                memo["generated_on_demand"] = generated_on_demand
+            else:
+                memo["generated_on_demand"] = False
+            self.success(memo)
+        finally:
+            db.close()
+
+
+# ══════════════════════════════════════════════════════════
+# SAR (SUSPICIOUS ACTIVITY REPORT) ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class SARListHandler(BaseHandler):
+    """GET /api/sar — List SAR reports, POST — create new SAR"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        status_filter = self.get_argument("status", None)
+        db = get_db()
+
+        query = "SELECT * FROM sar_reports WHERE 1=1"
+        params = []
+        if status_filter:
+            query += " AND filing_status = ?"
+            params.append(status_filter)
+        query += " ORDER BY created_at DESC"
+
+        rows = db.execute(query, params).fetchall()
+        result = []
+        for r in rows:
+            row_dict = dict(r)
+            row_dict["indicators"] = safe_json_loads(row_dict["indicators"]) if row_dict["indicators"] else []
+            row_dict["transaction_details"] = safe_json_loads(row_dict["transaction_details"]) if row_dict["transaction_details"] else {}
+            row_dict["supporting_documents"] = safe_json_loads(row_dict["supporting_documents"]) if row_dict["supporting_documents"] else []
+            result.append(row_dict)
+
+        db.close()
+        self.success({"sar_reports": result, "total": len(result)})
+
+    def post(self):
+        """Create a new SAR report — can be auto-triggered by alert or manually created."""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        subject_name = data.get("subject_name", "").strip()
+        narrative = data.get("narrative", "").strip()
+
+        if not subject_name or not narrative:
+            return self.error("subject_name and narrative are required")
+
+        db = get_db()
+        sar_id = uuid.uuid4().hex[:16]
+
+        # Generate SAR reference number
+        count = db.execute("SELECT COUNT(*) as c FROM sar_reports").fetchone()["c"]
+        year = datetime.now().year
+        sar_ref = f"SAR-{year}-{10001 + count}"
+
+        db.execute("""
+            INSERT INTO sar_reports (id, application_id, alert_id, sar_reference, report_type,
+                subject_name, subject_type, risk_level, narrative, indicators,
+                transaction_details, supporting_documents, filing_status, prepared_by, regulatory_body)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            sar_id,
+            data.get("application_id"),
+            data.get("alert_id"),
+            sar_ref,
+            data.get("report_type", "SAR"),
+            subject_name,
+            data.get("subject_type", "individual"),
+            data.get("risk_level", "HIGH"),
+            narrative,
+            json.dumps(data.get("indicators", [])),
+            json.dumps(data.get("transaction_details", {})),
+            json.dumps(data.get("supporting_documents", [])),
+            "draft",
+            user["sub"],
+            data.get("regulatory_body", "FIU Mauritius"),
+        ))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "SAR Created", sar_ref, f"SAR report created for {subject_name}")
+        if METRICS_ENABLED:
+            SAR_COUNT.labels(status="draft").inc()
+
+        self.success({"id": sar_id, "sar_reference": sar_ref, "status": "draft"}, 201)
+
+
+class SARDetailHandler(BaseHandler):
+    """GET/PUT /api/sar/:id — Get or update a SAR report"""
+    def get(self, sar_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
+        if not sar:
+            db.close()
+            return self.error("SAR report not found", 404)
+
+        result = dict(sar)
+        result["indicators"] = safe_json_loads(result["indicators"]) if result["indicators"] else []
+        result["transaction_details"] = safe_json_loads(result["transaction_details"]) if result["transaction_details"] else {}
+        result["supporting_documents"] = safe_json_loads(result["supporting_documents"]) if result["supporting_documents"] else []
+
+        db.close()
+        self.success(result)
+
+    def put(self, sar_id):
+        """Update SAR report (edit narrative, indicators, etc.)"""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
+        if not sar:
+            db.close()
+            return self.error("SAR report not found", 404)
+
+        if sar["filing_status"] == "filed":
+            db.close()
+            return self.error("Cannot modify a filed SAR report", 400)
+
+        real_id = sar["id"]
+        db.execute("""
+            UPDATE sar_reports SET
+                narrative=?, indicators=?, transaction_details=?,
+                supporting_documents=?, risk_level=?, updated_at=datetime('now')
+            WHERE id=?
+        """, (
+            data.get("narrative", sar["narrative"]),
+            json.dumps(data.get("indicators", safe_json_loads(sar["indicators"]))),
+            json.dumps(data.get("transaction_details", safe_json_loads(sar["transaction_details"]))),
+            json.dumps(data.get("supporting_documents", safe_json_loads(sar["supporting_documents"]))),
+            data.get("risk_level", sar["risk_level"]),
+            real_id,
+        ))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "SAR Updated", sar["sar_reference"], "SAR report updated")
+        self.success({"status": "updated"})
+
+
+class SARWorkflowHandler(BaseHandler):
+    """POST /api/sar/:id/workflow — Advance SAR through workflow (review → approve → file)"""
+    def post(self, sar_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        data = self.get_json()
+        action = data.get("action")
+        notes = data.get("notes", "")
+
+        valid_actions = ["submit_review", "approve", "reject", "file", "archive"]
+        if action not in valid_actions:
+            return self.error(f"Invalid action. Must be one of: {', '.join(valid_actions)}")
+
+        db = get_db()
+        sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
+        if not sar:
+            db.close()
+            return self.error("SAR report not found", 404)
+
+        real_id = sar["id"]
+        current_status = sar["filing_status"]
+
+        # Validate state transitions
+        valid_transitions = {
+            "draft": ["submit_review"],
+            "pending_review": ["approve", "reject"],
+            "approved": ["file"],
+            "filed": ["archive"],
+            "rejected": ["submit_review"],
+        }
+
+        if action not in valid_transitions.get(current_status, []):
+            db.close()
+            return self.error(f"Cannot {action} a SAR in '{current_status}' status", 400)
+
+        new_status = {
+            "submit_review": "pending_review",
+            "approve": "approved",
+            "reject": "rejected",
+            "file": "filed",
+            "archive": "archived",
+        }[action]
+
+        # C-06: Parameterized SQL — NO f-string interpolation for SQL
+        # Each action maps to a fixed SQL statement with explicit parameter positions
+        if action == "approve":
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now'), approved_by=? WHERE id=?",
+                (new_status, user["sub"], real_id)
+            )
+        elif action == "submit_review":
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now'), reviewed_by=? WHERE id=?",
+                (new_status, user["sub"], real_id)
+            )
+        elif action == "file":
+            external_ref = str(data.get("external_reference", ""))[:100]  # Sanitize + limit length
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now'), filed_at=datetime('now'), external_reference=? WHERE id=?",
+                (new_status, external_ref, real_id)
+            )
+        else:
+            # reject, archive — status-only update
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now') WHERE id=?",
+                (new_status, real_id)
+            )
+
+        self.log_audit(user, f"SAR {action.replace('_',' ').title()}", sar["sar_reference"],
+                       f"SAR workflow: {current_status} → {new_status}. {notes}", db=db)
+
+        db.commit()
+        db.close()
+
+        if METRICS_ENABLED:
+            SAR_COUNT.labels(status=new_status).inc()
+
+        self.success({"status": new_status, "sar_reference": sar["sar_reference"]})
+
+
+class SARAutoTriggerHandler(BaseHandler):
+    """POST /api/sar/auto-trigger — Auto-create SAR from high-risk monitoring alert"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        alert_id = data.get("alert_id")
+
+        if not alert_id:
+            return self.error("alert_id is required")
+
+        db = get_db()
+        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
+        if not alert:
+            db.close()
+            return self.error("Alert not found", 404)
+
+        # Check if SAR already exists for this alert
+        existing = db.execute("SELECT id, sar_reference FROM sar_reports WHERE alert_id = ?", (alert_id,)).fetchone()
+        if existing:
+            db.close()
+            return self.success({"existing": True, "sar_reference": existing["sar_reference"], "id": existing["id"]})
+
+        # Auto-populate SAR from alert data
+        sar_id = uuid.uuid4().hex[:16]
+        count = db.execute("SELECT COUNT(*) as c FROM sar_reports").fetchone()["c"]
+        sar_ref = f"SAR-{datetime.now().year}-{10001 + count}"
+
+        narrative = (
+            f"Auto-generated SAR from monitoring alert.\n\n"
+            f"Alert Type: {alert['alert_type']}\n"
+            f"Severity: {alert['severity']}\n"
+            f"Detected By: {alert['detected_by']}\n"
+            f"Summary: {alert['summary']}\n"
+            f"Source: {alert['source_reference']}\n"
+            f"AI Recommendation: {alert['ai_recommendation']}"
+        )
+
+        db.execute("""
+            INSERT INTO sar_reports (id, application_id, alert_id, sar_reference, report_type,
+                subject_name, subject_type, risk_level, narrative, filing_status, prepared_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            sar_id, alert["application_id"], alert_id, sar_ref, "SAR",
+            alert["client_name"], "entity", alert["severity"].upper(),
+            narrative, "draft", user["sub"],
+        ))
+
+        # Update alert to reflect SAR creation
+        db.execute("UPDATE monitoring_alerts SET officer_action='sar_filed', officer_notes=? WHERE id=?",
+                   (f"SAR {sar_ref} auto-created", alert_id))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "SAR Auto-Trigger", sar_ref, f"SAR auto-created from alert #{alert_id}")
+        self.success({"id": sar_id, "sar_reference": sar_ref, "status": "draft"}, 201)
+
+
+# ══════════════════════════════════════════════════════════
+# EDD (ENHANCED DUE DILIGENCE) PIPELINE ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+_EDD_VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
+_EDD_REVIEW_OR_TERMINAL_STAGES = {"pending_senior_review", "edd_approved", "edd_rejected"}
+_EDD_FIXTURE_COMPANY_NAME_PATTERNS = (
+    "%phase1 memo truth%",
+    "%codex rmi smoke%",
+    "%codex%smoke%",
+    "%qa e2e%",
+    "%staging e2e%",
+    "%e2e test%",
+)
+
+
+def _parse_edd_sla_due_at(value):
+    """Parse a date or datetime SLA value into an aware UTC datetime."""
+    if not value:
+        return None, None
+    raw = str(value).strip()
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+            parsed = datetime.strptime(raw, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        else:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None, "sla_due_at must be a valid ISO date or datetime"
+    return parsed, None
+
+
+def _edd_sla_is_breached(value):
+    due_at, error = _parse_edd_sla_due_at(value)
+    if error or due_at is None:
+        return False
+    return due_at < datetime.now(timezone.utc)
+
+
+def _edd_findings_are_complete(db, case_id):
+    """EDD closure requires structured findings, not free-text notes alone."""
+    try:
+        from edd_memo_integration import get_edd_findings
+        findings = get_edd_findings(db, case_id)
+    except Exception:
+        findings = None
+    if not findings:
+        return False
+    recommended = str(findings.get("recommended_outcome") or "").strip()
+    if not recommended:
+        return False
+
+    def _structured_list_has_content(value):
+        if isinstance(value, str):
+            try:
+                value = safe_json_loads(value)
+            except Exception:
+                value = [value]
+        if not isinstance(value, list):
+            value = [value]
+        return any(str(item or "").strip() for item in value)
+
+    summary = str(findings.get("findings_summary") or "").strip()
+    return (
+        len(summary) >= 12
+        or _structured_list_has_content(findings.get("key_concerns"))
+        or _structured_list_has_content(findings.get("mitigating_evidence"))
+    )
+
+
+def _edd_policy_block(case_dict):
+    notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+    policy_note = {}
+    if isinstance(notes, list):
+        for item in notes:
+            if isinstance(item, dict) and (
+                item.get("policy_version") or item.get("source") == "policy_routing"
+            ):
+                policy_note = item
+                break
+    return {
+        "origin_context": case_dict.get("origin_context"),
+        "trigger_source": case_dict.get("trigger_source"),
+        "policy_version": policy_note.get("policy_version"),
+        "triggers": policy_note.get("triggers") or [],
+        "mandatory_escalation_reasons": policy_note.get("mandatory_escalation_reasons") or [],
+        "evaluated_at": policy_note.get("evaluated_at"),
+        "trigger_notes": case_dict.get("trigger_notes"),
+    }
+
+
+def _edd_findings_complete_payload(findings):
+    if not findings:
+        return False
+    recommended = str(findings.get("recommended_outcome") or "").strip()
+    if not recommended:
+        return False
+
+    def _list_has_content(value):
+        if isinstance(value, str):
+            try:
+                value = safe_json_loads(value)
+            except Exception:
+                value = [value]
+        if not isinstance(value, list):
+            value = [value]
+        return any(str(item or "").strip() for item in value)
+
+    summary = str(findings.get("findings_summary") or "").strip()
+    return (
+        len(summary) >= 12
+        or _list_has_content(findings.get("key_concerns"))
+        or _list_has_content(findings.get("mitigating_evidence"))
+    )
+
+
+def _edd_case_status_block(case_dict, findings=None):
+    assigned = str(case_dict.get("assigned_officer") or "").strip()
+    senior = str(case_dict.get("senior_reviewer") or "").strip()
+    findings_complete = _edd_findings_complete_payload(findings)
+    blockers = []
+    if case_dict.get("has_authoritative_risk") is False:
+        risk_warnings = case_dict.get("risk_integrity_warnings") or [_RISK_UNAVAILABLE_WARNING]
+        blockers.append(
+            _RISK_UNAVAILABLE_WARNING
+            + ". Recompute risk before senior review or closure. "
+            + "Integrity warning(s): " + "; ".join(risk_warnings)
+        )
+    if not case_dict.get("sla_due_at"):
+        blockers.append("SLA due date is required before senior review or closure.")
+    if not findings_complete:
+        blockers.append("Structured EDD findings are required before senior review or closure.")
+    if not senior:
+        blockers.append("Senior reviewer must be assigned before senior review or closure.")
+    if assigned and senior and assigned == senior:
+        blockers.append("Senior reviewer must be different from the assigned officer.")
+
+    return {
+        "sla_due_at_set": bool(case_dict.get("sla_due_at")),
+        "findings_present": bool(findings),
+        "findings_complete": findings_complete,
+        "senior_reviewer_assigned": bool(senior),
+        "dual_control_ready": bool(senior) and (not assigned or assigned != senior),
+        "gate_blockers": blockers,
+        "can_enter_review_or_close": not blockers,
+        "is_terminal": case_dict.get("stage") in ("edd_approved", "edd_rejected"),
+    }
+
+
+def _materialise_edd_case(db, case_row, include_findings=True):
+    case_dict = dict(case_row)
+    app_row = db.execute(
+        "SELECT id, ref, status, risk_level, risk_score, final_risk_level, decision_notes, risk_escalations, elevation_reason_text "
+        "FROM applications WHERE id = ?",
+        (case_dict.get("application_id"),),
+    ).fetchone()
+    if app_row:
+        case_dict["application_ref"] = app_row["ref"]
+        decorated_app = _decorate_application_risk_integrity(dict(app_row))
+        case_dict["has_authoritative_risk"] = decorated_app.get("has_authoritative_risk")
+        case_dict["risk_integrity_warnings"] = decorated_app.get("risk_integrity_warnings", [])
+        case_dict["edd_trigger_flags"] = decorated_app.get("edd_trigger_flags", [])
+    else:
+        case_dict["has_authoritative_risk"] = False
+        case_dict["risk_integrity_warnings"] = ["Linked application unavailable"]
+    risk_level, risk_score = _edd_truthful_risk_snapshot(case_dict, app_row)
+    case_dict["risk_level"] = risk_level
+    case_dict["risk_score"] = risk_score
+    linked_review_id = case_dict.get("linked_periodic_review_id")
+    case_dict["linked_periodic_review"] = (
+        _get_periodic_review_projection(db, linked_review_id) if linked_review_id else None
+    )
+    case_dict["edd_notes"] = safe_json_loads(case_dict.get("edd_notes", "[]"))
+    findings = None
+    if include_findings:
+        try:
+            from edd_memo_integration import get_edd_findings
+            findings = get_edd_findings(db, case_dict["id"])
+        except Exception:
+            findings = None
+        case_dict["findings"] = findings
+    case_dict["case_status"] = _edd_case_status_block(case_dict, findings)
+    case_dict["policy"] = _edd_policy_block(case_dict)
+    return case_dict
+
+
+def _edd_application_ref(db, case_dict):
+    app = db.execute(
+        "SELECT ref FROM applications WHERE id = ?",
+        (case_dict.get("application_id"),),
+    ).fetchone()
+    if app and app["ref"]:
+        return app["ref"]
+    return f"EDD-{case_dict.get('id')}"
+
+
+def _edd_senior_reviewer_error(db, reviewer_id):
+    reviewer_id = str(reviewer_id or "").strip()
+    if not reviewer_id:
+        return None
+    reviewer = db.execute(
+        "SELECT role, status FROM users WHERE id = ? LIMIT 1",
+        (reviewer_id,),
+    ).fetchone()
+    if not reviewer:
+        return "senior_reviewer must be a Senior Compliance Officer or Admin"
+    role = str(reviewer["role"] or "").strip().lower()
+    status = str(reviewer["status"] or "active").strip().lower()
+    if role not in ("sco", "admin") or status != "active":
+        return "senior_reviewer must be a Senior Compliance Officer or Admin"
+    return None
+
+
+class EDDListHandler(BaseHandler):
+    """GET /api/edd/cases — List EDD cases; POST — Create a new EDD case"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        from fixture_filter import (
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
+        stage = self.get_argument("stage", None)
+        assigned = self.get_argument("assigned_officer", None)
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+
+        db = get_db()
+        if show_fx:
+            query = "SELECT * FROM edd_cases WHERE 1=1"
+            params = []
+        else:
+            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+            # edd_cases.application_id is NOT NULL, but use shared helper for
+            # consistency (the NULL-safe guard is a no-op here).
+            query = f"SELECT * FROM edd_cases WHERE {fx_excl}"
+            params = list(fx_params)
+            name_checks = " OR ".join(
+                "LOWER(COALESCE(company_name, '')) LIKE ?"
+                for _ in _EDD_FIXTURE_COMPANY_NAME_PATTERNS
+            )
+            query += f" AND application_id NOT IN (SELECT id FROM applications WHERE {name_checks})"
+            params.extend(_EDD_FIXTURE_COMPANY_NAME_PATTERNS)
+
+        if stage:
+            query += " AND stage = ?"
+            params.append(stage)
+        if assigned:
+            query += " AND assigned_officer = ?"
+            params.append(assigned)
+
+        query += " ORDER BY triggered_at DESC"
+        cases = db.execute(query, params).fetchall()
+        result = [_materialise_edd_case(db, c) for c in cases]
+        db.close()
+        self.success({"cases": result, "total": len(result)})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            return self.error("application_id is required", 400)
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        # Check if EDD case already exists for this application
+        existing = db.execute("SELECT id FROM edd_cases WHERE application_id = ? AND stage NOT IN ('edd_approved','edd_rejected')", (application_id,)).fetchone()
+        if existing:
+            db.close()
+            return self.success({"existing": True, "id": existing["id"]})
+
+        trigger_notes = data.get("trigger_notes", "EDD triggered by officer decision")
+        initial_note = json.dumps([{
+            "ts": datetime.now().isoformat(),
+            "author": user.get("name", "System"),
+            "note": trigger_notes
+        }])
+
+        risk_level, risk_score = _application_risk_snapshot(app)
+        insert_params = (application_id, app["company_name"], risk_level, risk_score,
+              "triggered", user["sub"], data.get("trigger_source", "officer_decision"), trigger_notes, initial_note)
+
+        if USE_POSTGRES:
+            row = db.execute("""
+                INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+                VALUES (?,?,?,?,?,?,?,?,?) RETURNING id
+            """, insert_params).fetchone()
+            case_id = row["id"]
+        else:
+            db.execute("""
+                INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, insert_params)
+            case_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "EDD Created", app["ref"], f"EDD case created for {app['company_name']}")
+        self.success({"id": case_id, "status": "created"}, 201)
+
+
+class EDDDetailHandler(BaseHandler):
+    """GET/PATCH /api/edd/cases/:id — Get or update EDD case"""
+    def get(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+
+        result = _materialise_edd_case(db, case)
+        db.close()
+        self.success(result)
+
+    def patch(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+        attempt_summary = _governance_summary(
+            data,
+            (
+                "stage", "priority", "assigned_officer", "senior_reviewer",
+                "sla_due_at", "sla_breach_reason", "decision_reason", "note",
+            ),
+        )
+        attempt_target = f"EDD-{case_id}"
+
+        def reject_edd_update(reason, status_code):
+            self.log_governance_attempt(
+                user, "edd.case_update", attempt_target, "rejected", status_code,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, status_code)
+
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            return reject_edd_update("EDD case not found", 404)
+        case_dict = dict(case)
+        app_ref = _edd_application_ref(db, case_dict)
+        attempt_target = app_ref
+
+        # Prevent updates on closed cases
+        if case["stage"] in ("edd_approved", "edd_rejected"):
+            return reject_edd_update(f"EDD case is already {case['stage']}. Cannot modify.", 409)
+
+        new_stage = data.get("stage")
+        valid_stages = ["triggered", "information_gathering", "analysis", "pending_senior_review", "edd_approved", "edd_rejected"]
+
+        if new_stage and new_stage not in valid_stages:
+            return reject_edd_update(f"Invalid stage. Must be one of: {', '.join(valid_stages)}", 400)
+
+        # Stage transition validation
+        valid_transitions = {
+            "triggered": ["information_gathering", "analysis", "edd_rejected"],
+            "information_gathering": ["analysis", "edd_rejected"],
+            "analysis": ["pending_senior_review", "edd_rejected"],
+            "pending_senior_review": ["edd_approved", "edd_rejected", "analysis"],
+        }
+
+        if new_stage and new_stage != case["stage"]:
+            allowed = valid_transitions.get(case["stage"], [])
+            if new_stage not in allowed:
+                return reject_edd_update(
+                    f"Invalid transition: {case['stage']} → {new_stage}. Allowed: {', '.join(allowed)}", 400)
+
+        priority = str(data.get("priority") or "").strip().lower()
+        if priority and priority not in _EDD_VALID_PRIORITIES:
+            return reject_edd_update(
+                f"Invalid priority. Must be one of: {', '.join(sorted(_EDD_VALID_PRIORITIES))}", 400)
+
+        sla_due_at = data.get("sla_due_at")
+        parsed_sla_due_at = None
+        if sla_due_at:
+            parsed_sla_due_at, sla_error = _parse_edd_sla_due_at(sla_due_at)
+            if sla_error:
+                return reject_edd_update(sla_error, 400)
+
+        effective_sla_due_at = sla_due_at or case_dict.get("sla_due_at")
+        if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
+            app_for_risk = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (case_dict.get("application_id"),),
+            ).fetchone()
+            risk_error = _application_risk_integrity_error(app_for_risk, "advance EDD case")
+            if risk_error:
+                return reject_edd_update(risk_error, 400)
+            if not effective_sla_due_at:
+                return reject_edd_update(
+                    "EDD SLA due date is required before senior review or closure", 400)
+            if not _edd_findings_are_complete(db, case_id):
+                return reject_edd_update(
+                    "Structured EDD findings are required before senior review or closure", 400)
+
+        sla_breach_reason = str(data.get("sla_breach_reason") or "").strip()
+        if new_stage in ("edd_approved", "edd_rejected") and _edd_sla_is_breached(effective_sla_due_at):
+            if len(sla_breach_reason) < 12:
+                return reject_edd_update(
+                    "sla_breach_reason is required when closing an overdue EDD case", 400)
+
+        # Build update fields
+        updates = ["updated_at=datetime('now')"]
+        params = []
+
+        if new_stage:
+            updates.append("stage=?")
+            params.append(new_stage)
+
+        if data.get("assigned_officer"):
+            updates.append("assigned_officer=?")
+            params.append(data["assigned_officer"])
+
+        if data.get("senior_reviewer"):
+            updates.append("senior_reviewer=?")
+            params.append(data["senior_reviewer"])
+
+        if priority:
+            updates.append("priority=?")
+            params.append(priority)
+
+        if parsed_sla_due_at is not None:
+            updates.append("sla_due_at=?")
+            params.append(parsed_sla_due_at.isoformat())
+
+        effective_assigned = str(data.get("assigned_officer") or case_dict.get("assigned_officer") or "").strip()
+        effective_senior = str(data.get("senior_reviewer") or case_dict.get("senior_reviewer") or "").strip()
+
+        senior_reviewer_error = _edd_senior_reviewer_error(db, effective_senior)
+        if senior_reviewer_error:
+            return reject_edd_update(senior_reviewer_error, 400)
+
+        if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
+            if not effective_senior:
+                return reject_edd_update(
+                    "senior_reviewer is required before senior review or closure", 400)
+            if effective_assigned and effective_senior == effective_assigned:
+                return reject_edd_update(
+                    "senior_reviewer must be different from the assigned officer", 400)
+
+        if new_stage in ("edd_approved", "edd_rejected"):
+            if user.get("role") not in ("sco", "admin"):
+                return reject_edd_update(
+                    "EDD closure requires Senior Compliance Officer or Admin role", 403)
+            if effective_assigned and user.get("sub") == effective_assigned:
+                return reject_edd_update(
+                    "EDD closure requires a different officer from the assigned officer", 403)
+
+        # Handle decision for terminal stages
+        if new_stage in ("edd_approved", "edd_rejected"):
+            decision_reason = data.get("decision_reason", "")
+            if not decision_reason:
+                return reject_edd_update("decision_reason is required for approval/rejection", 400)
+            updates.append("decision=?")
+            params.append(new_stage)
+            updates.append("decision_reason=?")
+            params.append(decision_reason)
+            updates.append("decided_by=?")
+            params.append(user["sub"])
+            updates.append("decided_at=datetime('now')")
+
+        params.append(case_id)
+        note_text = data.get("note")
+        try:
+            db.execute(f"UPDATE edd_cases SET {', '.join(updates)} WHERE id=?", params)
+
+            # Append note if provided
+            if note_text:
+                existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+                existing_notes.append({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": note_text
+                })
+                db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+            elif sla_breach_reason:
+                existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+                existing_notes.append({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": f"SLA breach acknowledged: {sla_breach_reason}"
+                })
+                db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+
+            # Audit trail
+            detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
+            if note_text:
+                detail += f" | Note: {note_text[:100]}"
+            if sla_breach_reason:
+                detail += f" | SLA breach acknowledged: {sla_breach_reason[:100]}"
+            detail += f" | EDD Case: EDD-{case_id}"
+            self.log_audit(user, "EDD Update", app_ref, detail, db=db, commit=False)
+            if new_stage in ("edd_approved", "edd_rejected"):
+                self.log_audit(
+                    user,
+                    "EDD Closure (dual-control)",
+                    app_ref,
+                    json.dumps({
+                        "edd_case_id": case_id,
+                        "decision": new_stage,
+                        "assigned_officer": effective_assigned or None,
+                        "senior_reviewer": effective_senior,
+                        "closed_by": user.get("sub"),
+                        "decision_reason": data.get("decision_reason", ""),
+                    }, default=str, sort_keys=True),
+                    db=db,
+                    commit=False,
+                )
+            self.log_governance_attempt(
+                user, "edd.case_update", attempt_target, "accepted", 200,
+                "", attempt_summary, db=db, commit=False)
+            updated_case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+            _mark_latest_memo_stale(
+                db,
+                case_dict.get("application_id"),
+                trigger="edd_status_or_requirements_changed",
+                reason="EDD case status, notes, SLA, priority, reviewer, or decision changed after memo generation.",
+                actor=user,
+                app_ref=app_ref,
+                ip_address=self.get_client_ip(),
+                before_state=case_dict,
+                after_state=dict(updated_case) if updated_case else None,
+            )
+
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.error("Failed to update EDD case %s: %s", case_id, e, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to update EDD case", 500)
+
+        self.success({"status": "updated", "stage": new_stage or case["stage"]})
+
+
+class EDDFindingsHandler(BaseHandler):
+    """GET/PATCH /api/edd/cases/:id/findings — structured EDD findings."""
+    def get(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+        try:
+            from edd_memo_integration import get_edd_findings
+            findings = get_edd_findings(db, case_id)
+        except Exception:
+            findings = None
+        case_dict = dict(case)
+        status = _edd_case_status_block(case_dict, findings)
+        db.close()
+        self.success({"findings": findings, "case_status": status})
+
+    def patch(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json()
+        findings = data.get("findings") if isinstance(data.get("findings"), dict) else data
+
+        db = get_db()
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+        case_dict = dict(case)
+        app_ref = _edd_application_ref(db, case_dict)
+
+        def _audit_writer(audit_user, action, _target, detail, db=None, before_state=None, after_state=None):
+            self.log_audit(
+                audit_user,
+                action,
+                app_ref,
+                detail,
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
+
+        try:
+            from edd_memo_integration import (
+                EDDCaseNotFound,
+                FindingsValidationError,
+                MissingAuditWriter,
+                set_edd_findings,
+            )
+            updated = set_edd_findings(
+                db,
+                case_id,
+                findings=findings,
+                user=user,
+                audit_writer=_audit_writer,
+            )
+            _mark_latest_memo_stale(
+                db,
+                case_dict.get("application_id"),
+                trigger="edd_findings_changed",
+                reason="EDD findings changed after memo generation.",
+                actor=user,
+                app_ref=app_ref,
+                ip_address=self.get_client_ip(),
+                before_state=None,
+                after_state=updated,
+            )
+            db.commit()
+        except EDDCaseNotFound:
+            db.close()
+            return self.error("EDD case not found", 404)
+        except (FindingsValidationError, MissingAuditWriter) as exc:
+            db.close()
+            return self.error(str(exc), 400)
+        except Exception as exc:
+            logger.error("Failed to save EDD findings for %s: %s", case_id, exc, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to save EDD findings", 500)
+
+        status = _edd_case_status_block(case_dict, updated)
+        db.close()
+        self.success({"findings": updated, "case_status": status})
+
+    put = patch
+
+
+class EDDStatsHandler(BaseHandler):
+    """GET /api/edd/stats — Get EDD pipeline statistics"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        from fixture_filter import (
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
+        db = get_db()
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        if show_fx:
+            fx_excl = "1=1"
+            fx_params = []
+        else:
+            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+        active = db.execute(
+            f"SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected') AND {fx_excl}",
+            fx_params,
+        ).fetchone()["c"]
+        pending_senior = db.execute(
+            f"SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review' AND {fx_excl}",
+            fx_params,
+        ).fetchone()["c"]
+        if USE_POSTGRES:
+            completed_month = db.execute(f"""
+                SELECT COUNT(*) as c FROM edd_cases
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date_trunc('month', CURRENT_DATE)
+                AND {fx_excl}
+            """, fx_params).fetchone()["c"]
+        else:
+            completed_month = db.execute(f"""
+                SELECT COUNT(*) as c FROM edd_cases
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month')
+                AND {fx_excl}
+            """, fx_params).fetchone()["c"]
+        db.close()
+
+        self.success({
+            "active": active,
+            "pending_senior_review": pending_senior,
+            "completed_this_month": completed_month,
+            "show_fixtures": show_fx,
+        })
+
+
+# ══════════════════════════════════════════════════════════
+# PR-05: LIFECYCLE QUEUE CLARITY ENDPOINTS (additive, read-only)
+# ══════════════════════════════════════════════════════════
+# These endpoints expose a single coherent operational view over the
+# three lifecycle object types (monitoring alerts, periodic reviews,
+# EDD cases) so the back-office can answer "what needs attention now,
+# who owns it, how old is it, what is it linked to?" without
+# scattering five separate API calls. Read-only; no DB mutation; no
+# semantic change to existing endpoints. Delegates to lifecycle_queue.
+
+class LifecycleQueueHandler(BaseHandler):
+    """GET /api/lifecycle/queue — unified lifecycle work queue.
+
+    Query params (all optional):
+      include       : 'active' (default), 'historical', or 'all'
+      type          : 'alerts', 'reviews', 'edd', or 'all' (default)
+                      also accepted: comma-separated list of item types
+                      (alert / review / edd) for finer control
+      application_id: scope to a single application
+      show_fixtures / include_fixtures:
+                      truthy value includes fixture rows (admin/sco only;
+                      silently ignored for other roles)
+
+    Response: ``{"items": [...], "counts": {...}, "filter": {...}}``.
+    Items carry: type, state, owner, age, linkage, next-action hint,
+    plus type-specific fields (severity, outcome, memo_context, ...).
+    """
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+        include = (self.get_argument("include", "active") or "active").lower()
+        if include not in ("active", "historical", "all", "legacy_unmapped"):
+            return self.error(
+                "include must be one of: active, historical, all, legacy_unmapped", 400,
+            )
+
+        # Accept either a single 'type' or 'types' (alerts/reviews/edd/all)
+        # plus comma-separated value for friendliness.
+        type_arg = (self.get_argument("type", None)
+                    or self.get_argument("types", None))
+        types = None
+        if type_arg:
+            raw = [t.strip().lower() for t in type_arg.split(",") if t.strip()]
+            if "all" in raw:
+                types = None
+            else:
+                # Accept both 'alerts'/'reviews'/'edd' (plural friendly) and
+                # canonical 'alert'/'review'/'edd' singular.
+                singular = {"alerts": "alert", "reviews": "review", "edd": "edd"}
+                normalised = []
+                for t in raw:
+                    canonical = singular.get(t, t)
+                    if canonical not in ("alert", "review", "edd"):
+                        return self.error(
+                            "type must be one of: alerts, reviews, edd, all",
+                            400,
+                        )
+                    normalised.append(canonical)
+                types = tuple(normalised)
+
+        application_id = self.get_argument("application_id", None) or None
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+
+        import lifecycle_queue as lq
+        db = get_db()
+        try:
+            try:
+                result = lq.build_lifecycle_queue(
+                    db,
+                    include=include,
+                    types=types,
+                    application_id=application_id,
+                    exclude_fixtures=not show_fx,
+                )
+            except ValueError as exc:
+                return self.error(str(exc), 400)
+            self.success(result)
+        finally:
+            db.close()
+
+
+class LifecycleApplicationSummaryHandler(BaseHandler):
+    """GET /api/lifecycle/applications/:application_id/summary
+
+    Per-application lifecycle linkage view. Returns active and
+    historical lifecycle objects plus the explicit linkage edge set
+    (alert<->review, alert<->edd, review<->edd) so the application
+    detail surface can show "what lifecycle objects exist for this
+    client and how are they connected" in one read.
+    """
+    def get(self, application_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not application_id:
+            return self.error("application_id is required", 400)
+
+        import lifecycle_queue as lq
+        db = get_db()
+        try:
+            # Sanity-check that the application exists -- 404 is a more
+            # useful signal than an empty payload.
+            row = db.execute(
+                "SELECT id FROM applications WHERE id = ?", (application_id,)
+            ).fetchone()
+            if not row:
+                return self.error("Application not found", 404)
+            try:
+                result = lq.build_application_lifecycle_summary(
+                    db, application_id,
+                )
+            except ValueError as exc:
+                return self.error(str(exc), 400)
+            self.success(result)
+        finally:
+            db.close()
 
 
 # ══════════════════════════════════════════════════════════
@@ -2878,28 +19387,1170 @@ class AIAssistantHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# CHANGE MANAGEMENT ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+# Import change management module (safe — additive only)
+try:
+    import change_management as cm
+    HAS_CHANGE_MANAGEMENT = True
+except ImportError:
+    HAS_CHANGE_MANAGEMENT = False
+    cm = None
+
+
+class ChangeAlertsListHandler(BaseHandler):
+    """GET/POST /api/change-management/alerts — List and create change alerts"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        application_id = self.get_argument("application_id", None)
+        status = self.get_argument("status", None)
+        limit = int(self.get_argument("limit", "50"))
+        offset = int(self.get_argument("offset", "0"))
+
+        db = get_db()
+        try:
+            alerts = cm.list_change_alerts(db, application_id=application_id,
+                                           status=status, limit=limit, offset=offset)
+            self.success({"alerts": alerts, "total": len(alerts)})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        allowed, err = cm.check_role_permission(user.get("role", ""), "create_alert")
+        if not allowed:
+            self.error(err, 403)
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            self.error("application_id is required", 400)
+            return
+
+        db = get_db()
+        try:
+            # Verify application exists
+            app = db.execute("SELECT id FROM applications WHERE id = ?", (application_id,)).fetchone()
+            if not app:
+                self.error("Application not found", 404)
+                return
+
+            alert = cm.create_change_alert(
+                db=db,
+                application_id=application_id,
+                alert_type=data.get("alert_type", "other"),
+                source_channel=data.get("source_channel", "backoffice"),
+                summary=data.get("summary", ""),
+                detected_changes=data.get("detected_changes", {}),
+                confidence=data.get("confidence"),
+                source_reference=data.get("source_reference"),
+                source_payload=data.get("source_payload"),
+                detected_by=data.get("detected_by", user.get("name")),
+                user=user,
+                log_audit_fn=self.log_audit,
+            )
+            self.success(alert, 201)
+        finally:
+            db.close()
+
+
+class ChangeAlertDetailHandler(BaseHandler):
+    """GET/PATCH /api/change-management/alerts/:id — Alert detail and status update"""
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            alert = cm.get_change_alert_detail(db, alert_id)
+            if not alert:
+                self.error("Alert not found", 404)
+                return
+            self.success(alert)
+        finally:
+            db.close()
+
+    def patch(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json()
+        new_status = data.get("status")
+        if not new_status:
+            self.error("status is required", 400)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.update_change_alert_status(
+                db, alert_id, new_status, user,
+                notes=data.get("notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400)
+                return
+            self.success({"status": "updated", "new_status": new_status})
+        finally:
+            db.close()
+
+
+class ChangeAlertConvertHandler(BaseHandler):
+    """POST /api/change-management/alerts/:id/convert — Convert alert to request"""
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        allowed, err = cm.check_role_permission(user.get("role", ""), "convert_alert")
+        if not allowed:
+            self.error(err, 403)
+            return
+
+        data = self.get_json() if self.request.body else {}
+
+        db = get_db()
+        try:
+            request, err = cm.convert_alert_to_request(
+                db, alert_id, user,
+                additional_notes=data.get("notes"),
+                items=data.get("items"),
+                log_audit_fn=self.log_audit,
+            )
+            if not request:
+                self.error(err, 400)
+                return
+            self.success(request, 201)
+        except ValueError as ve:
+            self.error(str(ve), 400)
+            return
+        finally:
+            db.close()
+
+
+class ChangeRequestsListHandler(BaseHandler):
+    """GET/POST /api/change-management/requests — List and create change requests"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        application_id = self.get_argument("application_id", None)
+        status = self.get_argument("status", None)
+        materiality = self.get_argument("materiality", None)
+        source = self.get_argument("source", None)
+        limit = int(self.get_argument("limit", "50"))
+        offset = int(self.get_argument("offset", "0"))
+
+        db = get_db()
+        try:
+            requests_list = cm.list_change_requests(
+                db, application_id=application_id, status=status,
+                materiality=materiality, source=source,
+                limit=limit, offset=offset,
+            )
+            self.success({"requests": requests_list, "total": len(requests_list)})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        allowed, err = cm.check_role_permission(user.get("role", ""), "create_request")
+        if not allowed:
+            self.error(err, 403)
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            self.error("application_id is required", 400)
+            return
+
+        db = get_db()
+        try:
+            app = db.execute("SELECT id FROM applications WHERE id = ?", (application_id,)).fetchone()
+            if not app:
+                self.error("Application not found", 404)
+                return
+
+            items = data.get("items", [])
+            if not items:
+                # Reject legacy top-level field/new_value payloads and empty creates
+                if "field" in data or "new_value" in data or "change_type" in data:
+                    self.error(
+                        "Legacy top-level field/new_value payload is not supported. "
+                        "Provide an 'items' array instead.",
+                        400,
+                    )
+                else:
+                    self.error("At least one change item is required in 'items' array", 400)
+                return
+            try:
+                request = cm.create_change_request(
+                    db=db,
+                    application_id=application_id,
+                    source=data.get("source", "backoffice_manual"),
+                    source_channel=data.get("source_channel", "backoffice"),
+                    reason=data.get("reason", ""),
+                    items=items,
+                    user=user,
+                    log_audit_fn=self.log_audit,
+                )
+            except PermissionError as pe:
+                self.error(str(pe), 403)
+                return
+            except ValueError as ve:
+                self.error(str(ve), 400)
+                return
+            self.success(request, 201)
+        finally:
+            db.close()
+
+
+class ChangeRequestDetailHandler(BaseHandler):
+    """GET/PATCH /api/change-management/requests/:id — Request detail and status"""
+    def get(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            detail = cm.get_change_request_detail(db, request_id)
+            if not detail:
+                self.error("Request not found", 404)
+                return
+            self.success(detail)
+        finally:
+            db.close()
+
+    def patch(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json()
+        new_status = data.get("status")
+        if not new_status:
+            self.error("status is required", 400)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.update_change_request_status(
+                db, request_id, new_status, user,
+                notes=data.get("notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                status_code = 403 if "not permitted" in err.lower() else 400
+                self.error(err, status_code)
+                return
+            self.success({"status": "updated", "new_status": new_status})
+        finally:
+            db.close()
+
+
+class ChangeRequestSubmitHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/submit — Submit a draft request"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.submit_change_request(
+                db, request_id, user, log_audit_fn=self.log_audit,
+            )
+            if not success:
+                status_code = 403 if "not permitted" in err.lower() else 400
+                self.error(err, status_code)
+                return
+            self.success({"status": "submitted"})
+        finally:
+            db.close()
+
+
+class ChangeRequestApproveHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/approve — Approve a request"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json() if self.request.body else {}
+
+        db = get_db()
+        try:
+            success, err = cm.approve_change_request(
+                db, request_id, user,
+                decision_notes=data.get("decision_notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400 if "not found" not in err.lower() else 404)
+                return
+            self.success({"status": "approved"})
+        finally:
+            db.close()
+
+
+class ChangeRequestRejectHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/reject — Reject a request"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json() if self.request.body else {}
+
+        db = get_db()
+        try:
+            success, err = cm.reject_change_request(
+                db, request_id, user,
+                decision_notes=data.get("decision_notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                if "not permitted" in err.lower():
+                    status_code = 403
+                elif "not found" in err.lower():
+                    status_code = 404
+                else:
+                    status_code = 400
+                self.error(err, status_code)
+                return
+            self.success({"status": "rejected"})
+        finally:
+            db.close()
+
+
+class ChangeRequestImplementHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/implement — Implement approved changes"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        # Import risk recomputation function
+        recompute_risk_fn = None
+        try:
+            from rule_engine import recompute_risk
+            recompute_risk_fn = recompute_risk
+        except ImportError:
+            pass
+
+        db = get_db()
+        try:
+            success, err, version_id = cm.implement_change_request(
+                db, request_id, user,
+                log_audit_fn=self.log_audit,
+                recompute_risk_fn=recompute_risk_fn,
+            )
+            if not success:
+                if "not permitted" in err.lower() or "not authorized" in err.lower():
+                    status_code = 403
+                elif "stale" in err.lower() or "conflict" in err.lower() or "version" in err.lower():
+                    status_code = 409
+                else:
+                    status_code = 400
+                self.error(err, status_code)
+                return
+            self.success({"status": "implemented", "profile_version_id": version_id})
+        finally:
+            db.close()
+
+
+class ChangeRequestDocumentHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/documents — Upload supporting doc"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            # Verify request exists
+            row = db.execute("SELECT id FROM change_requests WHERE id = ?", (request_id,)).fetchone()
+            if not row:
+                self.error("Request not found", 404)
+                return
+
+            files = self.request.files.get("file", [])
+            if not files:
+                self.error("No file uploaded", 400)
+                return
+
+            uploaded = files[0]
+            doc_type = self.get_argument("doc_type", "supporting_document")
+            item_id = self.get_argument("item_id", None)
+
+            # Validate file
+            if HAS_SECURITY_HARDENING:
+                valid, validation_err = FileUploadValidator.validate_upload(
+                    uploaded["filename"], uploaded["body"]
+                )
+                if not valid:
+                    self.error(validation_err, 400)
+                    return
+
+            # Save file — sanitize path components to prevent path traversal
+            import re as _re
+            safe_request_id = _re.sub(r'[^a-zA-Z0-9\-_]', '', request_id)
+            safe_filename = Path(uploaded["filename"]).name  # strip directory components
+            safe_filename = _re.sub(r'[^a-zA-Z0-9\-_.]', '_', safe_filename)
+            if not safe_filename or safe_filename.startswith('.'):
+                self.error("Invalid filename", 400)
+                return
+            upload_dir = Path(_CFG_UPLOAD_DIR) / "change_requests" / safe_request_id
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / safe_filename
+            # Verify resolved path is under upload_dir
+            if not str(file_path.resolve()).startswith(str(upload_dir.resolve())):
+                self.error("Invalid file path", 400)
+                return
+            with open(file_path, "wb") as f:
+                f.write(uploaded["body"])
+
+            doc = cm.attach_document_to_request(
+                db, request_id, uploaded["filename"], doc_type,
+                str(file_path), item_id=item_id,
+                uploaded_by=user.get("sub"),
+            )
+
+            self.log_audit(user, "Change Request Document Uploaded", request_id,
+                          f"Document: {uploaded['filename']}, type: {doc_type}")
+            self.success(doc, 201)
+        finally:
+            db.close()
+
+
+class ChangeManagementStatsHandler(BaseHandler):
+    """GET /api/change-management/stats — Dashboard statistics"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            stats = cm.get_change_management_stats(db)
+            self.success(stats)
+        finally:
+            db.close()
+
+
+class EntityProfileVersionsHandler(BaseHandler):
+    """GET /api/applications/:id/profile-versions — List profile versions"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            versions = cm.get_profile_versions(db, app_id)
+            self.success({"versions": versions, "total": len(versions)})
+        finally:
+            db.close()
+
+
+class EntityProfileVersionDetailHandler(BaseHandler):
+    """GET /api/profile-versions/:id — Get profile version detail with snapshot"""
+    def get(self, version_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            version = cm.get_profile_version_detail(db, version_id)
+            if not version:
+                self.error("Version not found", 404)
+                return
+            self.success(version)
+        finally:
+            db.close()
+
+
+class ApplicationProfileVersionDetailHandler(BaseHandler):
+    """GET /api/applications/:app_id/profile-versions/:version_id — Scoped version detail"""
+    def get(self, app_id, version_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            version = cm.get_profile_version_detail(db, version_id)
+            if not version or version.get("application_id") != app_id:
+                self.error("Version not found", 404)
+                return
+            self.success(version)
+        finally:
+            db.close()
+
+
+class PortalApplicationsHandler(BaseHandler):
+    """GET /api/portal/applications — List only client-owned applications"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        client_id = user.get("sub")
+        db = get_db()
+        try:
+            rows = db.execute(
+                "SELECT id, ref, company_name, status FROM applications WHERE client_id = ? ORDER BY created_at DESC",
+                (client_id,),
+            ).fetchall()
+            apps = [dict(r) for r in rows]
+            self.success({"applications": apps, "total": len(apps)})
+        finally:
+            db.close()
+
+
+class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
+    """GET /api/portal/applications/:id/enhanced-requirements.
+
+    Client-safe presentation only.  This endpoint does not create RMI rows,
+    notifications, emails, document slots, approval blockers, or memo content.
+    """
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can view requested information", 403)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            requirements = list_portal_application_enhanced_requirements(db, app["id"])
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "requirements": requirements,
+                "total": len(requirements),
+            })
+        finally:
+            db.close()
+
+
+class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
+    """POST /api/portal/applications/:id/enhanced-requirements/:req_id/upload.
+
+    Client fulfilment only. This endpoint creates a normal document row using
+    the existing upload validation/storage pattern, then links it to a requested
+    client-facing enhanced requirement. It does not create RMI rows,
+    notifications, emails, approval blockers, memo content, EDD case changes,
+    screening changes, or risk-threshold changes.
+    """
+    def _cleanup_upload_artifacts(self, file_path=None, s3_key=None):
+        """Best-effort cleanup for upload artifacts when DB/link/commit fails."""
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Enhanced requirement local upload cleanup failed: %s", exc)
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, message = s3.delete_document(s3_key)
+                if not success:
+                    logger.warning("Enhanced requirement S3 upload cleanup failed for %s: %s", s3_key, message)
+            except Exception as exc:
+                logger.warning("Enhanced requirement S3 upload cleanup exception for %s: %s", s3_key, exc)
+
+    def post(self, app_id, requirement_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can submit requested information", 403)
+        if not self.check_rate_limit("enhanced_requirement_upload", max_attempts=20, window_seconds=60):
+            return
+
+        db = get_db()
+        file_path = None
+        s3_key = None
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            safe_reqs = list_portal_application_enhanced_requirements(db, app["id"])
+            safe_req = next(
+                (item for item in safe_reqs if str(item.get("id")) == str(requirement_id)),
+                None,
+            )
+            if not safe_req:
+                return self.error("Requested information item not found", 404)
+            if safe_req.get("requirement_type") != "document":
+                return self.error("This requested information item does not accept document uploads", 400)
+            if safe_req.get("status") not in ("required", "additional_information_needed"):
+                return self.error("This requested information item is not awaiting a document", 400)
+
+            if "file" not in self.request.files:
+                return self.error("No file provided", 400)
+            file_info = self.request.files["file"][0]
+            filename = os.path.basename(file_info["filename"] or "")
+            body = file_info["body"]
+            content_type = file_info.get("content_type", "application/octet-stream")
+
+            if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+                return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
+
+            is_valid, _reason_code, upload_error = FileUploadValidator.validate_with_reason(
+                filename,
+                content_type,
+                body,
+            )
+            if not is_valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            document_id = uuid.uuid4().hex[:16]
+            ext = os.path.splitext(filename)[1].lower()
+            safe_name = f"{app['id']}_{document_id}{ext}"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
+            with open(file_path, "wb") as f:
+                f.write(body)
+
+            if HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, key_or_error = s3.upload_document(
+                        file_data=body,
+                        client_id=app["id"],
+                        doc_type="enhanced_requirement",
+                        filename=safe_name,
+                        content_type=content_type,
+                        metadata={
+                            "original_name": filename,
+                            "enhanced_requirement_id": str(requirement_id),
+                        },
+                    )
+                    if success:
+                        s3_key = key_or_error
+                    else:
+                        logger.error("Enhanced requirement S3 upload failed for %s: %s", document_id, key_or_error)
+                        if is_production() or is_staging():
+                            self._cleanup_upload_artifacts(file_path=file_path)
+                            return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                except Exception as exc:
+                    logger.error("Enhanced requirement S3 upload exception for %s: %s", document_id, exc)
+                    if is_production() or is_staging():
+                        self._cleanup_upload_artifacts(file_path=file_path)
+                        return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+            elif is_production() or is_staging():
+                self._cleanup_upload_artifacts(file_path=file_path)
+                return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
+
+            verification_metadata = {
+                "source": "enhanced_requirement_upload",
+                "enhanced_requirement_id": str(requirement_id),
+                "client_submitted": True,
+            }
+            slot_key = _document_slot_key(
+                "enhanced_requirement",
+                enhanced_requirement_id=requirement_id,
+            )
+            replacement = _prepare_document_slot_replacement(
+                db,
+                application_id=app["id"],
+                new_document_id=document_id,
+                doc_type="enhanced_requirement",
+                person_id=None,
+                slot_key=slot_key,
+                actor_user=user,
+                replaced_reason="enhanced_requirement_replacement",
+                extra_document_ids=[safe_req.get("linked_document_id")] if safe_req.get("linked_document_id") else None,
+            )
+            previous_documents = replacement["previous_documents"]
+            db.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, s3_key,
+                 file_size, mime_type, slot_key, is_current, version,
+                 verification_status, verification_results, review_status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    document_id,
+                    app["id"],
+                    "enhanced_requirement",
+                    filename,
+                    file_path,
+                    s3_key,
+                    len(body),
+                    content_type,
+                    replacement["slot_key"],
+                    True,
+                    replacement["version"],
+                    "pending",
+                    json.dumps(verification_metadata, sort_keys=True),
+                    "pending",
+                ),
+            )
+            _finalize_document_slot_replacement(db, app["id"], previous_documents, document_id)
+            result, error, status_code = fulfill_application_enhanced_requirement_document(
+                db,
+                app["id"],
+                requirement_id,
+                document_id,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+                return self.error(error, status_code)
+
+            safe_after = next(
+                (
+                    item for item in list_portal_application_enhanced_requirements(db, app["id"])
+                    if str(item.get("id")) == str(requirement_id)
+                ),
+                None,
+            )
+            if previous_documents:
+                self.log_audit(
+                    user,
+                    "document.replaced",
+                    app["ref"],
+                    json.dumps({
+                        "event": "document.replaced",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "doc_type": "enhanced_requirement",
+                        "person_id": None,
+                        "slot_key": replacement["slot_key"],
+                        "old_document_id": previous_documents[0]["id"],
+                        "old_document_ids": [row["id"] for row in previous_documents],
+                        "new_document_id": document_id,
+                        "actor": user.get("sub", ""),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state={"documents": previous_documents},
+                    after_state={"document_id": document_id, "version": replacement["version"], "is_current": True},
+                )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="enhanced_requirement_document_submitted",
+                reason="Enhanced requirement document submission changed memo evidence.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state={"documents": previous_documents} if previous_documents else safe_req,
+                after_state={"requirement": safe_after, "document_id": document_id},
+            )
+            db.commit()
+            self.success({
+                "status": "submitted",
+                "requirement": safe_after,
+                "document": {
+                    "id": document_id,
+                    "doc_name": filename,
+                    "doc_type": "enhanced_requirement",
+                    "file_size": len(body),
+                    "slot_key": replacement["slot_key"],
+                    "is_current": True,
+                    "version": replacement["version"],
+                },
+            }, 201)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+            logger.error(
+                "portal enhanced requirement upload failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to submit requested document", 500)
+        finally:
+            db.close()
+
+
+class PortalApplicationEnhancedRequirementResponseHandler(BaseHandler):
+    """POST /api/portal/applications/:id/enhanced-requirements/:req_id/response."""
+    def post(self, app_id, requirement_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can submit requested information", 403)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            safe_reqs = list_portal_application_enhanced_requirements(db, app["id"])
+            safe_req = next(
+                (item for item in safe_reqs if str(item.get("id")) == str(requirement_id)),
+                None,
+            )
+            if not safe_req:
+                return self.error("Requested information item not found", 404)
+            if safe_req.get("requirement_type") not in ("explanation", "declaration"):
+                return self.error("This requested information item does not accept text responses", 400)
+            if safe_req.get("status") not in ("required", "additional_information_needed"):
+                return self.error("This requested information item is not awaiting a response", 400)
+
+            data = self.get_json() or {}
+            response_text = data.get("response_text") or data.get("response") or ""
+            result, error, status_code = submit_application_enhanced_requirement_response(
+                db,
+                app["id"],
+                requirement_id,
+                response_text,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(error, status_code)
+
+            safe_after = next(
+                (
+                    item for item in list_portal_application_enhanced_requirements(db, app["id"])
+                    if str(item.get("id")) == str(requirement_id)
+                ),
+                None,
+            )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="enhanced_requirement_response_submitted",
+                reason="Enhanced requirement text response changed memo evidence.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=safe_req,
+                after_state=safe_after,
+            )
+            db.commit()
+            self.success({
+                "status": "submitted",
+                "requirement": safe_after,
+            })
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "portal enhanced requirement response failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to submit requested response", 500)
+        finally:
+            db.close()
+
+
+class PortalChangeRequestHandler(BaseHandler):
+    """POST /api/portal/change-requests — Client creates a change request from portal"""
+    def get(self):
+        """List client's own change requests."""
+        user = self.require_auth()
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            # Get client's applications
+            client_id = user.get("sub")
+            apps = db.execute(
+                "SELECT id FROM applications WHERE client_id = ?", (client_id,)
+            ).fetchall()
+            app_ids = [a["id"] for a in apps]
+
+            all_requests = []
+            for app_id in app_ids:
+                reqs = cm.list_change_requests(db, application_id=app_id)
+                all_requests.extend(reqs)
+
+            self.success({"requests": all_requests, "total": len(all_requests)})
+        finally:
+            db.close()
+
+    def post(self):
+        """Client creates a new change request."""
+        user = self.require_auth()
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            self.error("application_id is required", 400)
+            return
+
+        db = get_db()
+        try:
+            client_id = user.get("sub")
+
+            # Step 1: Check application exists
+            app = db.execute(
+                "SELECT id, status, client_id FROM applications WHERE id = ?",
+                (application_id,),
+            ).fetchone()
+            if not app:
+                logger.warning(
+                    "Portal CR denied: app not found | client=%s app=%s",
+                    client_id, application_id,
+                )
+                try:
+                    self.log_audit(
+                        user, "portal_change_request_denied",
+                        application_id,
+                        json.dumps({"reason": "not_found", "client_id": client_id,
+                                    "attempted_application_id": application_id}),
+                        db=db,
+                    )
+                except Exception:
+                    pass  # audit best-effort
+                self.error("Application not found", 404)
+                return
+
+            # Step 2: Verify client owns this application
+            # Same ownership predicate as GET /api/portal/applications:
+            #   WHERE client_id = <authenticated_client_id>
+            if app["client_id"] != client_id:
+                logger.warning(
+                    "Portal CR denied: not owner | client=%s app=%s owner=%s",
+                    client_id, application_id, app["client_id"],
+                )
+                try:
+                    self.log_audit(
+                        user, "portal_cr_denied_not_owner",
+                        application_id,
+                        json.dumps({"reason": "not_owner", "client_id": client_id,
+                                    "attempted_application_id": application_id,
+                                    "actual_owner": app["client_id"]}),
+                        db=db,
+                    )
+                except Exception:
+                    pass  # audit best-effort
+                self.error("You do not have permission to create a change request for this application", 403)
+                return
+
+            items = data.get("items", [])
+            if not items:
+                self.error("At least one change item is required", 400)
+                return
+
+            try:
+                request = cm.create_change_request(
+                    db=db,
+                    application_id=application_id,
+                    source="portal_client",
+                    source_channel="portal",
+                    reason=data.get("reason", ""),
+                    items=items,
+                    user=user,
+                    log_audit_fn=self.log_audit,
+                )
+            except PermissionError as pe:
+                self.error(str(pe), 403)
+                return
+            except ValueError as ve:
+                self.error(str(ve), 400)
+                return
+
+            # Auto-submit portal requests
+            ok, submit_err = cm.submit_change_request(db, request["id"], user, log_audit_fn=self.log_audit)
+            if ok:
+                request["status"] = "submitted"
+            else:
+                logger.warning("Portal CR %s auto-submit failed: %s", request["id"], submit_err)
+
+            self.success(request, 201)
+        except Exception:
+            logger.exception("Unhandled error in portal change request creation")
+            self.error("Internal server error while creating change request", 500)
+        finally:
+            db.close()
+
+
+# ══════════════════════════════════════════════════════════
 # APP SETUP & ROUTES
 # ══════════════════════════════════════════════════════════
 
 def make_app():
-    return tornado.web.Application([
-        # Health
+    routes = [
+        # Health & Readiness
         (r"/api/health", HealthHandler),
+        (r"/api/liveness", LivenessHandler),
+        (r"/api/readiness", ReadinessHandler),
+        (r"/api/admin/reset-db", AdminResetDBHandler),
+        (r"/api/admin/reset-password", AdminResetPasswordHandler),
+        (r"/api/admin/officer-reset-password", AdminOfficerPasswordResetHandler),
 
         # Auth
         (r"/api/auth/officer/login", OfficerLoginHandler),
         (r"/api/auth/client/login", ClientLoginHandler),
         (r"/api/auth/client/register", ClientRegisterHandler),
+        (r"/api/auth/client/forgot-password", ForgotPasswordHandler),
+        (r"/api/auth/client/reset-password", ResetPasswordHandler),
+        (r"/api/auth/client/change-password", ClientChangePasswordHandler),
+        (r"/api/auth/logout", LogoutHandler),
         (r"/api/auth/me", MeHandler),
 
         # Applications (more specific routes first)
         (r"/api/applications/([^/]+)/submit", SubmitApplicationHandler),
+        (r"/api/applications/([^/]+)/accept-pricing", PricingAcceptHandler),
+        (r"/api/applications/([^/]+)/pre-approval-decision", PreApprovalDecisionHandler),
+        (r"/api/applications/([^/]+)/submit-kyc", KYCSubmitHandler),
+        (r"/api/applications/([^/]+)/supervisor/run", SupervisorRunHandler),
+        (r"/api/applications/([^/]+)/supervisor/result", SupervisorResultHandler),
+        (r"/api/applications/([^/]+)/memo/validate", MemoValidateHandler),
+        (r"/api/applications/([^/]+)/memo/approve", MemoApproveHandler),
+        (r"/api/applications/([^/]+)/memo/validation", MemoValidationResultsHandler),
+        (r"/api/applications/([^/]+)/memo/pdf", MemoPDFDownloadHandler),
+        (r"/api/applications/([^/]+)/memo/supervisor/run", MemoSupervisorHandler),
+        (r"/api/applications/([^/]+)/memo/supervisor", MemoSupervisorResultHandler),
+        (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
+        (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
+        (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
+        (r"/api/applications/([^/]+)/evidence-pack", ApplicationEvidencePackHandler),
+        (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
+        (r"/api/applications/([^/]+)/corrections", ApplicationCorrectionHandler),
+        (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
+        (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
+        (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/request", ApplicationEnhancedRequirementRequestHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)", ApplicationEnhancedRequirementDetailHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements", ApplicationEnhancedRequirementsHandler),
+        (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),
         (r"/api/applications", ApplicationsHandler),
 
         # Documents
+        (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
+        (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
+        (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
+        (r"/api/resources/([^/]+)/download", ComplianceResourceDownloadHandler),
+        (r"/api/resources", ComplianceResourcesHandler),
+        (r"/api/regulatory-intelligence/([^/]+)/download", RegulatoryIntelligenceDownloadHandler),
+        (r"/api/regulatory-intelligence/([^/]+)/source-text", RegulatoryIntelligenceSourceTextHandler),
+        (r"/api/regulatory-intelligence/([^/]+)/review", RegulatoryIntelligenceReviewHandler),
+        (r"/api/regulatory-intelligence", RegulatoryIntelligenceHandler),
 
         # Users
         (r"/api/users", UsersHandler),
@@ -2907,11 +20558,22 @@ def make_app():
 
         # Config
         (r"/api/config/risk-model", RiskConfigHandler),
+        (r"/api/config/system-settings", SystemSettingsHandler),
+        (r"/api/config/roles-permissions", RolesPermissionsHandler),
         (r"/api/config/ai-agents", AIAgentsHandler),
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
+        (r"/api/config/verification-checks", VerificationChecksHandler),
+        (r"/api/config/environment", EnvironmentInfoHandler),
+        (r"/api/settings/enhanced-requirements", EnhancedRequirementRulesHandler),
+        (r"/api/settings/enhanced-requirements/diagnostics", EnhancedRequirementDiagnosticsHandler),
+        (r"/api/settings/enhanced-requirements/([^/]+)/(disable|enable)", EnhancedRequirementRuleStateHandler),
+        (r"/api/settings/enhanced-requirements/([^/]+)", EnhancedRequirementRuleDetailHandler),
+        (r"/api/version", VersionHandler),
 
         # Screening (Real API Integrations)
         (r"/api/screening/run", ScreeningHandler),
+        (r"/api/screening/queue", ScreeningQueueHandler),
+        (r"/api/screening/review", ScreeningReviewHandler),
         (r"/api/screening/sanctions", SanctionsCheckHandler),
         (r"/api/screening/company", CompanyLookupHandler),
         (r"/api/screening/ip", IPCheckHandler),
@@ -2923,26 +20585,124 @@ def make_app():
         (r"/api/kyc/status/([^/]+)", SumsubStatusHandler),
         (r"/api/kyc/document", SumsubDocumentHandler),
         (r"/api/kyc/webhook", SumsubWebhookHandler),
+        (r"/api/webhooks/complyadvantage", ComplyAdvantageWebhookHandler),
+
+        # Sumsub Diagnostics (admin only)
+        (r"/api/admin/sumsub-diagnostics", SumsubDiagnosticsHandler),
 
         # Reports
         (r"/api/reports/generate", ReportHandler),
+        (r"/api/reports/analytics", ReportAnalyticsHandler),
 
         # Audit
+        (r"/api/audit/export", AuditExportHandler),
+        (r"/api/audit/supervisor/export", SupervisorAuditExportHandler),
         (r"/api/audit", AuditHandler),
 
         # Dashboard
         (r"/api/dashboard", DashboardHandler),
 
+        # Client Notifications
+        (r"/api/notifications", GetClientNotificationsHandler),
+        (r"/api/notifications/([^/]+)/read", MarkNotificationReadHandler),
+        (r"/api/status-lookup", ClientStatusLookupHandler),
+
         # Monitoring
         (r"/api/monitoring/dashboard", MonitoringDashboardHandler),
         (r"/api/monitoring/clients", MonitoringClientsHandler),
-        (r"/api/monitoring/alerts", MonitoringAlertsHandler),
+        # Alerts (more specific routes first)
+        (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
+        (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
+        # Agents
+        (r"/api/monitoring/agents/([^/]+)/run", MonitoringAgentRunHandler),
+        (r"/api/monitoring/agents", MonitoringAgentsHandler),
+        # Periodic Reviews (more specific routes first)
+        (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items/generate",
+         PeriodicReviewRequiredItemsGenerateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items/custom",
+         PeriodicReviewCustomRequiredItemHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items/([^/]+)",
+         PeriodicReviewRequiredItemDetailHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items",
+         PeriodicReviewRequiredItemsHandler),
+        (r"/api/monitoring/reviews/([^/]+)/run-screening-refresh",
+         PeriodicReviewScreeningRefreshHandler),
+        (r"/api/monitoring/reviews/([^/]+)/assignment", PeriodicReviewAssignmentHandler),
+        (r"/api/monitoring/reviews/([^/]+)/import-setup", PeriodicReviewImportSetupHandler),
+        (r"/api/monitoring/reviews/([^/]+)/import-acknowledgement",
+         PeriodicReviewImportAcknowledgementHandler),
+        (r"/api/monitoring/reviews/([^/]+)/officer-rationale", PeriodicReviewRationaleHandler),
+        (r"/api/monitoring/reviews/([^/]+)/material-change-attestation",
+         PeriodicReviewMaterialChangeHandler),
+        (r"/api/monitoring/reviews/([^/]+)/risk-change", PeriodicReviewRiskChangeHandler),
+        (r"/api/monitoring/reviews/([^/]+)/evidence-links", PeriodicReviewEvidenceLinksHandler),
+        (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/escalate", PeriodicReviewEscalateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/complete", PeriodicReviewCompleteHandler),
+        (r"/api/monitoring/reviews/([^/]+)/decision", PeriodicReviewDecisionHandler),
+        (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
+        (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
+
+        # PR-D: Lightweight periodic review memo artifact (read-only)
+        (r"/api/periodic-reviews/([^/]+)/memo", PeriodicReviewMemoHandler),
+
+        # SAR (Suspicious Activity Reports)
+        (r"/api/sar/auto-trigger", SARAutoTriggerHandler),
+        (r"/api/sar/([^/]+)/workflow", SARWorkflowHandler),
+        (r"/api/sar/([^/]+)", SARDetailHandler),
+        (r"/api/sar", SARListHandler),
+
+        # EDD Pipeline
+        (r"/api/edd/stats", EDDStatsHandler),
+        (r"/api/edd/cases/([^/]+)/findings", EDDFindingsHandler),
+        (r"/api/edd/cases/([^/]+)", EDDDetailHandler),
+        (r"/api/edd/cases", EDDListHandler),
+
+        # PR-05: Lifecycle queue clarity (additive, read-only)
+        (r"/api/lifecycle/queue", LifecycleQueueHandler),
+        (r"/api/lifecycle/applications/([^/]+)/summary",
+         LifecycleApplicationSummaryHandler),
 
         # AI Assistant
         (r"/api/ai/assistant", AIAssistantHandler),
 
         # Save & Resume
+        (r"/api/save-resume/active", ActiveDraftsHandler),
         (r"/api/save-resume", SaveResumeHandler),
+
+        # Change Management
+        (r"/api/change-management/alerts/([^/]+)/convert", ChangeAlertConvertHandler),
+        (r"/api/change-management/alerts/([^/]+)", ChangeAlertDetailHandler),
+        (r"/api/change-management/alerts", ChangeAlertsListHandler),
+        (r"/api/change-management/requests/([^/]+)/submit", ChangeRequestSubmitHandler),
+        (r"/api/change-management/requests/([^/]+)/approve", ChangeRequestApproveHandler),
+        (r"/api/change-management/requests/([^/]+)/reject", ChangeRequestRejectHandler),
+        (r"/api/change-management/requests/([^/]+)/implement", ChangeRequestImplementHandler),
+        (r"/api/change-management/requests/([^/]+)/documents", ChangeRequestDocumentHandler),
+        (r"/api/change-management/requests/([^/]+)", ChangeRequestDetailHandler),
+        (r"/api/change-management/requests", ChangeRequestsListHandler),
+        (r"/api/change-management/stats", ChangeManagementStatsHandler),
+        (r"/api/applications/([^/]+)/profile-versions/([^/]+)", ApplicationProfileVersionDetailHandler),
+        (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
+        (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/upload",
+         PortalApplicationEnhancedRequirementUploadHandler),
+        (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/response",
+         PortalApplicationEnhancedRequirementResponseHandler),
+        (r"/api/portal/applications/([^/]+)/enhanced-requirements",
+         PortalApplicationEnhancedRequirementsHandler),
+        (r"/api/portal/applications", PortalApplicationsHandler),
+        (r"/api/portal/change-requests", PortalChangeRequestHandler),
+
+        # ── Public API v1 ─────────────────────────────────────
+        (r"/api/v1/health", PublicHealthHandler),
+        (r"/api/v1/applications/([^/]+)/status", PublicApplicationStatusHandler),
+        (r"/api/v1/applications/([^/]+)/decision", PublicApplicationDecisionHandler),
+        (r"/api/v1/dashboard/status", PublicDashboardStatusHandler),
+
+        # Prometheus Metrics
+        (r"/metrics", MetricsHandler),
 
         # Root redirect
         (r"/", tornado.web.RedirectHandler, {"url": "/portal"}),
@@ -2950,25 +20710,133 @@ def make_app():
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
         (r"/backoffice", BackOfficeHandler),
-        (r"/static/(.*)", tornado.web.StaticFileHandler, {"path": STATIC_DIR}),
-    ], debug=os.environ.get("DEBUG", "0") == "1")
+        (r"/static/(.*)", SecureStaticFileHandler, {"path": STATIC_DIR}),
+    ]
+
+    # Integrate supervisor routes
+    if SUPERVISOR_AVAILABLE:
+        routes.extend(get_supervisor_routes())
+        logger.info("Supervisor API endpoints registered (%d routes)", len(get_supervisor_routes()))
+
+    return tornado.web.Application(routes,
+        debug=_CFG_DEBUG,
+        xsrf_cookies=False,  # CSRF handled by custom check_xsrf_cookie() on BaseHandler (double-submit cookie pattern)
+        cookie_secret=SECRET_KEY,
+        max_body_size=20 * 1024 * 1024,  # 20MB max request body
+        default_handler_class=HardenedNotFoundHandler,
+    )
 
 
 if __name__ == "__main__":
+    import time as _time
+
+    _t0 = _time.monotonic()
+
+    def _elapsed():
+        return f"{_time.monotonic() - _t0:.2f}s"
+
+    logger.info("startup: begin (+%s)", _elapsed())
+
+    # Validate unified configuration before starting
+    logger.info("startup: entering validate_config (+%s)", _elapsed())
+    validate_config()
+    logger.info("startup: completed validate_config (+%s)", _elapsed())
+
+    # Validate environment before starting
+    logger.info("startup: entering validate_environment (+%s)", _elapsed())
+    validate_environment()
+    logger.info("startup: completed validate_environment (+%s)", _elapsed())
+
+    logger.info("startup: entering init_db (+%s)", _elapsed())
     init_db()
+    logger.info("startup: completed init_db (+%s)", _elapsed())
+
+    # Run database migrations.
+    #
+    # Failure policy (closes #127): the runner is fail-closed by default.
+    # If any migration raises, ``run_all_migrations`` will itself raise
+    # ``MigrationFailure`` after emitting a structured summary; we then
+    # halt startup so the platform is never booted with un-applied schema
+    # changes — a regulated AML system must not silently drift.
+    #
+    # The ``ImportError`` branch below is the *only* tolerated swallow
+    # (the migrations package is genuinely optional for some unit-test
+    # entrypoints).  Any other exception is re-raised after logging.
+    #
+    # Override for non-production debugging: set
+    # ``MIGRATION_FAILURE_MODE=continue`` (handled inside the runner).
+    logger.info("startup: entering run_all_migrations (+%s)", _elapsed())
+    try:
+        from migrations.runner import run_all_migrations, MigrationFailure
+    except ImportError as e:
+        logger.warning("Migration runner unavailable (import failed): %s", e)
+    else:
+        try:
+            run_all_migrations()
+        except MigrationFailure as e:
+            logger.error(
+                "startup: migration runner failed-closed (%d/%d applied, "
+                "failed=%s) — halting startup. Set MIGRATION_FAILURE_MODE=continue "
+                "to override in non-production.",
+                e.applied_count, e.total_count, e.failed_versions,
+            )
+            raise
+    logger.info("startup: completed run_all_migrations (+%s)", _elapsed())
+
+    # Initialize supervisor framework
+    if SUPERVISOR_AVAILABLE:
+        logger.info("startup: entering setup_supervisor (+%s)", _elapsed())
+        try:
+            supervisor_instance = setup_supervisor(DB_PATH)
+            register_all_executors(supervisor_instance, DB_PATH)
+            logger.info("startup: completed setup_supervisor — %d agent executors (+%s)", 10, _elapsed())
+        except Exception as e:
+            logger.error("Failed to initialize supervisor: %s", e)
+            SUPERVISOR_AVAILABLE = False
+
+    # Register Sumsub factory in the factory-based provider registry (A6).
+    # Runs after config is loaded and before make_app() so the registry is
+    # fully populated before any incoming request can reach the screening path.
+    from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME, SUMSUB_PROVIDER_NAME, register_provider
+    from screening_adapter_sumsub import SumsubScreeningAdapter
+    from screening_complyadvantage.adapter import ComplyAdvantageScreeningAdapter
+    register_provider(SUMSUB_PROVIDER_NAME, SumsubScreeningAdapter)
+    register_provider(COMPLYADVANTAGE_PROVIDER_NAME, ComplyAdvantageScreeningAdapter)
+    logger.info("startup: registered screening provider: %s (+%s)", SUMSUB_PROVIDER_NAME, _elapsed())
+
+    logger.info("startup: entering make_app (+%s)", _elapsed())
     app = make_app()
+    logger.info("startup: completed make_app (+%s)", _elapsed())
+
+    # Validate production environment (mandatory)
+    logger.info("startup: entering validate_production_environment (+%s)", _elapsed())
+    try:
+        validate_production_environment()
+    except RuntimeError as e:
+        logging.critical(f"PRODUCTION ENVIRONMENT VALIDATION FAILED: {e}")
+        if ENVIRONMENT == "production":
+            sys.exit(1)
+    logger.info("startup: completed validate_production_environment (+%s)", _elapsed())
+
+    # Enforce startup safety checks
+    logger.info("startup: entering enforce_startup_safety (+%s)", _elapsed())
+    enforce_startup_safety()
+    logger.info("startup: completed enforce_startup_safety (+%s)", _elapsed())
+
     # Bind to 0.0.0.0 for cloud deployment (Railway, Render, etc.)
+    logger.info("startup: binding to 0.0.0.0:%s (+%s)", PORT, _elapsed())
     app.listen(PORT, address="0.0.0.0")
+    logger.info("startup: listener bound — server READY (+%s)", _elapsed())
 
     # API integration status
-    sanctions_status = "LIVE" if OPENSANCTIONS_API_KEY else "SIMULATED"
+    sanctions_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"
     corporates_status = "LIVE" if OPENCORPORATES_API_KEY else "SIMULATED"
     ip_status = "LIVE (ipapi.co free tier)"
     sumsub_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"
 
     print(f"""
 ╔══════════════════════════════════════════════════╗
-║  ARIE Finance API Server                         ║
+║  Onboarda / RegMind API Server                   ║
 ║  Running on http://0.0.0.0:{PORT}                ║
 ║  Environment: {ENVIRONMENT:<33s}║
 ║                                                  ║
@@ -2988,13 +20856,36 @@ if __name__ == "__main__":
 ║    GET  /api/screening/status                    ║
 ║                                                  ║
 ║  API Integrations:                               ║
-║    OpenSanctions:    {sanctions_status:<27s}║
+║    Sumsub AML:       {sanctions_status:<27s}║
 ║    OpenCorporates:   {corporates_status:<27s}║
 ║    IP Geolocation:   {ip_status:<27s}║
 ║    Sumsub KYC:       {sumsub_status:<27s}║
 ║                                                  ║
-║  Admin email: asudally@ariefinance.mu              ║
+║  Admin email: asudally@onboarda.com                ║
 ║  Password: see initial boot output above          ║
 ╚══════════════════════════════════════════════════╝
     """)
+    # ── GDPR Retention Purge — daily scheduled run ──
+    # Runs run_scheduled_purge() once per day (86_400_000 ms).
+    # Only executes in non-testing environments to avoid touching test DBs.
+    # Purge only affects categories with auto_purge=True in data_retention_policies.
+    if HAS_GDPR_PURGE and ENVIRONMENT not in ("testing",):
+        def _gdpr_purge_tick():
+            try:
+                db = get_db()
+                results = _gdpr_run_scheduled_purge(db, purged_by="system-scheduler")
+                purged = sum(r.get("records_deleted", 0) for r in results if isinstance(r, dict))
+                if purged:
+                    logger.info("gdpr-purge: daily run complete — %d record(s) purged across %d categor(ies)",
+                                purged, len(results))
+                else:
+                    logger.debug("gdpr-purge: daily run complete — no records eligible for purge")
+                db.close()
+            except Exception as exc:
+                logger.error("gdpr-purge: daily run failed: %s", exc)
+
+        _gdpr_purge_cb = tornado.ioloop.PeriodicCallback(_gdpr_purge_tick, 86_400_000)
+        _gdpr_purge_cb.start()
+        logger.info("gdpr-purge: daily PeriodicCallback registered (interval=86400s)")
+
     tornado.ioloop.IOLoop.current().start()
