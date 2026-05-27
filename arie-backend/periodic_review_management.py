@@ -179,10 +179,11 @@ def _validate_officer(db, officer_id: Optional[str]) -> Optional[str]:
 
 
 def _setup_change_requires_override(review, proposed: Dict[str, Any]) -> bool:
-    if not any(
+    has_existing_manual_baseline = any(
         _row_get(review, field) not in (None, "", 0, "0", False)
-        for field in ("last_review_date", "policy_version", "frequency_months", "calculation_basis", "legacy_entered_at", "legacy_import")
-    ):
+        for field in ("last_review_date", "legacy_entered_at", "legacy_import")
+    )
+    if not has_existing_manual_baseline:
         return False
     for field in IMMUTABLE_SETUP_FIELDS:
         if field not in proposed:
