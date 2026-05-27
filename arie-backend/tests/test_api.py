@@ -2121,6 +2121,98 @@ class TestDocumentVerificationRuntimeReliability:
         )
         assert me.status_code == 200, me.text
 
+    def test_periodic_review_evidence_document_runs_agent1_verification(self, api_server, monkeypatch):
+        """Periodic-review evidence documents use the same Agent 1 verification path."""
+        import server
+        from auth import create_token
+        from db import get_db
+
+        uid = uuid.uuid4().hex[:8]
+        app_id = f"verify_pr_{uid}"
+        doc_id = f"doc_pr_{uid}"
+        _seed_document_verification_case(app_id, f"ARF-VERIFY-PR-{uid}", doc_id)
+
+        conn = get_db()
+        conn.execute(
+            """
+            INSERT INTO periodic_reviews (application_id, client_name, risk_level, status, required_items)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                "Verification Reliability Corp",
+                "LOW",
+                "in_progress",
+                json.dumps([{
+                    "id": "req-pr-doc",
+                    "item_type": "kyc_refresh",
+                    "label": "Refresh KYC evidence",
+                    "severity": "high",
+                    "status": "open",
+                }]),
+            ),
+        )
+        review_id = conn.execute("SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1").fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO periodic_review_evidence_links
+            (periodic_review_id, requirement_id, document_id, link_type, linked_by, note)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (review_id, "req-pr-doc", doc_id, "requirement_evidence", "admin001", "Periodic review upload"),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(
+            server,
+            "verify_document_layered",
+            lambda **_: {
+                "overall": "verified",
+                "checks": [{"label": "Agent 1 document check", "result": "pass", "message": "ok"}],
+            },
+        )
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/{doc_id}/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["verification_status"] == "verified"
+
+        conn = get_db()
+        try:
+            execution = conn.execute(
+                """
+                SELECT agent_name, agent_number, status
+                FROM agent_executions
+                WHERE application_id = ? AND agent_number = 1
+                ORDER BY id DESC LIMIT 1
+                """,
+                (app_id,),
+            ).fetchone()
+            link = conn.execute(
+                """
+                SELECT l.document_id, d.verification_status
+                FROM periodic_review_evidence_links l
+                JOIN documents d ON d.id = l.document_id
+                WHERE l.periodic_review_id = ? AND l.requirement_id = ?
+                """,
+                (review_id, "req-pr-doc"),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert execution is not None
+        assert execution["agent_name"] == "verify_document"
+        assert execution["agent_number"] == 1
+        assert execution["status"] == "verified"
+        assert link["document_id"] == doc_id
+        assert link["verification_status"] == "verified"
+
     def test_audit_write_failure_does_not_leak_transaction(self, monkeypatch):
         """Agent execution audit failures must rollback/close instead of leaking connections."""
         import db as db_module

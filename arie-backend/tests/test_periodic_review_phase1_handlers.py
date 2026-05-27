@@ -154,15 +154,37 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
             {
                 "last_review_date": "2025-01-01",
                 "source_type": "internal_register",
+                "source_note": "Legacy file migration",
+                "review_evidence_note": "Prior review memo retained in migration packet",
                 "confidence": "high",
                 "assigned_officer": "co001",
             },
         )
         self.assertEqual(resp.code, 200)
         row = self._conn.execute(
-            "SELECT import_requires_ack, assigned_officer, next_review_date FROM periodic_reviews WHERE id = ?",
+            "SELECT import_requires_ack, assigned_officer, next_review_date, legacy_review_evidence_note FROM periodic_reviews WHERE id = ?",
             (rid,),
         ).fetchone()
         self.assertEqual(row["import_requires_ack"], 1)
         self.assertEqual(row["assigned_officer"], "co001")
         self.assertEqual(row["next_review_date"], "2026-01-01")
+        self.assertEqual(row["legacy_review_evidence_note"], "Prior review memo retained in migration packet")
+        detail = self._get(f"/api/monitoring/reviews/{rid}")
+        self.assertEqual(detail.code, 200)
+        baseline = json.loads(detail.body)["manual_legacy_baseline"]
+        self.assertTrue(baseline["enabled"])
+        self.assertEqual(baseline["review_evidence_note"], "Prior review memo retained in migration packet")
+        self.assertEqual(baseline["frequency_months"], 12)
+
+    def test_import_setup_endpoint_rejects_non_compliance_role(self):
+        rid = self._create_review(status="pending", risk_level="LOW")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/import-setup",
+            {
+                "last_review_date": "2025-01-01",
+                "source_type": "internal_register",
+                "confidence": "high",
+            },
+            token=self.agent_token,
+        )
+        self.assertEqual(resp.code, 403)

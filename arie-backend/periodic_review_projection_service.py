@@ -197,7 +197,14 @@ def list_review_projections(
     if review_ids:
         placeholders = ",".join("?" for _ in review_ids)
         link_rows = db.execute(
-            f"SELECT * FROM periodic_review_evidence_links WHERE periodic_review_id IN ({placeholders}) ORDER BY id ASC",
+            f"SELECT l.id, l.periodic_review_id, l.requirement_id, l.document_id, l.link_type, l.linked_by, l.linked_at, l.note, "
+            "d.doc_type AS document_type, d.doc_name AS document_name, d.verification_status AS document_verification_status, "
+            "d.review_status AS document_review_status, d.review_comment AS document_review_comment, "
+            "d.reviewer_role AS document_reviewer_role, d.reviewed_at AS document_reviewed_at, "
+            "d.verified_at AS document_verified_at, d.is_current AS document_is_current "
+            f"FROM periodic_review_evidence_links l "
+            "LEFT JOIN documents d ON d.id = l.document_id "
+            f"WHERE l.periodic_review_id IN ({placeholders}) ORDER BY l.id ASC",
             tuple(review_ids),
         ).fetchall()
         for row in link_rows:

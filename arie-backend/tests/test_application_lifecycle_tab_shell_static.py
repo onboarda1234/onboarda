@@ -100,6 +100,31 @@ def test_lifecycle_required_evidence_wires_repository_link_upload_and_custom_req
     assert "does not create a separate periodic-review document store" in html
 
 
+def test_lifecycle_legacy_baseline_form_is_backoffice_conditional_and_auditable():
+    html = _read_backoffice()
+    assert "Manual Legacy Review Baseline" in html
+    assert "function lifecycleManualLegacyBaselineControls" in html
+    assert "canEditPeriodicReviewLegacyBaseline" in html
+    assert "lifecycle-legacy-last-review-" in html
+    assert "lifecycle-legacy-evidence-holder-" in html
+    assert "Review evidence / memo reference" in html
+    assert "toggleLifecycleLegacyEvidence" in html
+    assert "/import-setup" in html
+    assert "review_evidence_note" in html
+    assert "Compliance officer, SCO, or admin access is required" in html
+    assert "Overdue imported baselines stay visible as overdue" in html
+
+
+def test_lifecycle_required_evidence_uses_document_verification_truth_not_link_only():
+    html = _read_backoffice()
+    assert "function lifecycleEvidenceLinkReady(entry)" in html
+    assert "document_verification_status" in html
+    assert "document_review_status" in html
+    assert "Senior accepted flagged evidence" in html
+    assert "Pending verification" in html
+    assert "lifecycleOpenEvidenceRequirements(requiredItems, evidenceLinks, applicationDocuments)" in html
+
+
 def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
     html = _read_backoffice()
     start = html.index("function renderLifecycleDetailTab(context)")

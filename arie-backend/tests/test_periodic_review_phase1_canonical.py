@@ -82,10 +82,22 @@ def _insert_review(conn, **overrides):
 
 
 
-def _insert_document(conn, *, document_id="doc-phase1"):
+def _insert_document(conn, *, document_id="doc-phase1", verification_status="pending", review_status=None, reviewer_role=None, review_comment=None, is_current=1):
     conn.execute(
-        "INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, uploaded_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (document_id, "app-phase1", "passport", "passport.pdf", f"/tmp/{document_id}.pdf", datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, uploaded_at, verification_status, review_status, reviewer_role, review_comment, is_current) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            document_id,
+            "app-phase1",
+            "passport",
+            "passport.pdf",
+            f"/tmp/{document_id}.pdf",
+            datetime.now(timezone.utc).isoformat(),
+            verification_status,
+            review_status,
+            reviewer_role,
+            review_comment,
+            is_current,
+        ),
     )
     conn.commit()
     return document_id
@@ -122,6 +134,7 @@ def test_phase1_schema_helper_is_idempotent(phase1_db):
         "calculation_basis",
         "legacy_import",
         "legacy_source_type",
+        "legacy_review_evidence_note",
         "legacy_confidence",
         "legacy_sco_acknowledged_at",
         "import_requires_ack",
@@ -154,7 +167,7 @@ def test_existing_sqlite_schema_is_upgraded_by_phase1_helper(monkeypatch):
     db_module._ensure_periodic_review_phase1_schema(conn)
     db_module._ensure_periodic_review_phase1_schema(conn)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(periodic_reviews)").fetchall()}
-    assert {"assigned_officer", "legacy_import", "import_requires_ack", "officer_rationale", "memo_status"} <= cols
+    assert {"assigned_officer", "legacy_import", "legacy_review_evidence_note", "import_requires_ack", "officer_rationale", "memo_status"} <= cols
     idx_names = {
         row["name"]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
@@ -252,6 +265,7 @@ def test_import_setup_saves_last_review_date_and_source_metadata(phase1_db, audi
         last_review_date="2024-01-15",
         source_type="system_export",
         source_note="Imported from ARIE register",
+        review_evidence_note="Prior memo PR-2024-001 retained in migration pack",
         confidence="high",
         assigned_officer="co001",
         user=CO,
@@ -262,9 +276,13 @@ def test_import_setup_saves_last_review_date_and_source_metadata(phase1_db, audi
     assert row["last_review_date"] == "2024-01-15"
     assert row["legacy_source_type"] == "system_export"
     assert row["legacy_source_note"] == "Imported from ARIE register"
+    assert row["legacy_review_evidence_note"] == "Prior memo PR-2024-001 retained in migration pack"
     assert row["legacy_confidence"] == "high"
     assert row["assigned_officer"] == "co001"
     assert result["next_review_date"] == "2027-01-15"
+    assert result["legacy_review_evidence_note"] == "Prior memo PR-2024-001 retained in migration pack"
+    assert audit_sink.events[-1]["action"] == "periodic_review.legacy_import_saved"
+    assert audit_sink.events[-1]["after_state"]["legacy_review_evidence_note"] == "Prior memo PR-2024-001 retained in migration pack"
 
 
 
@@ -566,7 +584,7 @@ def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):
 
     _, params = next(call for call in db.calls if call[0].startswith("UPDATE periodic_reviews SET"))
     legacy_import_param = params[10]
-    import_requires_ack_param = params[16]
+    import_requires_ack_param = params[17]
     assert isinstance(legacy_import_param, bool)
     assert isinstance(import_requires_ack_param, bool)
     assert legacy_import_param is True
@@ -648,6 +666,90 @@ def test_cross_application_evidence_link_fails_and_duplicate_link_is_idempotent(
     count = phase1_db.execute("SELECT COUNT(*) AS c FROM periodic_review_evidence_links WHERE periodic_review_id = ?", (review_id,)).fetchone()["c"]
     assert first["id"] == second["id"]
     assert count == 1
+
+
+def test_required_evidence_link_does_not_clear_until_document_verified(phase1_db, audit_sink):
+    from periodic_review_management import add_evidence_link
+    from periodic_review_projection_service import get_review_projection
+
+    review_id = _insert_review(
+        phase1_db,
+        status="in_progress",
+        required_items=json.dumps([
+            {"id": "req-passport", "item_type": "kyc_refresh", "label": "Provide refreshed passport", "severity": "high", "status": "open"}
+        ]),
+    )
+    document_id = _insert_document(phase1_db, document_id="doc-pending", verification_status="pending")
+    add_evidence_link(
+        phase1_db,
+        review_id,
+        requirement_id="req-passport",
+        document_id=document_id,
+        link_type="requirement_evidence",
+        note="Uploaded during periodic review",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    phase1_db.commit()
+
+    projection = get_review_projection(phase1_db, review_id)
+    assert projection["blocker_count"] == 1
+    assert projection["blocker_summary"] == [
+        "Provide refreshed passport is linked but not yet verified or senior-accepted"
+    ]
+    assert projection["evidence_links"][0]["document_verification_status"] == "pending"
+
+    phase1_db.execute("UPDATE documents SET verification_status = 'verified', verified_at = ? WHERE id = ?", (datetime.now(timezone.utc).isoformat(), document_id))
+    phase1_db.commit()
+
+    projection = get_review_projection(phase1_db, review_id)
+    assert projection["blocker_count"] == 0
+    assert projection["blocker_summary"] == []
+
+
+def test_flagged_periodic_review_evidence_requires_senior_acceptance_with_reason(phase1_db, audit_sink):
+    from periodic_review_management import add_evidence_link
+    from periodic_review_projection_service import get_review_projection
+
+    review_id = _insert_review(
+        phase1_db,
+        status="in_progress",
+        required_items=json.dumps([
+            {"id": "req-sof", "item_type": "source_of_funds_refresh", "label": "Provide source of funds memo", "severity": "high", "status": "open"}
+        ]),
+    )
+    document_id = _insert_document(
+        phase1_db,
+        document_id="doc-flagged",
+        verification_status="flagged",
+        review_status="accepted",
+        reviewer_role="co",
+        review_comment="CO attempted acceptance",
+    )
+    add_evidence_link(
+        phase1_db,
+        review_id,
+        requirement_id="req-sof",
+        document_id=document_id,
+        link_type="requirement_evidence",
+        note="Linked flagged evidence",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    phase1_db.commit()
+
+    projection = get_review_projection(phase1_db, review_id)
+    assert projection["blocker_count"] == 1
+
+    phase1_db.execute(
+        "UPDATE documents SET review_status = 'accepted', reviewer_role = 'sco', review_comment = 'Accepted with documented reason' WHERE id = ?",
+        (document_id,),
+    )
+    phase1_db.commit()
+
+    projection = get_review_projection(phase1_db, review_id)
+    assert projection["blocker_count"] == 0
+    assert projection["evidence_links"][0]["document_review_status"] == "accepted"
 
 
 
