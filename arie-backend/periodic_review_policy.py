@@ -18,7 +18,7 @@ RISK_NOMINAL_INTERVAL_DAYS: Dict[int, int] = {
     12: 365,
     6: 180,
 }
-ENHANCED_FREQUENCY_MONTHS = 6
+ENHANCED_REVIEW_FLOOR_MONTHS = 12
 ENHANCED_MONITORING_LANES = {"edd", "enhanced_due_diligence", "enhanced due diligence"}
 EDD_ROUTE_STATUSES = {"edd_required", "edd_approved"}
 CRYPTO_VASP_PATTERNS = (
@@ -221,8 +221,11 @@ def policy_snapshot_for_application(
     )
     reasons = enhanced_monitoring_reasons(app, previous_status=previous_status)
     if reasons and normalized != "VERY_HIGH":
-        frequency = ENHANCED_FREQUENCY_MONTHS
-        calculation_basis = "enhanced_monitoring:" + "+".join(reasons)
+        frequency = min(
+            frequency_months_for_risk(normalized),
+            ENHANCED_REVIEW_FLOOR_MONTHS,
+        )
+        calculation_basis = "enhanced_monitoring_floor:" + "+".join(reasons)
     else:
         frequency = frequency_months_for_risk(normalized)
         calculation_basis = calculation_basis_for_risk(normalized)
