@@ -126,18 +126,19 @@ def test_portal_terminal_rendering_remains_truthful_for_non_verified_states():
     assert "var icon = stateMeta.verification_success === true ? '✅ '" in src
 
 
-def test_backoffice_detail_polls_pending_verification_documents_until_terminal():
+def test_backoffice_detail_preserves_verification_fields_from_backend_documents():
     src = _read(BACKOFFICE)
 
-    assert "var _VERIFICATION_DETAIL_POLL_INTERVAL_MS = 5000;" in src
-    assert "function startBackofficeVerificationDetailPolling(app)" in src
-    assert "appHasActiveVerificationDocuments(app)" in src
-    assert "await refreshCurrentAppDetail({ preserveDetailTab: true });" in src
-    assert "startBackofficeVerificationDetailPolling(app);" in src
-    assert "if (name !== 'app-detail') stopBackofficeVerificationDetailPolling();" in src
-    assert "stopBackofficeVerificationDetailPolling();" in src
-    assert "verification_terminal: doc.verification_terminal === true" in src
-    assert "verification_terminal: d.verification_terminal === true" in src
+    assert "verification_status: d.verification_status" in src
+    assert "verification_state: d.verification_state" in src
+    assert "verification_status_label: d.verification_status_label" in src
+    assert "verification_status_tone: d.verification_status_tone" in src
+    assert "verification_success: d.verification_success === true" in src
+    assert "verification_status: doc.verification_status || 'pending'" in src
+    assert "verification_state: doc.verification_state || doc.verification_status || 'pending'" in src
+    assert "verification_status_label: doc.verification_status_label || ''" in src
+    assert "verification_status_tone: doc.verification_status_tone || 'pending'" in src
+    assert "verification_success: doc.verification_success === true" in src
 
 
 def test_portal_async_browser_smoke_uses_real_login_and_checks_pending_to_terminal():
