@@ -843,20 +843,25 @@ class TestDayFourDashboardCountAlignment:
         assert '<div class="stat-card-label">In Progress</div>' in html
         assert "var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], eddRoutedStatuses: [], canonicalView: '' };" in html
         assert "function setDashboardStatusContract(source)" in html
+        assert "function setDashboardData(source)" in html
         assert "function getDashboardPendingStatuses()" in html
         assert "function hasDashboardStatusContract()" in html
         assert "function getDashboardEddRoutedStatuses()" in html
         assert "function isDashboardEddRoutedApplication(app)" in html
-        assert "setDashboardStatusContract(dashboardResp);" in html
+        assert "setDashboardStatusContract(source || {});" in html
         assert "function isDashboardPendingApplication(app)" in html
 
     def test_dashboard_pending_statuses_are_loaded_from_backend_contract(self):
         html = self._read_backoffice()
         load_start = html.index("async function loadFromAPI()")
         load_region = html[load_start:load_start + 1800]
-        assert "var dashboardResp = await boApiCall('GET', '/dashboard');" in load_region
-        assert "setDashboardStatusContract(dashboardResp);" in load_region
-        assert "Could not load dashboard status contract" in load_region
+        assert "await refreshDashboardData();" in load_region
+
+        refresh_start = html.index("async function refreshDashboardData()")
+        refresh_region = html[refresh_start:refresh_start + 600]
+        assert "var dashboardResp = await boApiCall('GET', '/dashboard');" in refresh_region
+        assert "setDashboardData(dashboardResp);" in refresh_region
+        assert "Could not load canonical dashboard metrics" in refresh_region
 
         helper_start = html.index("function isDashboardPendingApplication(app)")
         helper_region = html[helper_start:helper_start + 260]
@@ -878,22 +883,21 @@ class TestDayFourDashboardCountAlignment:
         html = self._read_backoffice()
 
         stats_start = html.index("function updateDashboardStats()")
-        stats_region = html[stats_start:stats_start + 1200]
-        assert "hasDashboardStatusContract() ? APPLICATIONS.filter(isDashboardPendingApplication).length : null" in stats_region
-        assert "earlyStage === null ? '—' : earlyStage" in stats_region
+        stats_region = html[stats_start:stats_start + 2200]
+        assert "var inProgressMetric = getDashboardMetric('in_progress_applications');" in stats_region
+        assert "setDashboardStatValue('dash-stat-early-stage', inProgressMetric ? String(inProgressMetric.value) : '—');" in stats_region
+        assert "setDashboardStatNote('dash-stat-early-stage-change', inProgressMetric ? 'Canonical pending status bucket' : 'Canonical dashboard metrics unavailable');" in stats_region
 
         kpi_start = html.index("function renderKPIDashboard()")
         kpi_region = html[kpi_start:kpi_start + 5200]
-        assert "var hasPendingStatusContract = hasDashboardStatusContract();" in kpi_region
-        assert "var backlogCount = hasPendingStatusContract ? appsInPeriod.filter(isDashboardPendingApplication).length : null;" in kpi_region
-        assert "var backlogValue = hasPendingStatusContract ? String(backlogCount) : '—';" in kpi_region
-        assert "In-progress status contract unavailable; reload dashboard data" in kpi_region
+        assert "Canonical dashboard metrics unavailable" not in kpi_region
 
     def test_dashboard_stats_uses_single_pending_helper(self):
         html = self._read_backoffice()
         fn_start = html.index("function updateDashboardStats()")
         fn_region = html[fn_start:fn_start + 900]
-        assert "APPLICATIONS.filter(isDashboardPendingApplication).length" in fn_region
+        assert "getDashboardMetric('in_progress_applications')" in fn_region
+        assert "APPLICATIONS.filter(isDashboardPendingApplication).length" not in fn_region
         assert "pending review" not in fn_region
         assert "pricing review" not in fn_region
 
