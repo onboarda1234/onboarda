@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from calendar import monthrange
 from datetime import date, datetime, timezone
@@ -30,6 +31,41 @@ CRYPTO_VASP_PATTERNS = (
 PEP_PATTERNS = (
     re.compile(r"\bpep\b"),
     re.compile(r"politically exposed"),
+)
+PEP_FLAG_KEYS = {
+    "is_pep",
+    "declared_pep",
+    "client_declared_pep",
+    "verified_pep",
+    "officer_verified_pep",
+    "screening_confirmed_pep",
+    "confirmed_pep",
+}
+PEP_STATUS_KEYS = {
+    "pep_status",
+    "pep_verification_status",
+    "pep_screening_status",
+}
+PEP_TRUE_VALUES = {
+    "1",
+    "true",
+    "yes",
+    "y",
+    "declared_yes",
+    "confirmed_pep",
+    "verified_pep",
+    "screening_confirmed_pep",
+}
+PEP_NEGATED_TEXT = (
+    "no pep",
+    "no politically exposed",
+    "not pep",
+    "not a pep",
+    "not politically exposed",
+    "non-pep",
+    "not_pep",
+    "declared_no",
+    "false_positive",
 )
 EDD_PATTERNS = (
     re.compile(r"\bedd\b"),
@@ -63,10 +99,8 @@ def _json_value(value: Any) -> Any:
     if not text:
         return value
     try:
-        import json
-
         return json.loads(text)
-    except Exception:
+    except json.JSONDecodeError:
         return value
 
 
@@ -94,6 +128,40 @@ def _value_matches_patterns(value: Any, patterns: Iterable[re.Pattern[str]]) -> 
         return any(_value_matches_patterns(item, patterns) for item in data)
     text = str(data or "").strip().lower()
     return any(pattern.search(text) for pattern in patterns)
+
+
+def _positive_pep_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in PEP_TRUE_VALUES
+
+
+def _pep_text_positive(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text or any(negated in text for negated in PEP_NEGATED_TEXT):
+        return False
+    return any(pattern.search(text) for pattern in PEP_PATTERNS)
+
+
+def _contains_pep_exposure(value: Any) -> bool:
+    data = _json_value(value)
+    if isinstance(data, dict):
+        for key, item in data.items():
+            normalized_key = str(key or "").strip().lower()
+            if normalized_key in PEP_FLAG_KEYS and _positive_pep_flag(item):
+                return True
+            if normalized_key in PEP_STATUS_KEYS and _positive_pep_flag(item):
+                return True
+            if normalized_key in {"pep_declaration", "pep_details", "pep_exposure", "pep"} and _contains_pep_exposure(item):
+                return True
+            if normalized_key not in PEP_FLAG_KEYS | PEP_STATUS_KEYS and _contains_pep_exposure(item):
+                return True
+        return False
+    if isinstance(data, list):
+        return any(_contains_pep_exposure(item) for item in data)
+    return _pep_text_positive(data)
 
 
 def _decision_notes_indicate_edd(value: Any) -> bool:
@@ -147,14 +215,21 @@ def _interval_days(anchor_date: Any, due_date: str) -> int:
 def is_crypto_vasp_application(app: Dict[str, Any]) -> bool:
     return any(
         _value_matches_patterns(app.get(field), CRYPTO_VASP_PATTERNS)
-        for field in ("sector", "business_activity", "entity_type", "form_data")
+        for field in ("sector", "business_activity", "entity_type", "form_data", "prescreening_data")
     )
 
 
 def has_pep_signal(app: Dict[str, Any]) -> bool:
     return any(
-        _value_matches_patterns(app.get(field), PEP_PATTERNS)
-        for field in ("decision_notes", "risk_escalations", "elevation_reason_text", "screening_summary", "form_data")
+        _contains_pep_exposure(app.get(field))
+        for field in (
+            "decision_notes",
+            "risk_escalations",
+            "elevation_reason_text",
+            "screening_summary",
+            "form_data",
+            "prescreening_data",
+        )
     )
 
 
@@ -181,11 +256,7 @@ def enhanced_monitoring_reasons(
         reasons.append("crypto_vasp")
     if has_pep_signal(app):
         reasons.append("pep_exposure")
-    deduped: List[str] = []
-    for reason in reasons:
-        if reason not in deduped:
-            deduped.append(reason)
-    return deduped
+    return list(dict.fromkeys(reasons))
 
 
 def policy_snapshot_for_risk(risk_level: Any, *, anchor_date: Any) -> Dict[str, Any]:

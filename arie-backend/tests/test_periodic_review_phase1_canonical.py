@@ -361,6 +361,53 @@ def test_application_policy_snapshot_applies_high_equivalent_floor_for_edd_crypt
     assert pep_snapshot["calculation_basis"] == "enhanced_monitoring_floor:pep_exposure"
 
 
+def test_application_policy_snapshot_detects_portal_prescreening_pep_without_false_clean_key_match():
+    from periodic_review_policy import policy_snapshot_for_application
+
+    pep_snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "LOW",
+            "final_risk_level": "LOW",
+            "prescreening_data": {
+                "directors": [
+                    {
+                        "is_pep": "Yes",
+                        "pep_declaration": {
+                            "declared_pep": True,
+                            "pep_role_type": "domestic_pep",
+                            "public_function": "Minister",
+                        },
+                    }
+                ]
+            },
+        },
+        anchor_date="2026-05-15",
+    )
+    assert pep_snapshot["frequency_months"] == 12
+    assert pep_snapshot["calculation_basis"] == "enhanced_monitoring_floor:pep_exposure"
+
+    clean_snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "LOW",
+            "final_risk_level": "LOW",
+            "prescreening_data": {
+                "directors": [
+                    {
+                        "is_pep": "No",
+                        "pep_declaration": {
+                            "declared_pep": False,
+                            "pep_status": "declared_no",
+                        },
+                    }
+                ]
+            },
+        },
+        anchor_date="2026-05-15",
+    )
+    assert clean_snapshot["frequency_months"] == 36
+    assert clean_snapshot["calculation_basis"] == "risk_level:LOW"
+
+
 def test_application_policy_snapshot_keeps_very_high_as_only_explicit_six_month_class():
     from periodic_review_policy import policy_snapshot_for_application
 

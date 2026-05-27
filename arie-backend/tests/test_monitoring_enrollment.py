@@ -104,6 +104,29 @@ def _review_rows(db, app_id):
 
 
 def _insert_review(db, app_id, **overrides):
+    allowed_columns = {
+        "application_id",
+        "client_name",
+        "risk_level",
+        "trigger_type",
+        "trigger_source",
+        "trigger_reason",
+        "review_reason",
+        "status",
+        "due_date",
+        "next_review_date",
+        "priority",
+        "review_cycle_number",
+        "review_type",
+        "policy_version",
+        "frequency_months",
+        "calculation_basis",
+        "sla_due_at",
+    }
+    unknown = set(overrides) - allowed_columns
+    if unknown:
+        raise ValueError(f"Unsupported periodic_reviews override(s): {sorted(unknown)}")
+
     payload = {
         "application_id": app_id,
         "client_name": "Existing Review Ltd",

@@ -39,7 +39,8 @@ def _truthy(value: Any) -> bool:
 
 def final_risk_level_for_review(app: Dict[str, Any]) -> str:
     """Return the authoritative risk level used for review frequency."""
-    return policy_snapshot_for_application(app, anchor_date=app.get("decided_at") or app.get("updated_at") or date.today().isoformat())["risk_level"]
+    anchor_date = app.get("decided_at") or app.get("updated_at") or date.today().isoformat()
+    return policy_snapshot_for_application(app, anchor_date=anchor_date)["risk_level"]
 
 
 def review_interval_days_for_application(
@@ -47,7 +48,8 @@ def review_interval_days_for_application(
     *,
     previous_status: Optional[str] = None,
 ) -> int:
-    anchor_date = _parse_anchor_date(app.get("decided_at") or app.get("updated_at"))
+    anchor_value = app.get("decided_at") or app.get("updated_at")
+    anchor_date = _parse_anchor_date(anchor_value)
     policy = policy_snapshot_for_application(app, anchor_date=anchor_date, previous_status=previous_status)
     return int(policy["interval_days"])
 
