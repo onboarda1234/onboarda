@@ -844,6 +844,54 @@ def _resolve_upload_document_path(stored_path: str):
     return str(resolved)
 
 
+def _hash_legacy_document_file(file_path: str):
+    """Hash a legacy document path after upload-dir containment checks."""
+    resolved = _resolve_upload_document_path(file_path)
+    if not resolved or not os.path.isfile(resolved):
+        return None
+
+    digest = hashlib.sha256()
+    try:
+        with open(resolved, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _duplicate_hashes_for_document(db, *, application_id, document_id, file_sha256=None):
+    """Return matching active peer document hashes, using stored hashes first."""
+    current_hash = file_sha256
+    if not current_hash and document_id:
+        current = db.execute(
+            "SELECT file_path, file_sha256 FROM documents WHERE id=? AND application_id=?",
+            (document_id, application_id),
+        ).fetchone()
+        if current:
+            current_hash = current.get("file_sha256") or _hash_legacy_document_file(current.get("file_path", ""))
+
+    if not current_hash:
+        return []
+
+    existing_hashes = []
+    other_docs = db.execute(
+        f"""
+        SELECT id, file_path, file_sha256
+        FROM documents
+        WHERE application_id=? AND id!=? AND {ACTIVE_DOCUMENT_SQL}
+        """,
+        (application_id, document_id),
+    ).fetchall()
+    for other_doc in other_docs:
+        peer_hash = other_doc.get("file_sha256")
+        if not peer_hash:
+            peer_hash = _hash_legacy_document_file(other_doc.get("file_path", ""))
+        if peer_hash and peer_hash == current_hash:
+            existing_hashes.append(peer_hash)
+    return existing_hashes
+
+
 def _revoke_all_client_sessions(db, user_id):
     """
     Best-effort revocation helper: invalidate any JWT that was issued for *user_id*.
@@ -6234,6 +6282,7 @@ class DocumentUploadHandler(BaseHandler):
         filename = os.path.basename(filename)
         body = file_info["body"]
         content_type = file_info.get("content_type", "application/octet-stream")
+        file_sha256 = hashlib.sha256(body).hexdigest()
 
         if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
             self._audit_upload_rejected(
@@ -6375,12 +6424,12 @@ class DocumentUploadHandler(BaseHandler):
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version, verification_status,
-                 verification_results)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 verification_results, file_sha256)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
                 len(body), content_type, replacement["slot_key"], True, replacement["version"],
-                STATE_PENDING, "{}",
+                STATE_PENDING, "{}", file_sha256,
             ))
             _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
 
@@ -6878,20 +6927,12 @@ class DocumentVerifyHandler(BaseHandler):
         existing_hashes = []
         if app:
             try:
-                other_docs = db.execute(
-                    f"SELECT file_path FROM documents WHERE application_id=? AND id!=? AND {ACTIVE_DOCUMENT_SQL}",
-                    (app["id"], doc_id)
-                ).fetchall()
-                for od in other_docs:
-                    fp = od.get("file_path", "")
-                    if fp and not os.path.isabs(fp):
-                        fp = os.path.join(UPLOAD_DIR, os.path.basename(fp))
-                    if fp and os.path.isfile(fp):
-                        try:
-                            h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
-                            existing_hashes.append(h)
-                        except OSError:
-                            pass
+                existing_hashes = _duplicate_hashes_for_document(
+                    db,
+                    application_id=app["id"],
+                    document_id=doc_id,
+                    file_sha256=doc.get("file_sha256"),
+                )
             except Exception as e:
                 logger.debug(f"Could not compute existing hashes: {e}")
 
