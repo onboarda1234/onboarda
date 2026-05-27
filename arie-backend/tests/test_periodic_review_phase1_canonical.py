@@ -330,7 +330,7 @@ def test_policy_snapshot_is_stored_from_import_setup(phase1_db, audit_sink, risk
     assert row["next_review_date"] == expected_next_review_date
 
 
-def test_application_policy_snapshot_applies_enhanced_overlay_for_edd_crypto_and_pep():
+def test_application_policy_snapshot_applies_high_equivalent_floor_for_edd_crypto_and_pep():
     from periodic_review_policy import policy_snapshot_for_application
 
     edd_snapshot = policy_snapshot_for_application(
@@ -338,16 +338,16 @@ def test_application_policy_snapshot_applies_enhanced_overlay_for_edd_crypto_and
         anchor_date="2026-05-15",
         previous_status="edd_approved",
     )
-    assert edd_snapshot["frequency_months"] == 6
-    assert edd_snapshot["calculation_basis"] == "enhanced_monitoring:edd_route"
-    assert edd_snapshot["next_review_date"] == "2026-11-15"
+    assert edd_snapshot["frequency_months"] == 12
+    assert edd_snapshot["calculation_basis"] == "enhanced_monitoring_floor:edd_route"
+    assert edd_snapshot["next_review_date"] == "2027-05-15"
 
     crypto_snapshot = policy_snapshot_for_application(
         {"risk_level": "HIGH", "final_risk_level": "HIGH", "sector": "Crypto / VASP"},
         anchor_date="2026-05-15",
     )
-    assert crypto_snapshot["frequency_months"] == 6
-    assert crypto_snapshot["calculation_basis"] == "enhanced_monitoring:crypto_vasp"
+    assert crypto_snapshot["frequency_months"] == 12
+    assert crypto_snapshot["calculation_basis"] == "enhanced_monitoring_floor:crypto_vasp"
 
     pep_snapshot = policy_snapshot_for_application(
         {
@@ -357,11 +357,30 @@ def test_application_policy_snapshot_applies_enhanced_overlay_for_edd_crypto_and
         },
         anchor_date="2026-05-15",
     )
-    assert pep_snapshot["frequency_months"] == 6
-    assert pep_snapshot["calculation_basis"] == "enhanced_monitoring:pep_exposure"
+    assert pep_snapshot["frequency_months"] == 12
+    assert pep_snapshot["calculation_basis"] == "enhanced_monitoring_floor:pep_exposure"
 
 
-def test_import_setup_uses_application_enhanced_policy_when_app_requires_edd(phase1_db, audit_sink):
+def test_application_policy_snapshot_keeps_very_high_as_only_explicit_six_month_class():
+    from periodic_review_policy import policy_snapshot_for_application
+
+    snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "VERY_HIGH",
+            "final_risk_level": "VERY_HIGH",
+            "onboarding_lane": "edd",
+            "sector": "Cryptocurrency",
+            "decision_notes": {"summary": "PEP exposure requires enhanced monitoring"},
+        },
+        anchor_date="2026-05-15",
+        previous_status="edd_approved",
+    )
+    assert snapshot["frequency_months"] == 6
+    assert snapshot["calculation_basis"] == "risk_level:VERY_HIGH"
+    assert snapshot["next_review_date"] == "2026-11-15"
+
+
+def test_import_setup_uses_high_equivalent_floor_when_app_requires_edd(phase1_db, audit_sink):
     from periodic_review_management import save_legacy_import_setup
 
     phase1_db.execute(
@@ -381,9 +400,9 @@ def test_import_setup_uses_application_enhanced_policy_when_app_requires_edd(pha
     phase1_db.commit()
     row = _review_row(phase1_db, review_id)
     assert row["policy_version"] == "v2"
-    assert row["frequency_months"] == 6
-    assert row["next_review_date"] == "2024-07-15"
-    assert row["calculation_basis"] == "enhanced_monitoring:edd_route"
+    assert row["frequency_months"] == 12
+    assert row["next_review_date"] == "2025-01-15"
+    assert row["calculation_basis"] == "enhanced_monitoring_floor:edd_route"
 
 
 
@@ -457,10 +476,10 @@ def test_risk_change_respects_application_enhanced_policy(phase1_db, audit_sink)
     )
     phase1_db.commit()
     row = _review_row(phase1_db, review_id)
-    assert row["frequency_months"] == 6
-    assert row["next_review_date"] == "2024-07-15"
-    assert row["calculation_basis"] == "enhanced_monitoring:crypto_vasp"
-    assert result["frequency_months"] == 6
+    assert row["frequency_months"] == 12
+    assert row["next_review_date"] == "2025-01-15"
+    assert row["calculation_basis"] == "enhanced_monitoring_floor:crypto_vasp"
+    assert result["frequency_months"] == 12
 
 
 def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):
