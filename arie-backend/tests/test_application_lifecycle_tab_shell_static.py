@@ -107,8 +107,22 @@ def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
     section = html[start:end]
     assert "var currentReviewActive = !!activeReview;" in section
     assert "var activeWorkItems = currentReviewActive ?" in section
-    assert "(currentReviewActive ? lifecycleDetailCard('Current Review Workspace'" in section
-    assert ": lifecycleDetailCard('Active Work'" in section
+    assert "var currentReviewCardHtml = currentReviewActive" in section
+    assert "lifecycleDetailCard('Current Review Workspace'" in section
+    assert "lifecycleDetailCard('Active Work'" in section
+
+
+def test_lifecycle_workspace_uses_scrollable_responsive_layout():
+    html = _read_backoffice()
+    assert ".lifecycle-detail-root" in html
+    assert ".lifecycle-top-grid" in html
+    assert ".lifecycle-card-grid" in html
+    assert ".lifecycle-workspace-layout" in html
+    assert ".lifecycle-workspace-panels" in html
+    assert ".lifecycle-evidence-list" in html
+    assert "max-height:440px; overflow:auto" in html
+    assert "@media (max-width:1180px)" in html
+    assert "@media (max-width:760px)" in html
 
 
 def test_lifecycle_workspace_save_helpers_refresh_canonical_projection():

@@ -146,6 +146,41 @@ a { color:var(--brand); text-decoration:none; }
 .detail-row .label { color:var(--text3); }
 .detail-row .value { font-weight:500; text-align:right; max-width:60%; }
 
+/* ── Application Lifecycle Workspace ── */
+.lifecycle-detail-root { display:flex; flex-direction:column; gap:16px; padding-bottom:32px; }
+.lifecycle-detail-hero { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap; padding:18px 20px; border:1px solid #dfe7f2; border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%); box-shadow:0 12px 28px rgba(16,24,40,0.06); }
+.lifecycle-detail-hero h2 { font-size:20px; line-height:1.2; font-weight:800; color:var(--text1); margin:0; }
+.lifecycle-detail-hero p { margin-top:6px; font-size:12px; color:var(--text3); max-width:780px; line-height:1.5; }
+.lifecycle-detail-banner { background:#edf4ff; border:1px solid #c7d7fe; color:#29487d; border-radius:14px; padding:13px 15px; font-size:13px; line-height:1.45; }
+.lifecycle-metrics-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+.lifecycle-top-grid { display:grid; grid-template-columns:minmax(280px,0.9fr) minmax(320px,1.1fr); gap:16px; align-items:start; }
+.lifecycle-card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; align-items:start; }
+.lifecycle-full-span { grid-column:1/-1; }
+.lifecycle-detail-card { background:#ffffff; border:1px solid #dfe7f2; border-radius:16px; box-shadow:0 12px 28px rgba(16,24,40,0.06); overflow:hidden; margin-bottom:0; min-width:0; }
+.lifecycle-detail-card-header { display:flex; align-items:flex-start; gap:12px; padding:16px 18px; border-bottom:1px solid #dfe7f2; background:linear-gradient(180deg,#ffffff 0%,#fbfdff 100%); }
+.lifecycle-detail-card-accent { width:4px; align-self:stretch; border-radius:999px; flex:0 0 auto; }
+.lifecycle-detail-card-title { font-size:15px; font-weight:800; letter-spacing:-0.01em; color:var(--text1); }
+.lifecycle-detail-card-subtitle { font-size:12px; color:var(--text3); margin-top:4px; line-height:1.45; }
+.lifecycle-detail-card-body { padding:16px 18px; min-width:0; }
+.lifecycle-evidence-list { max-height:440px; overflow:auto; padding-right:4px; }
+.lifecycle-workspace-root { min-width:0; }
+.lifecycle-workspace-statusbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.lifecycle-workspace-layout { display:grid; grid-template-columns:minmax(240px,300px) minmax(0,1fr); gap:16px; align-items:start; }
+.lifecycle-workspace-steps { display:grid; gap:10px; align-content:start; position:sticky; top:132px; max-height:calc(100vh - 170px); overflow:auto; padding-right:4px; }
+.lifecycle-workspace-panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; min-width:0; }
+.lifecycle-workspace-panels > * { min-width:0; }
+@media (max-width:1180px) {
+  .lifecycle-top-grid,
+  .lifecycle-workspace-layout { grid-template-columns:1fr; }
+  .lifecycle-workspace-steps { position:static; max-height:none; overflow:visible; padding-right:0; }
+}
+@media (max-width:760px) {
+  .lifecycle-detail-hero { padding:15px; }
+  .lifecycle-card-grid,
+  .lifecycle-workspace-panels { grid-template-columns:1fr; }
+  .lifecycle-evidence-list { max-height:none; overflow:visible; padding-right:0; }
+}
+
 /* ── Risk bars ── */
 .risk-bar-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
 .risk-bar-label { width:140px; font-size:12px; color:var(--text2); flex-shrink:0; }
@@ -9773,15 +9808,15 @@ function lifecycleWorkspaceStep(number, title, subtitle, tone) {
 
 function lifecycleDetailCard(title, subtitle, body, accent) {
   var border = accent || '#7c3aed';
-  return '<div class="card" style="background:#ffffff;border:1px solid #dfe7f2;border-radius:18px;box-shadow:0 14px 34px rgba(16,24,40,0.08);overflow:hidden;">' +
-    '<div class="card-header" style="align-items:flex-start;gap:12px;margin:0;padding:18px 20px;border-bottom:1px solid #dfe7f2;background:linear-gradient(180deg,#ffffff 0%,#fbfdff 100%);">' +
-      '<div style="width:4px;align-self:stretch;border-radius:999px;background:' + border + ';"></div>' +
+  return '<div class="lifecycle-detail-card">' +
+    '<div class="lifecycle-detail-card-header">' +
+      '<div class="lifecycle-detail-card-accent" style="background:' + border + ';"></div>' +
       '<div>' +
-        '<div class="card-title" style="font-size:16px;font-weight:800;letter-spacing:-0.015em;">' + escapeHtml(title) + '</div>' +
-        '<div style="font-size:12px;color:var(--text3);margin-top:4px;line-height:1.45;">' + escapeHtml(subtitle || '') + '</div>' +
+        '<div class="lifecycle-detail-card-title">' + escapeHtml(title) + '</div>' +
+        '<div class="lifecycle-detail-card-subtitle">' + escapeHtml(subtitle || '') + '</div>' +
       '</div>' +
     '</div>' +
-    '<div style="padding:18px 20px;">' + body + '</div>' +
+    '<div class="lifecycle-detail-card-body">' + body + '</div>' +
   '</div>';
 }
 
@@ -10255,7 +10290,7 @@ function renderLifecycleRequiredEvidenceCard(reviewId, requiredItems, evidenceLi
       lifecycleDetailBadge('Repository documents: ' + String((Array.isArray(documents) ? documents.length : 0)), 'slate') +
     '</div>' +
     '<div style="font-size:12px;color:var(--text2);margin-bottom:14px;">Lifecycle links evidence to the existing KYC Documents repository only. It does not create a separate periodic-review document store.</div>' +
-    requirementsHtml +
+    '<div class="lifecycle-evidence-list">' + requirementsHtml + '</div>' +
     '<div style="margin-top:16px;padding:14px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">' +
       '<div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:8px;">Upload new evidence to KYC Documents and link it</div>' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-items:end;">' +
@@ -10519,16 +10554,16 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
     lifecycleWorkspaceStep(4, 'Linked owner workflows', linkedEDD || openAlerts ? 'Linked EDD or monitoring work remains active outside Lifecycle.' : 'No linked EDD or monitoring escalation is currently open.', linkedEDD || openAlerts ? 'warn' : 'idle'),
     lifecycleWorkspaceStep(5, 'Completion gate readiness', completionBlockers || evidenceOpen ? 'Completion blockers still remain before memo and outcome controls arrive in the next phase.' : 'Completion blockers are currently clear on the canonical projection.', completionBlockers || evidenceOpen ? 'warn' : 'done')
   ].join('');
-  return '<div id="' + escapeHtml(workspaceDomId) + '" data-lifecycle-item-type="review" data-lifecycle-item-id="' + escapeHtml(String(reviewId)) + '">' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">' +
+  return '<div class="lifecycle-workspace-root" id="' + escapeHtml(workspaceDomId) + '" data-lifecycle-item-type="review" data-lifecycle-item-id="' + escapeHtml(String(reviewId)) + '">' +
+    '<div class="lifecycle-workspace-statusbar">' +
       lifecycleDetailBadge((projection && projection.status_label) || reviewDetail.status_label || 'In Review', 'purple') +
       lifecycleDetailBadge('Review #' + String(reviewId).slice(0, 8), 'slate') +
       lifecycleDetailBadge('Review risk: ' + lifecycleReviewRiskLevel(reviewDetail, projection), 'slate') +
       lifecycleDetailBadge('Due: ' + lifecycleFormatDate((reviewDetail && reviewDetail.next_review_date) || (projection && projection.next_review_date) || reviewDetail.due_date), 'slate') +
     '</div>' +
-    '<div style="display:grid;grid-template-columns:minmax(220px,250px) minmax(0,1fr);gap:16px;align-items:start;">' +
-      '<div style="display:grid;gap:10px;align-content:start;">' + workspaceSteps + '</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;">' +
+    '<div class="lifecycle-workspace-layout">' +
+      '<div class="lifecycle-workspace-steps">' + workspaceSteps + '</div>' +
+      '<div class="lifecycle-workspace-panels">' +
         lifecycleWorkspaceSection('Material Change Attestation', 'Officer-owned attestation only. No client profile mutation happens here.', lifecycleMaterialChangeControls(reviewId, reviewDetail), '#7c3aed') +
         lifecycleWorkspaceSection('Risk Rating Change Attestation', 'Record a review-level re-rate only when the officer determines a change is needed.', lifecycleRiskChangeControls(reviewId, reviewDetail, projection), '#ea580c') +
         lifecycleWorkspaceSection('KYC Documents', 'System-derived document repository health and projected evidence readiness.', lifecycleDocumentsPanel(currentApp || {}, reviewDetail), '#0f766e') +
@@ -10816,10 +10851,10 @@ function renderLifecycleDetailTab(context) {
   var operationalBlockerCount = Number((activeReview && activeReview.blocker_count) || (activeReviewProjection && activeReviewProjection.blocker_count) || 0);
   var completionBlockerCount = Number((activeReview && activeReview.completion_blocker_count) || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0);
   var memoStateLabel = activeReview ? (activeReview.memo_status || 'not_started') : 'no_active_review';
-  var lifecycleBanner = '<div style="background:#edf4ff;border:1px solid #c7d7fe;color:#29487d;border-radius:18px;padding:14px 16px;font-size:13px;line-height:1.45;margin-bottom:18px;">' +
+  var lifecycleBanner = '<div class="lifecycle-detail-banner">' +
     '<strong style="color:#153a7d;">Lifecycle owns periodic review only.</strong> Screening, EDD, Change Management, Monitoring, and KYC Documents remain owner workflows and are projected here without duplicating their state.' +
   '</div>';
-  var metricsRow = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px;">' +
+  var metricsRow = '<div class="lifecycle-metrics-grid">' +
     lifecycleDetailMetric('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'None active', activeReview ? 'purple' : 'slate') +
     lifecycleDetailMetric('Active items', String((((summary.active || {}).counts) || {}).total || 0), 'blue') +
     lifecycleDetailMetric('Operational blockers', String(operationalBlockerCount), operationalBlockerCount ? 'amber' : 'green') +
@@ -10872,7 +10907,7 @@ function renderLifecycleDetailTab(context) {
         lifecycleDetailBadge('Completion blockers: ' + String(activeReview.completion_blocker_count || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0), 'amber') +
         lifecycleDetailBadge('Operational blockers: ' + String(activeReview.blocker_count || (activeReviewProjection && activeReviewProjection.blocker_count) || 0), blockerSummary.length ? 'red' : 'green') +
       '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
         '<div><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Operational blockers</div>' +
           (blockerSummary.length ? blockerSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No operational blockers projected.</div>') +
         '</div>' +
@@ -10954,25 +10989,33 @@ function renderLifecycleDetailTab(context) {
       }).join('')
     : '<div style="font-size:12px;color:var(--text2);">Historical periodic reviews will appear here once review history exists for this client.</div>';
 
+  var currentReviewCardHtml = currentReviewActive
+    ? '<div class="lifecycle-full-span">' + lifecycleDetailCard('Current Review Workspace', 'Officer controls and system-derived panels for the active periodic review.', workspaceBody, '#4f46e5') + '</div>'
+    : lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client when no periodic review is active.', activeWorkBody, '#2563eb');
+
   container.innerHTML =
-    '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-start;">' +
+    '<div class="lifecycle-detail-root">' +
+    '<div class="lifecycle-detail-hero">' +
       '<div>' +
-        '<div style="font-size:20px;font-weight:800;color:var(--text1);">Lifecycle</div>' +
-        '<div style="font-size:12px;color:var(--text3);margin-top:4px;max-width:760px;">Client-level periodic review workspace backed by canonical lifecycle and periodic review projections. Officer attestations live here; owner workflows remain in their native modules.</div>' +
+        '<h2>Lifecycle</h2>' +
+        '<p>Client-level periodic review workspace backed by canonical lifecycle and periodic review projections. Officer attestations live here; owner workflows remain in their native modules.</p>' +
       '</div>' +
       '<button class="btn btn-outline btn-sm" onclick="loadLifecycleDetailTab(true)">⟳ Refresh Lifecycle</button>' +
     '</div>' +
     lifecycleBanner +
     metricsRow +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">' +
+    '<div class="lifecycle-top-grid">' +
       lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
-      (currentReviewActive ? lifecycleDetailCard('Current Review Workspace', 'Officer controls and system-derived panels for the active periodic review.', workspaceBody, '#4f46e5') : lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client when no periodic review is active.', activeWorkBody, '#2563eb')) +
       lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
+    '</div>' +
+    currentReviewCardHtml +
+    '<div class="lifecycle-card-grid">' +
       lifecycleDetailCard('Required Evidence', 'Canonical evidence requirements linked to the existing KYC document repository.', requiredEvidenceBody, '#0f766e') +
       lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
       lifecycleDetailCard('Agent Signals', 'Agent 6/7/8/10 decision-support signals projected into Lifecycle without mutating officer-owned review state.', lifecycleAgentSignalsPanel(summary), '#2557d6') +
       lifecycleDetailCard('Memo Status', 'Periodic review memo state remains separate from onboarding memo state.', memoBody, '#6d28d9') +
       lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
+    '</div>' +
     '</div>';
 }
 
