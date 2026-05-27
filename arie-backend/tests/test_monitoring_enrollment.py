@@ -227,12 +227,12 @@ def test_high_plain_case_stays_on_annual_cadence(db):
 @pytest.mark.parametrize(
     ("kwargs", "previous_status", "expected_basis"),
     [
-        ({"risk_level": "HIGH", "final_risk_level": "HIGH", "onboarding_lane": "edd"}, "edd_approved", "enhanced_monitoring:edd_route"),
-        ({"risk_level": "HIGH", "final_risk_level": "HIGH", "onboarding_lane": "standard", "sector": "Cryptocurrency"}, "approved", "enhanced_monitoring:crypto_vasp"),
-        ({"risk_level": "LOW", "final_risk_level": "LOW", "onboarding_lane": "standard", "decision_notes": json.dumps({"pep_condition": True, "summary": "PEP exposure requires enhanced monitoring"})}, "approved", "enhanced_monitoring:pep_exposure"),
+        ({"risk_level": "HIGH", "final_risk_level": "HIGH", "onboarding_lane": "edd"}, "edd_approved", "enhanced_monitoring_floor:edd_route"),
+        ({"risk_level": "HIGH", "final_risk_level": "HIGH", "onboarding_lane": "edd", "sector": "Cryptocurrency"}, "edd_approved", "enhanced_monitoring_floor:edd_route+crypto_vasp"),
+        ({"risk_level": "LOW", "final_risk_level": "LOW", "onboarding_lane": "standard", "decision_notes": json.dumps({"pep_condition": True, "summary": "PEP exposure requires enhanced monitoring"})}, "approved", "enhanced_monitoring_floor:pep_exposure"),
     ],
 )
-def test_enhanced_classes_get_six_month_cadence(db, kwargs, previous_status, expected_basis):
+def test_enhanced_classes_get_high_equivalent_twelve_month_cadence(db, kwargs, previous_status, expected_basis):
     from monitoring_enrollment import enroll_approved_application
 
     _reset_audit_events()
@@ -248,13 +248,37 @@ def test_enhanced_classes_get_six_month_cadence(db, kwargs, previous_status, exp
     db.commit()
 
     row = _review_rows(db, app["id"])[0]
+    assert result["interval_days"] == 365
+    assert row["due_date"] == "2027-05-15"
+    assert row["next_review_date"] == "2027-05-15"
+    assert row["priority"] == "high"
+    assert row["frequency_months"] == 12
+    assert row["calculation_basis"] == expected_basis
+    assert "12-month cadence" in row["trigger_reason"]
+
+
+def test_very_high_case_keeps_six_month_cadence(db):
+    from monitoring_enrollment import enroll_approved_application
+
+    _reset_audit_events()
+    app = _insert_app(db, risk_level="VERY_HIGH", final_risk_level="VERY_HIGH", onboarding_lane="edd")
+    result = enroll_approved_application(
+        db,
+        app,
+        user={"sub": "admin001", "name": "Admin", "role": "admin"},
+        audit_writer=_audit_writer,
+        approved_at=app["decided_at"],
+        previous_status="edd_approved",
+    )
+    db.commit()
+
+    row = _review_rows(db, app["id"])[0]
     assert result["interval_days"] == 184
     assert row["due_date"] == "2026-11-15"
     assert row["next_review_date"] == "2026-11-15"
     assert row["priority"] == "urgent"
     assert row["frequency_months"] == 6
-    assert row["calculation_basis"] == expected_basis
-    assert "6-month cadence" in row["trigger_reason"]
+    assert row["calculation_basis"] == "risk_level:VERY_HIGH"
 
 
 def test_approval_retry_updates_existing_schedule_without_duplicate(db):
@@ -340,10 +364,10 @@ def test_existing_approved_app_can_be_backfilled(db):
     assert len(_review_rows(db, approved["id"])) == 1
     assert _review_rows(db, rejected["id"]) == []
     repaired = _review_rows(db, approved["id"])[0]
-    assert repaired["due_date"] == "2026-11-15"
-    assert repaired["next_review_date"] == "2026-11-15"
-    assert repaired["frequency_months"] == 6
-    assert repaired["calculation_basis"] == "enhanced_monitoring:edd_route"
+    assert repaired["due_date"] == "2027-05-15"
+    assert repaired["next_review_date"] == "2027-05-15"
+    assert repaired["frequency_months"] == 12
+    assert repaired["calculation_basis"] == "enhanced_monitoring_floor:edd_route"
     assert _audit_writer.events[-1]["detail"]["enrollment_source"] == "backfill_repair"
 
 
