@@ -286,6 +286,39 @@ def test_import_setup_saves_last_review_date_and_source_metadata(phase1_db, audi
     assert audit_sink.events[-1]["after_state"]["legacy_review_evidence_note"] == "Prior memo PR-2024-001 retained in migration pack"
 
 
+def test_co_can_add_initial_legacy_baseline_to_system_scheduled_review(phase1_db, audit_sink):
+    from periodic_review_management import save_legacy_import_setup
+
+    review_id = _insert_review(
+        phase1_db,
+        risk_level="LOW",
+        policy_version="v2",
+        frequency_months=36,
+        calculation_basis="risk_level:LOW",
+        legacy_import=0,
+    )
+
+    result = save_legacy_import_setup(
+        phase1_db,
+        review_id,
+        last_review_date="2022-01-15",
+        source_type="internal_register",
+        source_note="Imported from legacy register",
+        review_evidence_note="Legacy review memo reference PR-2022-001",
+        confidence="high",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+
+    row = _review_row(phase1_db, review_id)
+    assert row["legacy_import"] == 1
+    assert row["last_review_date"] == "2022-01-15"
+    assert row["next_review_date"] == "2025-01-15"
+    assert row["legacy_review_evidence_note"] == "Legacy review memo reference PR-2022-001"
+    assert result["next_review_date"] == "2025-01-15"
+    assert audit_sink.events[-1]["action"] == "periodic_review.legacy_import_saved"
+
+
 
 def test_high_import_requires_acknowledgement_and_low_medium_does_not(phase1_db, audit_sink):
     from periodic_review_management import acknowledge_legacy_import, save_legacy_import_setup
