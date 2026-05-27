@@ -1267,7 +1267,15 @@ def _draft_party_row_is_meaningful(row) -> bool:
     pep_declaration = row.get("pep_declaration")
     if isinstance(pep_declaration, dict):
         for key, value in pep_declaration.items():
-            if key in ("person_key", "person_type", "is_pep"):
+            if key in (
+                "person_key",
+                "person_type",
+                "is_pep",
+                "declared_pep",
+                "client_declared_pep",
+                "pep_status",
+                "pep_schema_version",
+            ):
                 continue
             if _draft_value_is_meaningful(value):
                 return True
@@ -1284,6 +1292,17 @@ def _draft_uploaded_doc_is_meaningful(value) -> bool:
                 return True
         return False
     return _draft_value_is_meaningful(value)
+
+
+def _draft_prescreening_is_meaningful(value) -> bool:
+    if not isinstance(value, dict):
+        return _draft_value_is_meaningful(value)
+    for key, nested in value.items():
+        if key in ("f-phone-code", "phone_code"):
+            continue
+        if _draft_value_is_meaningful(nested):
+            return True
+    return False
 
 
 def _draft_payload_is_meaningful(payload) -> bool:
@@ -1320,7 +1339,15 @@ def _draft_payload_is_meaningful(payload) -> bool:
         "ownership_structure",
         "brn",
     )
-    return any(_draft_value_is_meaningful(payload.get(key)) for key in interesting_keys)
+    for key in interesting_keys:
+        value = payload.get(key)
+        if key in ("prescreening", "prescreening_data"):
+            if _draft_prescreening_is_meaningful(value):
+                return True
+            continue
+        if _draft_value_is_meaningful(value):
+            return True
+    return False
 
 
 def _extract_save_resume_form_data(payload) -> dict:
