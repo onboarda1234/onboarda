@@ -62,10 +62,10 @@ def review_priority_for_application(
         anchor_date=_parse_anchor_date(app.get("decided_at") or app.get("updated_at")),
         previous_status=previous_status,
     )
-    if policy["enhanced_monitoring"] or policy["risk_level"] == "VERY_HIGH":
+    if policy["risk_level"] == "VERY_HIGH":
         return "urgent"
     risk = policy["risk_level"]
-    if risk in {"HIGH", "VERY_HIGH"}:
+    if risk == "HIGH" or policy["enhanced_monitoring"]:
         return "high"
     if risk == "MEDIUM":
         return "normal"
