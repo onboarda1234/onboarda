@@ -41,8 +41,8 @@ class TestJurisdictionConfig:
 
     def test_monitoring_intervals(self):
         from config_loader import config
-        assert config.get_monitoring_interval("LOW") == 730
-        assert config.get_monitoring_interval("VERY_HIGH") == 90
+        assert config.get_monitoring_interval("LOW") == 1095
+        assert config.get_monitoring_interval("VERY_HIGH") == 180
 
     def test_high_risk_sectors(self):
         from config_loader import config
