@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 import pytest
@@ -90,7 +91,7 @@ def _insert_document(conn, *, document_id="doc-phase1", verification_status="pen
             "app-phase1",
             "passport",
             "passport.pdf",
-            f"/tmp/{document_id}.pdf",
+            os.path.join(tempfile.gettempdir(), f"{document_id}.pdf"),
             datetime.now(timezone.utc).isoformat(),
             verification_status,
             review_status,
@@ -582,9 +583,15 @@ def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):
         audit_writer=audit_sink,
     )
 
-    _, params = next(call for call in db.calls if call[0].startswith("UPDATE periodic_reviews SET"))
-    legacy_import_param = params[10]
-    import_requires_ack_param = params[17]
+    sql, params = next(call for call in db.calls if call[0].startswith("UPDATE periodic_reviews SET"))
+    set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
+    columns = [
+        part.split("=", 1)[0].strip()
+        for part in set_clause.split(",")
+        if "?" in part
+    ]
+    legacy_import_param = params[columns.index("legacy_import")]
+    import_requires_ack_param = params[columns.index("import_requires_ack")]
     assert isinstance(legacy_import_param, bool)
     assert isinstance(import_requires_ack_param, bool)
     assert legacy_import_param is True

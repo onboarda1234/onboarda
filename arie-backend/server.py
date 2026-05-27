@@ -18006,7 +18006,7 @@ def _serialize_periodic_review_row(db, review_row):
         try:
             due_date = datetime.fromisoformat(str(due_text).replace("Z", "+00:00")).date()
             is_overdue = due_date < datetime.now(timezone.utc).date()
-        except Exception:
+        except (TypeError, ValueError):
             is_overdue = False
     result["manual_legacy_baseline"] = {
         "enabled": bool(result.get("legacy_import")),
