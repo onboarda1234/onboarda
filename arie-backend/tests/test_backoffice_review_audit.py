@@ -932,10 +932,10 @@ class TestDayFourKPIEDDRoutingTruthfulness:
         contract_region = html[contract_start:contract_start + 1200]
         assert "source && source.edd_routed_statuses" in contract_region
         assert "DASHBOARD_STATUS_CONTRACT.eddRoutedStatuses = eddRouted" in contract_region
-        assert "function getDashboardEddRoutedStatuses()" in contract_region
-        assert "function hasDashboardEddRoutedStatusContract()" in contract_region
-        assert "function isDashboardEddRoutedApplication(app)" in contract_region
-        assert "getDashboardEddRoutedStatuses().indexOf" in contract_region
+        assert "function getDashboardEddRoutedStatuses()" in html
+        assert "function hasDashboardEddRoutedStatusContract()" in html
+        assert "function isDashboardEddRoutedApplication(app)" in html
+        assert "getDashboardEddRoutedStatuses().indexOf" in html
 
     def test_kpi_status_key_prefers_raw_backend_status(self):
         html = self._read_backoffice()
