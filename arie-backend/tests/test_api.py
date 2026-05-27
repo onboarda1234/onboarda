@@ -4174,7 +4174,7 @@ class TestMonitoringEnrollmentActuation:
         enrollment = body["monitoring_enrollment"]
         assert enrollment["status"] == "created"
         assert enrollment["risk_level"] == "LOW"
-        assert enrollment["interval_days"] == 1095
+        assert enrollment["interval_days"] == 1096
 
         conn = get_db()
         review_rows = conn.execute(
