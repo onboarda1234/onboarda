@@ -17520,6 +17520,31 @@ class MonitoringAgentRunHandler(BaseHandler):
             db.close()
 
 
+class MonitoringAutomationStatusHandler(BaseHandler):
+    """GET /api/monitoring/automation/status — scheduled runner health."""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        import monitoring_automation as ma
+
+        db = get_db()
+        try:
+            status = ma.automation_status(db)
+            status["enabled"] = ma.automation_enabled(ENVIRONMENT)
+            self.success(status)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring automation status failed")
+            self.error("Failed to load monitoring automation status.", 500)
+        finally:
+            db.close()
+
+
 class PeriodicReviewsListHandler(BaseHandler):
     """GET /api/monitoring/reviews — List periodic reviews"""
     def get(self):
@@ -20828,6 +20853,7 @@ def make_app():
         # Agents
         (r"/api/monitoring/agents/([^/]+)/run", MonitoringAgentRunHandler),
         (r"/api/monitoring/agents", MonitoringAgentsHandler),
+        (r"/api/monitoring/automation/status", MonitoringAutomationStatusHandler),
         # Periodic Reviews (more specific routes first)
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items/generate",
@@ -21099,5 +21125,73 @@ if __name__ == "__main__":
         _gdpr_purge_cb = tornado.ioloop.PeriodicCallback(_gdpr_purge_tick, 86_400_000)
         _gdpr_purge_cb.start()
         logger.info("gdpr-purge: daily PeriodicCallback registered (interval=86400s)")
+
+    # PR4 monitoring automation — single scheduled due-review sweep.
+    #
+    # The worker consumes already-persisted periodic_reviews due dates and
+    # cadence metadata written by monitoring_enrollment/periodic_review_policy.
+    # It does not call screening providers or agent LLM executors; it only
+    # claims due reviews and invokes the existing periodic-review engine.
+    try:
+        import monitoring_automation as _monitoring_automation
+
+        if _monitoring_automation.automation_enabled(ENVIRONMENT):
+            _monitoring_automation_interval_ms = (
+                _monitoring_automation.automation_interval_seconds() * 1000
+            )
+            try:
+                _monitoring_initial_delay = int(
+                    os.environ.get("MONITORING_AUTOMATION_INITIAL_DELAY_SECONDS", "60")
+                )
+            except (TypeError, ValueError):
+                _monitoring_initial_delay = 60
+            _monitoring_initial_delay = max(0, _monitoring_initial_delay)
+
+            def _monitoring_automation_tick():
+                db = None
+                try:
+                    db = get_db()
+                    summary = _monitoring_automation.run_due_monitoring_reviews(db)
+                    logger.info(
+                        "monitoring-automation: run complete due=%s processed=%s failed=%s skipped=%s",
+                        summary.get("due_count"),
+                        summary.get("processed"),
+                        summary.get("failed"),
+                        summary.get("skipped"),
+                    )
+                except Exception:
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    logger.exception("monitoring-automation: scheduled run failed")
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+
+            _monitoring_automation_cb = tornado.ioloop.PeriodicCallback(
+                _monitoring_automation_tick,
+                _monitoring_automation_interval_ms,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                _monitoring_initial_delay,
+                _monitoring_automation_tick,
+            )
+            _monitoring_automation_cb.start()
+            logger.info(
+                "monitoring-automation: scheduled runner registered (interval=%ss initial_delay=%ss)",
+                _monitoring_automation.automation_interval_seconds(),
+                _monitoring_initial_delay,
+            )
+        else:
+            logger.info("monitoring-automation: scheduled runner disabled for environment=%s", ENVIRONMENT)
+    except Exception:
+        logger.exception("monitoring-automation: startup registration failed")
+        if ENVIRONMENT in ("production", "staging"):
+            raise
 
     tornado.ioloop.IOLoop.current().start()

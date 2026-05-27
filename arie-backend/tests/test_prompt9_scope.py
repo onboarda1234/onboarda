@@ -4,7 +4,8 @@ Prompt 9 — Marketing vs Code Scope Verification Tests
 Verifies that code reality matches documented scope:
 1. ComplyAdvantage is SCAFFOLDED (not the default, not live).
 2. Adverse media is parsed from stored data only (no external API call wired).
-3. No automatic periodic review scheduler is active at server startup.
+3. Periodic review automation exists only in the PR4 scheduler wrapper,
+   not inside provider/screening code or the review engine itself.
 """
 import os
 import sys
@@ -152,21 +153,21 @@ class TestAdverseMediaUsesStoredData:
 
 
 # ════════════════════════════════════════════════════════════
-# Feature 3: No automatic periodic review scheduler
+# Feature 3: Periodic review automation scope
 # ════════════════════════════════════════════════════════════
 
-class TestNoAutomaticPeriodicReviewScheduler:
-    """Periodic review is manually triggered only; no automatic scheduler exists."""
+class TestPeriodicReviewAutomationScope:
+    """PR4 automation is allowed, but only through monitoring_automation."""
 
     def test_periodic_review_engine_has_no_scheduler_import(self):
-        """periodic_review_engine.py must not import APScheduler or Tornado PeriodicCallback."""
+        """periodic_review_engine.py must not own scheduler/runtime loops."""
         import periodic_review_engine
         source = inspect.getsource(periodic_review_engine)
         forbidden = ["APScheduler", "apscheduler", "PeriodicCallback", "BackgroundScheduler", "BlockingScheduler"]
         for token in forbidden:
             assert token not in source, (
                 f"periodic_review_engine.py must not use '{token}' — "
-                f"reviews are manually triggered, not automatically scheduled"
+                f"PR4 automation must stay in monitoring_automation.py"
             )
 
     def test_requirements_has_no_apscheduler(self):
@@ -180,13 +181,13 @@ class TestNoAutomaticPeriodicReviewScheduler:
         with open(req_path, "r", encoding="utf-8") as f:
             requirements = f.read().lower()
         assert "apscheduler" not in requirements, (
-            "requirements.txt must not include apscheduler — automatic scheduling is not implemented"
+            "requirements.txt must not include apscheduler — PR4 uses the existing Tornado runtime"
         )
 
-    def test_server_startup_has_no_periodic_review_callback(self):
+    def test_server_startup_scheduler_is_pr4_monitoring_automation_only(self):
         """
-        server.py must not call PeriodicCallback or IOLoop.call_later with
-        periodic_review functions at startup.
+        server.py may register the PR4 monitoring automation callback, but it
+        must not wire periodic_review_engine directly as a background loop.
         """
         server_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -196,13 +197,9 @@ class TestNoAutomaticPeriodicReviewScheduler:
             pytest.skip("server.py not found")
         with open(server_path, "r", encoding="utf-8") as f:
             source = f.read()
-        # PeriodicCallback used for periodic_review would appear together
-        # We check that PeriodicCallback is not called with any periodic_review function
-        if "PeriodicCallback" in source:
-            # Find lines with PeriodicCallback and ensure none reference periodic_review
-            import re
-            callback_lines = [line for line in source.splitlines() if "PeriodicCallback" in line]
-            for line in callback_lines:
-                assert "periodic_review" not in line.lower(), (
-                    f"server.py must not use PeriodicCallback with periodic_review: {line.strip()}"
-                )
+        callback_lines = [line for line in source.splitlines() if "PeriodicCallback" in line]
+        for line in callback_lines:
+            lowered = line.lower()
+            assert "periodic_review_engine" not in lowered
+            assert "screening" not in lowered
+        assert "monitoring_automation.run_due_monitoring_reviews" in source
