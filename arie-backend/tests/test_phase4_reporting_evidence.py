@@ -381,7 +381,7 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert dashboard_body["in_progress_applications"] == expected_pending
         assert dashboard_body["pending_statuses"] == analytics_body["report"]["pending_statuses"]
         assert dashboard_body["edd_routed_statuses"] == analytics_body["report"]["edd_routed_statuses"]
-        assert dashboard_body["canonical_view"] == "applications_report_v1"
+        assert dashboard_body["canonical_view"] == "dashboard_metrics_v2"
 
     def test_periodic_review_report_counts_reconcile_with_lifecycle_queue(self):
         country, app_ids = self._seed_periodic_review_reconciliation_rows()

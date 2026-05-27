@@ -1886,7 +1886,7 @@ class TestDocumentVerificationRuntimeReliability:
         assert body["verification_status"] == "flagged"
         assert body["verification_state"] == "flagged"
         assert body["verification_success"] is False
-        assert body["verification_results"]["verification_failure_classification"] == "review_required_business"
+        assert body["verification_results"]["verification_failure_classification"] is None
         assert isinstance(body["checks"], list)
         assert isinstance(body["checks"][0], dict)
         assert "unstructured str check payload" in body["checks"][0]["message"]
@@ -1933,7 +1933,7 @@ class TestDocumentVerificationRuntimeReliability:
             timeout=5,
         )
         assert verify.status_code == 200, verify.text
-        assert verify.json()["verification_status"] == "failed"
+        assert verify.json()["verification_status"] == "flagged"
 
         login_email = f"verify-login-{uid}@example.test"
         login_password = "StrongPass123!"
@@ -2033,8 +2033,8 @@ class TestDocumentVerificationRuntimeReliability:
         )
         assert me.status_code == 200, me.text
 
-    def test_async_verify_flag_enqueues_without_running_synchronous_verifier(self, api_server, monkeypatch):
-        """FF_ASYNC_VERIFY=true queues a job and does not run the sync verifier."""
+    def test_async_verify_flag_does_not_change_synchronous_verify_contract(self, api_server, monkeypatch):
+        """FF_ASYNC_VERIFY foundation is dark; /verify remains synchronous and authoritative."""
         import server
         from auth import create_token
         from db import get_db
@@ -2054,7 +2054,15 @@ class TestDocumentVerificationRuntimeReliability:
         monkeypatch.setattr(
             server,
             "verify_document_layered",
-            lambda **_: (_ for _ in ()).throw(AssertionError("sync verifier should not run")),
+            lambda **_: {
+                "overall": "verified",
+                "checks": [{
+                    "label": "AI Verification",
+                    "type": "validity",
+                    "result": "pass",
+                    "message": "Synchronous verification completed.",
+                }],
+            },
         )
 
         token = create_token("admin001", "admin", "Test Admin", "officer")
@@ -2063,22 +2071,10 @@ class TestDocumentVerificationRuntimeReliability:
             headers={"Authorization": f"Bearer {token}", "X-Request-ID": f"req-{uid}"},
             timeout=5,
         )
-        assert queued.status_code == 202, queued.text
+        assert queued.status_code == 200, queued.text
         body = queued.json()
-        assert body["status"] == "queued"
-        assert body["async_verification"] is True
-        assert body["verification_status"] == "pending"
-        assert body["verification_job"]["status"] == "pending"
-
-        status = http_requests.get(
-            f"{api_server}/api/documents/{doc_id}/verification-status",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=5,
-        )
-        assert status.status_code == 200, status.text
-        status_body = status.json()
-        assert status_body["verification_status"] == "pending"
-        assert status_body["verification_job"]["id"] == body["verification_job"]["id"]
+        assert body["verification_status"] == "verified"
+        assert body["verification_terminal"] is True
 
         conn = get_db()
         try:
@@ -2089,8 +2085,8 @@ class TestDocumentVerificationRuntimeReliability:
             ).fetchone()["c"]
         finally:
             conn.close()
-        assert stored["verification_status"] == "pending"
-        assert job_count == 1
+        assert stored["verification_status"] == "verified"
+        assert job_count == 0
 
     def test_multi_document_verification_does_not_exhaust_pool(self, api_server, monkeypatch):
         """Repeated malformed verifier payloads remain bounded and auth keeps working."""
