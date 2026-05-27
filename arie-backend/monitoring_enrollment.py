@@ -9,24 +9,11 @@ dates, and an audit record for every create/update.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
-from periodic_review_policy import policy_snapshot_for_risk
+from periodic_review_policy import policy_snapshot_for_application
 from periodic_review_projection_service import latest_active_review_summary as _projection_latest_active_review_summary
-
-
-LOW_REVIEW_INTERVAL_DAYS = 1095      # 36 months
-MEDIUM_REVIEW_INTERVAL_DAYS = 730    # 24 months
-HIGH_REVIEW_INTERVAL_DAYS = 365      # 12 months
-ENHANCED_REVIEW_INTERVAL_DAYS = 180  # 6 months for VERY_HIGH / EDD-routed cases
-
-REVIEW_INTERVAL_DAYS = {
-    "LOW": LOW_REVIEW_INTERVAL_DAYS,
-    "MEDIUM": MEDIUM_REVIEW_INTERVAL_DAYS,
-    "HIGH": HIGH_REVIEW_INTERVAL_DAYS,
-    "VERY_HIGH": ENHANCED_REVIEW_INTERVAL_DAYS,
-}
 
 ACTIVE_REVIEW_STATUSES = (
     "pending",
@@ -50,94 +37,10 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _normalise_risk_level(value: Any) -> str:
-    text = str(value or "").strip().upper()
-    if text in REVIEW_INTERVAL_DAYS:
-        return text
-    return "MEDIUM"
-
-
-def _json_value(value: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    if not isinstance(value, str):
-        return value
-    text = value.strip()
-    if not text:
-        return value
-    try:
-        return json.loads(text)
-    except Exception:
-        return value
-
-
-def _nonempty_signal(value: Any) -> bool:
-    value = _json_value(value)
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (list, tuple, set)):
-        return any(_nonempty_signal(item) for item in value)
-    if isinstance(value, dict):
-        return any(_nonempty_signal(item) for item in value.values())
-    text = str(value).strip().lower()
-    return text not in {"", "none", "null", "false", "0", "[]", "{}"}
-
-
-def _decision_notes_indicate_edd(value: Any) -> bool:
-    data = _json_value(value)
-    if isinstance(data, dict):
-        decision = str(data.get("decision") or "").strip().lower()
-        if decision == "escalate_edd":
-            return True
-        status = str(data.get("status") or data.get("new_status") or "").strip().lower()
-        if status in {"edd_required", "edd_approved"}:
-            return True
-        return any(
-            _nonempty_signal(data.get(key))
-            for key in (
-                "edd_trigger_flags",
-                "edd_triggers",
-                "edd_requirements",
-                "edd_findings",
-            )
-        )
-    if isinstance(data, list):
-        return any(_decision_notes_indicate_edd(item) for item in data)
-    return "edd" in str(value or "").strip().lower()
-
-
-def _value_mentions_edd(value: Any) -> bool:
-    data = _json_value(value)
-    if isinstance(data, dict):
-        return any(_value_mentions_edd(item) for item in data.values())
-    if isinstance(data, list):
-        return any(_value_mentions_edd(item) for item in data)
-    return "edd" in str(data or "").strip().lower()
-
-
-def _is_edd_routed(app: Dict[str, Any], *, previous_status: Optional[str] = None) -> bool:
-    previous = str(previous_status or "").strip().lower()
-    status = str(app.get("status") or "").strip().lower()
-    lane = str(app.get("onboarding_lane") or "").strip().lower()
-    return (
-        previous in {"edd_required", "edd_approved"}
-        or status in {"edd_required", "edd_approved"}
-        or lane == "edd"
-        or _decision_notes_indicate_edd(app.get("decision_notes"))
-        or _value_mentions_edd(app.get("risk_escalations"))
-        or _value_mentions_edd(app.get("elevation_reason_text"))
-    )
-
-
 def final_risk_level_for_review(app: Dict[str, Any]) -> str:
     """Return the authoritative risk level used for review frequency."""
-    return _normalise_risk_level(
-        app.get("final_risk_level")
-        or app.get("risk_level")
-        or app.get("base_risk_level")
-    )
+    anchor_date = app.get("decided_at") or app.get("updated_at") or date.today().isoformat()
+    return policy_snapshot_for_application(app, anchor_date=anchor_date)["risk_level"]
 
 
 def review_interval_days_for_application(
@@ -145,9 +48,10 @@ def review_interval_days_for_application(
     *,
     previous_status: Optional[str] = None,
 ) -> int:
-    if _is_edd_routed(app, previous_status=previous_status):
-        return ENHANCED_REVIEW_INTERVAL_DAYS
-    return REVIEW_INTERVAL_DAYS[final_risk_level_for_review(app)]
+    anchor_value = app.get("decided_at") or app.get("updated_at")
+    anchor_date = _parse_anchor_date(anchor_value)
+    policy = policy_snapshot_for_application(app, anchor_date=anchor_date, previous_status=previous_status)
+    return int(policy["interval_days"])
 
 
 def review_priority_for_application(
@@ -155,10 +59,15 @@ def review_priority_for_application(
     *,
     previous_status: Optional[str] = None,
 ) -> str:
-    if _is_edd_routed(app, previous_status=previous_status):
+    policy = policy_snapshot_for_application(
+        app,
+        anchor_date=_parse_anchor_date(app.get("decided_at") or app.get("updated_at")),
+        previous_status=previous_status,
+    )
+    if policy["risk_level"] == "VERY_HIGH":
         return "urgent"
-    risk = final_risk_level_for_review(app)
-    if risk in {"HIGH", "VERY_HIGH"}:
+    risk = policy["risk_level"]
+    if risk == "HIGH" or policy["enhanced_monitoring"]:
         return "high"
     if risk == "MEDIUM":
         return "normal"
@@ -248,27 +157,28 @@ def _review_payload(
     approved_at: Optional[Any],
     review_cycle_number: int,
 ) -> Dict[str, Any]:
-    risk_level = final_risk_level_for_review(app)
-    interval_days = review_interval_days_for_application(app, previous_status=previous_status)
     anchor_date = _parse_anchor_date(approved_at or app.get("decided_at") or app.get("updated_at"))
-    due_date = anchor_date + timedelta(days=interval_days)
+    policy = policy_snapshot_for_application(app, anchor_date=anchor_date, previous_status=previous_status)
+    risk_level = policy["risk_level"]
+    interval_days = int(policy["interval_days"])
     priority = review_priority_for_application(app, previous_status=previous_status)
-    policy = policy_snapshot_for_risk(risk_level, anchor_date=anchor_date)
+    due_date = policy["due_date"]
+    next_review_date = policy["next_review_date"]
+    cadence_label = f"{policy['frequency_months']}-month cadence"
     trigger_reason = (
         "Initial periodic review scheduled after application approval "
-        f"({risk_level} final risk, {interval_days}-day interval)."
+        f"({risk_level} final risk, {cadence_label})."
     )
-    if interval_days == ENHANCED_REVIEW_INTERVAL_DAYS and (
-        risk_level == "VERY_HIGH" or _is_edd_routed(app, previous_status=previous_status)
-    ):
+    if policy["enhanced_monitoring"]:
+        reasons = ", ".join(policy["enhanced_monitoring_reasons"])
         trigger_reason = (
             "Enhanced periodic review scheduled after application approval "
-            f"({risk_level} final risk / EDD controls, {interval_days}-day interval)."
+            f"({risk_level} final risk / {reasons}, {cadence_label})."
         )
     return {
         "risk_level": risk_level,
         "interval_days": interval_days,
-        "due_date": due_date.isoformat(),
+        "due_date": due_date,
         "priority": priority,
         "trigger_type": "time_based",
         "trigger_source": "schedule",
@@ -279,7 +189,8 @@ def _review_payload(
         "policy_version": policy["policy_version"],
         "frequency_months": policy["frequency_months"],
         "calculation_basis": policy["calculation_basis"],
-        "next_review_date": policy["next_review_date"],
+        "next_review_date": next_review_date,
+        "enhanced_monitoring_reasons": policy["enhanced_monitoring_reasons"],
     }
 
 
@@ -291,6 +202,7 @@ def enroll_approved_application(
     audit_writer=None,
     approved_at: Optional[Any] = None,
     previous_status: Optional[str] = None,
+    enrollment_source: str = "approval_decision",
 ) -> Dict[str, Any]:
     """Create or update the active periodic-review schedule for an approved app.
 
@@ -444,12 +356,18 @@ def enroll_approved_application(
     audit_payload = {
         "event": "monitoring_enrollment",
         "action": action,
+        "enrollment_source": enrollment_source,
         "application_id": app_id,
         "application_ref": app_ref,
         "periodic_review_id": review_id,
         "risk_level": payload["risk_level"],
         "interval_days": payload["interval_days"],
         "due_date": payload["due_date"],
+        "next_review_date": payload["next_review_date"],
+        "policy_version": payload["policy_version"],
+        "frequency_months": payload["frequency_months"],
+        "calculation_basis": payload["calculation_basis"],
+        "enhanced_monitoring_reasons": payload["enhanced_monitoring_reasons"],
         "priority": payload["priority"],
         "trigger_source": payload["trigger_source"],
         "previous_status": previous_status,
@@ -503,6 +421,7 @@ def backfill_approved_applications(
             audit_writer=audit_writer,
             approved_at=app.get("decided_at") or app.get("updated_at"),
             previous_status=app.get("status"),
+            enrollment_source="backfill_repair",
         )
         status = enrolled.get("status")
         if status == "created":

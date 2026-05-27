@@ -325,9 +325,131 @@ def test_policy_snapshot_is_stored_from_import_setup(phase1_db, audit_sink, risk
     )
     phase1_db.commit()
     row = _review_row(phase1_db, review_id)
-    assert row["policy_version"] == "v1"
+    assert row["policy_version"] == "v2"
     assert row["frequency_months"] == expected_months
     assert row["next_review_date"] == expected_next_review_date
+
+
+def test_application_policy_snapshot_applies_high_equivalent_floor_for_edd_crypto_and_pep():
+    from periodic_review_policy import policy_snapshot_for_application
+
+    edd_snapshot = policy_snapshot_for_application(
+        {"risk_level": "HIGH", "final_risk_level": "HIGH", "onboarding_lane": "edd"},
+        anchor_date="2026-05-15",
+        previous_status="edd_approved",
+    )
+    assert edd_snapshot["frequency_months"] == 12
+    assert edd_snapshot["calculation_basis"] == "enhanced_monitoring_floor:edd_route"
+    assert edd_snapshot["next_review_date"] == "2027-05-15"
+
+    crypto_snapshot = policy_snapshot_for_application(
+        {"risk_level": "HIGH", "final_risk_level": "HIGH", "sector": "Crypto / VASP"},
+        anchor_date="2026-05-15",
+    )
+    assert crypto_snapshot["frequency_months"] == 12
+    assert crypto_snapshot["calculation_basis"] == "enhanced_monitoring_floor:crypto_vasp"
+
+    pep_snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "LOW",
+            "final_risk_level": "LOW",
+            "decision_notes": {"summary": "PEP exposure requires enhanced monitoring"},
+        },
+        anchor_date="2026-05-15",
+    )
+    assert pep_snapshot["frequency_months"] == 12
+    assert pep_snapshot["calculation_basis"] == "enhanced_monitoring_floor:pep_exposure"
+
+
+def test_application_policy_snapshot_detects_portal_prescreening_pep_without_false_clean_key_match():
+    from periodic_review_policy import policy_snapshot_for_application
+
+    pep_snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "LOW",
+            "final_risk_level": "LOW",
+            "prescreening_data": {
+                "directors": [
+                    {
+                        "is_pep": "Yes",
+                        "pep_declaration": {
+                            "declared_pep": True,
+                            "pep_role_type": "domestic_pep",
+                            "public_function": "Minister",
+                        },
+                    }
+                ]
+            },
+        },
+        anchor_date="2026-05-15",
+    )
+    assert pep_snapshot["frequency_months"] == 12
+    assert pep_snapshot["calculation_basis"] == "enhanced_monitoring_floor:pep_exposure"
+
+    clean_snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "LOW",
+            "final_risk_level": "LOW",
+            "prescreening_data": {
+                "directors": [
+                    {
+                        "is_pep": "No",
+                        "pep_declaration": {
+                            "declared_pep": False,
+                            "pep_status": "declared_no",
+                        },
+                    }
+                ]
+            },
+        },
+        anchor_date="2026-05-15",
+    )
+    assert clean_snapshot["frequency_months"] == 36
+    assert clean_snapshot["calculation_basis"] == "risk_level:LOW"
+
+
+def test_application_policy_snapshot_keeps_very_high_as_only_explicit_six_month_class():
+    from periodic_review_policy import policy_snapshot_for_application
+
+    snapshot = policy_snapshot_for_application(
+        {
+            "risk_level": "VERY_HIGH",
+            "final_risk_level": "VERY_HIGH",
+            "onboarding_lane": "edd",
+            "sector": "Cryptocurrency",
+            "decision_notes": {"summary": "PEP exposure requires enhanced monitoring"},
+        },
+        anchor_date="2026-05-15",
+        previous_status="edd_approved",
+    )
+    assert snapshot["frequency_months"] == 6
+    assert snapshot["calculation_basis"] == "risk_level:VERY_HIGH"
+    assert snapshot["next_review_date"] == "2026-11-15"
+
+
+def test_import_setup_uses_high_equivalent_floor_when_app_requires_edd(phase1_db, audit_sink):
+    from periodic_review_management import save_legacy_import_setup
+
+    phase1_db.execute(
+        "UPDATE applications SET final_risk_level = 'HIGH', onboarding_lane = 'edd' WHERE id = ?",
+        ("app-phase1",),
+    )
+    review_id = _insert_review(phase1_db, risk_level="HIGH")
+    save_legacy_import_setup(
+        phase1_db,
+        review_id,
+        last_review_date="2024-01-15",
+        source_type="prior_file_note",
+        confidence="high",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    phase1_db.commit()
+    row = _review_row(phase1_db, review_id)
+    assert row["policy_version"] == "v2"
+    assert row["frequency_months"] == 12
+    assert row["next_review_date"] == "2025-01-15"
+    assert row["calculation_basis"] == "enhanced_monitoring_floor:edd_route"
 
 
 
@@ -380,6 +502,31 @@ def test_risk_change_records_audit_and_recalculates_next_review_date_without_app
     assert result["authoritative_application_risk_changed"] is False
     assert app["risk_level"] == "MEDIUM"
     assert audit_sink.events[-1]["after_state"]["new_risk_level"] == "HIGH"
+
+
+def test_risk_change_respects_application_enhanced_policy(phase1_db, audit_sink):
+    from periodic_review_management import record_risk_change
+
+    phase1_db.execute(
+        "UPDATE applications SET final_risk_level = 'HIGH', onboarding_lane = 'standard', sector = 'Cryptocurrency' WHERE id = ?",
+        ("app-phase1",),
+    )
+    review_id = _insert_review(phase1_db, risk_level="HIGH", last_review_date="2024-01-15")
+    result = record_risk_change(
+        phase1_db,
+        review_id,
+        new_risk_level="HIGH",
+        reason_code="monitoring_policy_alignment",
+        officer_note="Crypto/VASP cadence repair",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    phase1_db.commit()
+    row = _review_row(phase1_db, review_id)
+    assert row["frequency_months"] == 12
+    assert row["next_review_date"] == "2025-01-15"
+    assert row["calculation_basis"] == "enhanced_monitoring_floor:crypto_vasp"
+    assert result["frequency_months"] == 12
 
 
 def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):

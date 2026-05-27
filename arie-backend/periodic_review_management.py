@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from lifecycle_linkage import MissingAuditWriter, _row_get
-from periodic_review_policy import normalize_risk_level, policy_snapshot_for_risk
+from periodic_review_policy import normalize_risk_level, policy_snapshot_for_application
 
 ASSIGNABLE_REVIEW_ROLES = {"admin", "sco", "co"}
 LEGACY_SOURCE_TYPES = {
@@ -150,6 +150,14 @@ def _effective_risk_level(db, review) -> str:
     return normalize_risk_level(_row_get(app, "final_risk_level") or _row_get(app, "risk_level"))
 
 
+def _application_row(db, review) -> Optional[Dict[str, Any]]:
+    app_id = _row_get(review, "application_id")
+    if not app_id:
+        return None
+    app = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
+    return dict(app) if app is not None else None
+
+
 
 def _validate_officer(db, officer_id: Optional[str]) -> Optional[str]:
     officer_id = str(officer_id or "").strip()
@@ -280,7 +288,12 @@ def save_legacy_import_setup(
         raise InvalidPeriodicReviewInput("confidence must be high, medium, or low")
     assigned_officer = _validate_officer(db, assigned_officer) if assigned_officer is not None else _row_get(review, "assigned_officer")
     risk_level = _effective_risk_level(db, review)
-    policy = policy_snapshot_for_risk(risk_level, anchor_date=last_review_date)
+    app = _application_row(db, review) or {}
+    policy = policy_snapshot_for_application(
+        app,
+        anchor_date=last_review_date,
+        override_risk_level=risk_level,
+    )
     ts = _utc_now_iso()
     proposed = {
         "last_review_date": str(last_review_date),
@@ -512,7 +525,12 @@ def record_risk_change(
     new_risk_level = normalize_risk_level(new_risk_level)
     ts = _utc_now_iso()
     anchor_date = _row_get(review, "last_review_date") or _row_get(review, "created_at") or ts
-    policy = policy_snapshot_for_risk(new_risk_level, anchor_date=anchor_date)
+    app = _application_row(db, review) or {}
+    policy = policy_snapshot_for_application(
+        app,
+        anchor_date=anchor_date,
+        override_risk_level=new_risk_level,
+    )
     attestation_payload = {
         "prior_risk": prior_risk,
         "new_risk": new_risk_level,
@@ -532,9 +550,10 @@ def record_risk_change(
         "frequency_months": _row_get(review, "frequency_months"),
         "calculation_basis": _row_get(review, "calculation_basis"),
         "next_review_date": _row_get(review, "next_review_date"),
+        "due_date": _row_get(review, "due_date"),
     }
     db.execute(
-        "UPDATE periodic_reviews SET previous_risk_level = ?, new_risk_level = ?, risk_change_attestation = ?, risk_rerate_reason = ?, risk_rerated_by = ?, risk_rerated_at = ?, policy_version = ?, frequency_months = ?, calculation_basis = ?, next_review_date = ?, due_date = COALESCE(due_date, ?) WHERE id = ?",
+        "UPDATE periodic_reviews SET previous_risk_level = ?, new_risk_level = ?, risk_change_attestation = ?, risk_rerate_reason = ?, risk_rerated_by = ?, risk_rerated_at = ?, policy_version = ?, frequency_months = ?, calculation_basis = ?, next_review_date = ?, due_date = ? WHERE id = ?",
         (
             prior_risk,
             new_risk_level,
@@ -546,7 +565,7 @@ def record_risk_change(
             policy["frequency_months"],
             policy["calculation_basis"],
             policy["next_review_date"],
-            policy["next_review_date"],
+            policy["due_date"],
             review_id,
         ),
     )
@@ -562,6 +581,7 @@ def record_risk_change(
         "frequency_months": policy["frequency_months"],
         "calculation_basis": policy["calculation_basis"],
         "next_review_date": policy["next_review_date"],
+        "due_date": policy["due_date"],
     }
     _emit_audit(
         audit_writer,

@@ -1,6 +1,8 @@
 """
 ARIE Finance — Configuration Loader
 Loads jurisdiction_config.json and provides typed access to risk parameters.
+Periodic review intervals are delegated to periodic_review_policy so runtime
+scheduling, backfill, and config callers share one cadence source of truth.
 
 Usage:
     from config_loader import config
@@ -13,6 +15,8 @@ Usage:
 import json
 import os
 import logging
+
+from periodic_review_policy import nominal_interval_days_for_risk
 
 logger = logging.getLogger("arie")
 
@@ -72,9 +76,8 @@ class JurisdictionConfig:
         return thresholds.get("normal", 0.70)
 
     def get_monitoring_interval(self, risk_level):
-        """Get periodic review interval in days for the given risk level."""
-        intervals = self.data.get("monitoring_intervals_days", {})
-        return intervals.get(risk_level, 365)
+        """Get nominal periodic review interval in days from centralized policy."""
+        return nominal_interval_days_for_risk(risk_level)
 
     def get_high_risk_sectors(self):
         """Get list of high-risk sectors."""

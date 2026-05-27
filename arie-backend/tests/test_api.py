@@ -4170,9 +4170,12 @@ class TestMonitoringEnrollmentActuation:
         enrollment = body["monitoring_enrollment"]
         assert enrollment["status"] == "created"
         assert enrollment["risk_level"] == "LOW"
-        assert enrollment["interval_days"] == 1095
 
         conn = get_db()
+        app_row = conn.execute(
+            "SELECT decided_at FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
         review_rows = conn.execute(
             "SELECT * FROM periodic_reviews WHERE application_id = ?",
             (app_id,),
@@ -4184,6 +4187,11 @@ class TestMonitoringEnrollmentActuation:
         conn.close()
         assert len(review_rows) == 1
         assert review_rows[0]["due_date"] == enrollment["due_date"]
+        decided_date = datetime.fromisoformat(app_row["decided_at"].replace("Z", "+00:00")).date()
+        expected_days = (
+            datetime.fromisoformat(enrollment["due_date"]).date() - decided_date
+        ).days
+        assert enrollment["interval_days"] == expected_days
         assert audit is not None
         assert json.loads(audit["detail"])["periodic_review_id"] == enrollment["periodic_review_id"]
 
