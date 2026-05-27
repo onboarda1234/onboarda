@@ -1,0 +1,444 @@
+[
+  {
+    "id": "client-registration",
+    "label": "Client Registration",
+    "stage_order": 1,
+    "description": "Client creates account and configures credentials on the Onboarda portal.",
+    "business_owner": "Client Relations Team",
+    "user_type": "client",
+    "compliance_importance": "medium",
+    "connected_agents": [],
+    "connected_files": [
+      "arie-portal.html",
+      "auth.py",
+      "base_handler.py",
+      "server.py"
+    ],
+    "connected_routes": [
+      "POST /api/auth/client/register",
+      "POST /api/auth/client/login"
+    ],
+    "connected_tables": [
+      "clients",
+      "client_sessions"
+    ],
+    "validation_required": [
+      "Verify client portal user creation with strong password rules (12+ chars, special char check)",
+      "Test Bearer JWT token generation, cookie security, and local storage storage flows",
+      "Confirm auth logs record accurate client timestamps, IP addresses, and User-Agents"
+    ],
+    "plain_english_explanation": "The starting point where an applicant creates their credentials securely. If this fails, no new clients can access the platform."
+  },
+  {
+    "id": "application-prescreening",
+    "label": "Application / Prescreening",
+    "stage_order": 2,
+    "description": "Client submits initial corporate structure, expected volumes, and jurisdiction info.",
+    "business_owner": "Onboarding Desk",
+    "user_type": "client",
+    "compliance_importance": "high",
+    "connected_agents": [],
+    "connected_files": [
+      "arie-portal.html",
+      "server.py",
+      "db.py",
+      "rule_engine.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications",
+      "GET /api/applications/{id}"
+    ],
+    "connected_tables": [
+      "applications",
+      "directors",
+      "ubos",
+      "intermediaries"
+    ],
+    "validation_required": [
+      "Verify client session draft 'Save & Resume' state persistence across browser reboots",
+      "Verify server validation blocks incomplete shareholder structure percentage calculations",
+      "Confirm prescreening data is stored correctly in the JSONB database column"
+    ],
+    "plain_english_explanation": "Collects crucial company details and corporate structural charts. Gaps here cause incorrect downstream risk calculations."
+  },
+  {
+    "id": "risk-scoring",
+    "label": "Risk Scoring",
+    "stage_order": 3,
+    "description": "Deterministic D1-D5 composite risk calculation with non-overridable floor rules.",
+    "business_owner": "Chief Compliance Officer",
+    "user_type": "system",
+    "compliance_importance": "critical",
+    "connected_agents": [],
+    "connected_files": [
+      "rule_engine.py",
+      "server.py",
+      "db.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/recompute-risk"
+    ],
+    "connected_tables": [
+      "applications",
+      "risk_config"
+    ],
+    "validation_required": [
+      "Test D1-D5 composite scoring calculations against reference Excel spreadsheet templates",
+      "Verify FATF grey and black list country matches instantly trigger non-overridable VERY_HIGH floors",
+      "Test automatic risk recomputation trigger when company sector or ownership fields change"
+    ],
+    "plain_english_explanation": "Executes standard scoring logic to classify applicant risk (Low to Very High). Errors here bypass mandatory compliance gates."
+  },
+  {
+    "id": "pricing-review",
+    "label": "Pricing Review",
+    "stage_order": 4,
+    "description": "Internal officer review of client parameters to finalize onboarding quote.",
+    "business_owner": "Finance Operations Desk",
+    "user_type": "officer",
+    "compliance_importance": "low",
+    "connected_agents": [],
+    "connected_files": [
+      "server.py",
+      "arie-backoffice.html",
+      "arie-portal.html"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/accept-pricing"
+    ],
+    "connected_tables": [
+      "applications"
+    ],
+    "validation_required": [
+      "Verify application status transitions from 'pricing_review' to 'pricing_accepted' on user accept",
+      "Confirm back-office dashboard logs pricing approvals under the corresponding officer ID"
+    ],
+    "plain_english_explanation": "Determines the financial terms of the client contract before formal KYC document upload requests are sent."
+  },
+  {
+    "id": "pre-approval",
+    "label": "Pre-Approval",
+    "stage_order": 5,
+    "description": "Officer review and approval gate for high-risk applications before document upload.",
+    "business_owner": "Senior Compliance Officer",
+    "user_type": "officer",
+    "compliance_importance": "high",
+    "connected_agents": [],
+    "connected_files": [
+      "server.py",
+      "arie-backoffice.html",
+      "security_hardening.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/pre-approval-decision"
+    ],
+    "connected_tables": [
+      "applications",
+      "audit_log"
+    ],
+    "validation_required": [
+      "Test pre-approval dual-control locks: require administrative roles for High/Very High cases",
+      "Verify audit logs record the documented pre-approval decision, officer ID, and timestamps"
+    ],
+    "plain_english_explanation": "Acts as an early compliance gateway to halt high-risk applicants before investing operational effort in expensive document checks."
+  },
+  {
+    "id": "kyc-documents",
+    "label": "KYC Documents",
+    "stage_order": 6,
+    "description": "Client uploads entity (Section A), shareholder (Section B), and business (Section C) papers.",
+    "business_owner": "Onboarding Desk",
+    "user_type": "client",
+    "compliance_importance": "high",
+    "connected_agents": [],
+    "connected_files": [
+      "arie-portal.html",
+      "server.py",
+      "document_verification.py",
+      "verification_matrix.py",
+      "s3_client.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/documents",
+      "DELETE /api/applications/{id}/documents/{doc_id}"
+    ],
+    "connected_tables": [
+      "documents"
+    ],
+    "validation_required": [
+      "Test file format validators: block spoofed MIME files and allow only verified PDFs/Images",
+      "Test file size caps: block uploads larger than the 25MB safety limit",
+      "Verify documents are written to the correct AWS S3 environment bucket (demo vs staging)"
+    ],
+    "plain_english_explanation": "The intake pipeline where applicants upload proof of incorporation, passports, and utility bills. Blocks invalid file extensions."
+  },
+  {
+    "id": "screening",
+    "label": "Screening",
+    "stage_order": 7,
+    "description": "Sanctions, PEP, and adverse media screening checks executed via provider API.",
+    "business_owner": "FinCrime Officer",
+    "user_type": "system",
+    "compliance_importance": "critical",
+    "connected_agents": [
+      "agent-3",
+      "agent-7"
+    ],
+    "connected_files": [
+      "screening.py",
+      "sumsub_client.py",
+      "screening_normalizer.py",
+      "server.py",
+      "arie-backoffice.html"
+    ],
+    "connected_routes": [
+      "POST /api/screening/run",
+      "POST /api/screening/review",
+      "GET /api/screening/queue"
+    ],
+    "connected_tables": [
+      "screening_reviews",
+      "applications"
+    ],
+    "validation_required": [
+      "Verify production blocks mock/simulated screening, enforcing real Sumsub API calls",
+      "Test screening freshness: block application approval if inputs changed after last screening run",
+      "Confirm PEP and sanctions hits populate in the screening review queue for manual disposition"
+    ],
+    "plain_english_explanation": "Scans individuals and entities against global lists for criminal activity or political exposure. Failures here expose the firm to heavy fines."
+  },
+  {
+    "id": "document-verification",
+    "label": "Document Verification",
+    "stage_order": 8,
+    "description": "Automated 5-layer document verification (gate, rule, hybrid, and Claude AI checks).",
+    "business_owner": "Onboarding Desk",
+    "user_type": "system",
+    "connected_agents": [
+      "agent-1"
+    ],
+    "compliance_importance": "high",
+    "connected_files": [
+      "document_verification.py",
+      "verification_matrix.py",
+      "claude_client.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/submit-kyc"
+    ],
+    "connected_tables": [
+      "documents"
+    ],
+    "validation_required": [
+      "Verify document status changes to 'flagged' if any automated name or authenticity checks fail",
+      "Verify senior officer override gate: allow flagged documents only with documented reason and admin role",
+      "Test document duplication checker: calculate SHA-256 hash on file upload to block duplicates"
+    ],
+    "plain_english_explanation": "Runs OCR and Claude Vision checks to confirm passport validity, expiration dates, and stamp details. Flags tampered or blurry uploads."
+  },
+  {
+    "id": "compliance-memo",
+    "label": "Compliance Memo",
+    "stage_order": 9,
+    "description": "Compiles a structured 11-section compliance memo for officer review.",
+    "business_owner": "Compliance Manager",
+    "user_type": "system",
+    "compliance_importance": "critical",
+    "connected_agents": [
+      "agent-5"
+    ],
+    "connected_files": [
+      "memo_handler.py",
+      "pdf_generator.py",
+      "server.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/memo",
+      "GET /api/applications/{id}/memo/pdf"
+    ],
+    "connected_tables": [
+      "compliance_memos"
+    ],
+    "validation_required": [
+      "Test pre-generation rule block: refuse memo generation if sanctions or risk scores are pending",
+      "Verify WeasyPrint PDF compilation output: must execute asynchronously to prevent Tornado blocking",
+      "Verify generated PDF files include an immutable SHA-256 hash in database headers to block tampering"
+    ],
+    "plain_english_explanation": "Automates the writing of a complete 11-section compliance rationale. Eliminates 2-4 hours of manual word-processing."
+  },
+  {
+    "id": "validation-engine",
+    "label": "Validation Engine",
+    "stage_order": 10,
+    "description": "Deterministic 15-rule quality audit evaluating compliance memo structure and facts.",
+    "business_owner": "Quality Assurance Auditor",
+    "user_type": "system",
+    "compliance_importance": "high",
+    "connected_agents": [],
+    "connected_files": [
+      "validation_engine.py",
+      "server.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/memo/validate"
+    ],
+    "connected_tables": [
+      "compliance_memos"
+    ],
+    "validation_required": [
+      "Verify validation returns a quality score (0-10) and correct status (pass / pass_with_fixes / fail)",
+      "Confirm pass_with_fixes status blocks application approval unless senior admin overrides with reason"
+    ],
+    "plain_english_explanation": "Performs an automated quality assurance check on the generated memo, highlighting contradictions or unproven claims."
+  },
+  {
+    "id": "supervisor-review",
+    "label": "Supervisor Review",
+    "stage_order": 11,
+    "description": "Deterministic 11-check AI-output contradiction detection and gate review.",
+    "business_owner": "Chief Compliance Officer",
+    "user_type": "system",
+    "compliance_importance": "critical",
+    "connected_agents": [
+      "agent-10"
+    ],
+    "connected_files": [
+      "supervisor_engine.py",
+      "server.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/memo/supervisor/run"
+    ],
+    "connected_tables": [
+      "supervisor_pipeline_results",
+      "supervisor_audit_log"
+    ],
+    "validation_required": [
+      "Verify supervisor blocks approval (can_approve = False) if risk scoring diverges from decisions",
+      "Test supervisor warning bypass: require senior officer roles and documented overrides"
+    ],
+    "plain_english_explanation": "Cross-references automated AI checks against raw database findings. Ensures the AI and the database tell the exact same story."
+  },
+  {
+    "id": "edd-routing",
+    "label": "EDD Routing",
+    "stage_order": 12,
+    "description": "Routes High/Very High risk applicants into Enhanced Due Diligence queue.",
+    "business_owner": "EDD Operations Lead",
+    "user_type": "officer",
+    "compliance_importance": "critical",
+    "connected_agents": [
+      "agent-4",
+      "agent-8"
+    ],
+    "connected_files": [
+      "edd_routing_policy.py",
+      "edd_actuation.py",
+      "edd_completion.py",
+      "server.py",
+      "arie-backoffice.html"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/edd/trigger",
+      "POST /api/applications/{id}/edd/complete"
+    ],
+    "connected_tables": [
+      "edd_cases"
+    ],
+    "validation_required": [
+      "Verify EDD cases transition cleanly through all 6 operational stages (triggered to edd_approved)",
+      "Test EDD completion gate: block final application approval unless all active EDD triggers are satisfied"
+    ],
+    "plain_english_explanation": "An intensive compliance lane for complex clients, requiring additional documentation and dual-officer sign-offs."
+  },
+  {
+    "id": "officer-decision",
+    "label": "Officer Decision",
+    "stage_order": 13,
+    "description": "Enforces a 9-point approval gate validator before final application sign-off.",
+    "business_owner": "Senior Compliance Officer",
+    "user_type": "officer",
+    "compliance_importance": "critical",
+    "connected_agents": [],
+    "connected_files": [
+      "security_hardening.py",
+      "server.py",
+      "decision_model.py"
+    ],
+    "connected_routes": [
+      "POST /api/applications/{id}/decision"
+    ],
+    "connected_tables": [
+      "applications",
+      "decision_records"
+    ],
+    "validation_required": [
+      "Test all 9 sequential ApprovalGateValidator gates in security_hardening.py",
+      "Verify server-side capture of signing officer's IP address, User-Agent, and role permissions"
+    ],
+    "plain_english_explanation": "The ultimate approval point. Run through a fail-closed 9-point checklist to block any compliance oversights."
+  },
+  {
+    "id": "audit-trail",
+    "label": "Audit Trail",
+    "stage_order": 14,
+    "description": "Cryptographically chained log entries tracking all supervisor actions and decisions.",
+    "business_owner": "Compliance Internal Auditor",
+    "user_type": "system",
+    "compliance_importance": "critical",
+    "connected_agents": [],
+    "connected_files": [
+      "db.py",
+      "server.py"
+    ],
+    "connected_routes": [
+      "GET /api/applications/{id}/audit-log",
+      "GET /api/audit/supervisor-chain/export"
+    ],
+    "connected_tables": [
+      "audit_log",
+      "supervisor_audit_log",
+      "decision_records",
+      "data_purge_log"
+    ],
+    "validation_required": [
+      "Test SHA-256 cryptographic chain: verify a database edit breaks the hash validation",
+      "Verify GDPR purge events write to immutable logs and remove target PII columns",
+      "Confirm authorization denials log IP address, role, and query parameters to the audit log"
+    ],
+    "plain_english_explanation": "An immutable, blockchain-like log that proves to external regulators that no compliance records have been manipulated."
+  },
+  {
+    "id": "ongoing-monitoring",
+    "label": "Ongoing Monitoring",
+    "stage_order": 15,
+    "description": "Continuous monitoring alerts, periodic reviews, and risk drift tracking.",
+    "business_owner": "Chief Compliance Officer",
+    "user_type": "system",
+    "compliance_importance": "high",
+    "connected_agents": [
+      "agent-6",
+      "agent-7",
+      "agent-8"
+    ],
+    "connected_files": [
+      "agent_executors.py",
+      "server.py",
+      "arie-backoffice.html"
+    ],
+    "connected_routes": [
+      "GET /api/monitoring/alerts",
+      "POST /api/monitoring/reviews/schedule"
+    ],
+    "connected_tables": [
+      "monitoring_alerts",
+      "periodic_reviews",
+      "transactions"
+    ],
+    "validation_required": [
+      "Verify ongoing monitoring alerts trigger correctly on transaction anomalies or geographic drift",
+      "Verify periodic review schedules update correctly based on client risk levels (e.g. 1 year vs 3 months)"
+    ],
+    "plain_english_explanation": "Keeps the client under active review after onboarding. Alerts officers to subsequent transactional or media changes."
+  }
+]

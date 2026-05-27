@@ -1,0 +1,27 @@
+{
+  "affected_agents": [],
+  "affected_workflows": [],
+  "branch": "main",
+  "changed_files": [
+    {
+      "affected_agents": [],
+      "affected_workflows": [],
+      "area": "unmapped",
+      "file_path": ".github/workflows/update-flow-impact.yml",
+      "plain_english_impact": "Unmapped documentation or scratch script file. Low risk.",
+      "risk_level": "low"
+    },
+    {
+      "affected_agents": [],
+      "affected_workflows": [],
+      "area": "unmapped",
+      "file_path": "regmind-flow-dashboard/",
+      "plain_english_impact": "Unmapped documentation or scratch script file. Low risk.",
+      "risk_level": "low"
+    }
+  ],
+  "commit_sha": "b35c7b905b689038c26da7eabb02dcd0fb022576",
+  "generated_at": "2026-05-24T13:16:21.102848+00:00",
+  "risk_level": "LOW",
+  "validation_required": []
+}

@@ -1,0 +1,189 @@
+[
+  {
+    "id": "agent-1",
+    "name": "Agent 1: Identity & Document Verification",
+    "role": "Analyze KYC documents using Claude Vision to assess authenticity, clarity, and structural completeness.",
+    "authority_level": "advisory",
+    "workflows": [
+      "kyc-documents",
+      "document-verification"
+    ],
+    "files": [
+      "arie-backend/document_verification.py",
+      "arie-backend/verification_matrix.py",
+      "arie-backend/claude_client.py"
+    ],
+    "inputs": "Uploaded KYC document images or PDFs, target doc type metadata",
+    "outputs": "Extraction confidence metrics, visual clarity status, tampering indicators, and check status markers",
+    "risks": "Visual OCR errors on blurry text; potential false-positive tamper warnings on low-resolution files.",
+    "validation_required": "Verify document upload validation tests: `pytest tests/test_verification_matrix.py`",
+    "plain_english_explanation": "Acts as an automated document inspector. Looks at uploaded ID cards and company papers to ensure they are readable and not obviously altered."
+  },
+  {
+    "id": "agent-2",
+    "name": "Agent 2: External Database / Registry Checks",
+    "role": "Reconcile corporate registration details against official registries to verify incorporation legitimacy.",
+    "authority_level": "decision-support",
+    "workflows": [
+      "application-prescreening",
+      "screening"
+    ],
+    "files": [
+      "arie-backend/sumsub_client.py",
+      "arie-backend/rule_engine.py"
+    ],
+    "inputs": "Company name, registration number, incorporation country",
+    "outputs": "Registry existence status, registration number matches, and active status confirmation",
+    "risks": "Missing direct API connections to local emerging-market registers (e.g. Mauritius corporate registrar) leading to warnings.",
+    "validation_required": "Confirm API lookup errors return warning statuses safely rather than failing entirely",
+    "plain_english_explanation": "Cross-checks company registry databases (like OpenCorporates) to confirm the business is active and legally registered."
+  },
+  {
+    "id": "agent-3",
+    "name": "Agent 3: FinCrime Screening Interpretation",
+    "role": "Analyze PEP, sanctions, and watchlist screening hits using Claude to flag actual exposures vs false positives.",
+    "authority_level": "advisory",
+    "workflows": [
+      "screening",
+      "edd-routing"
+    ],
+    "files": [
+      "arie-backend/screening.py",
+      "arie-backend/sumsub_client.py",
+      "arie-backend/screening_normalizer.py"
+    ],
+    "inputs": "Sumsub raw PEP/sanctions matching payloads, client registration names",
+    "outputs": "Dispositions (cleared / follow_up / escalated) and false-positive justifications",
+    "risks": "Risk of misinterpreting highly matching names if raw API data lacks middle name details.",
+    "validation_required": "Verify screening disposition logging: `pytest tests/test_screening_review.py`",
+    "plain_english_explanation": "Inspects watchlists and sanctions match alerts. Distinguishes between real financial criminals and common name-matches."
+  },
+  {
+    "id": "agent-4",
+    "name": "Agent 4: Corporate Structure Analysis",
+    "role": "Deconstruct complex multi-tiered shareholder ownership structures to map final Ultimate Beneficial Owners (UBOs).",
+    "authority_level": "advisory",
+    "workflows": [
+      "application-prescreening",
+      "edd-routing"
+    ],
+    "files": [
+      "arie-backend/rule_engine.py",
+      "arie-backend/server.py"
+    ],
+    "inputs": "Shareholder lists, percentages, intermediary entity details",
+    "outputs": "Full ownership tree graph, UBO extraction above 25% thresholds, and complexity scores",
+    "risks": "Underestimating ownership risk if shell companies in offshore secrecy jurisdictions are used.",
+    "validation_required": "Verify structure validation rules: `pytest tests/test_rule_engine.py` and `pytest tests/test_ex08_applicant_id_validation.py`",
+    "plain_english_explanation": "Traces through multi-layered company ownership trees. Reveals the actual individuals who own or control the applicant."
+  },
+  {
+    "id": "agent-5",
+    "name": "Agent 5: Risk / Memo Support",
+    "role": "Orchestrates pre-generation compliance memo rules and drafts detailed regulatory arguments.",
+    "authority_level": "decision-support",
+    "workflows": [
+      "risk-scoring",
+      "compliance-memo",
+      "validation-engine"
+    ],
+    "files": [
+      "arie-backend/memo_handler.py",
+      "arie-backend/rule_engine.py",
+      "arie-backend/validation_engine.py"
+    ],
+    "inputs": "Risk scoring dimensions, document checks status, screening logs",
+    "outputs": "11-section structured compliance memo payload, pre-generation check warnings",
+    "risks": "Incomplete narrative generation if background data columns contain empty values.",
+    "validation_required": "Verify memo generation rules: `pytest tests/test_memo_original_risk_level.py`",
+    "plain_english_explanation": "Gathers all risk factors, checks, and screening results to compose the comprehensive, audit-ready compliance memo report."
+  },
+  {
+    "id": "agent-6",
+    "name": "Agent 6: Periodic Review",
+    "role": "Performs continuous ongoing surveillance checks on documents freshness, UBO logs, and active statuses.",
+    "authority_level": "authoritative",
+    "workflows": [
+      "ongoing-monitoring"
+    ],
+    "files": [
+      "arie-backend/periodic_review_engine.py",
+      "arie-backend/change_management.py"
+    ],
+    "inputs": "Document expiration parameters, profile update logs",
+    "outputs": "Staleness reviews, scheduled review timelines, and alert indicators",
+    "risks": "Ineffective monitoring if changes occur in unmonitored external databases without manual click triggers.",
+    "validation_required": "Verify review execution logs: `pytest tests/test_periodic_review_engine.py`",
+    "plain_english_explanation": "Monitors active client profiles continuously. Flags expired documents, changed directors, or stale screening records automatically."
+  },
+  {
+    "id": "agent-7",
+    "name": "Agent 7: Adverse Media / PEP",
+    "role": "Evaluates ongoing global adverse media alerts and political exposure adjustments.",
+    "authority_level": "advisory",
+    "workflows": [
+      "screening",
+      "ongoing-monitoring"
+    ],
+    "files": [
+      "arie-backend/screening.py",
+      "arie-backend/agent_executors.py"
+    ],
+    "inputs": "Continuous web alerts, media database hits, PEP watchlist logs",
+    "outputs": "Media alert severity, PEP category classifications (domestic vs foreign)",
+    "risks": "False alerts from unrelated individuals sharing similar names, requiring manual officer clearance.",
+    "validation_required": "Verify adverse media parsing tests: `pytest tests/test_screening_roundtrip.py`",
+    "plain_english_explanation": "Scans international news and databases continuously. Alerts compliance if an onboarding client gets named in adverse media or becomes a politically exposed person."
+  },
+  {
+    "id": "agent-8",
+    "name": "Agent 8: Behaviour / Risk Drift",
+    "role": "Analyze ongoing transaction volumes and geographical parameters to detect risk drift anomalies.",
+    "authority_level": "advisory",
+    "workflows": [
+      "edd-routing",
+      "ongoing-monitoring"
+    ],
+    "files": [
+      "arie-backend/agent_executors.py",
+      "arie-backend/rule_engine.py"
+    ],
+    "inputs": "Historical transactional amounts, counterparty details, and countries",
+    "outputs": "Anomalies, transaction volume spikes, and geographical drift indicators",
+    "risks": "Unwired direct transaction logging in core backend routes may result in missing drift telemetry.",
+    "validation_required": "Verify transactional drift alerts: `pytest tests/test_risk_elevation.py`",
+    "plain_english_explanation": "Analyzes client transactions post-onboarding. Alerts compliance if client activity deviates from expected business volumes or involves high-risk countries."
+  },
+  {
+    "id": "agent-9",
+    "name": "Agent 9: Regulatory Impact",
+    "role": "Evaluates new compliance directives or regulatory guidelines against active system configurations.",
+    "authority_level": "decision-support",
+    "workflows": [],
+    "files": [],
+    "inputs": "Official regulatory circulars, active system settings",
+    "outputs": "Scaffolded policy recommendations, update timeline alerts",
+    "risks": "Highly complex parsing of non-structured regulatory documents. Implemented as a future roadmap phase.",
+    "validation_required": "Future roadmap validation checks only (not yet code-implemented)",
+    "plain_english_explanation": "Reviews newly issued circulars and guidelines from regulators. Identifies if active risk weights or scoring thresholds need adjustment."
+  },
+  {
+    "id": "agent-10",
+    "name": "Agent 10: Ongoing Compliance Review",
+    "role": "Consolidates findings from all monitoring agents into a unified, audit-ready compliance overview report.",
+    "authority_level": "authoritative",
+    "workflows": [
+      "supervisor-review",
+      "ongoing-monitoring"
+    ],
+    "files": [
+      "arie-backend/supervisor_engine.py",
+      "arie-backend/observability.py"
+    ],
+    "inputs": "Monitoring alert histories, risk scoring logs, and document verification checks",
+    "outputs": "Unified compliance health report, supervisor contradiction verdicts",
+    "risks": "Event-loop blocking during comprehensive review compilations if run synchronously.",
+    "validation_required": "Verify supervisor dashboard executions: `pytest tests/test_supervisor.py`",
+    "plain_english_explanation": "Acts as the lead AI supervisor. Consolidates alerts, logs, and drift reports to verify that client behavior continues to match the approved risk profile."
+  }
+]

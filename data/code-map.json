@@ -1,0 +1,395 @@
+[
+  {
+    "file_path": "arie-backend/server.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "client-registration",
+      "application-prescreening",
+      "risk-scoring",
+      "pricing-review",
+      "pre-approval",
+      "kyc-documents",
+      "screening",
+      "document-verification",
+      "compliance-memo",
+      "validation-engine",
+      "supervisor-review",
+      "edd-routing",
+      "officer-decision",
+      "audit-trail",
+      "ongoing-monitoring"
+    ],
+    "affected_agents": [
+      "agent-1",
+      "agent-2",
+      "agent-3",
+      "agent-4",
+      "agent-5",
+      "agent-6",
+      "agent-7",
+      "agent-8",
+      "agent-10"
+    ],
+    "affected_controls": [
+      "Tornado REST API endpoints, session tokens, and route parameters validation"
+    ],
+    "validation_required": [
+      "Run complete pytests: `pytest tests/test_api.py -v`",
+      "Execute staging browser smoke checks to confirm all back-office and client portal routes return status 200",
+      "Verify Tornado server loads correctly under production environment configuration parameters"
+    ],
+    "plain_english_impact": "The central server containing all API routes and handlers. Changes here can break any onboarding or back-office route across the entire platform."
+  },
+  {
+    "file_path": "arie-backend/security_hardening.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "pre-approval",
+      "officer-decision",
+      "client-registration",
+      "screening",
+      "document-verification",
+      "compliance-memo"
+    ],
+    "affected_agents": [],
+    "affected_controls": [
+      "ApprovalGateValidator (9 sequential checks)",
+      "PII encryption and password complexity policy",
+      "Production guards blocking mock models"
+    ],
+    "validation_required": [
+      "Run targeted tests: `pytest tests/test_approval_gate.py -v` and `pytest tests/test_security_hardening_extended.py -v`",
+      "Verify that an unverified or flagged application fails to pass the approval gate (fail-closed check)"
+    ],
+    "plain_english_impact": "Enforces all P0 and P1 security controls (password hashing, PII encryption, approval gate validation). Breaking changes here directly expose the platform to data breaches and regulatory failure."
+  },
+  {
+    "file_path": "arie-backend/rule_engine.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "risk-scoring",
+      "application-prescreening",
+      "compliance-memo",
+      "edd-routing"
+    ],
+    "affected_agents": [
+      "agent-5",
+      "agent-8"
+    ],
+    "affected_controls": [
+      "D1-D5 composite scoring calculations",
+      "Sanctioned country floor rules",
+      "Automatic risk recomputation trigger"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_rule_engine.py -v` and `pytest tests/test_risk_scoring.py -v`",
+      "Verify that changing sector or country on an application successfully recalculates risk composites"
+    ],
+    "plain_english_impact": "Translates corporate structures, PEP details, and sectors into mathematical risk weights and scores (Low to Very High). Errors directly bypass regulated approval requirements."
+  },
+  {
+    "file_path": "arie-backend/sumsub_client.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "kyc-documents",
+      "screening",
+      "document-verification"
+    ],
+    "affected_agents": [
+      "agent-1",
+      "agent-3"
+    ],
+    "affected_controls": [
+      "HMAC-SHA256 signature request creation",
+      "Sumsub API client and error handling",
+      "API usage budget cap tracker"
+    ],
+    "validation_required": [
+      "Run targeted tests: `pytest tests/test_sumsub_verification.py -v` and `pytest tests/test_sumsub_integrity_hardening.py -v`",
+      "Verify webhook signatures are authenticated correctly in the staging provider environment"
+    ],
+    "plain_english_impact": "The client that handles live interactions with the external KYC provider (Sumsub). Outages or errors here block client onboarding and AML screening."
+  },
+  {
+    "file_path": "arie-backend/claude_client.py",
+    "area": "ai",
+    "risk_level": "high",
+    "affected_workflows": [
+      "document-verification",
+      "compliance-memo",
+      "validation-engine",
+      "supervisor-review"
+    ],
+    "affected_agents": [
+      "agent-1",
+      "agent-3",
+      "agent-4",
+      "agent-5",
+      "agent-6",
+      "agent-7",
+      "agent-8",
+      "agent-10"
+    ],
+    "affected_controls": [
+      "Anthropic Claude API client, prompt injection defense, and response cache"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_agent_executors_wave1.py -v`",
+      "Verify prompt sanitization logic blocks injected script elements safely without hanging"
+    ],
+    "plain_english_impact": "The interface communicating with the Anthropic Claude API. Faults here completely disable compliance memo generation, agent validation, and supervisor contradiction checks."
+  },
+  {
+    "file_path": "arie-backend/memo_handler.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "compliance-memo",
+      "risk-scoring",
+      "validation-engine"
+    ],
+    "affected_agents": [
+      "agent-5"
+    ],
+    "affected_controls": [
+      "Pre-generation compliance blocks (6 rules)",
+      "11-section structured memo compiler",
+      "Metadata and risk dimension aggregators"
+    ],
+    "validation_required": [
+      "Run targeted tests: `pytest tests/test_memo_original_risk_level.py -v` and `pytest tests/test_memo_staleness_approval.py -v`",
+      "Verify memo generation blocks if sanctions screening is pending or risk scoring is uncomputed"
+    ],
+    "plain_english_impact": "Compiles all database and screening findings into a structured, audit-ready compliance memo. This is the primary commercial and operational module of the system."
+  },
+  {
+    "file_path": "arie-backend/validation_engine.py",
+    "area": "backend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "validation-engine",
+      "compliance-memo",
+      "supervisor-review"
+    ],
+    "affected_agents": [],
+    "affected_controls": [
+      "15-rule compliance quality audit",
+      "Quality scoring algorithm"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_validation_engine.py -v`",
+      "Verify validation results are persisted correctly inside the compliance_memos table"
+    ],
+    "plain_english_impact": "Audits compliance memos against 15 specific rules to calculate quality scores. Flags missing facts or contradictory decisions before human officer sign-off."
+  },
+  {
+    "file_path": "arie-backend/supervisor_engine.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "supervisor-review",
+      "officer-decision",
+      "audit-trail"
+    ],
+    "affected_agents": [
+      "agent-10"
+    ],
+    "affected_controls": [
+      "11 contradiction check matrices",
+      "can_approve gate logic"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_supervisor.py -v` and `pytest tests/test_supervisor_warnings_approval.py -v`",
+      "Confirm that a mismatch between risk level and approval decision blocks application sign-off"
+    ],
+    "plain_english_impact": "Cross-references automated AI checks against raw database findings. Ensures the AI and the database tell the exact same story."
+  },
+  {
+    "file_path": "arie-backend/db.py",
+    "area": "database",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "audit-trail",
+      "client-registration",
+      "application-prescreening",
+      "kyc-documents",
+      "screening",
+      "document-verification",
+      "compliance-memo",
+      "edd-routing"
+    ],
+    "affected_agents": [],
+    "affected_controls": [
+      "PostgreSQL connection pooling, raw SQL query formatting, and transaction commit hooks"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_infra_db_compat.py -v` and `pytest tests/test_migration_chain_full.py -v`",
+      "Confirm database transactions rollback safely on server-side query crashes"
+    ],
+    "plain_english_impact": "Controls all database connections and transaction routing. Errors here crash the entire application and risk severe database corruption."
+  },
+  {
+    "file_path": "arie-backend/auth.py",
+    "area": "backend",
+    "risk_level": "critical",
+    "affected_workflows": [
+      "client-registration",
+      "officer-decision"
+    ],
+    "affected_agents": [],
+    "affected_controls": [
+      "Bcrypt password hashing and JWT token signature generation"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_auth.py -v` and `pytest tests/test_auth_stability.py -v`",
+      "Confirm invalid or expired JWT tokens fail with status 401 (Unauthorized) across all routes"
+    ],
+    "plain_english_impact": "Governs platform user logins, registration hashes, and JWT token signatures. A bug here allows authentication bypass."
+  },
+  {
+    "file_path": "arie-backend/change_management.py",
+    "area": "backend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "ongoing-monitoring",
+      "risk-scoring",
+      "compliance-memo"
+    ],
+    "affected_agents": [
+      "agent-6"
+    ],
+    "affected_controls": [
+      "Materiality classification workflows, atomic database profiles, and change request validation"
+    ],
+    "validation_required": [
+      "Run targeted tests: `pytest tests/test_change_management.py -v` and `pytest tests/test_cm_implement_propagation.py -v`",
+      "Verify Tier 1 structural changes successfully trigger risk recomputation and memo staleness flags"
+    ],
+    "plain_english_impact": "Tracks and validates changes to company structures or sectors post-onboarding. Enforces profile versioning and triggers compliance updates."
+  },
+  {
+    "file_path": "arie-backend/document_verification.py",
+    "area": "backend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "document-verification",
+      "kyc-documents"
+    ],
+    "affected_agents": [
+      "agent-1"
+    ],
+    "affected_controls": [
+      "Automated document check routing, expiration dates parsing, and OCR processing"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_verification_matrix.py -v` and `pytest tests/test_document_health_monitor.py -v`",
+      "Confirm file hash validations block direct duplicates on upload"
+    ],
+    "plain_english_impact": "Extracts document details and schedules verification checks. Errors here bypass document expiration or liveness requirements."
+  },
+  {
+    "file_path": "arie-backend/verification_matrix.py",
+    "area": "backend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "document-verification",
+      "kyc-documents"
+    ],
+    "affected_agents": [
+      "agent-1"
+    ],
+    "affected_controls": [
+      "Verification check classifications (RULE, HYBRID, AI), triggers, and scoring metrics"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_verification_matrix.py -v`",
+      "Verify that changing the verification status of a document propagates correctly through the dashboard UI"
+    ],
+    "plain_english_impact": "Houses the rules matrix for document validity checks. Represents essential codified compliance expertise."
+  },
+  {
+    "file_path": "arie-backend/periodic_review_engine.py",
+    "area": "backend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "ongoing-monitoring"
+    ],
+    "affected_agents": [
+      "agent-6",
+      "agent-10"
+    ],
+    "affected_controls": [
+      "Risk-driven scheduling frequency (e.g. 1 year vs 3 months), priority scores, and review lifecycles"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_periodic_review_engine.py -v`",
+      "Verify periodic review records update correctly in the database when a manual schedule button is clicked"
+    ],
+    "plain_english_impact": "Manages review frequencies and alerts compliance officers when periodic checks are due. Inactive automation leaves this as a manual task."
+  },
+  {
+    "file_path": "arie-backend/observability.py",
+    "area": "backend",
+    "risk_level": "medium",
+    "affected_workflows": [
+      "audit-trail"
+    ],
+    "affected_agents": [],
+    "affected_controls": [
+      "Structured JSON log format and logging utilities"
+    ],
+    "validation_required": [
+      "Run tests: `pytest tests/test_observability.py -v`",
+      "Verify standard error logs emit as clean, single-line JSON fields"
+    ],
+    "plain_english_impact": "Provides structured logging for telemetry. Errors here break staging log aggregation but do not affect compliance decisions directly."
+  },
+  {
+    "file_path": "arie-backoffice.html",
+    "area": "frontend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "pricing-review",
+      "pre-approval",
+      "screening",
+      "edd-routing",
+      "officer-decision",
+      "ongoing-monitoring"
+    ],
+    "affected_agents": [
+      "agent-10"
+    ],
+    "affected_controls": [
+      "Back-office dashboard UI, officer login, and role switcher buttons"
+    ],
+    "validation_required": [
+      "Execute browser smoke tests: login as officer, view screening queue, and generate a memo",
+      "Verify UI displays validation warning markers correctly for flagged documents"
+    ],
+    "plain_english_impact": "The central user interface used by compliance officers to review cases. Visual errors can lead to bad compliance decisions."
+  },
+  {
+    "file_path": "arie-portal.html",
+    "area": "frontend",
+    "risk_level": "high",
+    "affected_workflows": [
+      "client-registration",
+      "application-prescreening",
+      "pricing-review",
+      "kyc-documents"
+    ],
+    "affected_agents": [],
+    "affected_controls": [
+      "Onboarding portal UI, client login, and S3 file upload forms"
+    ],
+    "validation_required": [
+      "Execute browser smoke tests: register new client, submit application, upload S3 file",
+      "Verify frontend validations successfully block invalid corporate structure uploads"
+    ],
+    "plain_english_impact": "The applicant-facing portal. Errors here block new users from submitting their onboarding documentation, halting onboarding pipelines."
+  }
+]

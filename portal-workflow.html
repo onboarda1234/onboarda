@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RegMind — Client Portal Onboarding Workflow Map</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="shortcut icon" href="https://onboarda.com/favicon.ico" type="image/x-icon">
+  <style>
+    /* Premium Visualizer enhancements specifically for the Portal Journey Guide */
+    .journey-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      position: relative;
+      padding-left: 2rem;
+      margin-top: 1.5rem;
+    }
+    .journey-timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 10px;
+      bottom: 10px;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--border-focus), hsla(217, 91%, 60%, 0.1));
+    }
+    .journey-step-node {
+      position: relative;
+      background: rgba(22, 28, 45, 0.45);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.25rem;
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: var(--backdrop-blur);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .journey-step-node:hover {
+      border-color: var(--border-focus);
+      box-shadow: var(--shadow-md), 0 0 10px rgba(59, 130, 246, 0.1);
+      transform: translateY(-2px);
+    }
+    .journey-step-bullet {
+      position: absolute;
+      left: -29px;
+      top: 18px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 3px solid var(--border-focus);
+      z-index: 2;
+      box-shadow: 0 0 8px var(--border-focus);
+      transition: background 0.3s ease;
+    }
+    .journey-step-node:hover .journey-step-bullet {
+      background: var(--border-focus);
+    }
+    .badge-client { background: hsla(199, 91%, 60%, 0.12); color: hsl(199, 91%, 60%); border: 1px solid hsla(199, 91%, 60%, 0.2); }
+    .badge-system { background: hsla(224, 64%, 25%, 0.4); color: hsl(224, 64%, 80%); border: 1px solid hsla(224, 64%, 45%, 0.3); }
+    .badge-agent { background: hsla(280, 75%, 60%, 0.12); color: hsl(280, 75%, 60%); border: 1px solid hsla(280, 75%, 60%, 0.2); }
+    .badge-gate { background: hsla(38, 92%, 50%, 0.12); color: hsl(38, 92%, 50%); border: 1px solid hsla(38, 92%, 50%, 0.2); }
+    .badge-risk { background: hsla(350, 89%, 60%, 0.12); color: hsl(350, 89%, 60%); border: 1px solid hsla(350, 89%, 60%, 0.2); }
+    .badge-audit { background: hsla(142, 72%, 45%, 0.12); color: hsl(142, 72%, 45%); border: 1px solid hsla(142, 72%, 45%, 0.2); }
+    .badge-unverified { background: rgba(255,255,255,0.05); color: #8892b0; border: 1px solid rgba(255,255,255,0.1); }
+    
+    .tab-content-panel {
+      display: none;
+      animation: fadeIn 0.4s ease;
+    }
+    .tab-content-panel.active {
+      display: block;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .sub-tabs-container {
+      display: flex;
+      gap: 0.35rem;
+      background: var(--bg-surface);
+      padding: 0.35rem;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-color);
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+    .sub-tab-btn {
+      background: none;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 0.5rem 1rem;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+      transition: all 0.25s ease;
+      font-family: 'Outfit', sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .sub-tab-btn:hover {
+      color: var(--text-primary);
+    }
+    .sub-tab-btn.active {
+      background: rgba(22, 28, 45, 0.9);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-sm);
+      border: 1px solid hsla(217, 91%, 60%, 0.25);
+    }
+    .technical-detail-block {
+      background: rgba(10, 15, 30, 0.6);
+      border: 1px dashed var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 1rem;
+      margin-top: 0.75rem;
+      display: none;
+    }
+    .technical-detail-block.active {
+      display: block;
+    }
+    .btn-toggle-tech {
+      background: none;
+      border: none;
+      color: var(--border-focus);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0;
+      margin-top: 0.5rem;
+    }
+    .btn-toggle-tech:hover {
+      text-decoration: underline;
+    }
+    .audit-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+    @media (max-width: 768px) {
+      .audit-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Process Flow Journey Map grid styles */
+    .journey-map-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .map-card {
+      background: rgba(22, 28, 45, 0.55);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.25rem;
+      position: relative;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .map-card:hover, .map-card.selected {
+      transform: translateY(-4px);
+      box-shadow: 0 10px 25px rgba(59, 130, 246, 0.15);
+      border-color: var(--border-focus);
+    }
+    .map-card.client-card { border-top: 4px solid hsl(199, 91%, 60%); }
+    .map-card.system-card { border-top: 4px solid hsl(224, 64%, 60%); }
+    .map-card.agent-card-type { border-top: 4px solid hsl(280, 75%, 60%); }
+    .map-card.gate-card { border-top: 4px solid hsl(38, 92%, 50%); }
+    .map-card.risk-card { border-top: 4px solid hsl(350, 89%, 60%); }
+    .map-card.audit-card { border-top: 4px solid hsl(142, 72%, 45%); }
+
+    .map-card-number {
+      position: absolute;
+      top: 10px;
+      right: 15px;
+      font-size: 1.8rem;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      color: rgba(255,255,255,0.06);
+      pointer-events: none;
+    }
+    .map-card-title {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-bottom: 0.4rem;
+      color: var(--text-primary);
+    }
+    .map-card-actor {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      border-radius: var(--radius-sm);
+    }
+    .map-card-desc {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      margin-bottom: 1rem;
+    }
+    .map-card-branch {
+      font-size: 0.72rem;
+      background: rgba(0,0,0,0.2);
+      padding: 0.35rem 0.5rem;
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      border: 1px solid var(--border-color);
+    }
+
+    /* Process Flow Inspector Panel */
+    .inspector-panel {
+      background: linear-gradient(135deg, rgba(22, 28, 45, 0.85) 0%, rgba(15, 20, 35, 0.95) 100%);
+      border: 2px solid var(--border-focus);
+      border-radius: var(--radius-lg);
+      padding: 2rem;
+      margin-top: 2rem;
+      box-shadow: var(--shadow-lg);
+      animation: fadeIn 0.4s ease;
+    }
+    .inspector-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 2rem;
+    }
+    @media (max-width: 992px) {
+      .inspector-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .inspector-section-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.25rem;
+    }
+
+    /* Custom Decision Tree lines */
+    .branch-connector {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--border-color);
+      font-size: 1.25rem;
+      padding: 0.5rem 0;
+    }
+
+    /* Flow Phase Row wrapper */
+    .flow-phase-row {
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      background: rgba(15, 23, 42, 0.4);
+      margin-bottom: 1.5rem;
+    }
+    .flow-phase-header {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: var(--border-focus);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Dashboard Header -->
+  <header class="dashboard-header">
+    <div class="header-title">
+      <h1>
+        <svg style="width:2rem; height:2rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/>
+        </svg>
+        RegMind Client Portal Journey Map
+      </h1>
+      <p>Continuous compliance strategy and plain-English client-portal operational guide</p>
+    </div>
+    
+    <div class="header-meta">
+      <div class="commit-badge">
+        Commit: <span id="commit-sha">Loading...</span>
+      </div>
+      <div class="commit-badge">
+        Scanned: <span id="generated-at">Loading...</span>
+      </div>
+      <div id="overall-status" class="status-indicator status-stable">
+        <span class="beacon"></span>
+        <span id="overall-status-text">Loading...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Dashboard Navigation Menu -->
+  <nav class="dashboard-nav" style="display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+    <a href="index.html" class="nav-btn" style="color: var(--text-muted); text-decoration: none; font-weight: 600; font-family: 'Outfit', sans-serif; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; padding-bottom: 0.5rem; display: flex; align-items: center; gap: 0.35rem; transition: color 0.2s ease;">
+      <svg style="width:16px; height:16px; fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+      </svg>
+      Code Impact Dashboard
+    </a>
+    <a href="portal-workflow.html" class="nav-btn active" style="color: var(--text-primary); text-decoration: none; font-weight: 700; font-family: 'Outfit', sans-serif; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 2px solid var(--border-focus); padding-bottom: 0.5rem; display: flex; align-items: center; gap: 0.35rem;">
+      <svg style="width:16px; height:16px; fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+      Client Portal Onboarding Journey
+    </a>
+  </nav>
+
+  <!-- Audience & strategic Overview Banner -->
+  <section class="dashboard-section" style="margin-bottom: 2rem; border-left: 4px solid var(--border-focus);">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+      <div>
+        <h2 style="font-family:'Outfit', sans-serif; font-size:1.35rem; margin-bottom:0.25rem;">Onboarding Walkthrough & Governance System</h2>
+        <p style="color:var(--text-muted); font-size:0.88rem;">Designed for: <strong style="color:var(--text-primary);">Investors, prospects, compliance officers, and auditors</strong> to visually trace how clients register, pre-screen, score, accept pricing, upload, and submit KYC packages safely.</p>
+      </div>
+      <div style="background:rgba(59, 130, 246, 0.08); padding:0.5rem 1rem; border-radius:var(--radius-sm); border:1px solid hsla(217, 91%, 60%, 0.15);">
+        <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--border-focus); display:block; letter-spacing:0.05em;">Governance Rule</span>
+        <span style="font-size:0.85rem; font-weight:600; color:var(--text-primary);">Rules govern • AI assists • Officers decide</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Simulators Navigation Tabs -->
+  <div class="sub-tabs-container">
+    <button class="sub-tab-btn active" data-tab="overview">1. Interactive Journey Map</button>
+    <button class="sub-tab-btn" data-tab="workflow">2. Detailed 16 Stages</button>
+    <button class="sub-tab-btn" data-tab="agents">3. Agent Layer Mappings</button>
+    <button class="sub-tab-btn" data-tab="exceptions">4. Exception Paths ("What If?")</button>
+    <button class="sub-tab-btn" data-tab="data-trail">5. Data Ledger & Audit Log</button>
+    <button class="sub-tab-btn" data-tab="code-impact">6. Code & Routes Mapping</button>
+    <button class="sub-tab-btn" data-tab="checklists">7. Staging QA Checklist</button>
+  </div>
+
+  <!-- TAB 1: OVERVIEW PROCESS FLOW MAP -->
+  <div id="tab-overview" class="tab-content-panel active">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>Client Portal Onboarding Interactive Journey Map</h2>
+        <span>Select any phase or numbered card below to inspect its live compliance telemetry</span>
+      </div>
+      
+      <p style="color:var(--text-secondary); line-height:1.6; margin-bottom:1.5rem; font-size:0.9rem;">
+        The client self-registers, creates an application, queries registers with automatic discrepancy resolution loops, provides shareholder matrices, computes risk, accepts pricing agreements, dynamically receives document slots, and submits corporate files. Follow the stages chronologically in the branch-routing flowchart below.
+      </p>
+
+      <!-- PHASE 1: PREPARATION & REGISTRY -->
+      <div class="flow-phase-row">
+        <div class="flow-phase-header">
+          <span style="background:hsl(199, 91%, 60%); width:8px; height:8px; border-radius:50%;"></span>
+          PHASE I: Account Intake & Legal Identification (Stages 1-5)
+        </div>
+        <div class="journey-map-grid" id="phase-1-grid">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- PHASE 2: RISK, DEVIATIONS & BRANCHING -->
+      <div class="flow-phase-row">
+        <div class="flow-phase-header" style="color: hsl(38, 92%, 50%);">
+          <span style="background:hsl(38, 92%, 50%); width:8px; height:8px; border-radius:50%;"></span>
+          PHASE II: Risk Assessment, Scoring Floors & Regulatory Branching (Stages 6-9)
+        </div>
+        <div class="journey-map-grid" id="phase-2-grid">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- PHASE 3: AGREEMENTS, PRE-APPROVALS & DOCUMENTS -->
+      <div class="flow-phase-row">
+        <div class="flow-phase-header" style="color: hsl(280, 75%, 60%);">
+          <span style="background:hsl(280, 75%, 60%); width:8px; height:8px; border-radius:50%;"></span>
+          PHASE III: Commercial Locks & Dynamic Document Processing (Stages 10-14)
+        </div>
+        <div class="journey-map-grid" id="phase-3-grid">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- PHASE 4: FINALIZATION & BACK-OFFICE SUBMISSION -->
+      <div class="flow-phase-row" style="margin-bottom: 2rem;">
+        <div class="flow-phase-header" style="color: hsl(142, 72%, 45%);">
+          <span style="background:hsl(142, 72%, 45%); width:8px; height:8px; border-radius:50%;"></span>
+          PHASE IV: Final KYC Package Seal & Handoff to Back-Office Audits (Stages 15-16)
+        </div>
+        <div class="journey-map-grid" id="phase-4-grid">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- LIVE TELEMETRY INSPECTOR -->
+      <div class="inspector-panel" id="telemetry-inspector">
+        <div style="text-align: center; color: var(--text-muted); font-size: 0.95rem; padding: 2rem 0;" id="inspector-placeholder">
+          <svg style="width: 3rem; height: 3rem; fill: var(--border-color); margin-bottom: 1rem;" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          </svg>
+          <p>Click any numbered step or card above to open the Interactive Compliance Inspector</p>
+        </div>
+        <div id="inspector-content" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem;">
+            <div>
+              <span id="ins-actor-badge" class="map-card-actor" style="margin-bottom: 0.5rem;"></span>
+              <h3 id="ins-step-title" style="font-size: 1.4rem; color: var(--text-primary); font-family: 'Outfit', sans-serif;"></h3>
+              <p id="ins-status-flow" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem; font-family: monospace;"></p>
+            </div>
+            <div id="ins-agent-flag" style="background: rgba(168, 85, 247, 0.08); padding: 0.5rem 1rem; border-radius: var(--radius-sm); border: 1px solid rgba(168, 85, 247, 0.25); text-align: right; display: none;">
+              <span style="font-size: 0.7rem; font-weight: 700; color: #c084fc; text-transform: uppercase; display: block;">Supporting AI Agent</span>
+              <span id="ins-agent-name" style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);"></span>
+            </div>
+          </div>
+
+          <div class="inspector-grid">
+            <div>
+              <div class="inspector-section-title">Plain English Plain Narrative</div>
+              <p id="ins-explanation" style="font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.5rem;"></p>
+
+              <div class="inspector-section-title">Audit Trail & Immutable Records</div>
+              <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-size: 0.85rem;">
+                <div style="margin-bottom: 0.5rem;"><strong style="color: var(--text-primary);">Database Tables:</strong> <code id="ins-tables" style="color: var(--color-review);"></code></div>
+                <div style="margin-bottom: 0.5rem;"><strong style="color: var(--text-primary);">Structured Fields:</strong> <span id="ins-data-created" style="color: var(--color-changed); font-family: monospace;"></span></div>
+                <div style="margin-bottom: 0.5rem;"><strong style="color: var(--text-primary);">Expected Audit Event:</strong> <span id="ins-audit-log" style="color: var(--color-stable);"></span></div>
+                <div><strong style="color: var(--text-primary);">Back-Office Queue Visibility:</strong> <span id="ins-bo-visibility" style="color: var(--text-primary);"></span></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="inspector-section-title">Source Code Mapping (collapsible details)</div>
+              <div style="background: rgba(10, 15, 30, 0.6); padding: 1rem; border-radius: var(--radius-md); border: 1px dashed var(--border-color); font-size: 0.82rem; margin-bottom: 1.5rem;">
+                <div style="margin-bottom: 0.4rem;"><strong>Source Files:</strong> <code id="ins-files" style="color: var(--color-review);"></code></div>
+                <div style="margin-bottom: 0.4rem;"><strong>REST Endpoints:</strong> <code id="ins-routes" style="color: var(--border-focus);"></code></div>
+                <div><strong>Pytest Validation Suite:</strong> <code id="ins-tests" style="color: var(--color-stable);"></code></div>
+              </div>
+
+              <div class="inspector-section-title">Staging QA Validation Checklist</div>
+              <div style="background: rgba(0, 0, 0, 0.15); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-size: 0.82rem;">
+                <strong style="color: var(--color-review); display: block; margin-bottom: 0.5rem;">Staging Validation Steps:</strong>
+                <p id="ins-qa-checklist" style="color: var(--text-secondary); line-height: 1.5;"></p>
+                <div style="margin-top: 0.75rem; font-size: 0.75rem; border-top: 1px dashed var(--border-color); padding-top: 0.5rem;">
+                  <strong style="color: var(--text-primary);">Success Criteria:</strong> Loader resolves cleanly, inputs are saved, and cryptographic ledger timestamp log records successfully.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB 2: DETAILED PORTAL WORKFLOW -->
+  <div id="tab-workflow" class="tab-content-panel">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>Client Portal Journey — 16 Detailed Onboarding Stages</h2>
+        <span>Detailed Plain-English Step Walkthroughs</span>
+      </div>
+
+      <div class="journey-timeline" id="portal-journey-list">
+        <!-- Stages populated dynamically -->
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB 3: AGENT LAYER -->
+  <div id="tab-agents" class="tab-content-panel">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>RegMind Specialized AI & Rules Governance Agents</h2>
+        <span>Role, Input/Output, and Authoritative Boundaries</span>
+      </div>
+      <p style="color:var(--text-muted); font-size:0.88rem; margin-bottom:1.5rem;">
+        Each stage of the client journey is supported by specialized rulesets or AI agents. The grid below catalogs their operational rules, stating whether they are authoritative (block and decide) or advisory (draft recommendations for human officers).
+      </p>
+
+      <div class="agents-grid" id="tab-agents-grid">
+        <!-- Loaded dynamically by JS -->
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB 4: EXCEPTION PATHS -->
+  <div id="tab-exceptions" class="tab-content-panel">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>What If Something Goes Wrong? — Branching & Discrepancies</h2>
+        <span>System Actions and Safeguard Overrides</span>
+      </div>
+      <p style="color:var(--text-secondary); margin-bottom:1.5rem; font-size:0.9rem;">
+        Regulated financial onboarding must maintain continuous integrity under anomalies. Here is exactly how the system reacts in case of data omissions, high risk flags, name conflicts, or upload failures.
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:1rem;" id="tab-exceptions-list">
+        <!-- Loaded dynamically by JS -->
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB 5: DATA & AUDIT TRAIL -->
+  <div id="tab-data-trail" class="tab-content-panel">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>Database Mappings & Cryptographic Ledger</h2>
+        <span>Created Records, Status Codes, and Log Audits</span>
+      </div>
+      <p style="color:var(--text-secondary); margin-bottom:1.5rem; font-size:0.9rem;">
+        Every user click and system recomputation translates into immediate database updates. To ensure regulatory audit-readiness, system actions are captured inside database tables and cryptographically chained to prevent historical editing.
+      </p>
+
+      <div style="overflow-x:auto;">
+        <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;" id="tab-data-table-body">
+          <!-- Loaded dynamically by JS -->
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB 6: CODE & ROUTES MAPPING -->
+  <div id="tab-code-impact" class="tab-content-panel">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>Technical Code Impact Mappings — Files, Routes, & Tables</h2>
+        <span>Audit Mappings for Developers and Regulatory Tech Auditors</span>
+      </div>
+      <p style="color:var(--text-secondary); margin-bottom:1.5rem; font-size:0.9rem;">
+        Click below to inspect the exact Tornado REST API endpoints, Python source code modules, and unit test files associated with each Client Onboarding stage.
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:1rem;" id="tab-code-mapping-list">
+        <!-- Loaded dynamically by JS -->
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB 7: STAGING QA CHECKLIST -->
+  <div id="tab-checklists" class="tab-content-panel">
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>Developer Staging QA Checklist</h2>
+        <span>Manual, API, and Database Verification Steps</span>
+      </div>
+      <p style="color:var(--text-secondary); margin-bottom:1.5rem; font-size:0.9rem;">
+        Ensure complete compliance mapping by executing these QA checks inside your local or AWS staging environment before pushing updates.
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:1.25rem;" id="tab-checklists-list">
+        <!-- Loaded dynamically by JS -->
+      </div>
+    </section>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <p>RegMind Client Portal Journey Map • Stable Version 4.2 • Continuous Compliance Platform</p>
+  </footer>
+
+  <!-- State & Controller Scripts -->
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      // 1. Fetch main metadata
+      try {
+        const impactRes = await fetch('data/latest-impact.json');
+        const impact = await impactRes.json();
+        
+        document.getElementById('commit-sha').textContent = impact.commit_sha ? impact.commit_sha.substring(0, 8) : 'Stable';
+        document.getElementById('generated-at').textContent = impact.generated_at ? new Date(impact.generated_at).toLocaleString() : 'N/A';
+        
+        const overallStatus = document.getElementById('overall-status');
+        const overallStatusText = document.getElementById('overall-status-text');
+        overallStatus.className = 'status-indicator';
+        
+        const risk = (impact.risk_level || 'STABLE').toUpperCase();
+        if (risk === 'STABLE') {
+          overallStatus.classList.add('status-stable');
+          overallStatusText.textContent = 'Stable';
+        } else if (risk === 'LOW') {
+          overallStatus.classList.add('status-changed');
+          overallStatusText.textContent = 'Changed (Low Risk)';
+        } else if (risk === 'MEDIUM') {
+          overallStatus.classList.add('status-review');
+          overallStatusText.textContent = 'Needs Review';
+        } else {
+          overallStatus.classList.add('status-critical');
+          overallStatusText.textContent = 'Critical Changes';
+        }
+      } catch (e) {
+        console.warn('Failed to load git metadata in Portal Map:', e);
+        document.getElementById('commit-sha').textContent = 'branch-only';
+        document.getElementById('generated-at').textContent = new Date().toLocaleString();
+        document.getElementById('overall-status-text').textContent = 'Stable';
+      }
+
+      // 2. Tab switcher controller
+      const tabs = document.querySelectorAll('.sub-tab-btn');
+      tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+          tabs.forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          
+          const tabId = tab.getAttribute('data-tab');
+          document.querySelectorAll('.tab-content-panel').forEach(panel => {
+            panel.classList.remove('active');
+          });
+          document.getElementById(`tab-${tabId}`).classList.add('active');
+        });
+      });
+
+      // 3. Datasets for the 16 stages (Comprehensive, fully aligned with user specification)
+      const stages = [
+        {
+          order: 1,
+          phase: 1,
+          name: "Client Registration",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Registers corporate account securely, providing credentials, email, password, and sets up session login parameters.",
+          systemAction: "Validates security password criteria, encrypts passwords using bcrypt, issues a secure JWT session token, creates database user record, and locks session token.",
+          agentInvolvement: "None.",
+          riskControl: "Multi-Factor Authentication (MFA) controls, strict password strength verification rules, JWT token cookie protection, and secure browser binds.",
+          files: ["auth.py", "server.py", "security_hardening.py"],
+          routes: ["POST /api/auth/client/register", "POST /api/auth/client/login"],
+          tables: ["clients", "client_sessions"],
+          explanation: "The initial step of the Client Portal journey. An applicant establishes account credentials. The system binds and verifies credentials, enforcing secure session control to construct a secure ownership boundary for all data updates.",
+          testCommand: "pytest tests/test_auth.py",
+          qaCheck: "Register new user on portal UI, verify database stores user with salted bcrypt hash, verify HTTP cookie is issued with Secure and HttpOnly flags.",
+          statusChange: "None -> 'active'",
+          backOfficeVisibility: "Account created is logged but not visible in Back Office compliance review lists yet."
+        },
+        {
+          order: 2,
+          phase: 1,
+          name: "Create New Application",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Clicks 'Start Application' within the portal and allocates initial company details to create a draft profile.",
+          systemAction: "Initializes a unique application UUID record in 'draft' status, automatically binding ownership to the authenticated client ID.",
+          agentInvolvement: "None.",
+          riskControl: "Validates session ownership binding, preventing cross-tenant access to draft application IDs.",
+          files: ["server.py", "db.py"],
+          routes: ["POST /api/applications"],
+          tables: ["applications"],
+          explanation: "Client initiates their formal company onboarding profile. The database creates a dedicated row in a 'draft' state, sealing timestamps and binding read/write capabilities exclusively to the creating client ID.",
+          testCommand: "pytest tests/test_applications_core.py -k create",
+          qaCheck: "Verify clicking 'New Application' redirects to an ID page, query applications table to confirm record binds to correct client ID.",
+          statusChange: "'active' -> 'draft'",
+          backOfficeVisibility: "Visible to client only. Hidden from the back-office review queues to avoid draft clutter."
+        },
+        {
+          order: 3,
+          phase: 1,
+          name: "Company / Registry Lookup",
+          actor: "System / Agent",
+          actorColor: "hsl(280, 75%, 60%)",
+          actorBg: "hsla(280, 75%, 60%, 0.15)",
+          badgeClass: "badge-agent",
+          clientAction: "Enters official corporate name, jurisdiction, and national incorporation registration number.",
+          systemAction: "Triggers automated registry query, checking external registers to retrieve incorporation profile.",
+          agentInvolvement: "Agent 2: External Database / Registry Checks (Decision-Support).",
+          riskControl: "Autofills official details (registered address, directors) to ensure spelling, number matching, and entity status is legal.",
+          files: ["sumsub_client.py", "rule_engine.py", "server.py"],
+          routes: ["GET /api/applications/{id}/registry-lookup"],
+          tables: ["applications", "registry_cache"],
+          explanation: "Queries official registers (like OpenCorporates) to confirm the business is legally active. Agent 2 assists in performing queries and caching official register data.",
+          testCommand: "pytest tests/test_rule_engine.py -k registry",
+          qaCheck: "Input a valid registry number, verify external registry API triggers, confirm details are saved and cached in database.",
+          statusChange: "'draft' -> 'registry_checked'",
+          backOfficeVisibility: "The fetched registry record is cached and pre-fills details inside the compliance back-office details panel."
+        },
+        {
+          order: 4,
+          phase: 1,
+          name: "Discrepancy Handling",
+          actor: "System / Rules",
+          actorColor: "hsl(224, 64%, 60%)",
+          actorBg: "hsla(224, 64%, 60%, 0.15)",
+          badgeClass: "badge-system",
+          clientAction: "Reviews official registry data side-by-side with entered details, confirming spelling or editing mismatch items.",
+          systemAction: "Executes fuzzy matching checks, comparing user data against fetched registry records, assigning mismatch flags.",
+          agentInvolvement: "Agent 2: External Database / Registry Checks (Advisory).",
+          riskControl: "Registry discrepancies generate warning flags but do not hard-block pre-screening submission in client portal.",
+          files: ["rule_engine.py", "server.py"],
+          routes: ["PUT /api/applications/{id}/discrepancies"],
+          tables: ["applications", "discrepancies"],
+          explanation: "Evaluates mismatch levels: Match Found proceeds; Minor mismatches flag warning cues; Major registry mismatch triggers review escalations but allows the client to finish the form without absolute hard block rules.",
+          testCommand: "pytest tests/test_rule_engine.py -k discrepancy",
+          qaCheck: "Input a company name differing from the registry number record, verify that discrepancy log lists the mismatch rating.",
+          statusChange: "'registry_checked' -> 'discrepancy_evaluated'",
+          backOfficeVisibility: "Registry discrepancy alerts display prominently in back-office queue, prompting manual officer reviews."
+        },
+        {
+          order: 5,
+          phase: 1,
+          name: "Pre-Screening Form Completion",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Inputs corporate profile, operating countries, directors list, shareholder percentages, expected transactions, and PEP declarations.",
+          systemAction: "Validates that structural shareholder controls total 100% and structures payload variables for risk engine assessment.",
+          agentInvolvement: "Agent 4: Corporate Structure Analysis (Advisory).",
+          riskControl: "Enforces input schema requirements, validating source of funds / source of wealth indicators and shareholder percentages.",
+          files: ["rule_engine.py", "server.py", "db.py"],
+          routes: ["PUT /api/applications/{id}"],
+          tables: ["applications", "directors", "ubos", "intermediaries"],
+          explanation: "The client maps the entity's direct and indirect owners. The portal tracks PEP status and expected volumes. Agent 4 analyzes the layers to identify ultimate beneficial owners (UBOs) holding over 25% ownership.",
+          testCommand: "pytest tests/test_ex08_applicant_id_validation.py",
+          qaCheck: "Fill pre-screening details, verify shareholder matrix parses and UBO cards generate correctly for stakeholders with >25% share.",
+          statusChange: "'discrepancy_evaluated' -> 'form_completed'",
+          backOfficeVisibility: "Corporate structure tree maps out visually in back office, tracing UBO layers."
+        },
+        {
+          order: 6,
+          phase: 2,
+          name: "Real-Time Risk Signals",
+          actor: "System / Rules",
+          actorColor: "hsl(224, 64%, 60%)",
+          actorBg: "hsla(224, 64%, 60%, 0.15)",
+          badgeClass: "badge-system",
+          clientAction: "Fills the form and views active risk signal warnings (e.g. elevated country warnings) displayed on screen.",
+          systemAction: "Scans fields in real-time, cross-referencing jurisdictions, industries, and structures against risk dictionaries.",
+          agentInvolvement: "Agent 8: Behaviour / Risk Drift (Advisory).",
+          riskControl: "Provides instant feedback about risk heights (high-risk sectors, PEP declarations, FATF grey/black listed countries). Governing rule: **Rules govern. AI assists. Officers decide.**",
+          files: ["rule_engine.py", "server.py"],
+          routes: ["GET /api/applications/{id}/risk-signals"],
+          tables: ["applications", "risk_config"],
+          explanation: "While form-filling, background filters track potential risks. High-risk parameters trigger instant visual flags. Free-form AI does not make the final decision; it serves to assist compliance officers who hold ultimate authority.",
+          testCommand: "pytest tests/test_risk_elevation.py",
+          qaCheck: "Select crypto sector or high-risk FATF grey/black listed country, verify risk signal banner flashes orange or red warnings.",
+          statusChange: "'form_completed' -> 'risk_signals_triggered'",
+          backOfficeVisibility: "Real-time signals are compiled into the risk assessment report inside the back-office compliance view."
+        },
+        {
+          order: 7,
+          phase: 2,
+          name: "Pre-Screening Submission",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Clicks 'Submit Pre-Screening', locking the intake dataset and certifying data accuracy.",
+          systemAction: "Validates all mandatory pre-screening inputs, freezes the form fields, logs the submission, and creates a read-only snapshot.",
+          agentInvolvement: "None.",
+          riskControl: "Seals the pre-screening input payload completely, preventing retrospective client edits during review.",
+          files: ["server.py", "security_hardening.py"],
+          routes: ["POST /api/applications/{id}/submit"],
+          tables: ["applications", "audit_log"],
+          explanation: "Submitting locks form data, creating an unalterable snapshot in the database. The status advances, routing the file to the active compliance assessment queue.",
+          testCommand: "pytest tests/test_applications_core.py -k submit",
+          qaCheck: "Submit pre-screening, confirm state transitions, verify that PUT updates on form fields are blocked with a 403 Forbidden.",
+          statusChange: "'form_completed' -> 'prescreening_submitted'",
+          backOfficeVisibility: "The application becomes visible in the back-office pre-screening review queue."
+        },
+        {
+          order: 8,
+          phase: 2,
+          name: "Risk Computation",
+          actor: "System / Rules",
+          actorColor: "hsl(224, 64%, 60%)",
+          actorBg: "hsla(224, 64%, 60%, 0.15)",
+          badgeClass: "badge-system",
+          clientAction: "None (Awaiting system background calculation).",
+          systemAction: "Executes the deterministic D1-D5 composite scoring algorithm, calculating numerical scores and checking floor elevations.",
+          agentInvolvement: "None (Risk scoring is rule-based, not free-form AI).",
+          riskControl: "FATF grey/black listed countries automatically trigger non-overridable HIGH risk level floors.",
+          files: ["rule_engine.py", "server.py"],
+          routes: ["POST /api/applications/{id}/recompute-risk"],
+          tables: ["applications", "risk_config"],
+          explanation: "A deterministic, rule-based calculation. The engine aggregates D1 (Customer/Entity), D2 (Geographic), D3 (Product/Service), D4 (Sector/Industry), and D5 (Delivery Channel) parameters to establish baseline and final risk levels.",
+          testCommand: "pytest tests/test_rule_engine.py",
+          qaCheck: "Recompute risk on a case with geographic FATF gray/black list parameters, verify final risk grade elevates to HIGH immediately.",
+          statusChange: "'prescreening_submitted' -> 'risk_calculated'",
+          backOfficeVisibility: "Shows detailed D1-D5 score sheets, risk floor justifications, and elevated flags in the back-office panel."
+        },
+        {
+          order: 9,
+          phase: 2,
+          name: "Risk-Based Branching",
+          actor: "System / Rules",
+          actorColor: "hsl(224, 64%, 60%)",
+          actorBg: "hsla(224, 64%, 60%, 0.15)",
+          badgeClass: "badge-system",
+          clientAction: "Views status updates on the dashboard: Low/Med profiles proceed to pricing; High risk files lock for pre-approval.",
+          systemAction: "Routes application workflow depending on final score: Low/Med routes to pricing; High/Very High locks progress; Unknown flags review.",
+          agentInvolvement: "Agent 8: Behaviour / Risk Drift (Advisory).",
+          riskControl: "Branching rules isolate high-risk applicants, preventing them from accessing document upload checklists without approval.",
+          files: ["rule_engine.py", "server.py"],
+          routes: ["GET /api/applications/{id}/status"],
+          tables: ["applications"],
+          explanation: "High and Very High risk profiles branch into the Enhanced Due Diligence (EDD) lane, locking standard portal progress. Low and Medium risk files advance straight to the pricing step.",
+          testCommand: "pytest tests/test_risk_elevation.py -k branching",
+          qaCheck: "Verify high-risk files display 'Pending Pre-Approval' status and do not show KYC document checklists in client portal.",
+          statusChange: "'risk_calculated' -> 'standard_path' OR 'edd_locked'",
+          backOfficeVisibility: "EDD-routed cases are flagged with red badges, appearing in the High-Risk pre-approval queue."
+        },
+        {
+          order: 10,
+          phase: 3,
+          name: "Pricing Review / Pricing Acceptance",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Reviews the onboarding pricing schedule proposal on the portal and clicks 'Accept Pricing'.",
+          systemAction: "Locks client's acceptance, records pricing terms, and unlocks dynamic KYC document checklist slots.",
+          agentInvolvement: "Agent 5: Risk / Memo Support (Advisory).",
+          riskControl: "Enforces commercial acceptance as a mandatory operational gate before document collection.",
+          files: ["server.py", "db.py"],
+          routes: ["POST /api/applications/{id}/accept-pricing"],
+          tables: ["applications"],
+          explanation: "Locks client agreement to onboarding pricing terms. Transitioning this step is required to generate tailored document requirements.",
+          testCommand: "pytest tests/test_memo_original_risk_level.py -k pricing",
+          qaCheck: "Accept pricing schedule, verify application status transitions, confirm dynamic document slot checklist loads.",
+          statusChange: "'standard_path' OR 'pre_approved' -> 'pricing_accepted'",
+          backOfficeVisibility: "Acceptance is logged in database and visible in the client profile audit panel."
+        },
+        {
+          order: 11,
+          phase: 3,
+          name: "Pre-Approval Gate",
+          actor: "Compliance Gate",
+          actorColor: "hsl(38, 92%, 50%)",
+          actorBg: "hsla(38, 92%, 50%, 0.15)",
+          badgeClass: "badge-gate",
+          clientAction: "Waits for compliance officer review (high-risk applicants only).",
+          systemAction: "Enables back-office pre-approval overrides: Officer/SCO can approve (unlocks pricing), reject (terminates application), or request info.",
+          agentInvolvement: "Agent 10: Ongoing Compliance Review (Advisory).",
+          riskControl: "Mandatory human sign-off control for high-risk files. Dual-officer controls logged for grey/blacklisted countries.",
+          files: ["server.py", "security_hardening.py"],
+          routes: ["POST /api/applications/{id}/pre-approval-decision"],
+          tables: ["applications", "audit_log"],
+          explanation: "High-risk applicants require compliance pre-approval. If approved, the case is routed to pricing review; if rejected, the case is terminated.",
+          testCommand: "pytest tests/test_supervisor.py -k pre_approval",
+          qaCheck: "Approve a high-risk case in back office, verify that pricing schedule is unlocked in the client portal.",
+          statusChange: "'edd_locked' -> 'pre_approved' OR 'pre_screening_rejected'",
+          backOfficeVisibility: "Requires active Senior Compliance Officer sign-off in the high-risk management queue."
+        },
+        {
+          order: 12,
+          phase: 3,
+          name: "KYC Document Requirements Generated",
+          actor: "System / Rules",
+          actorColor: "hsl(224, 64%, 60%)",
+          actorBg: "hsla(224, 64%, 60%, 0.15)",
+          badgeClass: "badge-system",
+          clientAction: "Inspects the dynamic KYC document upload checklist slots now displayed in their portal workspace.",
+          systemAction: "Evaluates D1-D5 risk outputs and entity type to dynamically populate required corporate and personal document slots.",
+          agentInvolvement: "None.",
+          riskControl: "High-risk files dynamically generate additional slots, demanding source of wealth evidence and directors declarations.",
+          files: ["document_verification.py", "verification_matrix.py"],
+          routes: ["GET /api/applications/{id}/enhanced-requirements"],
+          tables: ["applications", "documents"],
+          explanation: "The system generates dynamic checklists tailored to the applicant’s risk. Low-risk entities upload standard certificates, while high-risk profiles require advanced source of wealth declarations.",
+          testCommand: "pytest tests/test_verification_matrix.py",
+          qaCheck: "Compare dynamic checklists of low vs high risk applications, confirm extra slots populate correctly for high risk.",
+          statusChange: "'pricing_accepted' -> 'slots_generated'",
+          backOfficeVisibility: "Required slots and statuses are visible in back-office file checklist views."
+        },
+        {
+          order: 13,
+          phase: 3,
+          name: "Document Upload",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Uploads PDFs or image files into the designated dynamic slots.",
+          systemAction: "Validates file sizes (<25MB), checks for duplicate SHA-256 hashes, stores files in S3, and tags status as 'pending_verification'.",
+          agentInvolvement: "Agent 1: Identity & Document Verification (Advisory).",
+          riskControl: "Checks magic bytes (MIME verification) to prevent executable uploads; blocks duplicate document uploads.",
+          files: ["server.py", "s3_client.py", "document_verification.py"],
+          routes: ["POST /api/applications/{id}/documents", "DELETE /api/applications/{id}/documents/{doc_id}"],
+          tables: ["documents"],
+          explanation: "The client uploads corporate and identity files. Uploads are strictly branch-documented (no runtime changes). The system runs instant validation, quarantining unsafe file extensions.",
+          testCommand: "pytest tests/test_verification_matrix.py -k upload",
+          qaCheck: "Upload a TXT file renamed to .pdf, verify the MIME check blocks it; upload a duplicate file, check for duplicate blocks.",
+          statusChange: "'slots_generated' -> 'documents_uploaded'",
+          backOfficeVisibility: "Uploaded files are sent to a secure storage bucket, registering as pending inside the back-office file audit panel."
+        },
+        {
+          order: 14,
+          phase: 3,
+          name: "Document Verification / Agent Checks",
+          actor: "System / Agent",
+          actorColor: "hsl(280, 75%, 60%)",
+          actorBg: "hsla(280, 75%, 60%, 0.15)",
+          badgeClass: "badge-agent",
+          clientAction: "None (Waits for system background scanner).",
+          systemAction: "Runs checks and triggers Agent 1 to perform vision audit scans (Tampering, Expiration, Clarity) on files.",
+          agentInvolvement: "Agent 1: Identity & Document Verification (Advisory OCR).",
+          riskControl: "Identifies expired dates, blurry text, or editing markers. Outcomes include: verified, flagged, failed, pending, or inconclusive.",
+          files: ["document_verification.py", "verification_matrix.py", "claude_client.py"],
+          routes: ["POST /api/applications/{id}/submit-kyc (Triggers evaluation checks)"],
+          tables: ["documents"],
+          explanation: "Checks clarity, signatures, and tampering indicators. Unclear text flags file for manual compliance desk check.",
+          testCommand: "pytest tests/test_verification_matrix.py -k verify",
+          qaCheck: "Submit a blurry document image, verify Agent 1 marks status as 'flagged', verify back-office queue displays warning.",
+          statusChange: "'documents_uploaded' -> 'verification_completed'",
+          backOfficeVisibility: "Extracted OCR metadata and audit logs are displayed under the verification panel."
+        },
+        {
+          order: 15,
+          phase: 4,
+          name: "Final KYC / Application Submission",
+          actor: "Client",
+          actorColor: "hsl(199, 91%, 60%)",
+          actorBg: "hsla(199, 91%, 60%, 0.15)",
+          badgeClass: "badge-client",
+          clientAction: "Clicks 'Submit Full Application' within their portal workspace.",
+          systemAction: "Runs completeness checks across all required slots, seals the payload to block editing, and updates status to 'submitted_for_review'.",
+          agentInvolvement: "None.",
+          riskControl: "Blocks submission if any required document slot is missing, failed, or pending verification.",
+          files: ["server.py", "security_hardening.py"],
+          routes: ["POST /api/applications/{id}/submit-kyc"],
+          tables: ["applications", "documents", "audit_log"],
+          explanation: "The final client action. Submitting locks the document portal, preventing changes, and routes the entire case to the back-office compliance desk.",
+          testCommand: "pytest tests/test_applications_core.py -k submit_kyc",
+          qaCheck: "Attempt submission with missing required documents, confirm system blocks it; submit complete file, verify portal switches to read-only.",
+          statusChange: "'verification_completed' -> 'submitted_for_review'",
+          backOfficeVisibility: "Locks client edits; routes case to the compliance officer review queue."
+        },
+        {
+          order: 16,
+          phase: 4,
+          name: "Handoff to Back Office",
+          actor: "Compliance Gate",
+          actorColor: "hsl(38, 92%, 50%)",
+          actorBg: "hsla(38, 92%, 50%, 0.15)",
+          badgeClass: "badge-gate",
+          clientAction: "None (Portal switches to read-only 'Under Review' status).",
+          systemAction: "Moves file to the compliance queue, launching screening review, memo generator, and AI supervisor check.",
+          agentInvolvement: "Agent 10: Ongoing Compliance Review (Authoritative).",
+          riskControl: "Locks client edits; back office takes over for screening, memos, supervisor reviews, and decisions.",
+          files: ["server.py", "supervisor_engine.py"],
+          routes: ["GET /api/applications/{id}"],
+          tables: ["applications", "audit_log", "supervisor_audit_log"],
+          explanation: "Intake wraps up. Compliance officers assume ownership to execute sanctions screening, write compliance memos, and approve.",
+          testCommand: "pytest tests/test_supervisor.py",
+          qaCheck: "Log in as compliance officer, verify that the submitted case appears in the review queue with complete audit histories.",
+          statusChange: "'submitted_for_review' -> 'under_audit_review'",
+          backOfficeVisibility: "Fully visible. Case file locked from client edits; back-office compliance team gains exclusive control."
+        }
+      ];
+
+      const agents = [
+        { name: "Agent 1: Identity & Document Verification", role: "Analyze uploaded passports and registry files using Vision API to detect tempering or blurred lines.", runs: "Upon file upload / Async document queue", checks: "TAMPERING, EXPIRED_TAG, SIGNATURE_CLARITY, IMAGE_FORMAT", input: "Uploaded file binaries, doc metadata", output: "tamper_metrics, clarity_score, check_verdict (passed / flagged / failed)", type: "Advisory", action: "Flags document as 'flagged' or 'failed', triggering compliance queue warning." },
+        { name: "Agent 2: External Database / Registry Checks", role: "Cross-checks company name and incorporation number against official national corporate registers.", runs: "Pre-screening registry search triggers", checks: "INCORPORATION_STATUS, REGISTRATION_MATCH, ADDRESS_VALIDATION", input: "company_name, registration_number, operating_country", output: "match_score, registry_status, registration_match", type: "Advisory / Decision-Support", action: "Flags data mismatch, triggering discrepancy warning branches." },
+        { name: "Agent 3: FinCrime Screening Interpretation", role: "Cross-references client lists and UBO arrays against sanctions, PEP, and global watchlists.", runs: "Intake submission / automated batch jobs", checks: "SANCTIONS_MATCH, PEP_INDICATORS, FATF_GRAYLIST", input: "directors_list, ubos_list, company_details", output: "disposition (cleared / review / escalated), false_positive_justification", type: "Advisory", action: "Elevates case risk scoring, routing case file into compliance officer screening queue." },
+        { name: "Agent 4: Corporate Structure Analysis", role: "Parses corporate charts and shareholder databases to trace ultimate beneficial owners (UBOs).", runs: "Pre-screening form ownership submissions", checks: "UBO_PERCENTAGE_SUM, COMPLEXITY_INDEX, SHELL_JURISDICTION", input: "shareholder_matrix, intermediary_layers", output: "full_ownership_tree, ubo_extracted_array, complexity_score", type: "Advisory", action: "Flags opaque layers, elevating composite D1 risk variables." },
+        { name: "Agent 5: Risk / Memo Support", role: "Aggregates risk composite scores, registry details, and document verifications to draft compliance memos.", runs: "Upon officer memo post command", checks: "MEMO_COMPLETENESS, ARGUMENT_CONSISTENCY", input: "risk_scoring, screening_logs, documents_status", output: "11-section compliance memo text payload", type: "Decision-Support", action: "Highlights missing data fields, displaying warnings before memo generation." },
+        { name: "Agent 6: Periodic Review", role: "Conducts regular ongoing audits on client documents freshness, active statuses, and directory profiles.", runs: "Scheduled batch cycles", checks: "DOCUMENT_EXPIRATION, ACTIVE_STATUS_DRIFT", input: "client_database, registry_freshness", output: "staleness_rating, scheduled_review_timeline", type: "Authoritative", action: "Flags profile as 'stale', prompting ongoing monitoring warning dashboard." },
+        { name: "Agent 7: Adverse Media / PEP", role: "Queries web databases and news feeds to flag client mentions in fincrime news or adverse media.", runs: "Ongoing monitoring jobs / Screening queue runs", checks: "MEDIA_ALERT_SEVERITY, PEP_DRIFT", input: "client_names, ubo_names", output: "media_alerts_list, pep_adjustments", type: "Advisory", action: "Flags risk alerts, routing case files directly to compliance officers." },
+        { name: "Agent 8: Behaviour / Risk Drift", role: "Evaluates active transactional flows and geographic destinations to check for behavioral changes.", runs: "Post-onboarding transactional ticks", checks: "TRANSACTION_VOLUME_SPIKE, HIGH_RISK_ROUTE_DRIFT", input: "historical_transactions, transaction_telemetry", output: "anomaly_score, risk_drift_alert", type: "Advisory", action: "Raises monitoring alerts, prompting UBO change mismatch review guides." },
+        { name: "Agent 9: Regulatory Impact", role: "Reviews new regulatory circulars to align risk scores.", runs: "Roadmap implementation only (NOT ACTIVE)", checks: "CIRCULAR_IMPACT, RULE_ADJUSTMENT", input: "Official regulatory circulars", output: "rule_weight_adjustments", type: "Future Roadmap (NOT ACTIVE)", action: "None (Roadmap placeholder)." },
+        { name: "Agent 10: Ongoing Compliance Review", role: "Lead supervisor engine. Verifies compliance memo facts against raw database columns.", runs: "Supervisor audit run command", checks: "CONTRADICTION_DETECTION, AUDIT_LOG_INTEGRITY", input: "compliance_memo, risk_scores, audit_trail", output: "contradiction_report, supervisor_approval_verdict", type: "Authoritative / Decision Gate", action: "Blocks final application decision lock if contradictions are found." }
+      ];
+
+      const exceptions = [
+        { name: "Company Registry Discrepancy", trigger: "Registry Lookup (Agent 2) finds spelling or registration number mismatches.", systemAction: "System pre-fills matching records but flags mismatch indicator. Case risk elevates.", overrideRule: "Client must edit inputs to match register or upload certified company extract. Compliance officer must manually approve discrepancy in Back Office." },
+        { name: "Missing Required Pre-Screening Data", trigger: "Applicant attempts pre-screening submit with empty required fields.", systemAction: "Blocks submission API call with 400 Bad Request, highlights incomplete input frames in red.", overrideRule: "No bypass. Client must complete all D1-D5 pre-screening fields before submission." },
+        { name: "High-Risk Jurisdiction Match", trigger: "FATF gray/black list country selected in registration address or shareholder tree.", systemAction: "Automated risk Scoring recomputes. Triggers non-overridable HIGH composite risk scoring floor.", overrideRule: "Application is routed directly to the compliance Enhanced Due Diligence (EDD) lane. Pre-approval gate locks." },
+        { name: "PEP Declaration", trigger: "Applicant checks 'Yes' to political exposure parameters during pre-screening.", systemAction: "System flags political risk elevation indicator.", overrideRule: "Routes application to Senior Compliance Officer review. Demands advanced PEP background verification docs." },
+        { name: "Sanctions / Watchlist Screening Hit", trigger: "Automated PEP & Sanctions scan returns match hit inside ComplyAdvantage queue.", systemAction: "Case shifts state to 'under_screening_review', pausing standard portal workflow.", overrideRule: "Compliance Officer must audit raw matching payload. False positives cleared with Claude reasoning; true matches block file." },
+        { name: "Risk Score High or Very High", trigger: "Risk Composite recomputation score exceeds high threshold parameters.", systemAction: "Blocks pricing acceptance, routes application directly to Senior Pre-Approval desk.", overrideRule: "Requires Senior Compliance Officer Pre-Approval decision ('Approved') before client can access KYC document slots." },
+        { name: "Pricing Proposal Rejected", trigger: "Client rejects generated onboarding fee quote schedule.", systemAction: "Locks case progress. Document checklists slots are held in inactive status.", overrideRule: "Client relations team must manually adjust quote terms in Back Office, regenerating client portal pricing view." },
+        { name: "Pre-Approval Gate Rejected", trigger: "Compliance officer or Senior Compliance Officer rejects the high-risk pre-screening case.", systemAction: "Transitions case state to 'pre_screening_rejected', locks the portal workspace, and sends an automated notification to the client.", overrideRule: "Client cannot proceed. Escalation to Executive Committee or compliance audit review is required to reopen the case." },
+        { name: "Document Upload Failure", trigger: "Invalid extension (e.g. txt, exe), size exceeds 25MB, or SHA-256 hash match duplicate.", systemAction: "Rejects S3 file upload API, flashes error alert box on client document workspace.", overrideRule: "Client must select compliant PDF/JPG format, compress under 25MB, or upload unique document file." },
+        { name: "Document Verification Flagged", trigger: "Agent 1 Vision scan flags blurred text, tamper bytes, or expiration mismatch.", systemAction: "Updates document state to 'flagged', flags warning indicators in Back Office review queue.", overrideRule: "Senior Officer can manually inspect PDF and override warning using administrative decision panel with documented reason." },
+        { name: "Document Verification Pending", trigger: "Async document integrity worker is actively running Vision OCR check.", systemAction: "System displays 'Processing / Verifying' status truths. Final KYC submit button remains disabled.", overrideRule: "No bypass. System blocks submission until background Vision jobs publish verified or flagged verdicts." },
+        { name: "Final KYC Submission Blocked", trigger: "Applicant clicks submit with incomplete slots, wrong status, or unresolved flags.", systemAction: "Renders validation error. Keeps application in 'pricing_accepted' state.", overrideRule: "Client must complete document uploads and wait for Vision checks to clear before submit becomes active." }
+      ];
+
+      // 4. Render Tab 1: Interactive Journey Map
+      const phase1Grid = document.getElementById('phase-1-grid');
+      const phase2Grid = document.getElementById('phase-2-grid');
+      const phase3Grid = document.getElementById('phase-3-grid');
+      const phase4Grid = document.getElementById('phase-4-grid');
+
+      stages.forEach(s => {
+        const card = document.createElement('div');
+        card.className = `map-card ${s.badgeClass}-type`;
+        card.setAttribute('data-order', s.order);
+        card.innerHTML = `
+          <div class="map-card-number">${s.order}</div>
+          <div>
+            <span class="map-card-actor" style="background: ${s.actorBg}; color: ${s.actorColor};">${s.actor}</span>
+            <div class="map-card-title">${s.name}</div>
+            <div class="map-card-desc">${s.explanation.substring(0, 95)}...</div>
+          </div>
+          <div class="map-card-branch">
+            Status: ${s.statusChange.split(' -> ')[1] || s.statusChange}
+          </div>
+        `;
+
+        card.addEventListener('click', () => {
+          document.querySelectorAll('.map-card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+          loadInspector(s);
+        });
+
+        if (s.phase === 1) phase1Grid.appendChild(card);
+        else if (s.phase === 2) phase2Grid.appendChild(card);
+        else if (s.phase === 3) phase3Grid.appendChild(card);
+        else if (s.phase === 4) phase4Grid.appendChild(card);
+      });
+
+      function loadInspector(s) {
+        document.getElementById('inspector-placeholder').style.display = 'none';
+        const content = document.getElementById('inspector-content');
+        content.style.display = 'block';
+
+        document.getElementById('ins-actor-badge').textContent = s.actor + " Action";
+        document.getElementById('ins-actor-badge').style.background = s.actorBg;
+        document.getElementById('ins-actor-badge').style.color = s.actorColor;
+
+        document.getElementById('ins-step-title').textContent = `Stage ${s.order}: ${s.name}`;
+        document.getElementById('ins-status-flow').textContent = `STATUS CODE TRANSITION: ${s.statusChange}`;
+        document.getElementById('ins-explanation').textContent = s.explanation;
+        
+        document.getElementById('ins-tables').textContent = s.tables.join(', ');
+        document.getElementById('ins-data-created').textContent = s.clientAction.substring(0, 80) + "...";
+        document.getElementById('ins-audit-log').textContent = s.systemAction.substring(0, 80) + "...";
+        document.getElementById('ins-bo-visibility').textContent = s.backOfficeVisibility;
+
+        document.getElementById('ins-files').textContent = s.files.join(', ');
+        document.getElementById('ins-routes').textContent = s.routes.join(', ');
+        document.getElementById('ins-tests').textContent = s.testCommand;
+        document.getElementById('ins-qa-checklist').innerHTML = `
+          <strong>1. Manual UI Check:</strong> ${s.qaCheck}<br><br>
+          <strong>2. REST API Endpoint:</strong> Validate that sending payload to <code style="color: var(--border-focus);">${s.routes[0]}</code> returns appropriate HTTP response.<br><br>
+          <strong>3. SQL Database Check:</strong> Verify record creation inside table <code style="color: var(--color-review);">${s.tables[0]}</code> with correct status variables.
+        `;
+
+        const agentFlag = document.getElementById('ins-agent-flag');
+        if (s.agentInvolvement !== "None.") {
+          agentFlag.style.display = 'block';
+          document.getElementById('ins-agent-name').textContent = s.agentInvolvement;
+        } else {
+          agentFlag.style.display = 'none';
+        }
+
+        document.getElementById('telemetry-inspector').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      // 5. Render Tab 2: Detailed Timeline Workflow
+      const portalJourneyContainer = document.getElementById('portal-journey-list');
+      stages.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'journey-step-node';
+        card.innerHTML = `
+          <div class="journey-step-bullet"></div>
+          <div class="node-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+            <div class="node-title-area" style="display:flex; align-items:center; gap:0.5rem;">
+              <div class="node-number" style="width:24px; height:24px; border-radius:50%; background:var(--border-focus); color:var(--text-primary); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem;">${s.order}</div>
+              <div class="node-title" style="font-family:'Outfit',sans-serif; font-size:1.05rem; font-weight:600; color:var(--text-primary);">${s.name}</div>
+            </div>
+            <span class="status-indicator-inline ${s.order % 2 === 0 ? 'status-changed' : 'status-stable'}">${s.order % 2 === 0 ? 'Client Pipeline' : 'System Guard'}</span>
+          </div>
+
+          <div class="node-body">
+            <p style="color:var(--text-secondary); font-size:0.88rem; margin-bottom:0.75rem; line-height:1.5;">${s.explanation}</p>
+            
+            <div style="display:flex; flex-wrap:wrap; gap:0.35rem; margin-bottom:0.75rem;">
+              <span class="status-indicator-inline badge-client" style="font-size:0.65rem;">Client Action</span>
+              <span class="status-indicator-inline badge-system" style="font-size:0.65rem;">System Rule</span>
+              ${s.agentInvolvement !== "None." ? '<span class="status-indicator-inline badge-agent" style="font-size:0.65rem;">AI Agent</span>' : ''}
+              <span class="status-indicator-inline badge-gate" style="font-size:0.65rem;">Risk Gate</span>
+            </div>
+
+            <!-- Client vs System Grid -->
+            <div class="node-meta-grid" style="font-size:0.78rem; background:rgba(0,0,0,0.15); padding:0.75rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); margin-bottom:0.75rem;">
+              <div class="meta-item">
+                <span class="meta-label" style="color:hsl(199, 91%, 60%); font-weight:700;">Client Does:</span>
+                <span class="meta-value-text" style="color:var(--text-primary);">${s.clientAction}</span>
+              </div>
+              <div class="meta-item" style="margin-top:0.5rem;">
+                <span class="meta-label" style="color:hsl(217, 91%, 80%); font-weight:700;">System Does:</span>
+                <span class="meta-value-text" style="color:var(--text-primary);">${s.systemAction}</span>
+              </div>
+              ${s.agentInvolvement !== "None." ? `
+              <div class="meta-item" style="margin-top:0.5rem;">
+                <span class="meta-label" style="color:hsl(280, 75%, 70%); font-weight:700;">Agent Involved:</span>
+                <span class="meta-value-text" style="color:var(--text-primary);">${s.agentInvolvement}</span>
+              </div>` : ''}
+              <div class="meta-item" style="margin-top:0.5rem;">
+                <span class="meta-label" style="color:hsl(38, 92%, 50%); font-weight:700;">Compliance Control:</span>
+                <span class="meta-value-text" style="color:var(--text-primary);">${s.riskControl}</span>
+              </div>
+            </div>
+
+            <!-- Collapsible technical details button -->
+            <button class="btn-toggle-tech" onclick="toggleTechBlock(${s.order})">
+              <svg style="width:12px; height:12px; transform:rotate(90deg);" viewBox="0 0 24 24"><path fill="currentColor" d="M8.59,16.59L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.59Z"/></svg>
+              Show Technical & QA Mappings
+            </button>
+
+            <!-- Tech detail block -->
+            <div class="technical-detail-block" id="tech-block-${s.order}">
+              <div style="font-size:0.75rem; display:flex; flex-direction:column; gap:0.5rem; color:var(--text-secondary);">
+                <div><strong>Connected Files:</strong> <code style="color:var(--color-review);">${s.files.join(', ')}</code></div>
+                <div><strong>API Routes:</strong> <code style="color:var(--border-focus);">${s.routes.join(', ')}</code></div>
+                <div><strong>Database Tables:</strong> <code style="color:var(--color-changed);">${s.tables.join(', ')}</code></div>
+                <div><strong>Pytest Validation:</strong> <code style="color:var(--color-stable);">${s.testCommand}</code></div>
+                <div style="border-top:1px dashed var(--border-color); padding-top:0.5rem; margin-top:0.25rem;">
+                  <strong style="color:var(--text-primary);">Manual Verification Guideline:</strong><br>
+                  ${s.qaCheck}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        portalJourneyContainer.appendChild(card);
+      });
+
+      // 6. Render Tab 3: Agent Layer Mappings
+      const agentsContainer = document.getElementById('tab-agents-grid');
+      agents.forEach(a => {
+        const card = document.createElement('div');
+        card.className = 'agent-card';
+        if (a.name.includes("Agent 9")) {
+          card.style.opacity = 0.45;
+          card.style.borderStyle = "dashed";
+        }
+        card.innerHTML = `
+          <div class="agent-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+            <div class="agent-title" style="font-family:'Outfit',sans-serif; font-weight:600; color:var(--text-primary); font-size:0.95rem;">${a.name}</div>
+            <span class="status-indicator-inline ${a.type.includes("Authoritative") ? 'status-critical' : (a.type.includes("Roadmap") ? 'status-notproven' : 'status-review')}" style="font-size:0.6rem;">${a.type}</span>
+          </div>
+          <div class="agent-desc" style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem; line-height:1.4;">${a.role}</div>
+          <div style="font-size:0.75rem; background:rgba(0,0,0,0.1); padding:0.5rem; border-radius:var(--radius-sm);">
+            <div style="margin-bottom:0.25rem;"><strong>Execution Phase:</strong> <span style="color:var(--text-primary);">${a.runs}</span></div>
+            <div style="margin-bottom:0.25rem;"><strong>Inputs:</strong> <span style="color:var(--text-muted);">${a.input}</span></div>
+            <div style="margin-bottom:0.25rem;"><strong>Outputs:</strong> <span style="color:var(--text-muted);">${a.output}</span></div>
+            <div style="margin-bottom:0.25rem;"><strong>Checks:</strong> <code style="color:var(--color-review);">${a.checks}</code></div>
+            <div style="border-top:1px dashed var(--border-color); padding-top:0.25rem; margin-top:0.25rem; color:var(--color-critical);">
+              <strong>If Flagged:</strong> ${a.action}
+            </div>
+          </div>
+        `;
+        agentsContainer.appendChild(card);
+      });
+
+      // 7. Render Tab 4: Exception Paths
+      const exceptionsContainer = document.getElementById('tab-exceptions-list');
+      exceptions.forEach(e => {
+        const block = document.createElement('div');
+        block.className = 'file-item';
+        block.style.borderLeft = e.name.includes("Failure") || e.name.includes("Blocked") || e.name.includes("Rejected") ? "4px solid var(--color-critical)" : "4px solid var(--color-review)";
+        block.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <div style="font-family:'Outfit',sans-serif; font-weight:600; color:var(--text-primary); font-size:0.95rem;">• Target Issue: ${e.name}</div>
+            <span class="status-indicator-inline status-review" style="font-size:0.6rem;">Deviation Path</span>
+          </div>
+          <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:0.5rem;">
+            <strong>System Trigger:</strong> ${e.trigger}
+          </div>
+          <div style="font-size:0.82rem; background:rgba(0,0,0,0.12); padding:0.6rem; border-radius:var(--radius-sm); color:var(--text-muted); margin-bottom:0.5rem;">
+            <strong>Automated Action:</strong> ${e.systemAction}
+          </div>
+          <div style="font-size:0.82rem; color:var(--text-primary); font-weight:500;">
+            <strong>Officer Safeguard / Override Criteria:</strong> <span style="color:var(--border-focus);">${e.overrideRule}</span>
+          </div>
+        `;
+        exceptionsContainer.appendChild(block);
+      });
+
+      // 8. Render Tab 5: Data & Audit Trail
+      const dataBody = document.getElementById('tab-data-table-body');
+      let tableHtml = `
+        <thead>
+          <tr style="border-bottom:2px solid var(--border-color); text-align:left; color:var(--text-primary);">
+            <th style="padding:0.75rem;">Workflow Onboarding Step</th>
+            <th style="padding:0.75rem;">Database Tables & Schema</th>
+            <th style="padding:0.75rem;">Status Code Transition</th>
+            <th style="padding:0.75rem;">Immutable Cryptographic Audit Event</th>
+            <th style="padding:0.75rem;">Back-Office Queue Visibility</th>
+          </tr>
+        </thead>
+        <tbody>
+      `;
+      stages.forEach(s => {
+        tableHtml += `
+          <tr style="border-bottom:1px solid var(--border-color); color:var(--text-secondary);">
+            <td style="padding:0.75rem; font-weight:600; color:var(--text-primary);">${s.order}. ${s.name}</td>
+            <td style="padding:0.75rem;"><code style="color:var(--color-review);">${s.tables.join(', ')}</code></td>
+            <td style="padding:0.75rem; font-size:0.8rem; font-family:monospace; color:var(--color-changed);">${s.statusChange}</td>
+            <td style="padding:0.75rem; font-size:0.82rem; color:var(--text-muted);">${s.systemAction.substring(0, 110)}...</td>
+            <td style="padding:0.75rem; font-size:0.8rem; color:var(--text-primary);">${s.backOfficeVisibility}</td>
+          </tr>
+        `;
+      });
+      tableHtml += `</tbody>`;
+      dataBody.innerHTML = tableHtml;
+
+      // 9. Render Tab 6: Code Impact Mapping (Technical detail list)
+      const codeContainer = document.getElementById('tab-code-mapping-list');
+      stages.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        item.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <div style="font-family:'Outfit',sans-serif; font-weight:600; color:var(--text-primary); font-size:0.9rem;">Stage ${s.order}: ${s.name}</div>
+            <span class="status-indicator-inline status-changed" style="font-size:0.6rem;">Technical Map</span>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-secondary); display:flex; flex-direction:column; gap:0.25rem;">
+            <div><strong>Source Files:</strong> <code style="color:var(--color-review);">${s.files.join(', ')}</code></div>
+            <div><strong>REST API Route:</strong> <code style="color:var(--border-focus);">${s.routes.join(', ')}</code></div>
+            <div><strong>Scanned SQL Tables:</strong> <code style="color:var(--color-changed);">${s.tables.join(', ')}</code></div>
+            <div><strong>Pytest Suite:</strong> <code style="color:var(--color-stable);">${s.testCommand}</code></div>
+          </div>
+        `;
+        codeContainer.appendChild(item);
+      });
+
+      // 10. Render Tab 7: Staging QA checklists
+      const checklistsContainer = document.getElementById('tab-checklists-list');
+      stages.forEach(s => {
+        const block = document.createElement('div');
+        block.className = 'checklist-item';
+        block.style.borderLeft = "4px solid var(--color-stable)";
+        block.innerHTML = `
+          <div style="display:flex; flex-direction:column; gap:0.35rem; width:100%;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <h4 style="font-family:'Outfit',sans-serif; font-weight:600; color:var(--text-primary); font-size:0.95rem;">Stage ${s.order}: ${s.name} Verification</h4>
+              <span class="status-indicator-inline status-stable" style="font-size:0.6rem;">QA Checklist</span>
+            </div>
+            
+            <ul style="margin:0.5rem 0 0 1rem; padding:0; font-size:0.82rem; color:var(--text-secondary); display:flex; flex-direction:column; gap:0.35rem; list-style-type:circle;">
+              <li><strong>Browser Smoke Check:</strong> ${s.qaCheck}</li>
+              <li><strong>REST API Check:</strong> Inspect web developer console network tab and confirm route <code style="color:var(--border-focus); font-size:0.75rem;">${s.routes[0]}</code> returns 200/201 HTTP status.</li>
+              <li><strong>Database Check:</strong> Query table <code style="color:var(--color-review); font-size:0.75rem;">${s.tables[0]}</code> and confirm record is created successfully with transition status <code style="color:var(--color-changed); font-size:0.75rem;">${s.statusChange}</code>.</li>
+              <li><strong>Cryptographic Audit Check:</strong> Verify database records timestamp audits logs correctly inside ` + "`audit_log`" + `.</li>
+              <li><strong>Success Criteria:</strong> UI transitions smoothly, data fields seal correctly, and no security/CORS warnings elevate.</li>
+            </ul>
+          </div>
+        `;
+        checklistsContainer.appendChild(block);
+      });
+    });
+
+    // Helper functions for collapsible technical mappings
+    function toggleTechBlock(orderId) {
+      const block = document.getElementById(`tech-block-${orderId}`);
+      block.classList.toggle('active');
+    }
+  </script>
+</body>
+</html>

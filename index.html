@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RegMind — Workflow & Code Impact Map</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="shortcut icon" href="https://onboarda.com/favicon.ico" type="image/x-icon">
+</head>
+<body>
+
+  <!-- Dashboard Header -->
+  <header class="dashboard-header">
+    <div class="header-title">
+      <h1>
+        <svg style="width:2rem; height:2rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/>
+        </svg>
+        RegMind Workflow & Code Impact Map
+      </h1>
+      <p>Continuous compliance assurance and risk mitigation dashboard</p>
+    </div>
+    
+    <div class="header-meta">
+      <div class="commit-badge">
+        Commit: <span id="commit-sha">Loading...</span>
+      </div>
+      <div class="commit-badge">
+        Scanned: <span id="generated-at">Loading...</span>
+      </div>
+      <div id="overall-status" class="status-indicator status-stable">
+        <span class="beacon"></span>
+        <span id="overall-status-text">Loading...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Dashboard Navigation Menu -->
+  <nav class="dashboard-nav" style="display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+    <a href="index.html" class="nav-btn active" style="color: var(--text-primary); text-decoration: none; font-weight: 700; font-family: 'Outfit', sans-serif; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 2px solid var(--border-focus); padding-bottom: 0.5rem; display: flex; align-items: center; gap: 0.35rem;">
+      <svg style="width:16px; height:16px; fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+      </svg>
+      Code Impact Dashboard
+    </a>
+    <a href="portal-workflow.html" class="nav-btn" style="color: var(--text-muted); text-decoration: none; font-weight: 600; font-family: 'Outfit', sans-serif; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; padding-bottom: 0.5rem; display: flex; align-items: center; gap: 0.35rem; transition: color 0.2s ease;">
+      <svg style="width:16px; height:16px; fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/>
+      </svg>
+      Client Portal Onboarding Journey
+    </a>
+  </nav>
+
+  <!-- Executive Summary KPI Grid -->
+  <section class="kpi-grid">
+    <div class="kpi-card">
+      <span class="kpi-label">Total Workflows</span>
+      <span class="kpi-val" id="kpi-workflows-total">-</span>
+      <span class="kpi-subtext">End-to-end compliance steps</span>
+    </div>
+    <div class="kpi-card" style="border-left: 3px solid var(--color-review);">
+      <span class="kpi-label">Workflows Affected</span>
+      <span class="kpi-val" id="kpi-workflows-affected" style="color:var(--color-review);">-</span>
+      <span class="kpi-subtext">Impacted by latest commit</span>
+    </div>
+    <div class="kpi-card" style="border-left: 3px solid var(--color-critical);">
+      <span class="kpi-label">Critical Controls Affected</span>
+      <span class="kpi-val" id="kpi-controls-affected" style="color:var(--color-critical);">-</span>
+      <span class="kpi-subtext">Strict regulatory gates</span>
+    </div>
+    <div class="kpi-card" style="border-left: 3px solid var(--color-changed);">
+      <span class="kpi-label">AI Agents Affected</span>
+      <span class="kpi-val" id="kpi-agents-affected" style="color:var(--color-changed);">-</span>
+      <span class="kpi-subtext">Specialized agents affected</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Validation Checklist</span>
+      <span class="kpi-val" id="kpi-validation-required">-</span>
+      <span class="kpi-subtext">Verification tests needed</span>
+    </div>
+  </section>
+
+  <!-- Interactive AI Workflow Simulator & Agent Visualizer -->
+  <section class="dashboard-section" style="margin-bottom: 2rem;">
+    <div class="section-title">
+      <h2>
+        <svg style="width:1.25rem; height:1.25rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+        </svg>
+        AI Workflow Visualizer & Agent Simulator
+      </h2>
+      <span>Step-by-Step Interactive Compliance Pipeline Simulation</span>
+    </div>
+
+    <!-- Stage Selector Tabs -->
+    <div class="visualizer-tabs-container">
+      <div class="visualizer-tabs-title">Select Active Compliance Phase:</div>
+      <div class="visualizer-tabs" id="visualizer-tabs">
+        <button class="visualizer-tab-btn" data-stage="1">1. Client Intake</button>
+        <button class="visualizer-tab-btn" data-stage="2">2. Screening</button>
+        <button class="visualizer-tab-btn" data-stage="3">3. KYB Mappings</button>
+        <button class="visualizer-tab-btn" data-stage="4">4. Compliance Memo</button>
+        <button class="visualizer-tab-btn" data-stage="5">5. AI Supervisor</button>
+        <button class="visualizer-tab-btn active" data-stage="6">6. Ongoing Monitoring</button>
+      </div>
+    </div>
+
+    <!-- Visualizer Container workspace -->
+    <div class="visualizer-container" id="visualizer-container">
+      <svg class="visualizer-lines" id="visualizer-svg" viewBox="0 0 900 400">
+        <!-- SVG filaments connecting left nodes to the central orb -->
+        <path id="filament-1" class="filament" d="M 230,65 C 330,65 370,200 450,200" />
+        <path id="filament-2" class="filament" d="M 230,132 C 330,132 370,200 450,200" />
+        <path id="filament-3" class="filament" d="M 230,200 C 330,200 370,200 450,200" />
+        <path id="filament-4" class="filament" d="M 230,268 C 330,268 370,200 450,200" />
+        <path id="filament-5" class="filament" d="M 230,335 C 330,335 370,200 450,200" />
+
+        <!-- SVG filaments connecting central orb to the right-side card -->
+        <path id="filament-right-1" class="filament" d="M 450,200 C 530,200 570,120 670,120" />
+        <path id="filament-right-2" class="filament" d="M 450,200 C 530,200 570,200 670,200" />
+        <path id="filament-right-3" class="filament" d="M 450,200 C 530,200 570,280 670,280" />
+      </svg>
+
+      <!-- Left Node Stack -->
+      <div class="visualizer-left" id="visualizer-left-nodes">
+        <div class="visualizer-node" id="node-1">
+          <div class="visualizer-icon-badge icon-client">&amp;</div>
+          <span class="visualizer-node-label">Client details</span>
+        </div>
+        <div class="visualizer-node" id="node-2">
+          <div class="visualizer-icon-badge icon-alert">
+            <svg style="width:14px; height:14px; fill:currentColor;" viewBox="0 0 24 24">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+          </div>
+          <span class="visualizer-node-label">Creating alerts</span>
+        </div>
+        <div class="visualizer-node" id="node-3">
+          <div class="visualizer-icon-badge icon-policy">📄</div>
+          <span class="visualizer-node-label">Document uploads</span>
+        </div>
+        <div class="visualizer-node" id="node-4">
+          <div class="visualizer-icon-badge icon-data">
+            <svg style="width:14px; height:14px; fill:currentColor;" viewBox="0 0 24 24">
+              <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+            </svg>
+          </div>
+          <span class="visualizer-node-label">Accessing data</span>
+        </div>
+        <div class="visualizer-node" id="node-5">
+          <div class="visualizer-icon-badge icon-rule">⚙️</div>
+          <span class="visualizer-node-label">Data policies</span>
+        </div>
+      </div>
+
+      <!-- Glowing Center Sphere -->
+      <div class="visualizer-center" id="visualizer-center-sphere">
+        <div id="visualizer-sphere-role" style="font-size: 0.6rem; text-transform: uppercase; font-weight: 700; letter-spacing: 0.08em; color: hsla(217, 91%, 90%, 0.85);">Agent Core</div>
+        <div class="visualizer-center-label" id="visualizer-sphere-label">RegMind Engine</div>
+      </div>
+
+      <!-- Glassmorphic AI Outcome Card -->
+      <div class="visualizer-right">
+        <div class="visualizer-card active" id="visualizer-card">
+          <div class="visualizer-card-header">
+            <div id="visualizer-card-icon" style="width:36px; height:36px; border-radius:50%; background:rgba(217, 32, 90, 0.12); color:hsl(350, 89%, 60%); display:flex; align-items:center; justify-content:center; border:1px solid rgba(217, 32, 90, 0.25);">
+              <svg style="width:18px; height:18px; fill:currentColor;" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+              </svg>
+            </div>
+            <div class="visualizer-card-title" id="visualizer-card-title">Monitoring alert</div>
+          </div>
+          
+          <div class="ai-summary-label">
+            <svg style="width:14px; height:14px; fill:currentColor;" viewBox="0 0 24 24">
+              <path d="M12 2l2.4 7.2 7.2 2.4-7.2 2.4-2.4 7.2-2.4-7.2-7.2-2.4 7.2-2.4z"/>
+            </svg>
+            AI Summary
+          </div>
+          
+          <div class="visualizer-card-text" id="visualizer-card-text">
+            Ownership structure changed after onboarding, creating a mismatch with the previously verified UBO. Review required.
+          </div>
+
+          <div style="margin-top: 1.25rem; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem;">
+            <div style="display:flex; justify-content:space-between; margin-bottom: 0.35rem;">
+              <span style="color:var(--text-muted);">Active Agent:</span>
+              <span id="visualizer-active-agent" style="color:var(--text-primary); font-weight:600;">Agent 6 &amp; 8</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="color:var(--text-muted);">Status Code:</span>
+              <span id="visualizer-impact-level" class="status-indicator-inline status-review" style="font-size:0.65rem; font-weight:700; padding:0.05rem 0.45rem; border-radius:3px; text-transform:uppercase;">Needs Review</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Toolbar & Interactive Filters -->
+  <section class="toolbar">
+    <div class="filter-group">
+      <span class="filter-label">Segment:</span>
+      <button class="btn-tab active" data-filter="all">Show All</button>
+      <button class="btn-tab" data-filter="affected">Show Affected Only</button>
+      <button class="btn-tab" data-filter="critical">Show Critical Controls Only</button>
+      <button class="btn-tab" data-filter="backend">Backend Focus</button>
+      <button class="btn-tab" data-filter="frontend">Frontend Focus</button>
+      <button class="btn-tab" data-filter="compliance">High Compliance Importance</button>
+    </div>
+
+    <div class="search-box">
+      <svg viewBox="0 0 24 24">
+        <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+      </svg>
+      <input type="text" id="search-bar" placeholder="Search files, routes, or workflows...">
+    </div>
+  </section>
+
+  <!-- Main Split Dashboard Layout -->
+  <main class="dashboard-layout">
+    
+    <!-- Left Column: Main Workflow Map Timeline -->
+    <section class="dashboard-section">
+      <div class="section-title">
+        <h2>
+          <svg style="width:1.25rem; height:1.25rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+          </svg>
+          Interactive RegMind Workflow Map
+        </h2>
+        <span>15 Sequential Operational Stages</span>
+      </div>
+
+      <div class="workflow-timeline" id="workflow-timeline">
+        <!-- Rendered dynamically by app.js -->
+        <div style="text-align:center; color:var(--text-muted); padding:3rem;">Loading timelines...</div>
+      </div>
+    </section>
+
+    <!-- Right Column: Context Panels -->
+    <aside class="side-panel">
+      
+      <!-- Changed Files Panel -->
+      <section class="dashboard-section" style="margin-bottom:0;">
+        <div class="section-title">
+          <h2>
+            <svg style="width:1.25rem; height:1.25rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+              <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+            </svg>
+            Changed Files & Impact
+          </h2>
+          <span>Git Revision Analysis</span>
+        </div>
+        <div class="file-list" id="changed-files-list">
+          <!-- Rendered dynamically by app.js -->
+          <div style="text-align:center; color:var(--text-muted); padding:1rem;">Loading commit changes...</div>
+        </div>
+      </section>
+
+      <!-- Non-Coder Business Impact Panel -->
+      <section class="dashboard-section" style="margin-bottom:0;">
+        <div class="section-title">
+          <h2>
+            <svg style="width:1.25rem; height:1.25rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+              <path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-9 7.5L3.5 8h17L12 13.5z"/>
+            </svg>
+            Executive Plain-English Summary
+          </h2>
+          <span>Business & Compliance Lens</span>
+        </div>
+        <div id="explanation-container">
+          <!-- Rendered dynamically by app.js -->
+          <div style="text-align:center; color:var(--text-muted); padding:1rem;">Loading compliance explanations...</div>
+        </div>
+      </section>
+
+      <!-- Validation Checklist Panel -->
+      <section class="dashboard-section" style="margin-bottom:0;">
+        <div class="section-title">
+          <h2>
+            <svg style="width:1.25rem; height:1.25rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+              <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9Z"/>
+            </svg>
+            Required Quality Verification Checklist
+          </h2>
+          <span>Staging Verification Requirements</span>
+        </div>
+        <div id="checklist-container">
+          <!-- Rendered dynamically by app.js -->
+          <div style="text-align:center; color:var(--text-muted); padding:1rem;">Loading checklists...</div>
+        </div>
+      </section>
+
+    </aside>
+  </main>
+
+  <!-- Full-Width AI Agent Map Section -->
+  <section class="dashboard-section" style="margin-top:2rem;">
+    <div class="section-title">
+      <h2>
+        <svg style="width:1.25rem; height:1.25rem; fill:var(--border-focus);" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+        </svg>
+        AI Governance & Agent Mapping
+      </h2>
+      <span>10 Specialized Decision & Advisory Agents</span>
+    </div>
+    <div class="agents-grid" id="agents-grid">
+      <!-- Rendered dynamically by app.js -->
+      <div style="text-align:center; color:var(--text-muted); padding:3rem; grid-column:1/-1;">Loading agent catalog...</div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <p>RegMind Workflow & Code Impact Map • Stable Version 4.1 • Continuous Compliance Platform</p>
+  </footer>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
