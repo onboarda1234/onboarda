@@ -17660,6 +17660,7 @@ class PeriodicReviewImportSetupHandler(BaseHandler):
                     last_review_date=data.get("last_review_date"),
                     source_type=data.get("source_type"),
                     source_note=data.get("source_note"),
+                    review_evidence_note=data.get("review_evidence_note"),
                     confidence=data.get("confidence"),
                     assigned_officer=data.get("assigned_officer"),
                     override_reason=data.get("override_reason"),
@@ -17999,6 +18000,32 @@ def _serialize_periodic_review_row(db, review_row):
     result["completion_readiness_applicable"] = projection.get("completion_readiness_applicable", True)
     result["last_review_date"] = projection.get("last_review_date")
     result["next_review_date"] = projection.get("next_review_date")
+    due_text = result.get("next_review_date") or result.get("due_date")
+    is_overdue = False
+    if due_text:
+        try:
+            due_date = datetime.fromisoformat(str(due_text).replace("Z", "+00:00")).date()
+            is_overdue = due_date < datetime.now(timezone.utc).date()
+        except (TypeError, ValueError):
+            is_overdue = False
+    result["manual_legacy_baseline"] = {
+        "enabled": bool(result.get("legacy_import")),
+        "last_review_date": result.get("last_review_date"),
+        "next_review_date": result.get("next_review_date") or result.get("due_date"),
+        "is_overdue": is_overdue,
+        "source_type": result.get("legacy_source_type"),
+        "source_note": result.get("legacy_source_note"),
+        "confidence": result.get("legacy_confidence"),
+        "review_evidence_note": result.get("legacy_review_evidence_note"),
+        "entered_by": result.get("legacy_entered_by"),
+        "entered_at": result.get("legacy_entered_at"),
+        "requires_acknowledgement": bool(result.get("import_requires_ack")),
+        "acknowledged_by": result.get("legacy_sco_acknowledged_by"),
+        "acknowledged_at": result.get("legacy_sco_acknowledged_at"),
+        "calculation_basis": result.get("calculation_basis"),
+        "frequency_months": result.get("frequency_months"),
+        "policy_version": result.get("policy_version"),
+    }
     result["memo_status"] = projection.get("memo_status")
     result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
     result["evidence_links"] = projection.get("evidence_links", [])

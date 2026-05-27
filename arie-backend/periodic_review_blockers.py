@@ -28,6 +28,7 @@ OPERATIONAL_ITEM_TYPES = {
 }
 HIGH_SEVERITY_ITEM_TYPES = DOCUMENT_EVIDENCE_ITEM_TYPES | OPERATIONAL_ITEM_TYPES
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+SENIOR_DOCUMENT_REVIEW_ROLES = {"admin", "sco"}
 
 
 def _row_get(row, key, default=None):
@@ -64,8 +65,14 @@ def decode_required_items(value: Any) -> List[Dict[str, Any]]:
 def load_evidence_links(db, review_id: int) -> List[Dict[str, Any]]:
     try:
         rows = db.execute(
-            "SELECT id, requirement_id, document_id, link_type, linked_by, linked_at, note "
-            "FROM periodic_review_evidence_links WHERE periodic_review_id = ? ORDER BY id ASC",
+            "SELECT l.id, l.requirement_id, l.document_id, l.link_type, l.linked_by, l.linked_at, l.note, "
+            "d.doc_type AS document_type, d.doc_name AS document_name, d.verification_status AS document_verification_status, "
+            "d.review_status AS document_review_status, d.review_comment AS document_review_comment, "
+            "d.reviewer_role AS document_reviewer_role, d.reviewed_at AS document_reviewed_at, "
+            "d.verified_at AS document_verified_at, d.is_current AS document_is_current "
+            "FROM periodic_review_evidence_links l "
+            "LEFT JOIN documents d ON d.id = l.document_id "
+            "WHERE l.periodic_review_id = ? ORDER BY l.id ASC",
             (review_id,),
         ).fetchall()
     except Exception:
@@ -73,12 +80,46 @@ def load_evidence_links(db, review_id: int) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _linked_requirement_ids(evidence_links: Iterable[Dict[str, Any]]) -> Set[str]:
+def _document_is_current(link: Dict[str, Any]) -> bool:
+    value = link.get("document_is_current")
+    if value in (None, ""):
+        return True
+    return str(value).strip().lower() not in {"0", "false", "no"}
+
+
+def evidence_link_satisfies_requirement(link: Dict[str, Any]) -> bool:
+    """Return whether a linked review evidence document is truly usable."""
+    if not link or not _document_is_current(link):
+        return False
+    verification_status = str(link.get("document_verification_status") or "").strip().lower()
+    if verification_status == "verified":
+        return True
+    review_status = str(link.get("document_review_status") or "").strip().lower()
+    reviewer_role = str(link.get("document_reviewer_role") or "").strip().lower()
+    review_comment = str(link.get("document_review_comment") or "").strip()
+    return (
+        verification_status == "flagged"
+        and review_status == "accepted"
+        and reviewer_role in SENIOR_DOCUMENT_REVIEW_ROLES
+        and bool(review_comment)
+    )
+
+
+def _satisfied_requirement_ids(evidence_links: Iterable[Dict[str, Any]]) -> Set[str]:
     return {
         str(link.get("requirement_id"))
         for link in evidence_links
-        if link.get("requirement_id") is not None and str(link.get("requirement_id")).strip()
+        if link.get("requirement_id") is not None
+        and str(link.get("requirement_id")).strip()
+        and evidence_link_satisfies_requirement(link)
     }
+
+
+def _has_linked_requirement(evidence_links: Iterable[Dict[str, Any]], requirement_id: str) -> bool:
+    return any(
+        str(link.get("requirement_id") or "").strip() == requirement_id
+        for link in evidence_links
+    )
 
 
 def _blocker(item_type: str, label: str, *, severity: str = "high", source: str, source_id: Any = None, completion_only: bool) -> Dict[str, Any]:
@@ -225,7 +266,7 @@ def evaluate_operational_blockers(
                 )
             )
 
-    linked_requirements = _linked_requirement_ids(evidence_links)
+    satisfied_requirements = _satisfied_requirement_ids(evidence_links)
     application_id = _row_get(review, "application_id")
     has_screening_requirement = any(
         str(item.get("item_type") or item.get("code") or "").strip() == "screening_refresh"
@@ -274,12 +315,17 @@ def evaluate_operational_blockers(
             continue
         if item_type in DOCUMENT_EVIDENCE_ITEM_TYPES:
             requirement_id = str(item.get("id") or "").strip()
-            if requirement_id and requirement_id in linked_requirements:
+            if requirement_id and requirement_id in satisfied_requirements:
                 continue
+            linked_but_not_ready = bool(requirement_id and _has_linked_requirement(evidence_links, requirement_id))
             blockers.append(
                 _blocker(
                     item_type,
-                    item.get("label") or "Required evidence is not linked",
+                    (
+                        f"{item.get('label') or 'Required evidence'} is linked but not yet verified or senior-accepted"
+                        if linked_but_not_ready
+                        else item.get("label") or "Required evidence is not linked"
+                    ),
                     severity=severity,
                     source="required_items",
                     source_id=item.get("id"),

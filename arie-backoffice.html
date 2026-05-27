@@ -10179,14 +10179,6 @@ function lifecycleRequirementIsEvidenceBacked(item) {
   return LIFECYCLE_EVIDENCE_ITEM_TYPES.indexOf(lifecycleEvidenceItemType(item)) >= 0;
 }
 
-function lifecycleOpenEvidenceRequirements(items) {
-  return (Array.isArray(items) ? items : []).filter(function(item) {
-    if (!lifecycleRequirementIsEvidenceBacked(item)) return false;
-    var status = String((item && item.status) || '').toLowerCase();
-    return status !== 'cleared' && status !== 'not_applicable' && status !== 'satisfied' && status !== 'linked';
-  });
-}
-
 function lifecycleDomKey(value) {
   return String(value || '').replace(/[^A-Za-z0-9_-]+/g, '_');
 }
@@ -10217,6 +10209,50 @@ function lifecycleLinkedEvidenceDocs(requirementId, evidenceLinks, documents) {
   });
 }
 
+function lifecycleEvidenceLinkReady(entry) {
+  var link = (entry && entry.link) || {};
+  var doc = (entry && entry.doc) || {};
+  var isCurrent = link.document_is_current;
+  if (isCurrent === undefined || isCurrent === null || isCurrent === '') isCurrent = doc.is_current;
+  if (isCurrent !== undefined && isCurrent !== null && String(isCurrent).toLowerCase() !== 'true' && String(isCurrent) !== '1') return false;
+  var verification = String(link.document_verification_status || doc.verification_status || '').toLowerCase();
+  if (verification === 'verified') return true;
+  var reviewStatus = String(link.document_review_status || doc.review_status || '').toLowerCase();
+  var reviewerRole = String(link.document_reviewer_role || doc.reviewer_role || '').toLowerCase();
+  var reviewComment = String(link.document_review_comment || doc.review_comment || '').trim();
+  return verification === 'flagged' && reviewStatus === 'accepted' && ['admin', 'sco'].indexOf(reviewerRole) >= 0 && !!reviewComment;
+}
+
+function lifecycleEvidenceLinkStatusBadge(entry) {
+  var link = (entry && entry.link) || {};
+  var doc = (entry && entry.doc) || {};
+  var verification = String(link.document_verification_status || doc.verification_status || 'pending').toLowerCase();
+  var reviewStatus = String(link.document_review_status || doc.review_status || '').toLowerCase();
+  if (lifecycleEvidenceLinkReady(entry)) {
+    return verification === 'flagged'
+      ? lifecycleDetailBadge('Senior accepted flagged evidence', 'green')
+      : lifecycleDetailBadge('Verified evidence', 'green');
+  }
+  if (verification === 'flagged') return lifecycleDetailBadge(reviewStatus === 'accepted' ? 'Acceptance incomplete' : 'Flagged - review required', 'amber');
+  if (verification === 'failed' || verification === 'rejected') return lifecycleDetailBadge('Verification failed', 'red');
+  return lifecycleDetailBadge('Pending verification', 'amber');
+}
+
+function lifecycleRequirementEvidenceSatisfied(item, evidenceLinks, documents) {
+  var itemId = String((item && item.id) || '');
+  if (!itemId) return false;
+  return lifecycleLinkedEvidenceDocs(itemId, evidenceLinks, documents).some(lifecycleEvidenceLinkReady);
+}
+
+function lifecycleOpenEvidenceRequirements(items, evidenceLinks, documents) {
+  return (Array.isArray(items) ? items : []).filter(function(item) {
+    if (!lifecycleRequirementIsEvidenceBacked(item)) return false;
+    var status = String((item && item.status) || '').toLowerCase();
+    if (status === 'cleared' || status === 'not_applicable' || status === 'satisfied' || status === 'linked') return false;
+    return !lifecycleRequirementEvidenceSatisfied(item, evidenceLinks, documents);
+  });
+}
+
 function lifecycleEvidenceRequirementRow(reviewId, item, evidenceLinks, documents) {
   var itemId = String((item && item.id) || '');
   var domKey = lifecycleDomKey(itemId || (item && item.label) || 'requirement');
@@ -10233,7 +10269,7 @@ function lifecycleEvidenceRequirementRow(reviewId, item, evidenceLinks, document
             '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Document ID: ' + escapeHtml(String(entry.link.document_id || '')) + '</div>' +
           '</div>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-            lifecycleDetailBadge('Linked', 'green') +
+            lifecycleEvidenceLinkStatusBadge(entry) +
             '<button class="btn btn-outline btn-sm" onclick="viewBackofficeDocument(' + JSON.stringify(entry.link.document_id) + ')">View document</button>' +
           '</div>' +
         '</div>';
@@ -10271,7 +10307,7 @@ function lifecycleEvidenceRequirementRow(reviewId, item, evidenceLinks, document
 
 function renderLifecycleRequiredEvidenceCard(reviewId, requiredItems, evidenceLinks, documents) {
   var evidenceItems = (Array.isArray(requiredItems) ? requiredItems : []).filter(lifecycleRequirementIsEvidenceBacked);
-  var openItems = lifecycleOpenEvidenceRequirements(evidenceItems);
+  var openItems = lifecycleOpenEvidenceRequirements(evidenceItems, evidenceLinks, documents);
   var openCount = openItems.length;
   var reviewIdText = reviewId != null ? String(reviewId) : '';
   var uploadRequirementOptions = openItems.length
@@ -10528,7 +10564,107 @@ function lifecycleSignalsPanel(summary, reviewDetail, activeReviewItem) {
     '<div style="margin-top:12px;font-size:11px;color:var(--text3);">Owner-workflow actions stay in Monitoring, EDD, and Change Management. PR 6 adds explicit deep-link actions from this panel.</div>';
 }
 
-function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReviewItem, requiredItems, projection) {
+function canEditPeriodicReviewLegacyBaseline() {
+  return !!(currentUser && ['admin', 'sco', 'co'].indexOf(currentUser.role) >= 0);
+}
+
+function lifecycleLegacySourceOptions(selected) {
+  var options = [
+    ['internal_register', 'Internal register'],
+    ['prior_file_note', 'Prior file note'],
+    ['email_record', 'Email record'],
+    ['system_export', 'System export'],
+    ['verbal_attestation', 'Verbal attestation'],
+    ['unknown', 'Unknown'],
+    ['other', 'Other']
+  ];
+  return options.map(function(option) {
+    return '<option value="' + option[0] + '"' + (selected === option[0] ? ' selected' : '') + '>' + escapeHtml(option[1]) + '</option>';
+  }).join('');
+}
+
+function lifecycleLegacyConfidenceOptions(selected) {
+  return ['high', 'medium', 'low'].map(function(value) {
+    return '<option value="' + value + '"' + (selected === value ? ' selected' : '') + '>' + value.charAt(0).toUpperCase() + value.slice(1) + '</option>';
+  }).join('');
+}
+
+function toggleLifecycleLegacyEvidence(reviewId) {
+  var lastReview = document.getElementById('lifecycle-legacy-last-review-' + reviewId);
+  var holder = document.getElementById('lifecycle-legacy-evidence-holder-' + reviewId);
+  if (!holder) return;
+  holder.style.display = lastReview && lastReview.value ? '' : 'none';
+}
+
+function lifecycleManualLegacyBaselineControls(reviewId, reviewDetail, projection) {
+  var baseline = (reviewDetail && reviewDetail.manual_legacy_baseline) || {};
+  var lastReview = baseline.last_review_date || (reviewDetail && reviewDetail.last_review_date) || '';
+  var nextReview = baseline.next_review_date || (reviewDetail && reviewDetail.next_review_date) || (projection && projection.next_review_date) || '';
+  var isOverdue = !!baseline.is_overdue;
+  var sourceType = baseline.source_type || (reviewDetail && reviewDetail.legacy_source_type) || 'internal_register';
+  var confidence = baseline.confidence || (reviewDetail && reviewDetail.legacy_confidence) || 'high';
+  var sourceNote = baseline.source_note || (reviewDetail && reviewDetail.legacy_source_note) || '';
+  var evidenceNote = baseline.review_evidence_note || (reviewDetail && reviewDetail.legacy_review_evidence_note) || '';
+  var canEdit = canEditPeriodicReviewLegacyBaseline();
+  var disabled = canEdit ? '' : ' disabled';
+  var evidenceDisplay = lastReview ? '' : 'display:none;';
+  var statusCopy = lastReview
+    ? 'Manual legacy review baseline is active. This is not a system-generated review completion event.'
+    : 'No manual legacy review baseline is recorded for this review.';
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+      lifecycleDetailBadge(lastReview ? 'Manual legacy baseline' : 'No manual baseline', lastReview ? 'blue' : 'slate') +
+      lifecycleDetailBadge('Next review: ' + lifecycleFormatDate(nextReview || '—'), isOverdue ? 'red' : 'slate') +
+      (isOverdue ? lifecycleDetailBadge('Overdue', 'red') : '') +
+      (baseline.frequency_months ? lifecycleDetailBadge('Cadence: ' + baseline.frequency_months + ' months', 'slate') : '') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.45;margin-bottom:12px;">' + escapeHtml(statusCopy) + '</div>' +
+    (!canEdit ? '<div style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);">Compliance officer, SCO, or admin access is required to edit the legacy baseline.</div>' : '') +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-items:end;">' +
+      '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Last review date</div><input id="lifecycle-legacy-last-review-' + reviewId + '" class="form-input" type="date" value="' + escapeHtml(String(lastReview || '')) + '" oninput="toggleLifecycleLegacyEvidence(\'' + reviewId + '\')"' + disabled + ' /></div>' +
+      '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Source type</div><select id="lifecycle-legacy-source-type-' + reviewId + '" class="form-select"' + disabled + '>' + lifecycleLegacySourceOptions(sourceType) + '</select></div>' +
+      '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Confidence</div><select id="lifecycle-legacy-confidence-' + reviewId + '" class="form-select"' + disabled + '>' + lifecycleLegacyConfidenceOptions(confidence) + '</select></div>' +
+    '</div>' +
+    '<div style="margin-top:10px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Source note / entry reason</div><textarea id="lifecycle-legacy-source-note-' + reviewId + '" class="form-input" rows="2" placeholder="Explain the file source and reason for manual baseline entry."' + disabled + '>' + escapeHtml(String(sourceNote || '')) + '</textarea></div>' +
+    '<div id="lifecycle-legacy-evidence-holder-' + reviewId + '" style="margin-top:10px;' + evidenceDisplay + '">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Review evidence / memo reference</div>' +
+      '<textarea id="lifecycle-legacy-evidence-note-' + reviewId + '" class="form-input" rows="3" placeholder="Reference the prior review memo, evidence file, register row, or migration pack. This appears only when Last review date is present."' + disabled + '>' + escapeHtml(String(evidenceNote || '')) + '</textarea>' +
+    '</div>' +
+    '<div style="margin-top:10px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Override reason for locked baseline changes</div><input id="lifecycle-legacy-override-reason-' + reviewId + '" class="form-input" type="text" placeholder="Required by API when changing a locked imported baseline."' + disabled + ' /></div>' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
+      '<div style="font-size:11px;color:var(--text3);max-width:560px;">Saving recalculates the next review date from the canonical periodic-review cadence policy. Overdue imported baselines stay visible as overdue.</div>' +
+      '<button class="btn btn-primary btn-sm" onclick="saveLifecycleLegacyBaseline(\'' + reviewId + '\')"' + disabled + '>Save legacy baseline</button>' +
+    '</div>';
+}
+
+async function saveLifecycleLegacyBaseline(reviewId) {
+  var lastEl = document.getElementById('lifecycle-legacy-last-review-' + reviewId);
+  var sourceEl = document.getElementById('lifecycle-legacy-source-type-' + reviewId);
+  var confidenceEl = document.getElementById('lifecycle-legacy-confidence-' + reviewId);
+  var noteEl = document.getElementById('lifecycle-legacy-source-note-' + reviewId);
+  var evidenceEl = document.getElementById('lifecycle-legacy-evidence-note-' + reviewId);
+  var overrideEl = document.getElementById('lifecycle-legacy-override-reason-' + reviewId);
+  var lastReview = lastEl ? lastEl.value : '';
+  if (!lastReview) {
+    showToast('Enter a Last review date before saving the legacy baseline.', 'error');
+    return;
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/import-setup', {
+      last_review_date: lastReview,
+      source_type: sourceEl ? sourceEl.value : 'internal_register',
+      confidence: confidenceEl ? confidenceEl.value : 'high',
+      source_note: noteEl ? noteEl.value.trim() : '',
+      review_evidence_note: evidenceEl ? evidenceEl.value.trim() : '',
+      override_reason: overrideEl ? overrideEl.value.trim() : ''
+    });
+    showToast('Manual legacy review baseline saved');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to save legacy baseline: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReviewItem, requiredItems, projection, evidenceLinks, documents) {
   var reviewId = lifecycleReviewIdentifier(reviewDetail, activeReviewItem);
   if (!reviewId) {
     return '<div style="font-size:12px;color:var(--text2);">No active periodic review workspace is available for this client yet.</div>';
@@ -10541,10 +10677,7 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
   var screeningBlocked = blockerSummary.some(function(label) { return /screening/i.test(String(label || '')); });
   var linkedEDD = !!(reviewDetail && reviewDetail.linked_edd_case_id);
   var openAlerts = Number((reviewDetail && reviewDetail.open_alerts_count) || 0);
-  var evidenceOpen = requiredItems.some(function(item) {
-    var status = String((item && item.status) || '').toLowerCase();
-    return status && status !== 'cleared' && status !== 'satisfied' && status !== 'linked';
-  });
+  var evidenceOpen = lifecycleOpenEvidenceRequirements(requiredItems, evidenceLinks, documents).length > 0;
   var completionBlockers = Number((reviewDetail && reviewDetail.completion_blocker_count) || (projection && projection.completion_blocker_count) || 0);
   var workspaceDomId = lifecycleQueueItemDomId('review', reviewId);
   var workspaceSteps = [
@@ -10564,6 +10697,7 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
     '<div class="lifecycle-workspace-layout">' +
       '<div class="lifecycle-workspace-steps">' + workspaceSteps + '</div>' +
       '<div class="lifecycle-workspace-panels">' +
+        lifecycleWorkspaceSection('Manual Legacy Review Baseline', 'Back-office-only imported-book baseline. Not a system-generated review event.', lifecycleManualLegacyBaselineControls(reviewId, reviewDetail, projection), '#334155') +
         lifecycleWorkspaceSection('Material Change Attestation', 'Officer-owned attestation only. No client profile mutation happens here.', lifecycleMaterialChangeControls(reviewId, reviewDetail), '#7c3aed') +
         lifecycleWorkspaceSection('Risk Rating Change Attestation', 'Record a review-level re-rate only when the officer determines a change is needed.', lifecycleRiskChangeControls(reviewId, reviewDetail, projection), '#ea580c') +
         lifecycleWorkspaceSection('KYC Documents', 'System-derived document repository health and projected evidence readiness.', lifecycleDocumentsPanel(currentApp || {}, reviewDetail), '#0f766e') +
@@ -10844,10 +10978,7 @@ function renderLifecycleDetailTab(context) {
   var activeWorkItems = currentReviewActive ? active.filter(function(item) {
     return !(item && item.type === 'review' && String(item.id) === String(activeReview && activeReview.id));
   }) : active;
-  var requiredOpenCount = requiredItems.filter(function(item) {
-    var status = String((item && item.status) || '').toLowerCase();
-    return status && status !== 'cleared' && status !== 'satisfied' && status !== 'linked';
-  }).length;
+  var requiredOpenCount = lifecycleOpenEvidenceRequirements(requiredItems, evidenceLinks, applicationDocuments).length;
   var operationalBlockerCount = Number((activeReview && activeReview.blocker_count) || (activeReviewProjection && activeReviewProjection.blocker_count) || 0);
   var completionBlockerCount = Number((activeReview && activeReview.completion_blocker_count) || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0);
   var memoStateLabel = activeReview ? (activeReview.memo_status || 'not_started') : 'no_active_review';
@@ -10887,7 +11018,7 @@ function renderLifecycleDetailTab(context) {
     : '<div style="font-size:12px;color:var(--text2);">No active lifecycle work is currently linked to this client.</div>';
 
   var workspaceBody = currentReviewActive
-    ? lifecycleCurrentReviewWorkspaceBody(summary, activeReview, activeReviewItem, requiredItems, activeReviewProjection)
+    ? lifecycleCurrentReviewWorkspaceBody(summary, activeReview, activeReviewItem, requiredItems, activeReviewProjection, evidenceLinks, applicationDocuments)
     : '<div style="font-size:12px;color:var(--text2);">No active periodic review is open for this client yet. Use Active Work to launch the next owner workflow without duplicating screening, EDD, or change-management steps.</div>';
 
   var completionSummary = [];
