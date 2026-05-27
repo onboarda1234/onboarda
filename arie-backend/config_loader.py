@@ -14,6 +14,8 @@ import json
 import os
 import logging
 
+from periodic_review_policy import nominal_interval_days_for_risk
+
 logger = logging.getLogger("arie")
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "jurisdiction_config.json")
@@ -73,8 +75,7 @@ class JurisdictionConfig:
 
     def get_monitoring_interval(self, risk_level):
         """Get periodic review interval in days for the given risk level."""
-        intervals = self.data.get("monitoring_intervals_days", {})
-        return intervals.get(risk_level, 365)
+        return nominal_interval_days_for_risk(risk_level)
 
     def get_high_risk_sectors(self):
         """Get list of high-risk sectors."""
