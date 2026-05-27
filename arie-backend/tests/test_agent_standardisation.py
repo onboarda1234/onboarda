@@ -367,6 +367,47 @@ class TestTraceability:
         assert len(rows) >= 1
         assert rows[0]["error_message"] == "AI timeout"
 
+    def test_log_agent_execution_uses_boolean_requires_review_for_postgres(self, monkeypatch):
+        """Postgres agent_executions.requires_review is BOOLEAN, not integer."""
+        import db as db_module
+
+        class CaptureDb:
+            def __init__(self):
+                self.params = None
+                self.committed = False
+                self.closed = False
+
+            def execute(self, _sql, params):
+                self.params = params
+
+            def commit(self):
+                self.committed = True
+
+            def rollback(self):
+                raise AssertionError("rollback should not be reached")
+
+            def close(self):
+                self.closed = True
+
+        fake_db = CaptureDb()
+        monkeypatch.setattr(db_module, "USE_POSTGRESQL", True)
+        monkeypatch.setattr(db_module, "get_db", lambda: fake_db)
+
+        db_module.log_agent_execution(
+            application_id="test-app-pg",
+            agent_name="verify_document",
+            agent_number=1,
+            status="flagged",
+            checks=[{"id": "GATE-01", "result": "fail"}],
+            flags=["format_failed"],
+            requires_review=True,
+            document_id="doc-pg",
+        )
+
+        assert fake_db.committed is True
+        assert fake_db.closed is True
+        assert fake_db.params[7] is True
+
 
 # ═══════════════════════════════════════════════════════════
 # Improvement 9: No Result = No Pass

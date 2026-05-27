@@ -2335,6 +2335,7 @@ def log_agent_execution(
     db = None
     try:
         db = get_db()
+        requires_review_value = bool(requires_review) if USE_POSTGRESQL else (1 if requires_review else 0)
         db.execute(
             """INSERT INTO agent_executions
                (application_id, document_id, agent_name, agent_number, status,
@@ -2348,7 +2349,7 @@ def log_agent_execution(
                 status,
                 json.dumps(checks, default=str) if checks else None,
                 json.dumps(flags, default=str) if flags else None,
-                1 if requires_review else 0,
+                requires_review_value,
                 source,
                 started_at or datetime.now().isoformat(),
                 error_message,
