@@ -1956,28 +1956,28 @@ PRICING_TIERS = {
         "annual_monitoring_fee": 250,
         "currency": "USD",
         "description": "Standard onboarding — Low risk profile",
-        "includes": ["Basic KYC verification", "Sanctions screening", "Annual review"]
+        "includes": ["Basic KYC verification", "Sanctions screening", "Periodic review every 36 months"]
     },
     "MEDIUM": {
         "onboarding_fee": 1500,
         "annual_monitoring_fee": 750,
         "currency": "USD",
         "description": "Enhanced onboarding — Medium risk profile",
-        "includes": ["Enhanced KYC verification", "Sanctions & PEP screening", "Semi-annual review", "Adverse media monitoring"]
+        "includes": ["Enhanced KYC verification", "Sanctions & PEP screening", "Periodic review every 24 months", "Adverse media monitoring"]
     },
     "HIGH": {
         "onboarding_fee": 3500,
         "annual_monitoring_fee": 2000,
         "currency": "USD",
         "description": "Enhanced Due Diligence onboarding — High risk profile",
-        "includes": ["Full EDD verification", "Continuous sanctions & PEP monitoring", "Quarterly review", "Adverse media monitoring", "Behaviour & risk drift monitoring"]
+        "includes": ["Full EDD verification", "Continuous sanctions & PEP monitoring", "Periodic review every 12 months", "Adverse media monitoring", "Behaviour & risk drift monitoring"]
     },
     "VERY_HIGH": {
         "onboarding_fee": 5000,
         "annual_monitoring_fee": 3500,
         "currency": "USD",
         "description": "Maximum Due Diligence onboarding — Very High risk profile",
-        "includes": ["Maximum EDD verification", "Real-time sanctions & PEP monitoring", "Monthly review", "Full monitoring suite", "Dedicated compliance officer"]
+        "includes": ["Maximum EDD verification", "Real-time sanctions & PEP monitoring", "Periodic review every 6 months", "Full monitoring suite", "Dedicated compliance officer"]
     }
 }
 
