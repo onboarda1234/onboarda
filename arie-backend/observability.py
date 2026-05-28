@@ -17,10 +17,12 @@ import os
 from datetime import datetime, timezone
 from functools import wraps
 
+from branding import BRAND
 
 # ── Configure structured JSON logger ──
 _LOG_LEVEL = os.environ.get("ARIE_LOG_LEVEL", "INFO").upper()
 _LOG_FORMAT = os.environ.get("ARIE_LOG_FORMAT", "json")  # "json" or "text"
+DEFAULT_CLOUDWATCH_NAMESPACE = f"{BRAND['backoffice_name']}/Pilot"
 
 
 class StructuredFormatter(logging.Formatter):
@@ -138,6 +140,41 @@ def log_cost_comparison(application_id, actual_model, actual_cost,
          actual_model=actual_model, actual_cost=round(actual_cost, 4),
          alternative_model=alternative_model, alternative_cost=round(alternative_cost, 4),
          savings_pct=round(savings_pct, 1), **kwargs)
+
+
+def emit_cloudwatch_metric_log(
+    metric_name,
+    value,
+    *,
+    unit="Count",
+    namespace=DEFAULT_CLOUDWATCH_NAMESPACE,
+    environment=None,
+    service=None,
+):
+    """Emit a low-cardinality metric log for CloudWatch metric filters.
+
+    The payload intentionally excludes application, customer, document, and job
+    identifiers. CloudWatch metric filters can extract ``metric_value`` while
+    alarms keep dimensions limited to environment/service.
+    """
+
+    if not metric_name:
+        return
+    try:
+        metric_value = float(value)
+    except (TypeError, ValueError):
+        return
+
+    payload = {
+        "metric_namespace": namespace,
+        "metric_name": str(metric_name),
+        "metric_value": metric_value,
+        "metric_unit": unit,
+        "environment": environment or os.environ.get("APP_ENV") or os.environ.get("ENVIRONMENT", "unknown"),
+    }
+    if service:
+        payload["service"] = service
+    _log(logging.INFO, "cloudwatch_metric", **payload)
 
 
 # ── Timer decorator for handler methods ──

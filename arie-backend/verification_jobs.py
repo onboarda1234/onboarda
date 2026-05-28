@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from branding import BRAND
 from verification_state import (
     STATE_FAILED,
     STATE_IN_PROGRESS,
@@ -589,6 +590,67 @@ def find_stuck_verification_jobs(db, *, now: Optional[datetime] = None) -> List[
         (pending_cutoff, in_progress_cutoff),
     ).fetchall()
     return [serialize_verification_job(row) for row in rows]
+
+
+def verification_queue_observability_snapshot(
+    db,
+    *,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Return PII-safe queue gauges for alarm metric emission."""
+
+    def row_get(row: Any, key: str, default: Any = None) -> Any:
+        try:
+            return row.get(key, default)
+        except AttributeError:
+            try:
+                return row[key]
+            except (KeyError, IndexError, TypeError):
+                return default
+
+    now = now or utc_now()
+    active_rows = db.execute(
+        """
+        SELECT status, created_at, locked_at
+          FROM verification_jobs
+         WHERE status IN ('pending','retrying','in_progress')
+        """
+    ).fetchall()
+    failed_cutoff = db_timestamp(now - timedelta(hours=1))
+    failed_last_hour = db.execute(
+        """
+        SELECT COUNT(*) AS count
+          FROM verification_jobs
+         WHERE status='failed'
+           AND COALESCE(completed_at, updated_at, created_at) >= ?
+        """,
+        (failed_cutoff,),
+    ).fetchone()
+
+    oldest_pending_age_seconds = 0
+    oldest_active_ts = None
+    for row in active_rows:
+        timestamp_value = (
+            row_get(row, "locked_at")
+            if row_get(row, "status") == JOB_IN_PROGRESS
+            else row_get(row, "created_at")
+        )
+        parsed = _parse_job_timestamp(timestamp_value)
+        if parsed and (oldest_active_ts is None or parsed < oldest_active_ts):
+            oldest_active_ts = parsed
+    if oldest_active_ts:
+        oldest_pending_age_seconds = max(int((now - oldest_active_ts).total_seconds()), 0)
+
+    stuck = find_stuck_verification_jobs(db, now=now)
+    return {
+        "queue_depth": len(active_rows),
+        "stuck_jobs": len(stuck),
+        "oldest_pending_age_seconds": oldest_pending_age_seconds,
+        "failed_last_hour": int(row_get(failed_last_hour, "count", 0) or 0),
+        "max_pending_seconds": MAX_PENDING_SECONDS,
+        "max_in_progress_seconds": MAX_IN_PROGRESS_SECONDS,
+        "alert_destination": f"cloudwatch_alarm_{BRAND['system_id']}_pilot_alerts",
+    }
 
 
 def mark_stuck_verification_jobs_failed(
