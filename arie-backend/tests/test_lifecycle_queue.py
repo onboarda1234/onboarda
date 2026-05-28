@@ -630,6 +630,27 @@ class TestApplicationSummary(_LifecycleQueueBase):
         self.assertIn("dismissed", hist_states)
         self.assertIn("edd_approved", hist_states)
 
+    def test_summary_exposes_scheduled_review_setup_when_not_active(self):
+        import lifecycle_queue as lq
+
+        rid = self._review(
+            status="scheduled",
+            last_review_date="2025-01-15",
+            next_review_date="2028-01-15",
+            due_date="2028-01-15",
+            legacy_import=1,
+            legacy_review_evidence_note="Prior review memo in migration pack.",
+        )
+
+        summary = lq.build_application_lifecycle_summary(self._conn, self._app_id)
+
+        self.assertEqual(summary["active"]["counts"]["review"], 0)
+        self.assertEqual(summary["review_setup"]["review_id"], rid)
+        self.assertEqual(summary["review_setup"]["status"], "scheduled")
+        self.assertEqual(summary["review_setup"]["last_review_date"], "2025-01-15")
+        self.assertEqual(summary["review_setup"]["next_review_date"], "2028-01-15")
+        self.assertFalse(summary["review_setup"]["is_active_work"])
+
     def test_summary_requires_application_id(self):
         import lifecycle_queue as lq
         with self.assertRaises(ValueError):

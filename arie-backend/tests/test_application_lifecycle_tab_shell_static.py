@@ -113,6 +113,9 @@ def test_lifecycle_legacy_baseline_form_is_backoffice_conditional_and_auditable(
     assert "review_evidence_note" in html
     assert "Compliance officer, SCO, or admin access is required" in html
     assert "Overdue imported baselines stay visible as overdue" in html
+    assert "Available before the scheduled review becomes active" in html
+    assert "setupReviewDetail" in html
+    assert "summary.review_setup" in html
 
 
 def test_lifecycle_required_evidence_uses_document_verification_truth_not_link_only():
@@ -135,6 +138,21 @@ def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
     assert "var currentReviewCardHtml = currentReviewActive" in section
     assert "lifecycleDetailCard('Current Review Workspace'" in section
     assert "lifecycleDetailCard('Active Work'" in section
+
+
+def test_lifecycle_legacy_baseline_visible_for_scheduled_review_setup():
+    html = _read_backoffice()
+    start = html.index("function renderLifecycleDetailTab(context)")
+    end = html.index("async function loadLifecycleDetailTab(force)", start)
+    section = html[start:end]
+    assert "var setupReviewDetail = activeReview || (context && context.setupReviewDetail)" in section
+    assert "Manual legacy baseline controls appear here once a periodic review schedule exists" in section
+    assert "lifecycleManualLegacyBaselineControls(setupReviewDetail.id" in section
+    load_start = html.index("async function loadLifecycleDetailTab(force)")
+    load_end = html.index("// ═══════════════════════════════════════════════════════════", load_start)
+    load_section = html[load_start:load_end]
+    assert "var reviewSetup = (summary && summary.review_setup) || null;" in load_section
+    assert "setupReviewDetail = await boApiCall('GET', '/monitoring/reviews/'" in load_section
 
 
 def test_lifecycle_workspace_uses_scrollable_responsive_layout():
