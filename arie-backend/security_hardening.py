@@ -79,6 +79,27 @@ _APPROVAL_RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation require
 _APPROVAL_EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
 
 
+def _truthy_db_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _staging_workflow_test_document_acceptance_satisfied(doc: Mapping[str, Any]) -> bool:
+    """Allow staged mechanics tests without changing document verification truth."""
+    return (
+        str(ENV or "").strip().lower() == "staging"
+        and str(doc.get("evidence_class") or "").strip().lower() == "test_only_synthetic"
+        and _truthy_db_value(doc.get("workflow_test_accepted"))
+        and bool(str(doc.get("workflow_test_acceptance_reason") or "").strip())
+        and bool(str(doc.get("workflow_test_accepted_by") or "").strip())
+        and bool(str(doc.get("workflow_test_accepted_at") or "").strip())
+        and str(doc.get("workflow_test_acceptance_environment") or "").strip().lower() == "staging"
+    )
+
+
 def _canonical_approval_risk_level(value: Any) -> Optional[str]:
     level = str(value or "").strip().upper()
     return level if level in _CANONICAL_APPROVAL_RISK_LEVELS else None
@@ -662,9 +683,15 @@ class ApprovalGateValidator:
             # 5. Check all documents are not flagged (from DB, not app dict)
             # Senior-officer override (EX-06): a flagged document passes the
             # gate when review_status='accepted' AND reviewer_role is admin/sco
-            # AND review_comment is non-empty (documented reason).
+            # AND review_comment is non-empty (documented reason). Staging has
+            # an additional workflow-only synthetic evidence acceptance path
+            # that preserves verification_status='flagged' and never counts as
+            # pilot approval proof.
             flagged_docs = db.execute(
-                "SELECT id, doc_type, verification_status, review_status, review_comment, reviewer_role FROM documents "
+                "SELECT id, doc_type, verification_status, review_status, review_comment, reviewer_role, "
+                "evidence_class, workflow_test_accepted, workflow_test_acceptance_reason, "
+                "workflow_test_accepted_by, workflow_test_accepted_at, workflow_test_acceptance_environment "
+                "FROM documents "
                 "WHERE application_id = ? AND verification_status = 'flagged' "
                 "AND COALESCE(is_current, TRUE) = TRUE",
                 (app_id,)
@@ -678,6 +705,8 @@ class ApprovalGateValidator:
                     r_comment = (d_dict.get('review_comment') or '').strip()
                     if r_status == 'accepted' and r_role in ('admin', 'sco') and r_comment:
                         continue  # Senior-accepted with documented reason — passes gate
+                    if _staging_workflow_test_document_acceptance_satisfied(d_dict):
+                        continue  # Workflow-only synthetic evidence acceptance — staging only
                     blocking_docs.append(d_dict['doc_type'])
                 if blocking_docs:
                     doc_types = ', '.join(blocking_docs)

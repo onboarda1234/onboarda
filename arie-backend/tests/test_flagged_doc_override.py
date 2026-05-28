@@ -115,6 +115,62 @@ def test_admin_accepts_flagged_doc_gate_passes(db):
     assert can_approve is True, f"Expected approval to pass but got: {msg}"
 
 
+def test_staging_workflow_only_synthetic_acceptance_passes_flagged_doc_gate_without_verifying(db, monkeypatch):
+    import security_hardening
+    from security_hardening import ApprovalGateValidator
+
+    monkeypatch.setattr(security_hardening, "ENV", "staging")
+    app, doc_id = _create_app_with_flagged_doc(db)
+    db.execute(
+        """
+        UPDATE documents
+        SET evidence_class='test_only_synthetic',
+            workflow_test_accepted=1,
+            workflow_test_acceptance_reason='Staging mechanics test only',
+            workflow_test_accepted_by='admin001',
+            workflow_test_accepted_at='2026-05-28T12:00:00',
+            workflow_test_acceptance_environment='staging'
+        WHERE id=?
+        """,
+        (doc_id,),
+    )
+    db.commit()
+
+    can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
+    assert can_approve is True, f"Expected staging workflow-only acceptance to pass flagged doc gate: {msg}"
+    stored = db.execute(
+        "SELECT verification_status FROM documents WHERE id=?",
+        (doc_id,),
+    ).fetchone()
+    assert stored["verification_status"] == "flagged"
+
+
+def test_workflow_only_synthetic_acceptance_does_not_pass_flagged_doc_gate_in_production(db, monkeypatch):
+    import security_hardening
+    from security_hardening import ApprovalGateValidator
+
+    monkeypatch.setattr(security_hardening, "ENV", "production")
+    app, doc_id = _create_app_with_flagged_doc(db)
+    db.execute(
+        """
+        UPDATE documents
+        SET evidence_class='test_only_synthetic',
+            workflow_test_accepted=1,
+            workflow_test_acceptance_reason='Staging mechanics test only',
+            workflow_test_accepted_by='admin001',
+            workflow_test_accepted_at='2026-05-28T12:00:00',
+            workflow_test_acceptance_environment='staging'
+        WHERE id=?
+        """,
+        (doc_id,),
+    )
+    db.commit()
+
+    can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
+    assert can_approve is False
+    assert "Flagged documents" in msg
+
+
 # ---------- Test 3: SCO can accept flagged doc → gate passes ----------
 
 def test_sco_accepts_flagged_doc_gate_passes(db):

@@ -3687,7 +3687,20 @@ function mapApplicationFromApi(a) {
       verification_success: d.verification_success === true,
       verification_results: d.verification_results,
       verified_at: d.verified_at,
-      person_id: d.person_id
+      person_id: d.person_id,
+      evidence_class: d.evidence_class || '',
+      evidence_class_label: d.evidence_class_label || '',
+      evidence_classification_note: d.evidence_classification_note || '',
+      evidence_classified_by: d.evidence_classified_by || '',
+      evidence_classified_by_name: d.evidence_classified_by_name || '',
+      evidence_classified_at: d.evidence_classified_at || '',
+      workflow_test_accepted: d.workflow_test_accepted,
+      workflow_test_acceptance_reason: d.workflow_test_acceptance_reason || '',
+      workflow_test_accepted_by: d.workflow_test_accepted_by || '',
+      workflow_test_accepted_by_name: d.workflow_test_accepted_by_name || '',
+      workflow_test_accepted_at: d.workflow_test_accepted_at || '',
+      workflow_test_acceptance_environment: d.workflow_test_acceptance_environment || '',
+      workflow_test_acceptance: d.workflow_test_acceptance || null
     };
   });
   return {
@@ -5843,6 +5856,10 @@ function canEditPilotEvidenceClassification() {
   return !!(currentUser && ['admin', 'sco', 'co'].indexOf(currentUser.role) >= 0);
 }
 
+function canAcceptWorkflowTestEvidence() {
+  return APP_ENV === 'staging' && !!(currentUser && ['admin', 'sco'].indexOf(currentUser.role) >= 0);
+}
+
 function renderPilotEvidenceSummaryBanner(app) {
   var summary = app && app.pilot_evidence_summary;
   if (!summary) return '';
@@ -5879,6 +5896,9 @@ function renderEvidenceClassificationPanel(doc) {
   var classifiedAt = normalizeDetailValue(doc.evidence_classified_at);
   var note = doc.evidence_classification_note || '';
   var canEdit = canEditPilotEvidenceClassification();
+  var workflowAcceptance = doc.workflow_test_acceptance || {};
+  var workflowAccepted = workflowAcceptance.accepted === true || doc.workflow_test_accepted === true || doc.workflow_test_accepted === 1 || doc.workflow_test_accepted === '1';
+  var canWorkflowAccept = canAcceptWorkflowTestEvidence() && selected === 'test_only_synthetic';
   var classId = evidenceClassDomId(doc.id, 'class');
   var noteId = evidenceClassDomId(doc.id, 'note');
   var options = '<option value="">Unclassified</option>' + Object.keys(EVIDENCE_CLASS_LABELS).map(function(key) {
@@ -5891,6 +5911,21 @@ function renderEvidenceClassificationPanel(doc) {
         '<button class="btn btn-outline btn-sm" onclick="saveDocumentEvidenceClassification(\'' + doc.id + '\')">Save class</button>' +
       '</div>'
     : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Compliance officer, SCO, or admin access is required to classify pilot evidence.</div>';
+  var workflowBanner = workflowAccepted
+    ? '<div style="margin-top:8px;padding:8px 10px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:11px;line-height:1.4;">' +
+        '<strong>Workflow-only accepted synthetic evidence.</strong> Verification remains ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '; this does not count as pilot approval proof.' +
+        (workflowAcceptance.reason || doc.workflow_test_acceptance_reason ? '<br>Reason: ' + escapeHtml(workflowAcceptance.reason || doc.workflow_test_acceptance_reason) : '') +
+        (workflowAcceptance.accepted_by_name || doc.workflow_test_accepted_by_name ? '<br>Accepted by: ' + escapeHtml(workflowAcceptance.accepted_by_name || doc.workflow_test_accepted_by_name) : '') +
+      '</div>'
+    : '';
+  var workflowControls = canWorkflowAccept
+    ? '<div style="margin-top:8px;display:flex;justify-content:flex-start;">' +
+        '<button class="btn btn-outline btn-sm" onclick="saveWorkflowTestEvidenceAcceptance(\'' + doc.id + '\')">Accept for workflow testing only</button>' +
+      '</div>' +
+      '<div style="font-size:10px;color:var(--text3);margin-top:4px;">Staging-only. Leaves verification truth unchanged and forces workflow-only pilot evidence status.</div>'
+    : (selected === 'test_only_synthetic' && APP_ENV !== 'staging'
+        ? '<div style="font-size:11px;color:#b91c1c;margin-top:8px;">Workflow-test acceptance is unavailable outside staging.</div>'
+        : '');
   return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
     '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">' +
       '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;">Pilot evidence classification</div>' +
@@ -5898,7 +5933,9 @@ function renderEvidenceClassificationPanel(doc) {
     '</div>' +
     (note ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Note: ' + escapeHtml(note) + '</div>' : '') +
     (classifiedBy !== '—' || classifiedAt !== '—' ? '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Classified by: ' + escapeHtml(classifiedBy) + (classifiedAt !== '—' ? ' on ' + escapeHtml(classifiedAt) : '') + '</div>' : '') +
+    workflowBanner +
     editControls +
+    workflowControls +
   '</div>';
 }
 
@@ -5919,6 +5956,29 @@ async function saveDocumentEvidenceClassification(docId) {
     openAppDetail(currentApp && (currentApp.ref || currentApp.id));
   } catch (e) {
     showToast(e.message || 'Evidence classification could not be saved');
+  }
+}
+
+async function saveWorkflowTestEvidenceAcceptance(docId, enhancedRequirementId) {
+  if (!docId) { showToast('Document record is missing a workflow acceptance identifier'); return; }
+  if (!canAcceptWorkflowTestEvidence()) {
+    showToast('Only admin or SCO users can accept synthetic evidence for workflow testing on staging.');
+    return;
+  }
+  var reason = prompt('Reason for staging workflow-only acceptance. This does not verify the document or count as pilot approval proof.');
+  if (!reason || !reason.trim()) {
+    showToast('A reason is required for workflow-only evidence acceptance.');
+    return;
+  }
+  try {
+    var payload = { reason: reason.trim() };
+    if (enhancedRequirementId) payload.enhanced_requirement_id = enhancedRequirementId;
+    await boApiCall('POST', '/documents/' + encodeURIComponent(docId) + '/workflow-test-acceptance', payload);
+    showToast('Synthetic evidence accepted for workflow testing only.');
+    await loadFromAPI();
+    openAppDetail(currentApp && (currentApp.ref || currentApp.id));
+  } catch (e) {
+    showToast(e.message || 'Workflow-test evidence acceptance could not be saved');
   }
 }
 
@@ -6686,6 +6746,13 @@ function enhancedRequirementLinkedDocumentLabel(req) {
   return doc ? enhancedRequirementDocumentLabel(doc) : ('Linked document: ' + docId);
 }
 
+function enhancedRequirementLinkedDocument(req) {
+  var docId = req && req.linked_document_id;
+  if (!docId) return null;
+  var docs = (currentApp && currentApp._documents) || [];
+  return docs.find(function(item) { return String(item.id) === String(docId); }) || null;
+}
+
 function enhancedRequirementClientSubmissionSummary(req) {
   var parts = [];
   if (req.uploaded_at) parts.push('Uploaded: ' + enhancedRequirementDate(req.uploaded_at));
@@ -6816,9 +6883,18 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
 
 function renderApplicationEnhancedRequirementActions(req) {
   var linkedLabel = enhancedRequirementLinkedDocumentLabel(req);
+  var linkedDoc = enhancedRequirementLinkedDocument(req);
+  var linkedDocWorkflowAccepted = linkedDoc && linkedDoc.workflow_test_acceptance && linkedDoc.workflow_test_acceptance.accepted === true;
+  var workflowAcceptHtml = '';
+  if (linkedDocWorkflowAccepted) {
+    workflowAcceptHtml = '<div style="margin-top:6px;padding:7px 8px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:10px;line-height:1.35;">Workflow-only synthetic evidence accepted. Verification truth is unchanged; this cannot count as pilot approval proof.</div>';
+  } else if (canAcceptWorkflowTestEvidence() && linkedDoc && linkedDoc.evidence_class === 'test_only_synthetic') {
+    workflowAcceptHtml = '<button class="btn btn-outline btn-sm" onclick="saveWorkflowTestEvidenceAcceptance(\'' + escapeHtml(String(linkedDoc.id)) + '\', \'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;margin-top:6px;">Accept linked synthetic evidence for workflow only</button>';
+  }
   if (!canUpdateApplicationEnhancedRequirements()) {
     return '<div style="font-size:11px;color:var(--text3);">Read-only</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(linkedLabel) + '</div>' +
+      workflowAcceptHtml +
       (req.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;max-width:260px;">' + escapeHtml(req.review_notes) + '</div>' : '');
   }
 
@@ -6853,6 +6929,7 @@ function renderApplicationEnhancedRequirementActions(req) {
         '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
       '</div>' +
     '</div>' +
+    workflowAcceptHtml +
     waiverHtml +
   '</div>';
 }
