@@ -488,6 +488,10 @@ def _get_postgres_schema() -> str:
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
         review_comment TEXT,
         reviewed_by TEXT REFERENCES users(id),
+        evidence_class TEXT,
+        evidence_classification_note TEXT,
+        evidence_classified_by TEXT REFERENCES users(id),
+        evidence_classified_at TIMESTAMP,
         uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         verified_at TIMESTAMP,
         reviewed_at TIMESTAMP
@@ -1473,6 +1477,10 @@ def _get_sqlite_schema() -> str:
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
         review_comment TEXT,
         reviewed_by TEXT REFERENCES users(id),
+        evidence_class TEXT,
+        evidence_classification_note TEXT,
+        evidence_classified_by TEXT REFERENCES users(id),
+        evidence_classified_at TEXT,
         uploaded_at TEXT DEFAULT (datetime('now')),
         verified_at TEXT,
         reviewed_at TEXT
@@ -3456,6 +3464,19 @@ def _ensure_document_file_hash_schema(db: DBConnection):
         "CREATE INDEX IF NOT EXISTS idx_documents_application_file_sha256 "
         "ON documents(application_id, file_sha256)"
     )
+
+
+def _ensure_document_evidence_classification_schema(db: DBConnection):
+    """Ensure documents can distinguish pilot-proof evidence from workflow-only evidence."""
+    columns = [
+        ("evidence_class", "TEXT"),
+        ("evidence_classification_note", "TEXT"),
+        ("evidence_classified_by", "TEXT REFERENCES users(id)"),
+        ("evidence_classified_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+    ]
+    for column, definition in columns:
+        if not _safe_column_exists(db, "documents", column):
+            db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
 
 
 def _ensure_document_current_slot_unique_index(db: DBConnection):
@@ -5729,6 +5750,19 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.39: Ensured document file hash schema")
     except Exception as e:
         logger.error("Migration v2.39 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.40: Explicitly classify document evidence for pilot-proof
+    # reporting without changing document verification or approval gates.
+    try:
+        _ensure_document_evidence_classification_schema(db)
+        db.commit()
+        logger.info("Migration v2.40: Ensured document evidence classification schema")
+    except Exception as e:
+        logger.error("Migration v2.40 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

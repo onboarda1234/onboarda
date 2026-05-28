@@ -3143,7 +3143,8 @@ class ApplicationsHandler(BaseHandler):
                 "SELECT id, doc_type, doc_name, file_size, verification_status, "
                 "verification_results, verified_at, person_id, review_status, "
                 "review_comment, reviewed_by, reviewed_at, application_id, "
-                "slot_key, is_current, version, superseded_at, superseded_by_document_id "
+                "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
+                "evidence_class, evidence_classification_note, evidence_classified_by, evidence_classified_at "
                 f"FROM documents WHERE application_id IN ({doc_placeholders}) "
                 f"AND {ACTIVE_DOCUMENT_SQL}",
                 app_ids,
@@ -3152,6 +3153,7 @@ class ApplicationsHandler(BaseHandler):
                 doc = dict(d)
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 decorate_document_verification_state(doc)
+                _decorate_document_evidence_classification(db, doc)
                 docs_by_app.setdefault(d["application_id"], []).append(doc)
 
         rmi_by_app = _load_rmi_requests_for_apps(db, app_ids) if app_ids else {}
@@ -3891,6 +3893,7 @@ class ApplicationDetailHandler(BaseHandler):
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
             decorate_document_verification_state(doc)
+            _decorate_document_evidence_classification(db, doc)
         if include_history:
             result["document_history"] = [dict(d) for d in db.execute(
                 "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
@@ -3900,6 +3903,12 @@ class ApplicationDetailHandler(BaseHandler):
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
                 decorate_document_verification_state(doc)
+                _decorate_document_evidence_classification(db, doc)
+        result["pilot_evidence_summary"] = _pilot_evidence_classification_summary(
+            db,
+            result,
+            result["documents"],
+        )
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
         result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
@@ -5709,6 +5718,189 @@ def _kyc_required_document_expectations(db, app):
     return expectations
 
 
+EVIDENCE_CLASS_OPTIONS = {
+    "authoritative_source_document": {
+        "label": "Authoritative source document",
+        "pilot_proof_eligible": True,
+    },
+    "certified_copy": {
+        "label": "Certified copy",
+        "pilot_proof_eligible": True,
+    },
+    "internal_genuine_business_document": {
+        "label": "Internal genuine business document",
+        "pilot_proof_eligible": True,
+    },
+    "test_only_synthetic": {
+        "label": "Test-only synthetic document",
+        "pilot_proof_eligible": False,
+    },
+}
+PILOT_APPROVAL_PROOF_EVIDENCE_CLASSES = frozenset(
+    key for key, meta in EVIDENCE_CLASS_OPTIONS.items()
+    if meta.get("pilot_proof_eligible")
+)
+
+
+def _normalize_evidence_class(value):
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in EVIDENCE_CLASS_OPTIONS else ""
+
+
+def _evidence_class_payload(value):
+    evidence_class = _normalize_evidence_class(value)
+    if not evidence_class:
+        return {
+            "evidence_class": "",
+            "evidence_class_label": "Unclassified",
+            "pilot_proof_eligible": False,
+        }
+    meta = EVIDENCE_CLASS_OPTIONS[evidence_class]
+    return {
+        "evidence_class": evidence_class,
+        "evidence_class_label": meta["label"],
+        "pilot_proof_eligible": bool(meta["pilot_proof_eligible"]),
+    }
+
+
+def _decorate_document_evidence_classification(db, doc):
+    doc.update(_evidence_class_payload(doc.get("evidence_class")))
+    doc["evidence_classified_by_name"] = resolve_user_display_name(db, doc.get("evidence_classified_by"))
+    return doc
+
+
+def _pilot_evidence_classification_summary(db, app, documents=None):
+    """Derive whether required evidence can support pilot approval-proof claims.
+
+    This is deliberately separate from document verification and application
+    approval gates. Synthetic evidence may still exercise workflow mechanics,
+    but it cannot be counted as pilot approval proof.
+    """
+    app_dict = dict(app or {})
+    app_id = app_dict.get("id")
+    expectations = _kyc_required_document_expectations(db, app_dict)
+    if documents is None:
+        documents = [
+            dict(row) for row in db.execute(
+                f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+                (app_id,),
+            ).fetchall()
+        ]
+    docs_by_slot = {}
+    docs_by_id = {}
+    for doc in documents or []:
+        doc_dict = dict(doc)
+        slot_key = doc_dict.get("slot_key") or _document_slot_key(doc_dict.get("doc_type"), doc_dict.get("person_id"))
+        docs_by_slot[slot_key] = doc_dict
+        if doc_dict.get("id"):
+            docs_by_id[doc_dict.get("id")] = doc_dict
+
+    try:
+        enhanced_rows = db.execute(
+            """
+            SELECT id, requirement_key, requirement_label, linked_document_id, status
+            FROM application_enhanced_requirements
+            WHERE application_id = ?
+              AND active = 1
+              AND requirement_type = 'document'
+              AND (mandatory = 1 OR blocking_approval = 1)
+              AND LOWER(COALESCE(status, 'generated')) NOT IN ('waived', 'cancelled')
+            ORDER BY id
+            """,
+            (app_id,),
+        ).fetchall()
+    except Exception:
+        enhanced_rows = []
+    for row in enhanced_rows:
+        item = dict(row)
+        expectations.append({
+            "doc_type": item.get("requirement_key") or "enhanced_requirement",
+            "label": item.get("requirement_label") or item.get("requirement_key") or "Enhanced requirement evidence",
+            "person_id": None,
+            "person_type": None,
+            "slot_key": f"enhanced_requirement:{item.get('id')}",
+            "source": "enhanced_requirement",
+            "enhanced_requirement_id": item.get("id"),
+            "linked_document_id": item.get("linked_document_id"),
+            "requirement_status": item.get("status"),
+        })
+
+    missing_required = []
+    unclassified_required = []
+    synthetic_required = []
+    eligible_required = []
+    invalid_required = []
+
+    for expectation in expectations:
+        slot_key = expectation["slot_key"]
+        linked_document_id = expectation.get("linked_document_id")
+        doc = docs_by_id.get(linked_document_id) if linked_document_id else docs_by_slot.get(slot_key)
+        base = {
+            "slot_key": slot_key,
+            "doc_type": expectation.get("doc_type"),
+            "label": expectation.get("label"),
+            "person_id": expectation.get("person_id"),
+            "person_type": expectation.get("person_type"),
+            "source": expectation.get("source", "kyc_required_document"),
+            "enhanced_requirement_id": expectation.get("enhanced_requirement_id"),
+            "linked_document_id": linked_document_id,
+            "requirement_status": expectation.get("requirement_status"),
+        }
+        if not doc:
+            missing_required.append(base)
+            continue
+        evidence_class = _normalize_evidence_class(doc.get("evidence_class"))
+        item = {
+            **base,
+            "document_id": doc.get("id"),
+            "doc_name": doc.get("doc_name"),
+            **_evidence_class_payload(evidence_class),
+        }
+        raw_class = str(doc.get("evidence_class") or "").strip()
+        if not evidence_class:
+            if raw_class:
+                invalid_required.append(item)
+            else:
+                unclassified_required.append(item)
+        elif evidence_class == "test_only_synthetic":
+            synthetic_required.append(item)
+        elif evidence_class in PILOT_APPROVAL_PROOF_EVIDENCE_CLASSES:
+            eligible_required.append(item)
+        else:
+            invalid_required.append(item)
+
+    if synthetic_required:
+        classification = "workflow_only"
+        reason = "At least one required document is classified as test-only synthetic."
+    elif missing_required or unclassified_required or invalid_required:
+        classification = "unclassified"
+        reason = "Required evidence is missing or not fully classified."
+    else:
+        classification = "approval_proof"
+        reason = "All required current documents are classified as pilot-proof eligible evidence."
+
+    return {
+        "pilot_evidence_classification": classification,
+        "can_count_as_pilot_approval_proof": classification == "approval_proof",
+        "required_count": len(expectations),
+        "eligible_required_count": len(eligible_required),
+        "synthetic_required_count": len(synthetic_required),
+        "missing_required_count": len(missing_required),
+        "unclassified_required_count": len(unclassified_required),
+        "invalid_required_count": len(invalid_required),
+        "reason": reason,
+        "missing_required": missing_required,
+        "unclassified_required": unclassified_required,
+        "synthetic_required": synthetic_required,
+        "invalid_required": invalid_required,
+        "eligible_required": eligible_required,
+        "policy": {
+            "approval_proof_allowed_classes": sorted(PILOT_APPROVAL_PROOF_EVIDENCE_CLASSES),
+            "workflow_only_class": "test_only_synthetic",
+        },
+    }
+
+
 def _kyc_verified_required_document_gate(db, app):
     """Return a gate result for submit-kyc required verified documents."""
     expectations = _kyc_required_document_expectations(db, app)
@@ -6178,7 +6370,9 @@ class DocumentUploadHandler(BaseHandler):
             "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
             "expiry_date, valid_until, expiry_source, expiry_confidence, expiry_extracted_at, "
             "verification_status, verification_results, verified_at, review_status, "
-            f"review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?{where_active} "
+            "review_comment, reviewed_by, reviewed_at, evidence_class, "
+            "evidence_classification_note, evidence_classified_by, evidence_classified_at "
+            f"FROM documents WHERE application_id = ?{where_active} "
             "ORDER BY uploaded_at DESC, id DESC",
             (app["id"],)).fetchall()]
 
@@ -6191,6 +6385,7 @@ class DocumentUploadHandler(BaseHandler):
                     pass
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
             decorate_document_verification_state(doc)
+            _decorate_document_evidence_classification(db, doc)
 
         db.close()
 
@@ -7349,6 +7544,125 @@ class DocumentReviewHandler(BaseHandler):
             after_state=_after,
         )
         self.success(result)
+
+
+class DocumentEvidenceClassificationHandler(BaseHandler):
+    """POST /api/documents/:id/evidence-classification — classify pilot evidence."""
+    def post(self, doc_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        evidence_class = _normalize_evidence_class(data.get("evidence_class"))
+        if not evidence_class:
+            return self.error("Invalid evidence classification", 400)
+        note = sanitize_input(data.get("note", "") or "")[:1000]
+
+        db = get_db()
+        try:
+            doc = db.execute(
+                """
+                SELECT id, application_id, doc_name, doc_type, person_id, slot_key,
+                       evidence_class, evidence_classification_note,
+                       evidence_classified_by, evidence_classified_at
+                FROM documents
+                WHERE id = ?
+                """,
+                (doc_id,),
+            ).fetchone()
+            if not doc:
+                db.close()
+                return self.error("Document not found", 404)
+            doc = dict(doc)
+
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (doc["application_id"],),
+            ).fetchone()
+            if not app:
+                db.close()
+                return self.error("Application not found", 404)
+            app = dict(app)
+
+            if not self.check_app_ownership(user, app):
+                db.close()
+                return
+
+            before_state = {
+                "document_id": doc["id"],
+                "doc_type": doc.get("doc_type"),
+                "doc_name": doc.get("doc_name"),
+                "evidence_class": doc.get("evidence_class"),
+                "evidence_classification_note": doc.get("evidence_classification_note"),
+                "evidence_classified_by": doc.get("evidence_classified_by"),
+                "evidence_classified_at": doc.get("evidence_classified_at"),
+            }
+            db.execute(
+                """
+                UPDATE documents
+                SET evidence_class = ?,
+                    evidence_classification_note = ?,
+                    evidence_classified_by = ?,
+                    evidence_classified_at = datetime('now')
+                WHERE id = ?
+                """,
+                (evidence_class, note, user.get("sub", ""), doc_id),
+            )
+            updated = db.execute(
+                """
+                SELECT id, application_id, person_id, doc_type, doc_name, slot_key,
+                       evidence_class, evidence_classification_note,
+                       evidence_classified_by, evidence_classified_at
+                FROM documents
+                WHERE id = ?
+                """,
+                (doc_id,),
+            ).fetchone()
+            result = dict(updated)
+            _decorate_document_evidence_classification(db, result)
+            after_state = {
+                "document_id": result["id"],
+                "doc_type": result.get("doc_type"),
+                "doc_name": result.get("doc_name"),
+                "evidence_class": result.get("evidence_class"),
+                "evidence_classification_note": result.get("evidence_classification_note"),
+                "evidence_classified_by": result.get("evidence_classified_by"),
+                "evidence_classified_at": result.get("evidence_classified_at"),
+            }
+            app_summary = _pilot_evidence_classification_summary(db, app)
+            self.log_audit(
+                user,
+                "Document Evidence Classified",
+                app["ref"],
+                json.dumps({
+                    "document_id": doc_id,
+                    "doc_type": doc.get("doc_type"),
+                    "doc_name": doc.get("doc_name"),
+                    "evidence_class": evidence_class,
+                    "evidence_class_label": result.get("evidence_class_label"),
+                    "pilot_evidence_classification": app_summary.get("pilot_evidence_classification"),
+                    "can_count_as_pilot_approval_proof": app_summary.get("can_count_as_pilot_approval_proof"),
+                }, sort_keys=True),
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
+            db.commit()
+            db.close()
+            self.success({
+                "document": result,
+                "pilot_evidence_summary": app_summary,
+            })
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            logger.error("document_evidence_classification_failed doc_id=%s error=%s", doc_id, exc, exc_info=True)
+            self.error("Document evidence classification could not be saved", 500)
 
 
 class DocumentAIVerifyHandler(BaseHandler):
@@ -10442,6 +10756,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
         )
         for doc in documents:
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            _decorate_document_evidence_classification(db, doc)
 
         include_history = self.get_argument("include_history", "false").lower() == "true"
         document_history = []
@@ -10455,6 +10770,9 @@ class ApplicationEvidencePackHandler(BaseHandler):
             )
             for doc in document_history:
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+                _decorate_document_evidence_classification(db, doc)
+        pilot_evidence_summary = _pilot_evidence_classification_summary(db, app_dict, documents)
+        app_dict["pilot_evidence_summary"] = pilot_evidence_summary
 
         memos = self._dict_rows(
             db.execute(
@@ -10555,6 +10873,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
             },
             "documents": documents,
             "document_history": document_history if include_history else [],
+            "pilot_evidence_summary": pilot_evidence_summary,
             "application_notes": application_notes,
             "rmi_requests": rmi_requests,
             "compliance_memos": memos,
@@ -20808,6 +21127,7 @@ def make_app():
         (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
+        (r"/api/documents/([^/]+)/evidence-classification", DocumentEvidenceClassificationHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
         (r"/api/resources/([^/]+)/download", ComplianceResourceDownloadHandler),
         (r"/api/resources", ComplianceResourcesHandler),

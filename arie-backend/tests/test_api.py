@@ -1419,6 +1419,312 @@ class TestAuthenticatedAccess:
         assert detail_data["documents"][0]["reviewed_by"] == "admin001"
         assert detail_data["documents"][0]["reviewed_by_name"]
 
+    def test_document_evidence_classification_persists_and_audits(self, api_server):
+        """Compliance officers can classify pilot evidence without altering review/verification gates."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", ("ARF-2026-EVIDCLASS",))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_evidence_class",))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_evidence_class",))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "app_evidence_class",
+            "ARF-2026-EVIDCLASS",
+            "testclient001",
+            "Evidence Class Ltd",
+            "Mauritius",
+            "in_review",
+        ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, person_id, doc_type, doc_name, file_path, verification_status, review_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_evidence_class_1",
+            "app_evidence_class",
+            None,
+            "cert_inc",
+            "certificate-source.pdf",
+            "/tmp/certificate-source.pdf",
+            "verified",
+            "pending",
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("co001", "co", "Test CO", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_evidence_class_1/evidence-classification",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "evidence_class": "certified_copy",
+                "note": "Certified copy reviewed against onboarding evidence pack.",
+            },
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["document"]["evidence_class"] == "certified_copy"
+        assert body["document"]["evidence_class_label"] == "Certified copy"
+        assert body["document"]["pilot_proof_eligible"] is True
+
+        detail_resp = http_requests.get(
+            f"{api_server}/api/applications/ARF-2026-EVIDCLASS",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert detail_resp.status_code == 200, detail_resp.text
+        doc = detail_resp.json()["documents"][0]
+        assert doc["evidence_class"] == "certified_copy"
+        assert doc["evidence_classification_note"] == "Certified copy reviewed against onboarding evidence pack."
+        assert doc["verification_status"] == "verified"
+        assert doc["review_status"] == "pending"
+
+        conn = get_db()
+        audit = conn.execute(
+            "SELECT action, before_state, after_state FROM audit_log WHERE target = ? ORDER BY id DESC LIMIT 1",
+            ("ARF-2026-EVIDCLASS",),
+        ).fetchone()
+        conn.close()
+        assert audit is not None
+        assert audit["action"] == "Document Evidence Classified"
+        after_state = json.loads(audit["after_state"])
+        assert after_state["evidence_class"] == "certified_copy"
+
+    def test_document_evidence_classification_requires_compliance_role(self, api_server):
+        """Analysts may review documents but cannot classify pilot-proof evidence."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_evidence_rbac",))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_evidence_rbac",))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "app_evidence_rbac",
+            "ARF-2026-EVIDRBAC",
+            "testclient001",
+            "Evidence RBAC Ltd",
+            "Mauritius",
+            "in_review",
+        ))
+        conn.execute("""
+            INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, verification_status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_evidence_rbac_1",
+            "app_evidence_rbac",
+            "cert_inc",
+            "certificate.pdf",
+            "/tmp/certificate.pdf",
+            "verified",
+        ))
+        conn.commit()
+        conn.close()
+
+        analyst_token = create_token("analyst001", "analyst", "Test Analyst", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_evidence_rbac_1/evidence-classification",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+            json={"evidence_class": "authoritative_source_document"},
+            timeout=3,
+        )
+        assert resp.status_code == 403
+
+    def test_pilot_evidence_summary_requires_all_required_docs_to_be_real_classes(self, api_server):
+        """A case becomes approval-proof only when every required current document is class 1/2/3."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_evidence_summary_real"
+        app_ref = "ARF-2026-EVIDREAL"
+        required_doc_types = [
+            "cert_inc", "memarts", "reg_sh", "reg_dir",
+            "fin_stmt", "poa", "board_res", "structure_chart",
+        ]
+        conn = get_db()
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                risk_level, final_risk_level, status, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "testclient001", "Evidence Real Ltd", "Mauritius",
+            "Technology", "SME", "LOW", "LOW", "in_review", json.dumps({}),
+        ))
+        for idx, doc_type in enumerate(required_doc_types, start=1):
+            conn.execute("""
+                INSERT INTO documents (
+                    id, application_id, doc_type, doc_name, file_path,
+                    verification_status, evidence_class
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"doc_evidence_real_{idx}", app_id, doc_type, f"{doc_type}.pdf",
+                f"/tmp/{doc_type}.pdf", "verified", "authoritative_source_document",
+            ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("co001", "co", "Test CO", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["pilot_evidence_summary"]
+        assert summary["pilot_evidence_classification"] == "approval_proof"
+        assert summary["can_count_as_pilot_approval_proof"] is True
+        assert summary["synthetic_required_count"] == 0
+        assert summary["unclassified_required_count"] == 0
+
+    def test_synthetic_required_document_forces_workflow_only_pilot_evidence(self, api_server):
+        """Synthetic required evidence can exercise workflow mechanics but cannot count as pilot proof."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_evidence_summary_synth"
+        app_ref = "ARF-2026-EVIDSYN"
+        required_doc_types = [
+            "cert_inc", "memarts", "reg_sh", "reg_dir",
+            "fin_stmt", "poa", "board_res", "structure_chart",
+        ]
+        conn = get_db()
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                risk_level, final_risk_level, status, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "testclient001", "Evidence Synthetic Ltd", "Mauritius",
+            "Technology", "SME", "LOW", "LOW", "in_review", json.dumps({}),
+        ))
+        for idx, doc_type in enumerate(required_doc_types, start=1):
+            evidence_class = "test_only_synthetic" if doc_type == "fin_stmt" else "internal_genuine_business_document"
+            conn.execute("""
+                INSERT INTO documents (
+                    id, application_id, doc_type, doc_name, file_path,
+                    verification_status, evidence_class
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"doc_evidence_synth_{idx}", app_id, doc_type, f"{doc_type}.pdf",
+                f"/tmp/{doc_type}.pdf", "verified", evidence_class,
+            ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("co001", "co", "Test CO", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["pilot_evidence_summary"]
+        assert summary["pilot_evidence_classification"] == "workflow_only"
+        assert summary["can_count_as_pilot_approval_proof"] is False
+        assert summary["synthetic_required_count"] == 1
+        assert summary["synthetic_required"][0]["doc_type"] == "fin_stmt"
+
+    def test_synthetic_enhanced_requirement_document_forces_workflow_only_pilot_evidence(self, api_server):
+        """Enhanced requirement evidence is also required evidence for pilot-proof classification."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_evidence_summary_enhanced"
+        app_ref = "ARF-2026-EVIDENH"
+        required_doc_types = [
+            "cert_inc", "memarts", "reg_sh", "reg_dir",
+            "fin_stmt", "poa", "board_res", "structure_chart",
+        ]
+        conn = get_db()
+        conn.execute("DELETE FROM application_enhanced_requirements WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                risk_level, final_risk_level, status, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "testclient001", "Evidence Enhanced Ltd", "Mauritius",
+            "Technology", "SME", "HIGH", "HIGH", "in_review", json.dumps({}),
+        ))
+        for idx, doc_type in enumerate(required_doc_types, start=1):
+            conn.execute("""
+                INSERT INTO documents (
+                    id, application_id, doc_type, doc_name, file_path,
+                    verification_status, evidence_class
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"doc_evidence_enh_kyc_{idx}", app_id, doc_type, f"{doc_type}.pdf",
+                f"/tmp/{doc_type}.pdf", "verified", "certified_copy",
+            ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, doc_type, doc_name, file_path,
+                verification_status, evidence_class
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_evidence_enhanced_synthetic",
+            app_id,
+            "bankref",
+            "synthetic-bank-reference.pdf",
+            "/tmp/synthetic-bank-reference.pdf",
+            "verified",
+            "test_only_synthetic",
+        ))
+        conn.execute("""
+            INSERT INTO application_enhanced_requirements (
+                application_id, trigger_key, trigger_label, trigger_category,
+                requirement_key, requirement_label, requirement_type,
+                mandatory, blocking_approval, status, active, linked_document_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            "high_risk",
+            "High risk",
+            "risk",
+            "bank_reference",
+            "Bank reference letter",
+            "document",
+            1,
+            1,
+            "accepted",
+            1,
+            "doc_evidence_enhanced_synthetic",
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("co001", "co", "Test CO", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["pilot_evidence_summary"]
+        assert summary["pilot_evidence_classification"] == "workflow_only"
+        assert summary["can_count_as_pilot_approval_proof"] is False
+        assert summary["synthetic_required_count"] >= 1
+        enhanced_synthetic = [
+            item for item in summary["synthetic_required"]
+            if item.get("source") == "enhanced_requirement"
+        ]
+        assert len(enhanced_synthetic) == 1
+        assert enhanced_synthetic[0]["linked_document_id"] == "doc_evidence_enhanced_synthetic"
+
     def test_application_detail_backfills_sparse_prescreening_from_saved_session(self, api_server):
         """Authoritative detail should backfill sparse legacy prescreening JSON from saved portal session data."""
         from auth import create_token

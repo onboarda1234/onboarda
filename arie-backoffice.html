@@ -5831,6 +5831,96 @@ function renderDocumentReadinessBanner(summary) {
   return '<div class="ah-alert-banner warning" style="margin-bottom:12px;"><span style="font-size:18px;">⚠️</span><div><strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(parts.join(' · ')) + '. This case is reviewable but should not be treated as clean.</div></div>';
 }
 
+var EVIDENCE_CLASS_LABELS = {
+  authoritative_source_document: 'Authoritative source document',
+  certified_copy: 'Certified copy',
+  internal_genuine_business_document: 'Internal genuine business document',
+  test_only_synthetic: 'Test-only synthetic document'
+};
+
+function canEditPilotEvidenceClassification() {
+  return !!(currentUser && ['admin', 'sco', 'co'].indexOf(currentUser.role) >= 0);
+}
+
+function renderPilotEvidenceSummaryBanner(app) {
+  var summary = app && app.pilot_evidence_summary;
+  if (!summary) return '';
+  var cls = summary.pilot_evidence_classification || 'unclassified';
+  var color = cls === 'approval_proof' ? '#16a34a' : cls === 'workflow_only' ? '#d97706' : '#6b7280';
+  var title = cls === 'approval_proof'
+    ? 'Pilot approval proof'
+    : cls === 'workflow_only'
+      ? 'Workflow-only evidence'
+      : 'Pilot evidence not fully classified';
+  var detail = summary.reason || '';
+  var counts = 'Required: ' + (summary.required_count || 0) +
+    ' · Eligible: ' + (summary.eligible_required_count || 0) +
+    ' · Synthetic: ' + (summary.synthetic_required_count || 0) +
+    ' · Missing/unclassified: ' + ((summary.missing_required_count || 0) + (summary.unclassified_required_count || 0) + (summary.invalid_required_count || 0));
+  return '<div style="margin-bottom:12px;padding:12px 14px;border:1px solid ' + color + '44;border-radius:10px;background:' + color + '10;">' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+      '<div><div style="font-size:13px;font-weight:700;color:' + color + ';">' + escapeHtml(title) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-top:3px;">' + escapeHtml(detail) + '</div></div>' +
+      '<span style="font-size:10px;padding:3px 8px;border-radius:999px;background:' + color + '18;color:' + color + ';border:1px solid ' + color + '44;font-weight:700;text-transform:uppercase;">' + escapeHtml(cls.replace(/_/g, ' ')) + '</span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(counts) + '</div>' +
+  '</div>';
+}
+
+function evidenceClassDomId(docId, suffix) {
+  return 'pilot-evidence-' + String(docId || '').replace(/[^A-Za-z0-9_-]/g, '_') + '-' + suffix;
+}
+
+function renderEvidenceClassificationPanel(doc) {
+  var selected = doc.evidence_class || '';
+  var label = doc.evidence_class_label || EVIDENCE_CLASS_LABELS[selected] || 'Unclassified';
+  var classifiedBy = normalizeDetailValue(doc.evidence_classified_by_name || doc.evidence_classified_by);
+  var classifiedAt = normalizeDetailValue(doc.evidence_classified_at);
+  var note = doc.evidence_classification_note || '';
+  var canEdit = canEditPilotEvidenceClassification();
+  var classId = evidenceClassDomId(doc.id, 'class');
+  var noteId = evidenceClassDomId(doc.id, 'note');
+  var options = '<option value="">Unclassified</option>' + Object.keys(EVIDENCE_CLASS_LABELS).map(function(key) {
+    return '<option value="' + key + '"' + (key === selected ? ' selected' : '') + '>' + escapeHtml(EVIDENCE_CLASS_LABELS[key]) + '</option>';
+  }).join('');
+  var editControls = canEdit
+    ? '<div style="display:grid;grid-template-columns:minmax(190px,1fr) minmax(180px,1fr) auto;gap:8px;align-items:center;margin-top:8px;">' +
+        '<select class="form-input" id="' + classId + '" style="font-size:12px;padding:7px 9px;">' + options + '</select>' +
+        '<input class="form-input" id="' + noteId + '" value="' + escapeHtml(note) + '" placeholder="Classification note (optional)" style="font-size:12px;padding:7px 9px;" />' +
+        '<button class="btn btn-outline btn-sm" onclick="saveDocumentEvidenceClassification(\'' + doc.id + '\')">Save class</button>' +
+      '</div>'
+    : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Compliance officer, SCO, or admin access is required to classify pilot evidence.</div>';
+  return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;">Pilot evidence classification</div>' +
+      '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:#64748b18;color:#475569;border:1px solid #64748b33;font-weight:600;">' + escapeHtml(label) + '</span>' +
+    '</div>' +
+    (note ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Note: ' + escapeHtml(note) + '</div>' : '') +
+    (classifiedBy !== '—' || classifiedAt !== '—' ? '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Classified by: ' + escapeHtml(classifiedBy) + (classifiedAt !== '—' ? ' on ' + escapeHtml(classifiedAt) : '') + '</div>' : '') +
+    editControls +
+  '</div>';
+}
+
+async function saveDocumentEvidenceClassification(docId) {
+  if (!docId) { showToast('Document record is missing a classification identifier'); return; }
+  var classEl = document.getElementById(evidenceClassDomId(docId, 'class'));
+  var noteEl = document.getElementById(evidenceClassDomId(docId, 'note'));
+  var evidenceClass = classEl ? classEl.value : '';
+  var note = noteEl ? noteEl.value.trim() : '';
+  if (!evidenceClass) { showToast('Select an evidence class before saving.'); return; }
+  try {
+    await boApiCall('POST', '/documents/' + encodeURIComponent(docId) + '/evidence-classification', {
+      evidence_class: evidenceClass,
+      note: note
+    });
+    showToast('Pilot evidence classification saved.');
+    await loadFromAPI();
+    openAppDetail(currentApp && (currentApp.ref || currentApp.id));
+  } catch (e) {
+    showToast(e.message || 'Evidence classification could not be saved');
+  }
+}
+
 function renderStoredRiskComputationHtml(app) {
   var computation = buildStoredRiskComputation(app);
   if (!computation) {
@@ -6403,6 +6493,7 @@ function renderAuthoritativeAppDetail(app, options) {
       '</div>' +
       reviewMeta +
       reviewComment +
+      renderEvidenceClassificationPanel(doc) +
       '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
         '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁 View</button>' +
         '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
@@ -6413,8 +6504,8 @@ function renderAuthoritativeAppDetail(app, options) {
       '</div>' +
     '</div>';
   }).join('') : '<div style="padding:32px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📂</div><div style="font-size:13px;color:var(--text2);font-weight:500;">No documents uploaded yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Documents uploaded by the client will appear here with their verification results.</div></div>';
-  document.getElementById('detail-documents').innerHTML = docsHtml;
-  document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
+  document.getElementById('detail-documents').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
+  document.getElementById('detail-docs-with-verification').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
   loadApplicationEnhancedRequirements(app).catch(function(e) {
     console.warn('Enhanced requirements display failed:', e);
   });
