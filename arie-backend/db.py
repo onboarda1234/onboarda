@@ -492,6 +492,11 @@ def _get_postgres_schema() -> str:
         evidence_classification_note TEXT,
         evidence_classified_by TEXT REFERENCES users(id),
         evidence_classified_at TIMESTAMP,
+        workflow_test_accepted BOOLEAN DEFAULT FALSE,
+        workflow_test_acceptance_reason TEXT,
+        workflow_test_accepted_by TEXT REFERENCES users(id),
+        workflow_test_accepted_at TIMESTAMP,
+        workflow_test_acceptance_environment TEXT,
         uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         verified_at TIMESTAMP,
         reviewed_at TIMESTAMP
@@ -1481,6 +1486,11 @@ def _get_sqlite_schema() -> str:
         evidence_classification_note TEXT,
         evidence_classified_by TEXT REFERENCES users(id),
         evidence_classified_at TEXT,
+        workflow_test_accepted INTEGER DEFAULT 0,
+        workflow_test_acceptance_reason TEXT,
+        workflow_test_accepted_by TEXT REFERENCES users(id),
+        workflow_test_accepted_at TEXT,
+        workflow_test_acceptance_environment TEXT,
         uploaded_at TEXT DEFAULT (datetime('now')),
         verified_at TEXT,
         reviewed_at TEXT
@@ -2700,6 +2710,12 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
             reviewed_at TIMESTAMP,
             reviewed_by TEXT REFERENCES users(id),
             review_notes TEXT,
+            workflow_test_accepted BOOLEAN DEFAULT FALSE,
+            workflow_test_acceptance_reason TEXT,
+            workflow_test_accepted_by TEXT REFERENCES users(id),
+            workflow_test_accepted_at TIMESTAMP,
+            workflow_test_acceptance_environment TEXT,
+            workflow_test_acceptance_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
             waived_at TIMESTAMP,
             waived_by TEXT REFERENCES users(id),
             waiver_reason TEXT,
@@ -2750,6 +2766,12 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
             reviewed_at TEXT,
             reviewed_by TEXT REFERENCES users(id),
             review_notes TEXT,
+            workflow_test_accepted INTEGER DEFAULT 0,
+            workflow_test_acceptance_reason TEXT,
+            workflow_test_accepted_by TEXT REFERENCES users(id),
+            workflow_test_accepted_at TEXT,
+            workflow_test_acceptance_environment TEXT,
+            workflow_test_acceptance_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
             waived_at TEXT,
             waived_by TEXT REFERENCES users(id),
             waiver_reason TEXT,
@@ -2777,6 +2799,12 @@ def _ensure_application_enhanced_requirement_fulfilment_columns(db: DBConnection
         "client_response_text": "TEXT",
         "client_response_at": "TIMESTAMP" if db.is_postgres else "TEXT",
         "client_response_by": "TEXT REFERENCES clients(id)",
+        "workflow_test_accepted": "BOOLEAN DEFAULT FALSE" if db.is_postgres else "INTEGER DEFAULT 0",
+        "workflow_test_acceptance_reason": "TEXT",
+        "workflow_test_accepted_by": "TEXT REFERENCES users(id)",
+        "workflow_test_accepted_at": "TIMESTAMP" if db.is_postgres else "TEXT",
+        "workflow_test_acceptance_environment": "TEXT",
+        "workflow_test_acceptance_document_id": "TEXT REFERENCES documents(id) ON DELETE SET NULL",
     }
     for column, definition in column_types.items():
         if not _safe_column_exists(db, "application_enhanced_requirements", column):
@@ -3473,6 +3501,20 @@ def _ensure_document_evidence_classification_schema(db: DBConnection):
         ("evidence_classification_note", "TEXT"),
         ("evidence_classified_by", "TEXT REFERENCES users(id)"),
         ("evidence_classified_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+    ]
+    for column, definition in columns:
+        if not _safe_column_exists(db, "documents", column):
+            db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
+
+
+def _ensure_document_workflow_test_acceptance_schema(db: DBConnection):
+    """Ensure documents can record governed staging-only workflow-test acceptance."""
+    columns = [
+        ("workflow_test_accepted", "BOOLEAN DEFAULT FALSE" if db.is_postgres else "INTEGER DEFAULT 0"),
+        ("workflow_test_acceptance_reason", "TEXT"),
+        ("workflow_test_accepted_by", "TEXT REFERENCES users(id)"),
+        ("workflow_test_accepted_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+        ("workflow_test_acceptance_environment", "TEXT"),
     ]
     for column, definition in columns:
         if not _safe_column_exists(db, "documents", column):
@@ -5763,6 +5805,22 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.40: Ensured document evidence classification schema")
     except Exception as e:
         logger.error("Migration v2.40 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.41: Governed staging-only workflow-test evidence acceptance.
+    #
+    # This stores a separate workflow-only acceptance trail without changing
+    # document verification truth or pilot approval-proof classification.
+    try:
+        _ensure_document_workflow_test_acceptance_schema(db)
+        _ensure_application_enhanced_requirement_fulfilment_columns(db)
+        db.commit()
+        logger.info("Migration v2.41: Ensured workflow-test evidence acceptance schema")
+    except Exception as e:
+        logger.error("Migration v2.41 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

@@ -493,6 +493,20 @@ def test_backoffice_incomplete_submission_banner_is_present():
     assert "This case is reviewable but should not be treated as clean." in src
 
 
+def test_backoffice_workflow_test_evidence_ui_is_staging_only_and_truthful():
+    backoffice_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
+    with open(backoffice_path, "r", encoding="utf-8") as handle:
+        src = handle.read()
+
+    assert "function canAcceptWorkflowTestEvidence()" in src
+    assert "APP_ENV === 'staging'" in src
+    assert "['admin', 'sco']" in src
+    assert "Accept for workflow testing only" in src
+    assert "Accept linked synthetic evidence for workflow only" in src
+    assert "Verification remains" in src
+    assert "does not count as pilot approval proof" in src
+
+
 def test_kyc_submit_blocks_unverified_required_documents(api_server):
     from db import get_db
 
@@ -552,6 +566,175 @@ def test_kyc_submit_refuses_each_non_verified_required_document_state(api_server
 
     assert resp.status_code == 400
     assert "not verified: 1" in resp.json()["error"].lower()
+
+
+def test_staging_workflow_test_acceptance_allows_synthetic_required_doc_without_verifying(api_server, monkeypatch):
+    from auth import create_token
+    from db import get_db
+    import server as server_module
+
+    monkeypatch.setattr(server_module, "ENVIRONMENT", "staging")
+    app_id = "submit_workflow_test_accept"
+    ref = "ARF-SUBMIT-WORKFLOW-TEST"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="kyc_documents", risk_level="LOW", risk_score=12)
+    _ensure_verified_required_documents(conn, app_id)
+    conn.execute(
+        """
+        UPDATE documents
+        SET verification_status='flagged',
+            verification_results=?,
+            evidence_class='test_only_synthetic'
+        WHERE application_id=? AND doc_type='cert_inc'
+        """,
+        (json.dumps({"overall": "flagged", "checks": [{"result": "warn"}]}), app_id),
+    )
+    doc = conn.execute(
+        "SELECT id FROM documents WHERE application_id=? AND doc_type='cert_inc'",
+        (app_id,),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+
+    admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+    accept_resp = http_requests.post(
+        f"{api_server}/api/documents/{doc['id']}/workflow-test-acceptance",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"reason": "Synthetic staging pack used for workflow mechanics only."},
+        timeout=3,
+    )
+    assert accept_resp.status_code == 200, accept_resp.text
+    assert accept_resp.json()["document"]["verification_status"] == "flagged"
+
+    detail_resp = http_requests.get(
+        f"{api_server}/api/applications/{ref}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        timeout=3,
+    )
+    assert detail_resp.status_code == 200, detail_resp.text
+    summary = detail_resp.json()["pilot_evidence_summary"]
+    assert summary["pilot_evidence_classification"] == "workflow_only"
+    assert summary["can_count_as_pilot_approval_proof"] is False
+    assert summary["workflow_test_accepted_required_count"] == 1
+
+    submit_resp = http_requests.post(
+        f"{api_server}/api/applications/{ref}/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert submit_resp.status_code == 200, submit_resp.text
+    submit_body = submit_resp.json()
+    assert submit_body["status"] == "kyc_submitted"
+    assert submit_body["required_documents_workflow_test_accepted"] == 1
+
+    conn = get_db()
+    stored = conn.execute(
+        """
+        SELECT verification_status, workflow_test_accepted, workflow_test_acceptance_reason
+        FROM documents
+        WHERE id=?
+        """,
+        (doc["id"],),
+    ).fetchone()
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target=? AND action='Workflow Test Evidence Accepted' ORDER BY id DESC LIMIT 1",
+        (ref,),
+    ).fetchone()
+    conn.close()
+    assert stored["verification_status"] == "flagged"
+    assert stored["workflow_test_accepted"] in (1, True)
+    assert "workflow mechanics" in stored["workflow_test_acceptance_reason"]
+    assert audit is not None
+    audit_detail = json.loads(audit["detail"])
+    assert audit_detail["workflow_only"] is True
+    assert audit_detail["can_count_as_pilot_approval_proof"] is False
+
+
+def test_workflow_test_acceptance_is_staging_only(api_server, monkeypatch):
+    from auth import create_token
+    from db import get_db
+    import server as server_module
+
+    monkeypatch.setattr(server_module, "ENVIRONMENT", "production")
+    app_id = "workflow_accept_prod_guard"
+    ref = "ARF-WORKFLOW-PROD-GUARD"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="kyc_documents")
+    _insert_uploaded_document(conn, app_id, doc_id="doc_workflow_prod_guard", verification_status="flagged")
+    conn.execute(
+        "UPDATE documents SET evidence_class='test_only_synthetic' WHERE id='doc_workflow_prod_guard'"
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/documents/doc_workflow_prod_guard/workflow-test-acceptance",
+        headers={"Authorization": f"Bearer {create_token('admin001', 'admin', 'Test Admin', 'officer')}"},
+        json={"reason": "Should not be available outside staging."},
+        timeout=3,
+    )
+    assert resp.status_code == 403
+
+
+def test_workflow_test_acceptance_requires_admin_sco_and_reason(api_server, monkeypatch):
+    from auth import create_token
+    from db import get_db
+    import server as server_module
+
+    monkeypatch.setattr(server_module, "ENVIRONMENT", "staging")
+    app_id = "workflow_accept_rbac"
+    ref = "ARF-WORKFLOW-RBAC"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="kyc_documents")
+    _insert_uploaded_document(conn, app_id, doc_id="doc_workflow_rbac", verification_status="flagged")
+    conn.execute("UPDATE documents SET evidence_class='test_only_synthetic' WHERE id='doc_workflow_rbac'")
+    conn.commit()
+    conn.close()
+
+    analyst_resp = http_requests.post(
+        f"{api_server}/api/documents/doc_workflow_rbac/workflow-test-acceptance",
+        headers={"Authorization": f"Bearer {create_token('analyst001', 'analyst', 'Test Analyst', 'officer')}"},
+        json={"reason": "Analyst should not be able to accept synthetic evidence."},
+        timeout=3,
+    )
+    assert analyst_resp.status_code == 403
+
+    missing_reason_resp = http_requests.post(
+        f"{api_server}/api/documents/doc_workflow_rbac/workflow-test-acceptance",
+        headers={"Authorization": f"Bearer {create_token('sco001', 'sco', 'Test SCO', 'officer')}"},
+        json={"reason": "   "},
+        timeout=3,
+    )
+    assert missing_reason_resp.status_code == 400
+
+
+def test_workflow_test_acceptance_requires_synthetic_class(api_server, monkeypatch):
+    from auth import create_token
+    from db import get_db
+    import server as server_module
+
+    monkeypatch.setattr(server_module, "ENVIRONMENT", "staging")
+    app_id = "workflow_accept_real_class"
+    ref = "ARF-WORKFLOW-REAL-CLASS"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="kyc_documents")
+    _insert_uploaded_document(conn, app_id, doc_id="doc_workflow_real_class", verification_status="flagged")
+    conn.execute("UPDATE documents SET evidence_class='certified_copy' WHERE id='doc_workflow_real_class'")
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/documents/doc_workflow_real_class/workflow-test-acceptance",
+        headers={"Authorization": f"Bearer {create_token('admin001', 'admin', 'Test Admin', 'officer')}"},
+        json={"reason": "Real evidence classes must not use the synthetic workflow control."},
+        timeout=3,
+    )
+    assert resp.status_code == 400
+    assert "test-only synthetic" in resp.json()["error"].lower()
 
 
 def test_kyc_submit_still_blocks_when_no_documents_uploaded(api_server):

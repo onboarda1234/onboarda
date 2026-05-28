@@ -1725,6 +1725,119 @@ class TestAuthenticatedAccess:
         assert len(enhanced_synthetic) == 1
         assert enhanced_synthetic[0]["linked_document_id"] == "doc_evidence_enhanced_synthetic"
 
+    def test_workflow_test_acceptance_can_resolve_enhanced_requirement_without_verifying_document(self, api_server, monkeypatch):
+        """Staging workflow acceptance can close an enhanced document requirement but keeps proof workflow-only."""
+        from auth import create_token
+        from db import get_db
+        import server as server_module
+
+        monkeypatch.setattr(server_module, "ENVIRONMENT", "staging")
+        app_id = "app_workflow_accept_enhanced"
+        app_ref = "ARF-2026-WORKFLOWENH"
+        conn = get_db()
+        conn.execute("DELETE FROM application_enhanced_requirements WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                risk_level, final_risk_level, status, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "testclient001", "Workflow Enhanced Ltd", "Mauritius",
+            "Technology", "SME", "HIGH", "HIGH", "in_review", json.dumps({}),
+        ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, doc_type, doc_name, file_path,
+                verification_status, verification_results, evidence_class
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_workflow_enhanced_synthetic",
+            app_id,
+            "bankref",
+            "synthetic-bank-reference.pdf",
+            "/tmp/synthetic-bank-reference.pdf",
+            "flagged",
+            json.dumps({"overall": "flagged"}),
+            "test_only_synthetic",
+        ))
+        conn.execute("""
+            INSERT INTO application_enhanced_requirements (
+                application_id, trigger_key, trigger_label, trigger_category,
+                requirement_key, requirement_label, requirement_type,
+                mandatory, blocking_approval, status, active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            "high_risk",
+            "High risk",
+            "risk",
+            "bank_reference",
+            "Bank reference letter",
+            "document",
+            1,
+            1,
+            "uploaded",
+            1,
+        ))
+        req_id = conn.execute(
+            "SELECT id FROM application_enhanced_requirements WHERE application_id=?",
+            (app_id,),
+        ).fetchone()["id"]
+        conn.commit()
+        conn.close()
+
+        token = create_token("sco001", "sco", "Test SCO", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_workflow_enhanced_synthetic/workflow-test-acceptance",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "reason": "Synthetic evidence used only to complete staging workflow mechanics.",
+                "enhanced_requirement_id": req_id,
+            },
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+
+        conn = get_db()
+        doc = conn.execute(
+            "SELECT verification_status, workflow_test_accepted FROM documents WHERE id=?",
+            ("doc_workflow_enhanced_synthetic",),
+        ).fetchone()
+        req = conn.execute(
+            """
+            SELECT status, linked_document_id, workflow_test_accepted, workflow_test_acceptance_reason
+            FROM application_enhanced_requirements
+            WHERE id=?
+            """,
+            (req_id,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT action, detail FROM audit_log WHERE target=? AND action='Workflow Test Evidence Accepted' ORDER BY id DESC LIMIT 1",
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+        assert doc["verification_status"] == "flagged"
+        assert doc["workflow_test_accepted"] in (1, True)
+        assert req["status"] == "accepted"
+        assert req["linked_document_id"] == "doc_workflow_enhanced_synthetic"
+        assert req["workflow_test_accepted"] in (1, True)
+        assert "staging workflow" in req["workflow_test_acceptance_reason"]
+        audit_detail = json.loads(audit["detail"])
+        assert audit_detail["workflow_only"] is True
+        assert audit_detail["can_count_as_pilot_approval_proof"] is False
+
+        detail_resp = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert detail_resp.status_code == 200, detail_resp.text
+        summary = detail_resp.json()["pilot_evidence_summary"]
+        assert summary["pilot_evidence_classification"] == "workflow_only"
+        assert summary["can_count_as_pilot_approval_proof"] is False
+
     def test_application_detail_backfills_sparse_prescreening_from_saved_session(self, api_server):
         """Authoritative detail should backfill sparse legacy prescreening JSON from saved portal session data."""
         from auth import create_token

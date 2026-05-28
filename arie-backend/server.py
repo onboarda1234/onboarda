@@ -5769,6 +5769,63 @@ def _decorate_document_evidence_classification(db, doc):
     return doc
 
 
+WORKFLOW_TEST_ACCEPTANCE_ROLES = ("admin", "sco")
+
+
+def _workflow_test_acceptance_enabled():
+    """Return whether governed workflow-test evidence acceptance is enabled."""
+    return str(ENVIRONMENT or "").strip().lower() == "staging"
+
+
+def _truthy_db_value(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("1", "true", "t", "yes", "y")
+
+
+def _document_workflow_test_accepted(doc):
+    """Check the separate staging-only workflow-test acceptance state.
+
+    This intentionally does not inspect or alter verification_status. It only
+    recognises synthetic evidence explicitly accepted for workflow mechanics in
+    staging, with a reason and actor trail.
+    """
+    doc_dict = dict(doc or {})
+    return (
+        _workflow_test_acceptance_enabled()
+        and _normalize_evidence_class(doc_dict.get("evidence_class")) == "test_only_synthetic"
+        and _truthy_db_value(doc_dict.get("workflow_test_accepted"))
+        and bool(str(doc_dict.get("workflow_test_acceptance_reason") or "").strip())
+        and bool(str(doc_dict.get("workflow_test_accepted_by") or "").strip())
+        and bool(str(doc_dict.get("workflow_test_accepted_at") or "").strip())
+        and str(doc_dict.get("workflow_test_acceptance_environment") or "").strip().lower() == "staging"
+    )
+
+
+def _workflow_test_acceptance_payload(db, doc):
+    doc_dict = dict(doc or {})
+    accepted = _document_workflow_test_accepted(doc_dict)
+    return {
+        "accepted": accepted,
+        "accepted_for_workflow_only": accepted,
+        "label": "Workflow-only test evidence accepted" if accepted else "Not workflow-test accepted",
+        "reason": doc_dict.get("workflow_test_acceptance_reason") or "",
+        "accepted_by": doc_dict.get("workflow_test_accepted_by") or "",
+        "accepted_by_name": resolve_user_display_name(db, doc_dict.get("workflow_test_accepted_by")),
+        "accepted_at": doc_dict.get("workflow_test_accepted_at"),
+        "environment": doc_dict.get("workflow_test_acceptance_environment") or "",
+        "verification_status_unchanged": doc_dict.get("verification_status"),
+        "pilot_approval_proof_eligible": False if accepted else bool(_evidence_class_payload(doc_dict.get("evidence_class")).get("pilot_proof_eligible")),
+    }
+
+
+def _decorate_document_workflow_test_acceptance(db, doc):
+    doc["workflow_test_acceptance"] = _workflow_test_acceptance_payload(db, doc)
+    return doc
+
+
 def _pilot_evidence_classification_summary(db, app, documents=None):
     """Derive whether required evidence can support pilot approval-proof claims.
 
@@ -5830,6 +5887,7 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
     synthetic_required = []
     eligible_required = []
     invalid_required = []
+    workflow_test_accepted_required = []
 
     for expectation in expectations:
         slot_key = expectation["slot_key"]
@@ -5854,6 +5912,7 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
             **base,
             "document_id": doc.get("id"),
             "doc_name": doc.get("doc_name"),
+            "workflow_test_acceptance": _workflow_test_acceptance_payload(db, doc),
             **_evidence_class_payload(evidence_class),
         }
         raw_class = str(doc.get("evidence_class") or "").strip()
@@ -5864,6 +5923,8 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
                 unclassified_required.append(item)
         elif evidence_class == "test_only_synthetic":
             synthetic_required.append(item)
+            if _document_workflow_test_accepted(doc):
+                workflow_test_accepted_required.append(item)
         elif evidence_class in PILOT_APPROVAL_PROOF_EVIDENCE_CLASSES:
             eligible_required.append(item)
         else:
@@ -5871,7 +5932,13 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
 
     if synthetic_required:
         classification = "workflow_only"
-        reason = "At least one required document is classified as test-only synthetic."
+        if workflow_test_accepted_required:
+            reason = (
+                "Required evidence includes staging-only workflow-test accepted synthetic "
+                "document(s); it remains workflow-only and cannot count as pilot approval proof."
+            )
+        else:
+            reason = "At least one required document is classified as test-only synthetic."
     elif missing_required or unclassified_required or invalid_required:
         classification = "unclassified"
         reason = "Required evidence is missing or not fully classified."
@@ -5885,6 +5952,7 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
         "required_count": len(expectations),
         "eligible_required_count": len(eligible_required),
         "synthetic_required_count": len(synthetic_required),
+        "workflow_test_accepted_required_count": len(workflow_test_accepted_required),
         "missing_required_count": len(missing_required),
         "unclassified_required_count": len(unclassified_required),
         "invalid_required_count": len(invalid_required),
@@ -5892,11 +5960,13 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
         "missing_required": missing_required,
         "unclassified_required": unclassified_required,
         "synthetic_required": synthetic_required,
+        "workflow_test_accepted_required": workflow_test_accepted_required,
         "invalid_required": invalid_required,
         "eligible_required": eligible_required,
         "policy": {
             "approval_proof_allowed_classes": sorted(PILOT_APPROVAL_PROOF_EVIDENCE_CLASSES),
             "workflow_only_class": "test_only_synthetic",
+            "workflow_test_acceptance": "staging_only_admin_sco",
         },
     }
 
@@ -5906,7 +5976,9 @@ def _kyc_verified_required_document_gate(db, app):
     expectations = _kyc_required_document_expectations(db, app)
     rows = [
         dict(row) for row in db.execute(
-            f"SELECT id, doc_type, doc_name, person_id, slot_key, verification_status "
+            f"SELECT id, doc_type, doc_name, person_id, slot_key, verification_status, "
+            f"evidence_class, workflow_test_accepted, workflow_test_acceptance_reason, "
+            f"workflow_test_accepted_by, workflow_test_accepted_at, workflow_test_acceptance_environment "
             f"FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
             (app["id"],),
         ).fetchall()
@@ -5918,26 +5990,44 @@ def _kyc_verified_required_document_gate(db, app):
 
     missing = []
     not_verified = []
+    workflow_test_accepted = []
+    verified_required_count = 0
     for expectation in expectations:
         doc = docs_by_slot.get(expectation["slot_key"])
         if not doc:
             missing.append(expectation)
             continue
         status = normalize_verification_state(doc.get("verification_status"))
-        if status != STATE_VERIFIED:
-            not_verified.append({
+        if status == STATE_VERIFIED:
+            verified_required_count += 1
+            continue
+        if _document_workflow_test_accepted(doc):
+            workflow_test_accepted.append({
                 "document_id": doc.get("id"),
                 "doc_name": doc.get("doc_name"),
                 "doc_type": doc.get("doc_type"),
                 "slot_key": expectation["slot_key"],
                 "label": expectation["label"],
                 "verification_status": status,
+                "workflow_test_acceptance": _workflow_test_acceptance_payload(db, doc),
             })
+            continue
+        not_verified.append({
+            "document_id": doc.get("id"),
+            "doc_name": doc.get("doc_name"),
+            "doc_type": doc.get("doc_type"),
+            "slot_key": expectation["slot_key"],
+            "label": expectation["label"],
+            "verification_status": status,
+        })
     return {
         "passed": not missing and not not_verified,
         "required_count": len(expectations),
         "uploaded_count": len(rows),
-        "verified_required_count": len(expectations) - len(missing) - len(not_verified),
+        "verified_required_count": verified_required_count,
+        "satisfied_required_count": verified_required_count + len(workflow_test_accepted),
+        "workflow_test_accepted_required_count": len(workflow_test_accepted),
+        "workflow_test_accepted": workflow_test_accepted,
         "missing": missing,
         "not_verified": not_verified,
     }
@@ -6091,6 +6181,8 @@ class KYCSubmitHandler(BaseHandler):
                 "application_id": real_id,
                 "application_ref": app["ref"],
                 "required_documents_verified": verification_gate["verified_required_count"],
+                "required_documents_workflow_test_accepted": verification_gate.get("workflow_test_accepted_required_count", 0),
+                "required_documents_satisfied": verification_gate.get("satisfied_required_count", verification_gate["verified_required_count"]),
                 "required_documents_total": verification_gate["required_count"],
                 "documents_uploaded": doc_count,
             }, sort_keys=True),
@@ -6105,6 +6197,8 @@ class KYCSubmitHandler(BaseHandler):
             "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
             "documents_uploaded": doc_count,
             "required_documents_verified": verification_gate["verified_required_count"],
+            "required_documents_workflow_test_accepted": verification_gate.get("workflow_test_accepted_required_count", 0),
+            "required_documents_satisfied": verification_gate.get("satisfied_required_count", verification_gate["verified_required_count"]),
         })
 
 
@@ -7663,6 +7757,234 @@ class DocumentEvidenceClassificationHandler(BaseHandler):
             db.close()
             logger.error("document_evidence_classification_failed doc_id=%s error=%s", doc_id, exc, exc_info=True)
             self.error("Document evidence classification could not be saved", 500)
+
+
+class DocumentWorkflowTestAcceptanceHandler(BaseHandler):
+    """POST /api/documents/:id/workflow-test-acceptance — staging-only workflow mechanics acceptance."""
+    def post(self, doc_id):
+        if not _workflow_test_acceptance_enabled():
+            return self.error("Workflow-test evidence acceptance is available in staging only", 403)
+
+        user = self.require_auth(roles=list(WORKFLOW_TEST_ACCEPTANCE_ROLES))
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        reason = sanitize_input(data.get("reason", "") or "")[:1000]
+        if not reason:
+            return self.error("Workflow-test acceptance requires a reason", 400)
+        enhanced_requirement_id = data.get("enhanced_requirement_id")
+        if enhanced_requirement_id in ("", None):
+            enhanced_requirement_id = None
+
+        db = get_db()
+        try:
+            doc = db.execute(
+                """
+                SELECT *
+                FROM documents
+                WHERE id = ?
+                """,
+                (doc_id,),
+            ).fetchone()
+            if not doc:
+                db.close()
+                return self.error("Document not found", 404)
+            doc = dict(doc)
+
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (doc["application_id"],),
+            ).fetchone()
+            if not app:
+                db.close()
+                return self.error("Application not found", 404)
+            app = dict(app)
+
+            if not self.check_app_ownership(user, app):
+                db.close()
+                return
+
+            if _normalize_evidence_class(doc.get("evidence_class")) != "test_only_synthetic":
+                db.close()
+                return self.error(
+                    "Only documents classified as test-only synthetic can be accepted for workflow testing",
+                    400,
+                )
+
+            requirement_before = None
+            if enhanced_requirement_id is not None:
+                requirement = db.execute(
+                    """
+                    SELECT *
+                    FROM application_enhanced_requirements
+                    WHERE id = ? AND application_id = ? AND active = 1
+                    """,
+                    (enhanced_requirement_id, app["id"]),
+                ).fetchone()
+                if not requirement:
+                    db.close()
+                    return self.error("Enhanced requirement not found for this application", 404)
+                requirement_before = dict(requirement)
+                if str(requirement_before.get("requirement_type") or "").lower() != "document":
+                    db.close()
+                    return self.error("Workflow-test acceptance can only satisfy document requirements", 400)
+                linked_doc = requirement_before.get("linked_document_id")
+                if linked_doc and linked_doc != doc_id:
+                    db.close()
+                    return self.error("Enhanced requirement is already linked to a different document", 409)
+
+            before_state = {
+                "document": {
+                    "document_id": doc["id"],
+                    "doc_type": doc.get("doc_type"),
+                    "doc_name": doc.get("doc_name"),
+                    "verification_status": doc.get("verification_status"),
+                    "evidence_class": doc.get("evidence_class"),
+                    "workflow_test_accepted": doc.get("workflow_test_accepted"),
+                    "workflow_test_acceptance_reason": doc.get("workflow_test_acceptance_reason"),
+                    "workflow_test_accepted_by": doc.get("workflow_test_accepted_by"),
+                    "workflow_test_accepted_at": doc.get("workflow_test_accepted_at"),
+                    "workflow_test_acceptance_environment": doc.get("workflow_test_acceptance_environment"),
+                },
+                "enhanced_requirement": {
+                    "id": requirement_before.get("id"),
+                    "status": requirement_before.get("status"),
+                    "linked_document_id": requirement_before.get("linked_document_id"),
+                    "workflow_test_accepted": requirement_before.get("workflow_test_accepted"),
+                } if requirement_before else None,
+            }
+
+            db.execute(
+                """
+                UPDATE documents
+                SET workflow_test_accepted = ?,
+                    workflow_test_acceptance_reason = ?,
+                    workflow_test_accepted_by = ?,
+                    workflow_test_accepted_at = datetime('now'),
+                    workflow_test_acceptance_environment = ?
+                WHERE id = ?
+                """,
+                (True, reason, user.get("sub", ""), "staging", doc_id),
+            )
+
+            if requirement_before:
+                review_note = (
+                    "Accepted for staging workflow testing only; verification truth unchanged. "
+                    f"Reason: {reason}"
+                )
+                db.execute(
+                    """
+                    UPDATE application_enhanced_requirements
+                    SET status = 'accepted',
+                        linked_document_id = ?,
+                        reviewed_by = ?,
+                        reviewed_at = datetime('now'),
+                        review_notes = ?,
+                        workflow_test_accepted = ?,
+                        workflow_test_acceptance_reason = ?,
+                        workflow_test_accepted_by = ?,
+                        workflow_test_accepted_at = datetime('now'),
+                        workflow_test_acceptance_environment = ?,
+                        workflow_test_acceptance_document_id = ?,
+                        updated_by = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (
+                        doc_id,
+                        user.get("sub", ""),
+                        review_note,
+                        True,
+                        reason,
+                        user.get("sub", ""),
+                        "staging",
+                        doc_id,
+                        user.get("sub", ""),
+                        enhanced_requirement_id,
+                    ),
+                )
+
+            updated = db.execute(
+                """
+                SELECT *
+                FROM documents
+                WHERE id = ?
+                """,
+                (doc_id,),
+            ).fetchone()
+            result = dict(updated)
+            _decorate_document_evidence_classification(db, result)
+            _decorate_document_workflow_test_acceptance(db, result)
+
+            requirement_after = None
+            if requirement_before:
+                requirement_after = dict(db.execute(
+                    "SELECT * FROM application_enhanced_requirements WHERE id = ?",
+                    (enhanced_requirement_id,),
+                ).fetchone())
+
+            app_summary = _pilot_evidence_classification_summary(db, app)
+            after_state = {
+                "document": {
+                    "document_id": result["id"],
+                    "doc_type": result.get("doc_type"),
+                    "doc_name": result.get("doc_name"),
+                    "verification_status": result.get("verification_status"),
+                    "evidence_class": result.get("evidence_class"),
+                    "workflow_test_accepted": result.get("workflow_test_accepted"),
+                    "workflow_test_acceptance_reason": result.get("workflow_test_acceptance_reason"),
+                    "workflow_test_accepted_by": result.get("workflow_test_accepted_by"),
+                    "workflow_test_accepted_at": result.get("workflow_test_accepted_at"),
+                    "workflow_test_acceptance_environment": result.get("workflow_test_acceptance_environment"),
+                },
+                "enhanced_requirement": {
+                    "id": requirement_after.get("id"),
+                    "status": requirement_after.get("status"),
+                    "linked_document_id": requirement_after.get("linked_document_id"),
+                    "workflow_test_accepted": requirement_after.get("workflow_test_accepted"),
+                    "workflow_test_acceptance_document_id": requirement_after.get("workflow_test_acceptance_document_id"),
+                } if requirement_after else None,
+            }
+
+            self.log_audit(
+                user,
+                "Workflow Test Evidence Accepted",
+                app["ref"],
+                json.dumps({
+                    "document_id": doc_id,
+                    "doc_type": doc.get("doc_type"),
+                    "doc_name": doc.get("doc_name"),
+                    "enhanced_requirement_id": enhanced_requirement_id,
+                    "reason": reason,
+                    "actor_role": user.get("role"),
+                    "environment": "staging",
+                    "verification_status_unchanged": result.get("verification_status"),
+                    "evidence_class": result.get("evidence_class"),
+                    "workflow_only": True,
+                    "pilot_evidence_classification": app_summary.get("pilot_evidence_classification"),
+                    "can_count_as_pilot_approval_proof": False,
+                }, sort_keys=True, default=str),
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
+            db.commit()
+            db.close()
+            self.success({
+                "document": result,
+                "enhanced_requirement": requirement_after,
+                "pilot_evidence_summary": app_summary,
+            })
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            logger.error("workflow_test_acceptance_failed doc_id=%s error=%s", doc_id, exc, exc_info=True)
+            self.error("Workflow-test evidence acceptance could not be saved", 500)
 
 
 class DocumentAIVerifyHandler(BaseHandler):
@@ -10757,6 +11079,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
         for doc in documents:
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
             _decorate_document_evidence_classification(db, doc)
+            _decorate_document_workflow_test_acceptance(db, doc)
 
         include_history = self.get_argument("include_history", "false").lower() == "true"
         document_history = []
@@ -10771,6 +11094,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
             for doc in document_history:
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
                 _decorate_document_evidence_classification(db, doc)
+                _decorate_document_workflow_test_acceptance(db, doc)
         pilot_evidence_summary = _pilot_evidence_classification_summary(db, app_dict, documents)
         app_dict["pilot_evidence_summary"] = pilot_evidence_summary
 
@@ -21133,6 +21457,7 @@ def make_app():
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
         (r"/api/documents/([^/]+)/evidence-classification", DocumentEvidenceClassificationHandler),
+        (r"/api/documents/([^/]+)/workflow-test-acceptance", DocumentWorkflowTestAcceptanceHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
         (r"/api/resources/([^/]+)/download", ComplianceResourceDownloadHandler),
         (r"/api/resources", ComplianceResourcesHandler),
