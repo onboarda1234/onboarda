@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Optional
 
 from base_handler import _safe_json
 from db import get_db
+from observability import emit_cloudwatch_metric_log
 from verification_jobs import (
     format_async_job_health_log_line,
     format_verification_job_timing_log_fields,
@@ -24,6 +25,8 @@ from verification_jobs import (
     mark_verification_job_failed,
     mark_verification_job_succeeded,
     recover_stuck_verification_jobs,
+    verification_job_timing_ms,
+    verification_queue_observability_snapshot,
 )
 from verification_state import (
     STATE_FAILED,
@@ -36,11 +39,13 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_DOCUMENT_STATES = (STATE_VERIFIED, STATE_FLAGGED, STATE_FAILED)
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
+DEFAULT_OBSERVABILITY_INTERVAL_SECONDS = 60.0
 SYSTEM_USER = {
     "sub": "system:verification-worker",
     "name": "Verification Worker",
     "role": "system",
 }
+_LAST_OBSERVABILITY_EMIT_MONOTONIC = 0.0
 
 
 class RetryableVerificationWorkerError(Exception):
@@ -147,6 +152,84 @@ def _is_retryable_exception(exc: Exception) -> bool:
     return isinstance(exc, (TimeoutError, ConnectionError))
 
 
+def _observability_interval_seconds() -> float:
+    try:
+        return max(
+            float(os.getenv("VERIFICATION_OBSERVABILITY_INTERVAL_SECONDS", DEFAULT_OBSERVABILITY_INTERVAL_SECONDS)),
+            5.0,
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_OBSERVABILITY_INTERVAL_SECONDS
+
+
+def emit_verification_observability_metrics(
+    db,
+    *,
+    worker_id: str,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Emit PII-safe verification queue gauges for CloudWatch alarms."""
+
+    global _LAST_OBSERVABILITY_EMIT_MONOTONIC
+    now_monotonic = time.monotonic()
+    if (
+        not force
+        and now_monotonic - _LAST_OBSERVABILITY_EMIT_MONOTONIC
+        < _observability_interval_seconds()
+    ):
+        return {"emitted": False}
+
+    snapshot = verification_queue_observability_snapshot(db)
+    dimensions = {
+        "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT", "unknown"),
+        "service": "verification-worker",
+    }
+    emit_cloudwatch_metric_log(
+        "VerificationQueueDepth",
+        snapshot.get("queue_depth") or 0,
+        **dimensions,
+    )
+    emit_cloudwatch_metric_log(
+        "VerificationStuckJobs",
+        snapshot.get("stuck_jobs") or 0,
+        **dimensions,
+    )
+    emit_cloudwatch_metric_log(
+        "VerificationOldestPendingAgeSeconds",
+        snapshot.get("oldest_pending_age_seconds") or 0,
+        unit="Seconds",
+        **dimensions,
+    )
+    emit_cloudwatch_metric_log(
+        "VerificationFailedJobsLastHour",
+        snapshot.get("failed_last_hour") or 0,
+        **dimensions,
+    )
+    logger.info(
+        "verification_queue_observability queue_depth=%s stuck_jobs=%s oldest_pending_age_seconds=%s failed_last_hour=%s worker_id=%s",
+        snapshot.get("queue_depth"),
+        snapshot.get("stuck_jobs"),
+        snapshot.get("oldest_pending_age_seconds"),
+        snapshot.get("failed_last_hour"),
+        worker_id,
+    )
+    _LAST_OBSERVABILITY_EMIT_MONOTONIC = now_monotonic
+    return {"emitted": True, "snapshot": snapshot}
+
+
+def _safe_emit_worker_metric(metric_name: str, value, *, unit: str = "Count") -> None:
+    try:
+        emit_cloudwatch_metric_log(
+            metric_name,
+            value,
+            unit=unit,
+            environment=os.getenv("APP_ENV") or os.getenv("ENVIRONMENT", "unknown"),
+            service="verification-worker",
+        )
+    except Exception:
+        logger.exception("verification_worker_metric_emit_failed metric_name=%s", metric_name)
+
+
 def default_verification_executor(db, job: Dict[str, Any], worker_id: str) -> Dict[str, Any]:
     """Run the existing synchronous verification path for a claimed job."""
     from server import DocumentVerifyHandler
@@ -225,6 +308,16 @@ def process_claimed_job(
             transition_document=not bool(result.get("document_already_updated")),
         )
         db.commit()
+        try:
+            timing = verification_job_timing_ms(updated)
+            if timing.get("end_to_end_job_ms") is not None:
+                _safe_emit_worker_metric(
+                    "VerificationEndToEndJobMs",
+                    timing["end_to_end_job_ms"],
+                    unit="Milliseconds",
+                )
+        except Exception:
+            logger.exception("verification_worker_timing_metric_failed job_id=%s", job["id"])
         logger.info(
             "verification_worker_job_completed job_id=%s document_id=%s status=%s worker_id=%s %s",
             job["id"],
@@ -253,6 +346,7 @@ def process_claimed_job(
             retryable=retryable,
         )
         db.commit()
+        _safe_emit_worker_metric("VerificationWorkerFailures", 1)
         logger.warning(
             "verification_worker_job_failed job_id=%s document_id=%s retryable=%s error_type=%s %s",
             job["id"],
@@ -283,6 +377,10 @@ def run_once(
         health = recover_stuck_verification_jobs(db, worker_id=worker_id)
         if health.get("stuck_jobs"):
             logger.warning(format_async_job_health_log_line(health))
+        try:
+            emit_verification_observability_metrics(db, worker_id=worker_id)
+        except Exception:
+            logger.exception("verification_observability_emit_failed worker_id=%s", worker_id)
         job = claim_next_verification_job(db, worker_id)
         db.commit()
         if not job:
