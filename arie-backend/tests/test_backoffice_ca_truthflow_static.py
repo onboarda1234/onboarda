@@ -246,6 +246,46 @@ def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     assert "Declared PEP:</strong> ' + escapeHtml(person.pep === 'Yes' ? 'Yes' : 'No')" not in region
 
 
+def test_backoffice_screening_disposition_modal_matches_api_contract():
+    html = BACKOFFICE_HTML.read_text()
+
+    modal_start = html.index("<!-- ═══════════════ SCREENING DISPOSITION MODAL")
+    modal_end = html.index('<div class="modal-overlay" id="modal-screening-evidence">', modal_start)
+    modal_region = html[modal_start:modal_end]
+    options_region = _function_region(html, "screeningDispositionCodeOptions", "screeningRationaleWordCount")
+    submit_region = _function_region(html, "submitScreeningDisposition", "renderScreening")
+
+    assert "screening-disposition-evidence" in modal_region
+    assert "Evidence / Provider Reference" in modal_region
+    assert "false_positive_cleared" in options_region
+    assert "true_match" in options_region
+    assert "material_concern" in options_region
+    assert "needs_more_information" in options_region
+    assert "escalated_to_edd" in options_region
+    assert "provider_no_relevant_match" not in options_region
+    assert "potential_sanctions_match" not in options_region
+    assert "evidence_reference: evidenceReference" in submit_region
+    assert "False-positive clearance requires Compliance Officer, SCO, or Admin role" in submit_region
+    assert "False-positive clearance requires an evidence / provider reference" in submit_region
+
+
+def test_backoffice_screening_disposition_history_surfaces_evidence_reference():
+    html = BACKOFFICE_HTML.read_text()
+
+    badge_region = _function_region(html, "screeningReviewBadge", "screeningReviewHistory")
+    history_region = _function_region(html, "screeningReviewHistory", "screeningReviewCard")
+    queue_start = html.index("async function renderScreening")
+    queue_end = html.index("function mapEDDCaseFromApi", queue_start)
+    queue_region = html[queue_start:queue_end]
+
+    assert "review_evidence_reference" in badge_region
+    assert "Evidence/reference:" in badge_region
+    assert "review_evidence_reference" in history_region
+    assert "Evidence/reference:" in history_region
+    assert "canClearScreeningDisposition()" in queue_region
+    assert "False-positive clearance requires Compliance Officer, SCO, or Admin role." in queue_region
+
+
 def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_clear():
     html = BACKOFFICE_HTML.read_text()
 

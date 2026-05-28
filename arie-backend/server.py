@@ -11800,7 +11800,10 @@ def _normalise_screening_review_disposition(disposition, disposition_code):
             if disposition_code in _SCREENING_CANONICAL_DISPOSITION_STORAGE
             else _SCREENING_LEGACY_CODE_TO_CANONICAL.get(disposition_code)
         )
-        return disposition, disposition_code, canonical
+        # Store canonical disposition codes for all new reviews. Legacy UI/API
+        # aliases remain accepted as input, but downstream truth, memo, approval
+        # gates, and audit payloads should not need to reinterpret old labels.
+        return disposition, canonical or disposition_code, canonical
     return disposition, disposition_code, None
 
 
@@ -12017,6 +12020,7 @@ def _screening_review_payload_fields(review):
             "second_reviewed_at": None,
             "second_disposition_code": None,
             "second_rationale": None,
+            "review_evidence_reference": None,
         }
 
     requires_four_eyes = _truthy_review_flag(review.get("requires_four_eyes"))
@@ -12048,6 +12052,7 @@ def _screening_review_payload_fields(review):
         "second_reviewed_at": review.get("second_reviewed_at"),
         "second_disposition_code": review.get("second_disposition_code"),
         "second_rationale": review.get("second_rationale"),
+        "review_evidence_reference": review.get("review_evidence_reference") or review.get("evidence_reference"),
     }
 
 
