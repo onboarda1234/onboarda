@@ -2931,6 +2931,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div id="screening-four-eyes-panel" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;color:var(--text2);"></div>
       <div id="screening-disposition-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;"></div>
       <div class="form-group"><div class="form-label">Disposition Code</div><select class="form-select" id="screening-disposition-code"></select></div>
+      <div class="form-group"><div class="form-label">Evidence / Provider Reference <span id="screening-disposition-evidence-required">(Required for false-positive clearance)</span></div><input class="form-input" id="screening-disposition-evidence" placeholder="Provider case ID, registry extract, document reference, or review pack..." /><div id="screening-disposition-evidence-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Required when clearing a match. Stored in audit evidence; do not paste raw PII.</div></div>
       <div class="form-group"><div class="form-label">Rationale (Required)</div><textarea class="form-input" rows="5" id="screening-disposition-rationale" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;"></textarea><div id="screening-disposition-rationale-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Rationale must be at least 12 characters.</div></div>
     </div>
     <div class="modal-footer">
@@ -7537,6 +7538,7 @@ function screeningReviewBadge(row) {
   return '<div style="margin-top:4px;"><span class="badge ' + cls + '">' + escapeHtml(pendingSecond ? 'Second Review Required' : (labelMap[status] || status)) + '</span>' +
     (meta ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(meta + (row.reviewed_at ? ' • ' + String(row.reviewed_at).substring(0, 19).replace('T', ' ') : '')) + '</div>' : '') +
     code +
+    (row.review_evidence_reference ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Evidence/reference: ' + escapeHtml(row.review_evidence_reference) + '</div>' : '') +
     (row.review_rationale ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_rationale) + '</div>' : row.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_notes) + '</div>' : '') +
     second +
     '</div>';
@@ -7549,6 +7551,7 @@ function screeningReviewHistory(row) {
   html += '<div><strong>First reviewer:</strong> ' + escapeHtml(row.reviewed_by || 'Not recorded') + (row.reviewed_at ? ' • ' + escapeHtml(String(row.reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>';
   html += '<div><strong>Decision:</strong> ' + escapeHtml(String(row.review_disposition || '').replace(/_/g, ' ')) + (row.review_disposition_code ? ' / ' + escapeHtml(row.review_disposition_code.replace(/_/g, ' ')) : '') + '</div>';
   if (row.review_rationale || row.review_notes) html += '<div><strong>Rationale:</strong> ' + escapeHtml(row.review_rationale || row.review_notes) + '</div>';
+  if (row.review_evidence_reference) html += '<div><strong>Evidence/reference:</strong> ' + escapeHtml(row.review_evidence_reference) + '</div>';
   if (row.requires_four_eyes) {
     if (row.second_reviewed_by) {
       html += '<div><strong>Second reviewer:</strong> ' + escapeHtml(row.second_reviewed_by) + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>';
@@ -8455,32 +8458,22 @@ function openScreeningReviewByRow(rowKey) {
 }
 
 function screeningDispositionLabel(disposition) {
-  var labels = { cleared: 'Clear', escalated: 'Escalate', follow_up_required: 'Request Follow-Up' };
+  var labels = { cleared: 'Clear reviewed false positive', escalated: 'Record blocking match', follow_up_required: 'Request Follow-Up' };
   return labels[disposition] || disposition;
 }
 
 function screeningDispositionCodeOptions(disposition) {
   var options = {
     cleared: [
-      ['false_positive', 'False positive'],
-      ['identity_mismatch', 'Identity mismatch'],
-      ['provider_no_relevant_match', 'Provider no relevant match'],
-      ['duplicate_or_irrelevant', 'Duplicate or irrelevant hit'],
-      ['low_risk_context_accepted', 'Low-risk context accepted']
+      ['false_positive_cleared', 'False positive cleared']
     ],
     escalated: [
-      ['potential_sanctions_match', 'Potential sanctions match'],
-      ['potential_pep_match', 'Potential PEP match'],
-      ['adverse_media_match', 'Adverse media match'],
-      ['director_ubo_sensitive_hit', 'Director/UBO sensitive hit'],
-      ['high_risk_jurisdiction', 'High-risk jurisdiction'],
-      ['provider_unresolved', 'Provider unresolved']
+      ['true_match', 'True match'],
+      ['material_concern', 'Material concern'],
+      ['escalated_to_edd', 'Escalated to EDD']
     ],
     follow_up_required: [
-      ['client_clarification_required', 'Client clarification required'],
-      ['missing_identity_data', 'Missing identity data'],
-      ['provider_pending_or_unavailable', 'Provider pending or unavailable'],
-      ['documentation_required', 'Documentation required']
+      ['needs_more_information', 'Needs more information']
     ]
   };
   return options[disposition] || [];
@@ -8497,7 +8490,7 @@ function screeningRationaleWordCount(value) {
 
 function screeningDispositionRationaleHelp(disposition) {
   if (disposition === 'cleared') {
-    return 'Cleared subjects require at least ' + SCREENING_CLEAR_RATIONALE_MIN_CHARS + ' characters and ' + SCREENING_CLEAR_RATIONALE_MIN_WORDS + ' words citing the evidence reviewed.';
+    return 'False-positive clearance requires at least ' + SCREENING_CLEAR_RATIONALE_MIN_CHARS + ' characters and ' + SCREENING_CLEAR_RATIONALE_MIN_WORDS + ' words citing the evidence reviewed. The original match remains visible as reviewed/cleared.';
   }
   return 'Rationale must be at least ' + SCREENING_RATIONALE_MIN_CHARS + ' characters.';
 }
@@ -8513,6 +8506,10 @@ function screeningDispositionRationaleError(disposition, rationale) {
     return 'Cleared screening rationale must be at least ' + SCREENING_CLEAR_RATIONALE_MIN_CHARS + ' characters and ' + SCREENING_CLEAR_RATIONALE_MIN_WORDS + ' words, citing the evidence reviewed.';
   }
   return '';
+}
+
+function canClearScreeningDisposition() {
+  return !!(currentUser && ['admin', 'sco', 'co'].indexOf(currentUser.role) >= 0);
 }
 
 function setScreeningDispositionError(message) {
@@ -8546,6 +8543,16 @@ function openScreeningDispositionModalByRow(rowKey, disposition) {
   }
   var rationale = document.getElementById('screening-disposition-rationale');
   if (rationale) rationale.value = '';
+  var evidence = document.getElementById('screening-disposition-evidence');
+  if (evidence) evidence.value = '';
+  var evidenceRequired = document.getElementById('screening-disposition-evidence-required');
+  if (evidenceRequired) evidenceRequired.style.display = disposition === 'cleared' ? '' : 'none';
+  var evidenceHelp = document.getElementById('screening-disposition-evidence-help');
+  if (evidenceHelp) {
+    evidenceHelp.textContent = disposition === 'cleared'
+      ? 'Required for false-positive clearance. Reference provider case IDs, source records, or review-pack evidence; do not paste raw PII.'
+      : 'Optional evidence/reference. Use provider case IDs, source records, or review-pack references; do not paste raw PII.';
+  }
   var rationaleHelp = document.getElementById('screening-disposition-rationale-help');
   if (rationaleHelp) rationaleHelp.textContent = screeningDispositionRationaleHelp(disposition);
 
@@ -8594,7 +8601,16 @@ async function submitScreeningDisposition() {
   var disposition = pendingScreeningDisposition.disposition;
   var code = document.getElementById('screening-disposition-code').value;
   var rationale = document.getElementById('screening-disposition-rationale').value.trim();
+  var evidenceReference = (document.getElementById('screening-disposition-evidence').value || '').trim();
   if (!code) { setScreeningDispositionError('Select a disposition code.'); return; }
+  if (disposition === 'cleared' && !canClearScreeningDisposition()) {
+    setScreeningDispositionError('False-positive clearance requires Compliance Officer, SCO, or Admin role.');
+    return;
+  }
+  if (disposition === 'cleared' && !evidenceReference) {
+    setScreeningDispositionError('False-positive clearance requires an evidence / provider reference.');
+    return;
+  }
   var rationaleError = screeningDispositionRationaleError(disposition, rationale);
   if (rationaleError) { setScreeningDispositionError(rationaleError); return; }
 
@@ -8608,7 +8624,8 @@ async function submitScreeningDisposition() {
       disposition: disposition,
       disposition_code: code,
       rationale: rationale,
-      notes: rationale
+      notes: rationale,
+      evidence_reference: evidenceReference
     });
     closeModal('modal-screening-disposition');
     showToast(resp.status === 'second_review_required' ? 'First review recorded; awaiting second reviewer' : 'Screening disposition saved');
@@ -8646,7 +8663,11 @@ async function renderScreening() {
       var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReviewByRow(\'' + rowKey + '\')">View</button>';
       if (row.review_required && !row.review_resolved) {
         var clearLabel = row.review_four_eyes_status === 'pending_second_review' ? 'Second Review' : 'Clear';
-        actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">' + clearLabel + '</button>';
+        if (canClearScreeningDisposition()) {
+          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">' + clearLabel + '</button>';
+        } else {
+          actions += ' <button class="btn btn-outline btn-sm" disabled title="False-positive clearance requires Compliance Officer, SCO, or Admin role.">Clear</button>';
+        }
         actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'escalated\')">Escalate</button>';
         actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'follow_up_required\')">Follow-Up</button>';
       }

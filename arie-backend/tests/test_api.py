@@ -3457,6 +3457,10 @@ class TestGovernanceAttemptAudit:
             timeout=3,
         )
         assert resp.status_code == 200
+        assert resp.json()["review"]["canonical_disposition"] == "false_positive_cleared"
+        assert resp.json()["review"]["review_evidence_reference"] == (
+            "Provider case CA-AUDIT-001 reviewed against registry evidence."
+        )
 
         conn = get_db()
         row = conn.execute(
@@ -3480,7 +3484,7 @@ class TestGovernanceAttemptAudit:
         assert detail["response_code"] == 200
         assert review is not None
         assert review["subject_type"] == "entity"
-        assert review["disposition_code"] == "provider_no_relevant_match"
+        assert review["disposition_code"] == "false_positive_cleared"
         assert review["rationale"] == "Testing accepted screening audit with a recorded rationale."
 
     def test_screening_review_requires_code_and_rationale(self, api_server):
@@ -3565,6 +3569,22 @@ class TestGovernanceAttemptAudit:
         assert thin_clear_rationale.status_code == 400
         assert "40 characters" in thin_clear_rationale.json()["error"]
         assert "8 words" in thin_clear_rationale.json()["error"]
+
+        legacy_alias_without_evidence = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_id,
+                "subject_type": "entity",
+                "subject_name": "Phase 1C Required Fields Ltd",
+                "disposition": "cleared",
+                "disposition_code": "provider_no_relevant_match",
+                "rationale": "Officer reviewed provider and registry evidence and wants to clear this as not the same entity.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert legacy_alias_without_evidence.status_code == 400
+        assert "evidence_reference" in legacy_alias_without_evidence.json()["error"]
 
         conn = get_db()
         review = conn.execute("SELECT id FROM screening_reviews WHERE application_id = ?", (app_id,)).fetchone()
@@ -3811,9 +3831,9 @@ class TestGovernanceAttemptAudit:
         ).fetchone()
         conn.close()
 
-        assert review["disposition_code"] == "false_positive"
+        assert review["disposition_code"] == "false_positive_cleared"
         assert review["rationale"] == first_payload["rationale"]
-        assert review["second_disposition_code"] == "identity_mismatch"
+        assert review["second_disposition_code"] == "false_positive_cleared"
         assert review["second_rationale"] == second_payload["rationale"]
         assert review["second_reviewer_id"] == "sco_phase1c"
 
