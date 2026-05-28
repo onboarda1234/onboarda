@@ -11059,10 +11059,12 @@ function renderLifecycleDetailTab(context) {
   var historical = ((summary.historical || {}).items) || [];
   var linkageEdges = ((summary.linkage || {}).edges) || [];
   var activeReview = context && context.reviewDetail;
+  var setupReviewDetail = activeReview || (context && context.setupReviewDetail) || null;
   var requiredItems = Array.isArray(context && context.requiredItems) ? context.requiredItems : [];
   var evidenceLinks = Array.isArray(activeReview && activeReview.evidence_links) ? activeReview.evidence_links : [];
   var applicationDocuments = Array.isArray(currentApp && currentApp._documents) ? currentApp._documents : [];
   var activeReviewProjection = activeReview && activeReview.projection ? activeReview.projection : null;
+  var setupReviewProjection = activeReviewProjection || (setupReviewDetail && setupReviewDetail.projection) || (context && context.reviewSetup) || null;
   var activeReviewItem = context && context.activeReviewItem ? context.activeReviewItem : null;
   var agentSignalCount = Number(((summary.agent_signals || {}).count) || 0);
   var currentReviewActive = !!activeReview;
@@ -11100,8 +11102,18 @@ function renderLifecycleDetailTab(context) {
       lifecycleDetailMeta('Risk level', activeReview.risk_level || (activeReviewProjection && activeReviewProjection.risk_level) || '—') +
       lifecycleDetailMeta('Next review date', activeReview.next_review_date || (activeReviewProjection && activeReviewProjection.next_review_date) || activeReview.due_date || '—') +
     '</div>';
+  } else if (setupReviewDetail) {
+    setupBody += '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);">' +
+      lifecycleDetailMeta('Review setup', 'Review #' + String(setupReviewDetail.id || (setupReviewProjection && setupReviewProjection.review_id) || '').slice(0, 8)) +
+      lifecycleDetailMeta('Status', setupReviewDetail.status_label || (setupReviewProjection && setupReviewProjection.status_label) || setupReviewDetail.status || 'Scheduled') +
+      lifecycleDetailMeta('Risk level', setupReviewDetail.risk_level || (setupReviewProjection && setupReviewProjection.risk_level) || '—') +
+      lifecycleDetailMeta('Next review date', setupReviewDetail.next_review_date || (setupReviewProjection && setupReviewProjection.next_review_date) || setupReviewDetail.due_date || '—') +
+    '</div>' +
+    '<div style="margin-top:14px;">' +
+      lifecycleWorkspaceSection('Manual Legacy Review Baseline', 'Back-office-only imported-book baseline. Available before the scheduled review becomes active.', lifecycleManualLegacyBaselineControls(setupReviewDetail.id, setupReviewDetail, setupReviewProjection), '#334155') +
+    '</div>';
   } else {
-    setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">Lifecycle is now the client-level periodic review workspace. When a review becomes active, the officer controls render here from the canonical review APIs.</div>';
+    setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">Lifecycle is now the client-level periodic review workspace. Manual legacy baseline controls appear here once a periodic review schedule exists; active review execution controls appear when a review becomes due or open.</div>';
   }
 
   var activeWorkBody = activeWorkItems.length
@@ -11259,16 +11271,22 @@ async function loadLifecycleDetailTab(force) {
     var summary = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(app.id) + '/summary');
     var activeItems = ((summary && summary.active) || {}).items || [];
     var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;
+    var reviewSetup = (summary && summary.review_setup) || null;
     var reviewDetail = null;
+    var setupReviewDetail = null;
     var requiredItems = [];
     if (activeReviewItem && activeReviewItem.id != null) {
       reviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(activeReviewItem.id));
       requiredItems = Array.isArray(reviewDetail.required_items) ? reviewDetail.required_items : [];
+    } else if (reviewSetup && reviewSetup.review_id != null) {
+      setupReviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewSetup.review_id));
     }
     var data = {
       summary: summary,
       activeReviewItem: activeReviewItem,
       reviewDetail: reviewDetail,
+      reviewSetup: reviewSetup,
+      setupReviewDetail: setupReviewDetail,
       requiredItems: requiredItems
     };
     window._detailLifecycleTabCache = {

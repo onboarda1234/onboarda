@@ -1000,6 +1000,18 @@ def build_application_lifecycle_summary(
     historical = build_lifecycle_queue(
         db, include="historical", application_id=application_id, now=ref_now,
     )
+    review_setup = None
+    for projection in list_review_projections(db, application_id=application_id):
+        status = str(projection.get("status") or "").strip().lower()
+        if status not in HISTORICAL_REVIEW_STATES:
+            review_setup = {
+                **projection,
+                "id": projection.get("review_id"),
+                "review_id": projection.get("review_id"),
+                "is_active_work": status in ACTIVE_REVIEW_STATES,
+                "source": "periodic_reviews",
+            }
+            break
 
     # --- Linkage edges ------------------------------------------------
     edges: List[Dict[str, Any]] = []
@@ -1054,6 +1066,7 @@ def build_application_lifecycle_summary(
         "application_id": application_id,
         "active": active,
         "historical": historical,
+        "review_setup": review_setup,
         "linkage": {"edges": edges, "count": len(edges)},
         "agent_signals": {
             "items": active_signals,
