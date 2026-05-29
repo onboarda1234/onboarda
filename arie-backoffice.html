@@ -154,10 +154,6 @@ a { color:var(--brand); text-decoration:none; }
 .overview-compact-lifecycle { margin:0 0 12px; padding:10px 14px; border:1px solid #dfe7f2; border-radius:12px; background:#fbfdff; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
 .overview-compact-lifecycle-copy { font-size:12px; color:var(--text2); line-height:1.45; }
 .overview-compact-lifecycle-copy strong { color:var(--text1); }
-.overview-top-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,420px); gap:16px; align-items:start; margin-bottom:16px; }
-.overview-top-main > :last-child,
-.overview-top-aside > :last-child { margin-bottom:0; }
-.overview-top-aside { position:sticky; top:92px; }
 .prescreen-collapsible-card { border:1px solid #d6ddf7; border-radius:14px; background:#fbfcff; overflow:hidden; box-shadow:0 8px 20px rgba(99,102,241,0.06); }
 .prescreen-collapsible-card details { background:inherit; }
 .prescreen-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:14px 16px; }
@@ -247,10 +243,8 @@ a { color:var(--brand); text-decoration:none; }
 .lifecycle-workspace-panels > * { min-width:0; }
 @media (max-width:1180px) {
   .lifecycle-top-grid,
-  .lifecycle-workspace-layout,
-  .overview-top-layout { grid-template-columns:1fr; }
+  .lifecycle-workspace-layout { grid-template-columns:1fr; }
   .lifecycle-workspace-steps { position:static; max-height:none; overflow:visible; padding-right:0; }
-  .overview-top-aside { position:static; }
 }
 @media (max-width:760px) {
   .lifecycle-detail-hero { padding:15px; }
@@ -1271,45 +1265,41 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div id="detail-entity-info"></div>
     </div>
 
-    <div class="overview-top-layout">
-      <div class="overview-top-main">
-        <div class="detail-section" id="detail-rmi-section" style="display:none;">
-          <div class="detail-section-title">Request For More Information</div>
-          <div id="detail-rmi-panel"></div>
-        </div>
-
-        <div class="detail-section">
-          <div class="detail-section-title">Directors & UBOs</div>
-          <div id="detail-persons"></div>
-        </div>
-        <div class="detail-section">
-          <div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-            <span>Officer Correction History</span>
-            <button class="btn btn-outline btn-sm" onclick="openOfficerCorrectionModal()" style="font-size:11px;">Add correction</button>
-          </div>
-          <div id="detail-officer-corrections"></div>
-        </div>
-      </div>
-
-      <aside class="overview-top-aside">
-        <div class="prescreen-collapsible-card" id="prescreen-summary-card">
-          <details id="detail-prescreen-summary-details" open>
-            <summary>
-              <div class="prescreen-collapsible-copy">
-                <div class="prescreen-collapsible-title">Pre-Screening Summary</div>
-                <div class="prescreen-collapsible-subtitle">All data submitted by the client during pre-screening.</div>
-              </div>
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <span class="prescreen-collapsible-meta">Client-submitted onboarding data</span>
-                <span class="prescreen-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
-              </div>
-            </summary>
-            <div class="prescreen-collapsible-body">
-              <div id="detail-prescreen-summary"></div>
+    <div class="detail-section">
+      <div class="prescreen-collapsible-card" id="prescreen-summary-card">
+        <details id="detail-prescreen-summary-details" open>
+          <summary>
+            <div class="prescreen-collapsible-copy">
+              <div class="prescreen-collapsible-title">Pre-Screening Summary</div>
+              <div class="prescreen-collapsible-subtitle">All data submitted by the client during pre-screening.</div>
             </div>
-          </details>
-        </div>
-      </aside>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span class="prescreen-collapsible-meta">Client-submitted onboarding data</span>
+              <span class="prescreen-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+            </div>
+          </summary>
+          <div class="prescreen-collapsible-body">
+            <div id="detail-prescreen-summary"></div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="detail-section" id="detail-rmi-section" style="display:none;">
+      <div class="detail-section-title">Request For More Information</div>
+      <div id="detail-rmi-panel"></div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-title">Directors & UBOs</div>
+      <div id="detail-persons"></div>
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <span>Officer Correction History</span>
+        <button class="btn btn-outline btn-sm" onclick="openOfficerCorrectionModal()" style="font-size:11px;">Add correction</button>
+      </div>
+      <div id="detail-officer-corrections"></div>
     </div>
 
       <!-- Documents moved to KYC Documents & Verifications tab -->
