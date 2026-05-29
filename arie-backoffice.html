@@ -13817,6 +13817,10 @@ function getCaseCommandBlockers(app) {
   var status = String(app.statusRaw || app.status || '').toLowerCase();
   var screening = getApplicationScreeningSummary(app);
   var screeningTruth = screening.screening_truth_summary || null;
+  var screeningReviews = Array.isArray(app.screeningReviews) ? app.screeningReviews : [];
+  var pendingScreeningReviews = screeningReviews.filter(function(review) {
+    return review && review.review_required;
+  });
   var documentReadiness = computeDocumentReadinessSummary(app);
   var enhanced = getEnhancedReviewSummary(app);
   var memoData = app.latestMemo || null;
@@ -13866,7 +13870,20 @@ function getCaseCommandBlockers(app) {
     );
   }
 
-  if (!screening.screening_run_recorded) {
+  if (pendingScreeningReviews.length > 0) {
+    addBlocker(
+      'screening-review',
+      'Screening',
+      pendingScreeningReviews.length === 1
+        ? 'A screening result still needs officer review.'
+        : String(pendingScreeningReviews.length) + ' screening results still need officer review.',
+      'Open the screening tab to review the latest match evidence and record an officer disposition before approval.',
+      'Resolve screening',
+      'screening',
+      'detail-screening-review',
+      true
+    );
+  } else if (!screening.screening_run_recorded) {
     addBlocker(
       'screening-missing',
       'Screening',

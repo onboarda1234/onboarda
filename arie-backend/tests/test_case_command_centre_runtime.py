@@ -138,6 +138,7 @@ def _base_app(**overrides):
         "assigned": "Case Officer",
         "monitoringAlerts": [],
         "_documents": [],
+        "screeningReviews": [],
         "prescreeningData": {},
         "latestMemo": {
             "sections": {"summary": {"content": "ok"}},
@@ -209,6 +210,36 @@ class TestCaseCommandCentreRuntime:
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "screening-missing" in blocker_ids
         assert "Screening review is still required." in result["html"]
+
+    def test_screening_review_blocker_uses_application_screening_reviews(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        screeningReviews=[
+                            {
+                                "subject_name": "John Harbor",
+                                "subject_type": "ubo",
+                                "review_required": True,
+                                "review_disposition": None,
+                            }
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Screening review pending."]},
+                },
+            )
+        )
+        blocker_ids = [item["id"] for item in result["blockers"]]
+        assert "screening-review" in blocker_ids
+        assert "A screening result still needs officer review." in result["html"]
+        assert "Resolve screening" in result["html"]
 
     def test_memo_missing_blocker_is_shown(self):
         html = _read_backoffice()
