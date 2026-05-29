@@ -145,6 +145,15 @@ a { color:var(--brand); text-decoration:none; }
 .detail-row { display:flex; justify-content:space-between; padding:6px 0; font-size:13px; }
 .detail-row .label { color:var(--text3); }
 .detail-row .value { font-weight:500; text-align:right; max-width:60%; }
+.overview-collapsible-card { margin:0 0 16px; }
+.overview-collapsible-card details { border:1px solid var(--border1); border-radius:12px; background:var(--surface); }
+.overview-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; font-size:13px; font-weight:700; color:var(--text1); }
+.overview-collapsible-card summary::-webkit-details-marker { display:none; }
+.overview-collapsible-hint { font-size:11px; font-weight:500; color:var(--text3); }
+.overview-collapsible-body { padding:0 14px 14px; }
+.overview-compact-lifecycle { margin:0 0 12px; padding:10px 14px; border:1px solid #dfe7f2; border-radius:12px; background:#fbfdff; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+.overview-compact-lifecycle-copy { font-size:12px; color:var(--text2); line-height:1.45; }
+.overview-compact-lifecycle-copy strong { color:var(--text1); }
 .case-command-centre { margin:0 0 14px; border:1px solid var(--border1); border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%); box-shadow:0 10px 22px rgba(16,24,40,0.05); overflow:hidden; }
 .case-command-centre-header { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; padding:14px 16px 10px; border-bottom:1px solid var(--border1); flex-wrap:wrap; }
 .case-command-centre-eyebrow { font-size:11px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--brand); }
@@ -1213,18 +1222,23 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Tab: Overview (full width) -->
   <div id="detail-tab-overview">
-    <!-- Lifecycle summary (PR-B AC5): typed-edge linkage chips, above-the-fold. -->
+    <!-- Lifecycle summary: compact actionable strip; full detail remains in Lifecycle tab. -->
     <div id="detail-lifecycle-summary"></div>
-    <!-- Client Info (full width) -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title" id="detail-company-name">Company Name</div>
-          <div id="detail-badges"></div>
-        </div>
-        <div class="detail-section">
-          <div class="detail-section-title">Entity Information</div>
+
+    <div id="detail-company-name" style="height:0;overflow:hidden;font-size:0;line-height:0;" aria-hidden="true">Company Name</div>
+    <div id="detail-badges" style="display:none;" aria-hidden="true"></div>
+
+    <div class="overview-collapsible-card">
+      <details id="detail-application-data">
+        <summary>
+          <span>Application Data</span>
+          <span class="overview-collapsible-hint">Profile details and timestamps</span>
+        </summary>
+        <div class="overview-collapsible-body">
           <div id="detail-entity-info"></div>
         </div>
+      </details>
+    </div>
 
         <div class="detail-section" id="detail-rmi-section" style="display:none;">
           <div class="detail-section-title">Request For More Information</div>
@@ -1255,7 +1269,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           </div>
           <div id="detail-officer-corrections"></div>
         </div>
-      </div>
 
       <!-- Documents moved to KYC Documents & Verifications tab -->
 
@@ -6356,14 +6369,18 @@ function renderAuthoritativeAppDetail(app, options) {
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
 
-  document.getElementById('detail-company-name').textContent = app.company;
-  document.getElementById('detail-badges').innerHTML = riskBadgeForRecord(app) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + renderIncompleteSubmissionBadge(documentReadiness);
+  var detailCompanyName = document.getElementById('detail-company-name');
+  if (detailCompanyName) detailCompanyName.textContent = app.company;
+  var detailBadges = document.getElementById('detail-badges');
+  if (detailBadges) {
+    detailBadges.innerHTML = riskBadgeForRecord(app) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + renderIncompleteSubmissionBadge(documentReadiness);
+  }
 
   document.getElementById('detail-entity-info').innerHTML =
-    '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
+    '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date || '—') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Last updated</span><span class="value">' + escapeHtml(app.updated_at || '—') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Last document upload</span><span class="value">' + escapeHtml(app.last_document_upload || '—') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Screening refreshed</span><span class="value">' + escapeHtml(app.screening_updated_at || '—') + '</span></div>';
   renderRMIPanel(app);
 
   // Format nested estimated_monthly_activity object into readable string
@@ -9973,41 +9990,31 @@ async function loadLifecycleApplicationSummary(applicationId) {
 function renderLifecycleApplicationSummary(resp) {
   var container = document.getElementById('detail-lifecycle-summary');
   if (!container) return;
-  var linkage = (resp && resp.linkage) || { edges: [], count: 0 };
-  var activeCount  = ((resp && resp.active  && resp.active.counts)  || {}).total || 0;
-  var historicalCount = ((resp && resp.historical && resp.historical.counts) || {}).total || 0;
-  var agentSignalCount = ((resp && resp.agent_signals) || {}).count || 0;
-
-  function edgeChip(edge) {
-    function side(o) {
-      var t = String((o && o.type) || '').toLowerCase();
-      var label = (t === 'edd') ? 'EDD' : (t.charAt(0).toUpperCase() + t.slice(1));
-      var idShort = (o && o.id) ? String(o.id).slice(0, 8) : '?';
-      return { kind: t, id: o && o.id, label: label + ' #' + idShort };
+  var activeItems = ((resp && resp.active) || {}).items || [];
+  var activeCount = ((resp && resp.active && resp.active.counts) || {}).total || activeItems.length || 0;
+  if (!activeCount || !activeItems.length) {
+    container.innerHTML = '';
+    if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
+      renderCaseCommandCentre(window._currentDetailApp);
     }
-    var from = side(edge.from);
-    var to = side(edge.to);
-    // PR-C — app-summary edges route through prcChipHtml so clicking
-    // either end of the edge opens the relevant detail modal.
-    var fromChip = from.id != null ? prcChipHtml(from.label, from.kind, from.id) : '<span>' + escapeHtml(from.label) + '</span>';
-    var toChip = to.id != null ? prcChipHtml(to.label, to.kind, to.id) : '<span>' + escapeHtml(to.label) + '</span>';
-    return '<span style="display:inline-flex;gap:4px;align-items:center;">' + fromChip + '<span style="color:var(--text3);">→</span>' + toChip + '</span>';
+    return;
   }
 
-  var edgesHtml = (linkage.edges && linkage.edges.length)
-    ? linkage.edges.map(edgeChip).join(' ')
-    : '<span style="font-size:11px;color:var(--text3);">No linked lifecycle objects.</span>';
+  var labels = [];
+  activeItems.forEach(function(item) {
+    var label = lifecycleObjectLabel(item);
+    if (labels.indexOf(label) < 0) labels.push(label);
+  });
+  var visibleLabels = labels.slice(0, 3);
+  var moreCount = Math.max(labels.length - visibleLabels.length, 0);
+  var itemWord = activeCount === 1 ? 'item' : 'items';
+  var labelText = visibleLabels.join(', ');
+  if (moreCount > 0) labelText += ' +' + moreCount + ' more';
 
   container.innerHTML =
-    '<div class="card" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.03);margin-bottom:16px;">' +
-      '<div class="card-header" style="margin-bottom:12px;">' +
-        '<div class="card-icon" style="background:rgba(124,58,237,0.1);color:#7c3aed;">🔗</div>' +
-        '<div>' +
-          '<div class="card-title">Lifecycle Summary</div>' +
-          '<div style="font-size:11px;color:var(--text3);">Active: ' + activeCount + ' · Historical: ' + historicalCount + ' · Linked edges: ' + linkage.count + ' · Agent signals: ' + agentSignalCount + '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' + edgesHtml + '</div>' +
+    '<div class="overview-compact-lifecycle">' +
+      '<div class="overview-compact-lifecycle-copy"><strong>Lifecycle:</strong> ' + escapeHtml(String(activeCount)) + ' active linked ' + escapeHtml(itemWord) + ' — ' + escapeHtml(labelText) + '</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'lifecycle\',\'detail-tab-lifecycle\')">Review lifecycle</button>' +
     '</div>';
   if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
     renderCaseCommandCentre(window._currentDetailApp);
