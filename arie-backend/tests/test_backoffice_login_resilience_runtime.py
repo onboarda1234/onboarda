@@ -59,16 +59,22 @@ def _login_runtime_js(html, scenario):
                 }
 
                 function makeElement(id) {
+                  const attributes = {};
                   return {
                     id,
                     value: '',
                     textContent: '',
                     innerHTML: '',
                     disabled: false,
+                    hidden: false,
                     focusCalled: false,
                     style: {},
+                    attributes,
                     classList: makeClassList(id === 'login-error' || id === 'dashboard-load-warning' ? [] : []),
-                    focus() { this.focusCalled = true; }
+                    focus() { this.focusCalled = true; },
+                    setAttribute(name, value) { this.attributes[name] = String(value); },
+                    getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; },
+                    removeAttribute(name) { delete this.attributes[name]; }
                   };
                 }
 
@@ -112,6 +118,10 @@ def _login_runtime_js(html, scenario):
                 document.getElementById('login-email').value = '';
                 document.getElementById('login-password').value = '';
                 document.getElementById('login-error-text').textContent = 'Invalid email or password. Please try again.';
+                document.getElementById('login-overlay').style.display = 'flex';
+                document.getElementById('login-overlay').style.pointerEvents = 'auto';
+                document.getElementById('login-overlay').style.visibility = 'visible';
+                document.getElementById('login-overlay').setAttribute('aria-hidden', 'false');
 
                 function showToast(message, type) { toasts.push({ message, type }); }
                 function mapApplicationFromApi(app) { return Object.assign({ ref: app.ref || 'ARF-TEST-1' }, app); }
@@ -195,6 +205,12 @@ def _scenario_script(fetch_behavior_js, api_behavior_js):
                 document.getElementById('login-error').classList = makeClassList([]);
                 document.getElementById('login-overlay').classList = makeClassList([]);
                 document.getElementById('dashboard-load-warning').classList = makeClassList([]);
+                document.getElementById('login-overlay').hidden = false;
+                document.getElementById('login-overlay').style.display = 'flex';
+                document.getElementById('login-overlay').style.pointerEvents = 'auto';
+                document.getElementById('login-overlay').style.visibility = 'visible';
+                document.getElementById('login-overlay').setAttribute('aria-hidden', 'false');
+                document.body.className = 'role-admin login-active';
 
                 global.fetch = async function(url, options) {
                   fetchCalls.push({ url, method: (options || {}).method || 'GET' });
@@ -210,6 +226,12 @@ def _scenario_script(fetch_behavior_js, api_behavior_js):
                   await handleLogin({ preventDefault() {} });
                   console.log(JSON.stringify({
                     overlayHidden: document.getElementById('login-overlay').classList.contains('hidden'),
+                    overlayDisplay: document.getElementById('login-overlay').style.display || '',
+                    overlayPointerEvents: document.getElementById('login-overlay').style.pointerEvents || '',
+                    overlayVisibility: document.getElementById('login-overlay').style.visibility || '',
+                    overlayAriaHidden: document.getElementById('login-overlay').getAttribute('aria-hidden'),
+                    overlayHiddenAttr: !!document.getElementById('login-overlay').hidden,
+                    bodyClassName: document.body.className,
                     loginErrorVisible: document.getElementById('login-error').classList.contains('show'),
                     loginErrorText: document.getElementById('login-error-text').textContent,
                     warningVisible: document.getElementById('dashboard-load-warning').classList.contains('show'),
@@ -279,6 +301,12 @@ class TestBackofficeLoginResilienceRuntime:
         result = _run_node(_login_runtime_js(html, scenario))
 
         assert result["overlayHidden"] is True
+        assert result["overlayDisplay"] == "none"
+        assert result["overlayPointerEvents"] == "none"
+        assert result["overlayVisibility"] == "hidden"
+        assert result["overlayAriaHidden"] == "true"
+        assert result["overlayHiddenAttr"] is True
+        assert "authenticated" in result["bodyClassName"]
         assert result["loginErrorVisible"] is False
         assert result["warningVisible"] is False
         assert result["token"] == "token-123"
@@ -304,6 +332,11 @@ class TestBackofficeLoginResilienceRuntime:
         result = _run_node(_login_runtime_js(html, scenario))
 
         assert result["overlayHidden"] is True
+        assert result["overlayDisplay"] == "none"
+        assert result["overlayPointerEvents"] == "none"
+        assert result["overlayVisibility"] == "hidden"
+        assert result["overlayAriaHidden"] == "true"
+        assert result["overlayHiddenAttr"] is True
         assert result["loginErrorVisible"] is False
         assert result["warningVisible"] is True
         assert "Users" in result["warningText"]
@@ -329,6 +362,11 @@ class TestBackofficeLoginResilienceRuntime:
         result = _run_node(_login_runtime_js(html, scenario))
 
         assert result["overlayHidden"] is True
+        assert result["overlayDisplay"] == "none"
+        assert result["overlayPointerEvents"] == "none"
+        assert result["overlayVisibility"] == "hidden"
+        assert result["overlayAriaHidden"] == "true"
+        assert result["overlayHiddenAttr"] is True
         assert result["loginErrorVisible"] is False
         assert result["warningVisible"] is True
         assert "EDD cases" in result["warningText"]
@@ -348,6 +386,12 @@ class TestBackofficeLoginResilienceRuntime:
         result = _run_node(_login_runtime_js(html, scenario))
 
         assert result["overlayHidden"] is False
+        assert result["overlayDisplay"] == "flex"
+        assert result["overlayPointerEvents"] == "auto"
+        assert result["overlayVisibility"] == "visible"
+        assert result["overlayAriaHidden"] == "false"
+        assert result["overlayHiddenAttr"] is False
+        assert "login-active" in result["bodyClassName"]
         assert result["loginErrorVisible"] is True
         assert result["loginErrorText"] == "Invalid email or password."
         assert result["token"] == ""
@@ -366,6 +410,12 @@ class TestBackofficeLoginResilienceRuntime:
         result = _run_node(_login_runtime_js(html, scenario))
 
         assert result["overlayHidden"] is False
+        assert result["overlayDisplay"] == "flex"
+        assert result["overlayPointerEvents"] == "auto"
+        assert result["overlayVisibility"] == "visible"
+        assert result["overlayAriaHidden"] == "false"
+        assert result["overlayHiddenAttr"] is False
+        assert "login-active" in result["bodyClassName"]
         assert result["loginErrorVisible"] is True
         assert "authentication service is unavailable" in result["loginErrorText"].lower()
         assert result["token"] == ""

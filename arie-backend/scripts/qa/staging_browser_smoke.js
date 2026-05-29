@@ -152,6 +152,30 @@ async function visible(page, selector) {
   return page.locator(selector).first().isVisible().catch(() => false);
 }
 
+async function overlayState(page) {
+  return page.$eval("#login-overlay", (el) => {
+    const style = window.getComputedStyle(el);
+    return {
+      display: style.display,
+      visibility: style.visibility,
+      pointerEvents: style.pointerEvents,
+      hidden: !!el.hidden,
+      ariaHidden: el.getAttribute("aria-hidden"),
+      className: el.className,
+    };
+  });
+}
+
+function isOverlayInactive(state) {
+  return !!state &&
+    state.display === "none" &&
+    state.visibility === "hidden" &&
+    state.pointerEvents === "none" &&
+    state.hidden === true &&
+    state.ariaHidden === "true" &&
+    /\bhidden\b/.test(state.className || "");
+}
+
 async function clickNav(page, view) {
   const nav = page.locator(`.snav-item[data-view="${view}"]`).first();
   if (await nav.count()) {
@@ -302,12 +326,37 @@ async function main() {
     await page.goto(`${baseUrl}/backoffice`, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.locator('input[type="email"], input[name="email"], #email').first().fill(email);
     await page.locator('input[type="password"], input[name="password"], #password').first().fill(password);
+    const authResponsePromise = page.waitForResponse((resp) => {
+      try {
+        return new URL(resp.url()).pathname === "/api/auth/officer/login";
+      } catch (err) {
+        return false;
+      }
+    }, { timeout: 30000 });
     await page.locator('button:has-text("Login"), button:has-text("Sign In"), button[type="submit"]').first().click();
-    await page.waitForSelector('.snav-item[data-view="applications"]', { timeout: 30000 });
-    report.checks.loginWithApprovedCredentials = true;
-    report.checks.loginOverlayHidden = await page.locator("#login-overlay.hidden").count().then((count) => count > 0);
+    const authResponse = await authResponsePromise;
+    report.checks.loginRequestCompleted = true;
+    report.checks.loginWithApprovedCredentials = authResponse.ok();
+    report.observations.loginResponseStatus = authResponse.status();
+    if (!authResponse.ok()) {
+      throw new Error(`Login failed with status ${authResponse.status()}`);
+    }
+    await page.waitForFunction(() => {
+      const overlay = document.getElementById("login-overlay");
+      if (!overlay) return false;
+      const style = window.getComputedStyle(overlay);
+      return style.display === "none" &&
+        style.visibility === "hidden" &&
+        style.pointerEvents === "none" &&
+        overlay.hidden === true &&
+        overlay.getAttribute("aria-hidden") === "true" &&
+        /\bhidden\b/.test(overlay.className || "");
+    }, { timeout: 30000 });
+    report.observations.overlayStateAfterLogin = await overlayState(page);
+    report.checks.loginOverlayHidden = isOverlayInactive(report.observations.overlayStateAfterLogin);
     report.checks.noVisibleLoginErrorAfterSuccess = !(await visible(page, "#login-error.show"));
     report.observations.loginErrorText = await page.locator("#login-error-text").first().textContent().catch(() => "");
+    report.checks.shellNavigationInteractive = false;
 
     if (failPaths.length) {
       await page.waitForSelector("#dashboard-load-warning.show", { timeout: 30000 });
@@ -315,6 +364,7 @@ async function main() {
     }
 
     await clickNav(page, "applications");
+    report.checks.shellNavigationInteractive = true;
     await page.waitForSelector("#applications-body tr", { timeout: 30000 });
     report.checks.applicationsPageLoads = await visible(page, "#view-applications.active");
     await screenshot(page, "applications");

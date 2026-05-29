@@ -4166,7 +4166,7 @@ function switchUser(role) {
     match = { id: 0, name: ROLE_LABELS[role] || role, email: '', role: role, initials: '--', status: 'active' };
   }
   currentUser = match;
-  document.body.className = 'role-' + (role || 'admin');
+  setAuthenticatedBodyState(true, role || 'admin');
   var nameEl = document.getElementById('sidebar-user-name');
   var roleEl = document.getElementById('sidebar-user-role');
   var avatarEl = document.getElementById('sidebar-avatar');
@@ -16192,7 +16192,17 @@ async function signOut() {
 
 function showLoginScreen() {
   clearDashboardLoadWarning();
-  document.getElementById('login-overlay').classList.remove('hidden');
+  setAuthenticatedBodyState(false, currentUser && currentUser.role);
+  var overlay = document.getElementById('login-overlay');
+  if (overlay) {
+    overlay.classList.remove('hidden');
+    overlay.classList.remove('active');
+    overlay.hidden = false;
+    overlay.setAttribute('aria-hidden', 'false');
+    overlay.style.display = 'flex';
+    overlay.style.pointerEvents = 'auto';
+    overlay.style.visibility = 'visible';
+  }
   document.getElementById('login-email').value = '';
   document.getElementById('login-password').value = '';
   document.getElementById('login-error').classList.remove('show');
@@ -16200,7 +16210,32 @@ function showLoginScreen() {
 }
 
 function hideLoginScreen() {
-  document.getElementById('login-overlay').classList.add('hidden');
+  var overlay = document.getElementById('login-overlay');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.classList.remove('active');
+  overlay.hidden = true;
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.style.display = 'none';
+  overlay.style.pointerEvents = 'none';
+  overlay.style.visibility = 'hidden';
+}
+
+function setAuthenticatedBodyState(isAuthenticated, role) {
+  var body = document.body;
+  if (!body) return;
+  var nextRole = role || (currentUser && currentUser.role) || 'admin';
+  var classes = String(body.className || '').split(/\s+/).filter(Boolean).filter(function(name) {
+    return !/^role-/.test(name) && name !== 'authenticated' && name !== 'login-active';
+  });
+  classes.push('role-' + nextRole);
+  classes.push(isAuthenticated ? 'authenticated' : 'login-active');
+  body.className = classes.join(' ');
+}
+
+function activateAuthenticatedShell() {
+  setAuthenticatedBodyState(true, currentUser && currentUser.role);
+  hideLoginScreen();
 }
 
 function applyAuthenticatedShellState() {
@@ -16210,7 +16245,7 @@ function applyAuthenticatedShellState() {
   if (nameEl) nameEl.textContent = currentUser.name;
   if (roleEl) roleEl.textContent = ROLE_LABELS[currentUser.role] || currentUser.role;
   if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){ return w[0]; }).join('');
-  document.body.className = 'role-' + (currentUser.role || 'admin');
+  setAuthenticatedBodyState(true, currentUser && currentUser.role);
 }
 
 function makeAuthError(kind, message, status) {
@@ -16282,25 +16317,29 @@ async function handleLogin(e) {
   } catch(err) {
     errText.textContent = getAuthErrorMessage(err);
     errEl.classList.add('show');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Sign In';
     return;
   }
 
   try {
     setBoAuth(resp.token, resp.user);
     applyAuthenticatedShellState();
-    hideLoginScreen();
+    activateAuthenticatedShell();
     if (!applyBackofficeHashRoute()) showView('dashboard');
     renderDashboardRecent();
 
     AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: 'Signed in via login page', ip:'client' });
 
     var loadedCleanly = await loadFromAPI();
+    if (BO_AUTH_TOKEN) activateAuthenticatedShell();
     populateOfficerDropdowns();
     renderDashboardRecent();
     if (!loadedCleanly) showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES);
     showToast('Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
     console.error('Post-login data load failed', err);
+    if (BO_AUTH_TOKEN) activateAuthenticatedShell();
     showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES.length ? BACKOFFICE_LAST_LOAD_FAILURES : ['Background data']);
   } finally {
     submitBtn.disabled = false;
@@ -18653,6 +18692,7 @@ async function boLogin(email, password) {
     var resp = await authenticateOfficer(email, password);
     setBoAuth(resp.token, resp.user);
     applyAuthenticatedShellState();
+    activateAuthenticatedShell();
     showToast('Signed in as ' + resp.user.name);
     return true;
   } catch(e) {
@@ -18673,10 +18713,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     try {
       var me = await boApiCall('GET', '/auth/me');
       setBoAuth(BO_AUTH_TOKEN, (me && (me.user || me)) || BO_AUTH_USER);
-      hideLoginScreen();
       applyAuthenticatedShellState();
+      activateAuthenticatedShell();
       renderDashboardRecent();
       var loadedCleanly = await loadFromAPI();
+      if (BO_AUTH_TOKEN) activateAuthenticatedShell();
       populateOfficerDropdowns();
       renderDashboardRecent();
       if (!loadedCleanly) showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES);
@@ -18691,7 +18732,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // No valid token — show login screen
   showLoginScreen();
-  document.body.className = 'role-' + (currentUser.role || 'admin');
+  setAuthenticatedBodyState(false, currentUser && currentUser.role);
 });
 window.addEventListener('hashchange', function() {
   if (document.getElementById('login-overlay') && !document.getElementById('login-overlay').classList.contains('hidden')) return;
