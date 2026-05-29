@@ -145,6 +145,35 @@ a { color:var(--brand); text-decoration:none; }
 .detail-row { display:flex; justify-content:space-between; padding:6px 0; font-size:13px; }
 .detail-row .label { color:var(--text3); }
 .detail-row .value { font-weight:500; text-align:right; max-width:60%; }
+.case-command-centre { margin:0 0 16px; border:1px solid var(--border1); border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%); box-shadow:0 12px 24px rgba(16,24,40,0.06); overflow:hidden; }
+.case-command-centre-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; padding:18px 20px 14px; border-bottom:1px solid var(--border1); flex-wrap:wrap; }
+.case-command-centre-eyebrow { font-size:11px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--brand); }
+.case-command-centre-title { font-size:18px; font-weight:800; color:var(--text1); line-height:1.2; margin-top:4px; }
+.case-command-centre-subtitle { font-size:12px; color:var(--text3); margin-top:6px; line-height:1.45; max-width:720px; }
+.case-command-centre-status { display:inline-flex; align-items:center; gap:8px; padding:9px 12px; border-radius:999px; font-size:11px; font-weight:800; letter-spacing:0.05em; text-transform:uppercase; }
+.case-command-centre-status.ready { background:#dcfce7; color:#166534; }
+.case-command-centre-status.requires-review { background:#eff6ff; color:#1d4ed8; }
+.case-command-centre-status.blocked { background:#fef3c7; color:#92400e; }
+.case-command-centre-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; padding:14px 20px; }
+.case-command-centre-metric { border:1px solid var(--border1); border-radius:12px; background:var(--surface); padding:12px 14px; min-width:0; }
+.case-command-centre-metric .label { display:block; font-size:10px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--text3); margin-bottom:6px; }
+.case-command-centre-metric .value { display:block; font-size:14px; font-weight:700; color:var(--text1); line-height:1.35; word-break:break-word; }
+.case-command-centre-next { margin:0 20px 14px; border:1px solid rgba(37,99,235,0.18); border-radius:14px; background:rgba(37,99,235,0.06); padding:14px 16px; }
+.case-command-centre-next .label { display:block; font-size:10px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:#1d4ed8; margin-bottom:6px; }
+.case-command-centre-next .value { font-size:14px; font-weight:700; color:var(--text1); }
+.case-command-centre-blockers { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px; padding:0 20px 18px; }
+.case-command-centre-empty { margin:0 20px 18px; border:1px solid #bbf7d0; border-radius:14px; background:#ecfdf3; padding:14px 16px; color:#166534; font-size:13px; line-height:1.5; }
+.case-command-blocker-card { border:1px solid var(--border1); border-radius:14px; background:var(--surface); padding:14px 16px; box-shadow:0 8px 18px rgba(15,23,42,0.04); }
+.case-command-blocker-card.blocking { border-color:#fde68a; background:#fffaf0; }
+.case-command-blocker-top { display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+.case-command-blocker-chip { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; background:var(--surface2); color:var(--text2); font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; }
+.case-command-blocker-severity { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; font-size:10px; font-weight:800; }
+.case-command-blocker-severity.blocked { background:#fef3c7; color:#92400e; }
+.case-command-blocker-severity.review { background:#eff6ff; color:#1d4ed8; }
+.case-command-blocker-title { font-size:14px; font-weight:700; color:var(--text1); line-height:1.35; }
+.case-command-blocker-text { font-size:12px; color:var(--text2); line-height:1.55; margin-top:6px; min-height:38px; }
+.case-command-blocker-actions { display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+.case-command-blocker-actions .btn { white-space:nowrap; }
 
 /* ── Application Lifecycle Workspace ── */
 .lifecycle-detail-root { display:flex; flex-direction:column; gap:16px; padding-bottom:32px; }
@@ -1167,6 +1196,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     </div>
   </div>
 
+  <div id="detail-case-command-centre"></div>
   <div id="detail-approval-blockers" style="display:none;margin:0 0 16px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
   <div id="detail-correction-warning" style="display:none;margin:0 0 16px;padding:12px 14px;border-radius:8px;border:1px solid #f59e0b;background:#fef3c7;font-size:12px;line-height:1.5;color:#92400e;"></div>
 
@@ -4400,6 +4430,7 @@ function assertPermission(permissionId) {
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
 var currentApp = null;
 var currentScreeningReviewFocus = null;
+var detailLifecycleSummaryOverview = null;
 
 // ═══════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════
@@ -6652,6 +6683,8 @@ function renderAuthoritativeAppDetail(app, options) {
   var standardCard = document.getElementById('standard-actions-topbar');
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? 'flex' : 'none';
   if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
+  detailLifecycleSummaryOverview = null;
+  renderCaseCommandCentre(app);
   renderApprovalBlockersPanel(app);
 
   switchDetailTab(options.initialTab || 'overview');
@@ -9922,11 +9955,16 @@ async function loadLifecycleApplicationSummary(applicationId) {
   container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Loading lifecycle summary…</div>';
   try {
     var resp = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(applicationId) + '/summary');
+    detailLifecycleSummaryOverview = {
+      applicationId: applicationId,
+      summary: resp
+    };
     renderLifecycleApplicationSummary(resp);
   } catch (err) {
     // Soft-fail: do not block app detail rendering if the lifecycle
     // endpoint is unavailable. Keep this section out of the way.
     console.warn('Lifecycle summary load failed:', err);
+    detailLifecycleSummaryOverview = null;
     container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
   }
 }
@@ -9970,6 +10008,9 @@ function renderLifecycleApplicationSummary(resp) {
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' + edgesHtml + '</div>' +
     '</div>';
+  if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
+    renderCaseCommandCentre(window._currentDetailApp);
+  }
 }
 
 function lifecycleDetailBadge(text, tone) {
@@ -13083,6 +13124,7 @@ async function loadActivityLog(appOverride) {
     container.innerHTML = html;
   } catch (err) {
     container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--red);font-size:12px;">Failed to load audit trail: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
+    if (window._currentDetailApp && window._currentDetailApp.id === app.id) renderCaseCommandCentre(window._currentDetailApp);
   }
 }
 
@@ -13326,6 +13368,361 @@ function getApplicationApprovalBlockers(app) {
 function getApprovalReadiness(app) {
   var blockers = getApplicationApprovalBlockers(app);
   return { ready: blockers.length === 0, blockers: blockers };
+}
+
+function caseCommandOpenLifecycleItems(app) {
+  var summary = detailLifecycleSummaryOverview && app && detailLifecycleSummaryOverview.applicationId === app.id
+    ? detailLifecycleSummaryOverview.summary
+    : null;
+  return (summary && summary.active && Array.isArray(summary.active.items)) ? summary.active.items : [];
+}
+
+function caseCommandOpenMonitoringAlertCount(app) {
+  var alerts = (app && Array.isArray(app.monitoringAlerts)) ? app.monitoringAlerts : [];
+  return alerts.filter(function(alert) {
+    var status = String((alert && alert.status) || '').toLowerCase();
+    return ['dismissed', 'converted_to_change_request', 'resolved_no_change', 'implemented', 'cancelled', 'superseded'].indexOf(status) < 0;
+  }).length;
+}
+
+function caseCommandAuditFailureMessage() {
+  var activity = document.getElementById('detail-activity');
+  if (!activity) return '';
+  var text = String(activity.textContent || '').trim();
+  return text.indexOf('Failed to load audit trail') >= 0 ? text : '';
+}
+
+function activateCaseCommandTarget(tab, anchorId) {
+  if (tab) switchDetailTab(tab);
+  if (!anchorId) return;
+  var target = document.getElementById(anchorId);
+  if (!target) return;
+  if (typeof target.scrollIntoView === 'function') {
+    try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    catch (err) { target.scrollIntoView(); }
+  }
+}
+
+function getCaseCommandBlockers(app) {
+  var blockers = [];
+  if (!app) return blockers;
+
+  var status = String(app.statusRaw || app.status || '').toLowerCase();
+  var screening = getApplicationScreeningSummary(app);
+  var screeningTruth = screening.screening_truth_summary || null;
+  var documentReadiness = computeDocumentReadinessSummary(app);
+  var enhanced = getEnhancedReviewSummary(app);
+  var memoData = app.latestMemo || null;
+  var memoMeta = app.latestMemoMeta || {};
+  var memoValidation = String((memoData && memoData.validation_status) || memoMeta.validation_status || 'pending').toLowerCase();
+  var memoReview = String((memoData && memoData.review_status) || memoMeta.review_status || '').toLowerCase();
+  var memoSupervisor = memoSupervisorBlock(memoData, memoMeta);
+  var supervisorVerdict = String(memoSupervisor.verdict || memoMeta.supervisor_status || '').toUpperCase();
+  var lifecycleItems = caseCommandOpenLifecycleItems(app);
+  var openAlertCount = caseCommandOpenMonitoringAlertCount(app);
+  var auditFailureMessage = caseCommandAuditFailureMessage();
+
+  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking) {
+    blockers.push({
+      id: id,
+      category: category,
+      title: title,
+      description: description,
+      ctaLabel: ctaLabel,
+      tab: tab,
+      anchorId: anchorId,
+      blocking: blocking !== false
+    });
+  };
+
+  if (status === 'pre_approval_review') {
+    addBlocker(
+      'pre-approval',
+      'Pre-Approval',
+      'Pre-approval must be completed before final approval.',
+      'Complete the current pre-approval step from the case header before moving this file into final approval.',
+      'Review pre-approval',
+      'overview',
+      'pre-approval-actions-topbar',
+      true
+    );
+  } else if (['draft', 'prescreening_submitted', 'pricing_review', 'pricing_accepted', 'pre_approved', 'kyc_documents'].indexOf(status) >= 0) {
+    addBlocker(
+      'case-stage',
+      'Case Stage',
+      'This case is not yet in compliance review.',
+      'Move the application into the compliance review stage before attempting final approval.',
+      'Review case stage',
+      'overview',
+      'detail-company-name',
+      true
+    );
+  }
+
+  if (!screening.screening_run_recorded) {
+    addBlocker(
+      'screening-missing',
+      'Screening',
+      'Screening review is still required.',
+      'No screening run is recorded for this application yet. Open the screening tab to review the latest screening state.',
+      'Resolve screening',
+      'screening',
+      'detail-screening-review',
+      true
+    );
+  } else if (screeningTruth && !screeningTruth.approval_ready) {
+    var screeningState = screeningTruth.canonical_state ? String(screeningTruth.canonical_state).replace(/_/g, ' ') : 'pending review';
+    addBlocker(
+      'screening-review',
+      'Screening',
+      'A screening result still needs officer review.',
+      'Current screening state: ' + screeningState + '. Review the screening evidence before approval.',
+      'Resolve screening',
+      'screening',
+      'detail-screening-review',
+      true
+    );
+  } else if (screening.screening_freshness && screening.screening_freshness.status === 'expired') {
+    addBlocker(
+      'screening-expired',
+      'Screening',
+      'Screening results have expired.',
+      'Re-screen the client before approval so the screening record is current.',
+      'Resolve screening',
+      'screening',
+      'detail-screening-review',
+      true
+    );
+  }
+
+  if (documentReadiness.missingCount > 0 || documentReadiness.issueCount > 0 || documentReadiness.pepIncompleteCount > 0) {
+    var documentParts = [];
+    if (documentReadiness.missingCount > 0) documentParts.push(documentReadiness.missingCount + ' missing required document(s)');
+    if (documentReadiness.issueCount > 0) documentParts.push(documentReadiness.issueCount + ' uploaded document(s) with warnings or failed checks');
+    if (documentReadiness.pepIncompleteCount > 0) documentParts.push(documentReadiness.pepIncompleteCount + ' incomplete PEP declaration(s)');
+    addBlocker(
+      'documents',
+      'KYC Documents',
+      'Document review still needs attention.',
+      documentParts.join(' · ') + '. Review the KYC documents tab before approval.',
+      'Review documents',
+      'kyc-docs',
+      'detail-documents',
+      true
+    );
+  }
+
+  if (enhanced.approval_blocked || enhanced.enhanced_review_active || status === 'edd_required' || status === 'edd_in_progress' || status === 'edd_approved' || status === 'pending_senior_review') {
+    var enhancedDetail = enhanced.next_action || enhanced.status_label || 'Enhanced due diligence must be completed before approval.';
+    addBlocker(
+      'edd',
+      'EDD',
+      'Enhanced due diligence is still in progress.',
+      enhancedDetail,
+      'Review EDD',
+      'lifecycle',
+      'detail-tab-lifecycle',
+      true
+    );
+  }
+
+  if (!memoData || !memoData.sections) {
+    addBlocker(
+      'memo-missing',
+      'Compliance Memo',
+      'Compliance memo has not been generated.',
+      'Generate the compliance memo from the overview tab before approval.',
+      'Generate memo',
+      'overview',
+      'detail-memo',
+      true
+    );
+  } else {
+    if (app.memoIsStale || app.memoRequiresRegeneration) {
+      addBlocker(
+        'memo-stale',
+        'Compliance Memo',
+        'Compliance memo must be regenerated.',
+        app.memoStaleReason || 'Application data changed after the current memo was generated.',
+        'Open memo',
+        'overview',
+        'detail-memo',
+        true
+      );
+    } else if (memoValidation === 'pending') {
+      addBlocker(
+        'memo-validation-pending',
+        'Compliance Memo',
+        'Compliance memo validation has not been run.',
+        'Run validation from the memo section before approval.',
+        'Open memo',
+        'overview',
+        'memo-validation-panel',
+        true
+      );
+    } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
+      addBlocker(
+        'memo-validation-failed',
+        'Compliance Memo',
+        'Compliance memo validation needs attention.',
+        'Current validation status: ' + memoValidation.replace(/_/g, ' ') + '. Review the validation panel before approval.',
+        'Open memo',
+        'overview',
+        'memo-validation-panel',
+        true
+      );
+    }
+
+    if (memoReview !== 'approved') {
+      addBlocker(
+        'memo-approval',
+        'Compliance Memo',
+        'Compliance memo is still awaiting officer approval.',
+        'Review the memo outcome and complete the memo approval step before final application approval.',
+        'Open memo',
+        'overview',
+        'detail-memo',
+        true
+      );
+    }
+
+    if (app.supervisorRequiresRerun) {
+      addBlocker(
+        'supervisor-rerun',
+        'Supervisor Review',
+        'Compliance supervisor analysis must be rerun.',
+        'Recent case changes require the supervisor workflow to be rerun before approval can continue.',
+        'Run supervisor',
+        'supervisor',
+        'detail-tab-supervisor',
+        true
+      );
+    } else if (!supervisorVerdict) {
+      addBlocker(
+        'supervisor-missing',
+        'Supervisor Review',
+        'Compliance supervisor review has not been completed.',
+        'Run the compliance supervisor before relying on the memo for final approval.',
+        'Run supervisor',
+        'supervisor',
+        'detail-tab-supervisor',
+        true
+      );
+    } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
+      addBlocker(
+        'supervisor-failed',
+        'Supervisor Review',
+        'Compliance supervisor review needs attention.',
+        'Current supervisor status: ' + supervisorVerdict.replace(/_/g, ' ') + '. Resolve the supervisor findings before approval.',
+        'Run supervisor',
+        'supervisor',
+        'detail-tab-supervisor',
+        true
+      );
+    }
+  }
+
+  if (openAlertCount > 0) {
+    addBlocker(
+      'monitoring-alert',
+      'Monitoring',
+      openAlertCount === 1 ? 'One monitoring alert is still open.' : openAlertCount + ' monitoring alerts are still open.',
+      'Review the lifecycle view to understand linked alerts and next steps before approval.',
+      'View alerts',
+      'lifecycle',
+      'detail-tab-lifecycle',
+      false
+    );
+  } else if (lifecycleItems.length > 0) {
+    addBlocker(
+      'lifecycle-review',
+      'Lifecycle',
+      'Lifecycle follow-up is open for this client.',
+      'Open the lifecycle view to review linked work items and confirm what still needs officer attention.',
+      'Open lifecycle',
+      'lifecycle',
+      'detail-tab-lifecycle',
+      false
+    );
+  }
+
+  if (auditFailureMessage) {
+    addBlocker(
+      'audit-load-failure',
+      'Audit Trail',
+      'Audit trail data could not be loaded.',
+      auditFailureMessage,
+      'View activity log',
+      'activity',
+      'detail-activity',
+      false
+    );
+  }
+
+  return blockers;
+}
+
+function renderCaseCommandCentre(app) {
+  var container = document.getElementById('detail-case-command-centre');
+  if (!container) return;
+  if (!app) {
+    container.innerHTML = '';
+    return;
+  }
+
+  var approvalReadiness = getApprovalReadiness(app);
+  var blockers = getCaseCommandBlockers(app);
+  var readinessLabel = approvalReadiness.ready ? (blockers.length ? 'Requires Review' : 'Ready') : 'Blocked';
+  var readinessClass = approvalReadiness.ready ? (blockers.length ? 'requires-review' : 'ready') : 'blocked';
+  var riskLabel = app.finalRiskLevel || app.rawRiskLevel || app.risk || 'Unknown';
+  var nextBestAction = blockers.length
+    ? (blockers[0].ctaLabel + ': ' + blockers[0].title)
+    : 'This case looks ready for final officer review. Backend approval gates remain authoritative.';
+
+  var metrics = [
+    ['Application', app.ref || '—'],
+    ['Company', app.company || '—'],
+    ['Current stage', app.status || '—'],
+    ['Risk level', riskLabel],
+    ['Assigned officer', app.assigned || 'Unassigned'],
+    ['Approval readiness', readinessLabel],
+    ['Active blockers', String(blockers.length)]
+  ];
+
+  var blockersHtml = blockers.map(function(blocker) {
+    return '<div class="case-command-blocker-card ' + (blocker.blocking ? 'blocking' : '') + '">' +
+      '<div class="case-command-blocker-top">' +
+        '<span class="case-command-blocker-chip">' + escapeHtml(blocker.category) + '</span>' +
+        '<span class="case-command-blocker-severity ' + (blocker.blocking ? 'blocked' : 'review') + '">' + (blocker.blocking ? 'Blocked' : 'Review') + '</span>' +
+      '</div>' +
+      '<div class="case-command-blocker-title">' + escapeHtml(blocker.title) + '</div>' +
+      '<div class="case-command-blocker-text">' + escapeHtml(blocker.description) + '</div>' +
+      '<div class="case-command-blocker-actions">' +
+        '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(' + JSON.stringify(blocker.tab) + ',' + JSON.stringify(blocker.anchorId) + ')">' + escapeHtml(blocker.ctaLabel) + '</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  container.innerHTML =
+    '<div class="case-command-centre">' +
+      '<div class="case-command-centre-header">' +
+        '<div>' +
+          '<div class="case-command-centre-eyebrow">Case Command Centre</div>' +
+          '<div class="case-command-centre-title">' + escapeHtml(app.ref || 'Application') + ' · ' + escapeHtml(app.company || 'Unknown company') + '</div>' +
+          '<div class="case-command-centre-subtitle">Guidance only — backend approval gates remain authoritative. Use the resolve links below to open the existing review surface for each blocker.</div>' +
+        '</div>' +
+        '<div class="case-command-centre-status ' + readinessClass + '">' + escapeHtml(readinessLabel) + '</div>' +
+      '</div>' +
+      '<div class="case-command-centre-grid">' +
+        metrics.map(function(metric) {
+          return '<div class="case-command-centre-metric"><span class="label">' + escapeHtml(metric[0]) + '</span><span class="value">' + escapeHtml(metric[1]) + '</span></div>';
+        }).join('') +
+      '</div>' +
+      '<div class="case-command-centre-next"><span class="label">Next best action</span><div class="value">' + escapeHtml(nextBestAction) + '</div></div>' +
+      (blockers.length
+        ? '<div class="case-command-centre-blockers">' + blockersHtml + '</div>'
+        : '<div class="case-command-centre-empty"><strong>Ready for officer review.</strong> No obvious client-side blockers are currently visible on this application. Backend approval gates still run when approval is attempted.</div>') +
+    '</div>';
 }
 
 function renderApprovalBlockersPanel(app) {
