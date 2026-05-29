@@ -152,6 +152,22 @@ async function visible(page, selector) {
   return page.locator(selector).first().isVisible().catch(() => false);
 }
 
+async function fillLoginForm(page, email, password) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.locator("#login-email").fill(email);
+    await page.locator("#login-password").fill(password);
+    const currentEmail = await page.locator("#login-email").inputValue();
+    const currentPassword = await page.locator("#login-password").inputValue();
+    if (currentEmail === email && currentPassword === password) {
+      return { email: currentEmail, passwordLength: currentPassword.length, attempt: attempt + 1 };
+    }
+    await page.waitForTimeout(250);
+  }
+  const currentEmail = await page.locator("#login-email").inputValue().catch(() => "");
+  const currentPassword = await page.locator("#login-password").inputValue().catch(() => "");
+  return { email: currentEmail, passwordLength: currentPassword.length, attempt: 3 };
+}
+
 async function overlayState(page) {
   return page.$eval("#login-overlay", (el) => {
     const style = window.getComputedStyle(el);
@@ -324,8 +340,25 @@ async function main() {
 
   try {
     await page.goto(`${baseUrl}/backoffice`, { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.locator('input[type="email"], input[name="email"], #email').first().fill(email);
-    await page.locator('input[type="password"], input[name="password"], #password').first().fill(password);
+    await page.waitForFunction(() => {
+      const overlay = document.getElementById("login-overlay");
+      const emailInput = document.getElementById("login-email");
+      const passwordInput = document.getElementById("login-password");
+      const submitBtn = document.getElementById("login-submit");
+      if (!overlay || !emailInput || !passwordInput || !submitBtn) return false;
+      const style = window.getComputedStyle(overlay);
+      return style.display === "flex" &&
+        style.visibility === "visible" &&
+        style.pointerEvents !== "none" &&
+        submitBtn.textContent.trim() === "Sign In" &&
+        emailInput.disabled !== true &&
+        passwordInput.disabled !== true;
+    }, { timeout: 30000 });
+    report.observations.loginFormValuesBeforeSubmit = await fillLoginForm(page, email, password);
+    if (report.observations.loginFormValuesBeforeSubmit.email !== email ||
+        report.observations.loginFormValuesBeforeSubmit.passwordLength !== password.length) {
+      throw new Error("Login form values were not retained before submit");
+    }
     const authResponsePromise = page.waitForResponse((resp) => {
       try {
         return new URL(resp.url()).pathname === "/api/auth/officer/login";
