@@ -276,7 +276,7 @@ class TestCaseCommandCentreRuntime:
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "documents" in blocker_ids
         assert "Document review still needs attention." in result["html"]
-        assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-documents")\'' in result["html"]
+        assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-kyc-documents-panel")\'' in result["html"]
         assert result["visibleBlockerCardCount"] == len(result["blockers"])
         assert "1 blocker" in result["html"]
 
@@ -327,3 +327,39 @@ class TestCaseCommandCentreRuntime:
         assert "getApplicationApprovalBlockers(app)" in html
         assert "approveBtn.disabled = true" in html
         assert "Backend gates still perform final validation." in html
+
+    def test_pr2d_overview_and_kyc_ui_cleanup_markup_is_present(self):
+        html = _read_backoffice()
+        assert "AI Risk Assessment" not in html
+        assert 'details id="detail-ai-explainability-details"' in html
+        assert 'AI Explainability Layer' in html
+        assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in html
+        assert 'details id="detail-kyc-documents-details"' in html
+        assert 'id="detail-kyc-documents-summary-copy"' in html
+        assert 'details id="detail-enhanced-requirements-details"' in html
+        assert 'id="detail-enhanced-requirements-summary-copy"' in html
+
+    def test_pr2d_enhanced_requirements_table_is_slimmed_without_upload_controls(self):
+        html = _read_backoffice()
+        assert "<th>Source / Reason</th>" not in html
+        assert "<th>Timeline</th>" not in html
+        assert "<th>Evidence / Current State</th>" in html
+        assert "No upload controls were added to Enhanced Review Requirements." not in html
+        enhanced_section = _extract_between(
+            html,
+            '<div class="detail-collapsible-card" id="detail-enhanced-requirements-section"',
+            '<div class="detail-collapsible-card" id="detail-kyc-documents-panel"',
+        )
+        assert "Upload Document" not in enhanced_section
+        assert "Document Type" not in enhanced_section
+
+    def test_pr2d_existing_kyc_upload_ui_is_still_present(self):
+        html = _read_backoffice()
+        kyc_section = _extract_between(
+            html,
+            '<div class="detail-collapsible-card" id="detail-kyc-documents-panel"',
+            '<!-- Tab: Screening Review (hidden by default) -->',
+        )
+        assert "Upload Document" in kyc_section
+        assert "Document Type" in kyc_section
+        assert "Upload to Record" in kyc_section
