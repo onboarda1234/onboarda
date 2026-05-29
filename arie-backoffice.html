@@ -154,6 +154,24 @@ a { color:var(--brand); text-decoration:none; }
 .overview-compact-lifecycle { margin:0 0 12px; padding:10px 14px; border:1px solid #dfe7f2; border-radius:12px; background:#fbfdff; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
 .overview-compact-lifecycle-copy { font-size:12px; color:var(--text2); line-height:1.45; }
 .overview-compact-lifecycle-copy strong { color:var(--text1); }
+.detail-collapsible-card { margin:0 0 16px; border:1px solid var(--border1); border-radius:14px; background:var(--surface); overflow:hidden; }
+.detail-collapsible-card details { background:inherit; }
+.detail-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:flex-start; gap:14px; padding:14px 16px; }
+.detail-collapsible-card summary::-webkit-details-marker { display:none; }
+.detail-collapsible-copy { min-width:0; }
+.detail-collapsible-title { font-size:14px; font-weight:800; color:var(--text1); line-height:1.3; }
+.detail-collapsible-subtitle { font-size:11px; color:var(--text3); line-height:1.45; margin-top:4px; }
+.detail-collapsible-meta { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.detail-collapsible-summary-line { font-size:11px; color:var(--text3); line-height:1.4; }
+.detail-collapsible-toggle { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border1); border-radius:999px; padding:4px 10px; background:var(--surface2); font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; color:var(--text2); white-space:nowrap; }
+.detail-collapsible-toggle .when-open { display:none; }
+.detail-collapsible-card details[open] .detail-collapsible-toggle .when-open { display:inline; }
+.detail-collapsible-card details[open] .detail-collapsible-toggle .when-closed { display:none; }
+.detail-collapsible-card details[open] summary { border-bottom:1px solid var(--border1); }
+.detail-collapsible-body { padding:14px 16px 16px; }
+.detail-collapsible-body > :last-child { margin-bottom:0; }
+.detail-collapsible-inline-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.detail-collapsible-section-label { font-size:11px; color:var(--text3); }
 .case-command-centre { margin:0 0 14px; border:1px solid var(--border1); border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%); box-shadow:0 10px 22px rgba(16,24,40,0.05); overflow:hidden; }
 .case-command-centre-header { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; padding:14px 16px 10px; border-bottom:1px solid var(--border1); flex-wrap:wrap; }
 .case-command-centre-eyebrow { font-size:11px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--brand); }
@@ -243,10 +261,10 @@ a { color:var(--brand); text-decoration:none; }
 .agent-check .result.fail { color:var(--red); }
 
 /* ── AI Explainability Layer ── */
-.ai-explain-card { background:var(--surface); border:1px solid var(--border1); border-radius:var(--radius); padding:20px; margin-bottom:16px; }
-.ai-explain-header { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding-bottom:12px; border-bottom:2px solid var(--brand); }
-.ai-explain-header .title { font-size:16px; font-weight:800; color:var(--brand); }
-.ai-explain-header .subtitle { font-size:11px; color:var(--text3); margin-left:auto; }
+.ai-explain-card { border-color:#dbe4f3; background:#fbfdff; }
+.ai-explain-card summary { background:linear-gradient(180deg,#ffffff 0%,#fbfdff 100%); }
+.ai-explain-card .detail-collapsible-title { color:var(--brand); }
+.ai-explain-model-source { font-size:10px; color:var(--text3); white-space:nowrap; }
 
 .explain-trail { position:relative; padding-left:28px; margin-bottom:18px; }
 .explain-trail::before { content:''; position:absolute; left:10px; top:0; bottom:0; width:2px; background:var(--border1); }
@@ -1272,15 +1290,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
       <!-- Documents moved to KYC Documents & Verifications tab -->
 
-      <!-- Risk Assessment -->
-      <div class="card">
-        <div class="card-header"><div class="card-title">AI Risk Assessment</div></div>
+      <div id="detail-risk-assessment-hidden" style="display:none;">
         <div id="detail-risk-bars"></div>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border1);">
-          <span style="font-size:13px;color:var(--text3);">Composite Score:</span>
-          <span style="font-size:22px;font-weight:800;" id="detail-composite-score">0</span>
-          <span id="detail-risk-badge"></span>
-        </div>
+        <span id="detail-composite-score">0</span>
+        <span id="detail-risk-badge"></span>
       </div>
 
       <!-- Rule-Based Score Breakdown -->
@@ -1298,41 +1311,46 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       </div>
 
       <!-- AI Explainability Layer -->
-      <div class="ai-explain-card" id="ai-explainability-panel">
-        <div class="ai-explain-header">
-          <span style="font-size:20px;">🧠</span>
-          <div>
-            <div class="title">AI Explainability Layer</div>
-            <div style="font-size:11px;color:var(--text3);">Transparent reasoning behind every AI decision</div>
-          </div>
-          <div class="subtitle" id="explain-model-source">Model: Rule-Based + AI Agents</div>
-        </div>
+      <div class="detail-collapsible-card ai-explain-card" id="ai-explainability-panel">
+        <details id="detail-ai-explainability-details">
+          <summary>
+            <div class="detail-collapsible-copy">
+              <div class="detail-collapsible-title">AI Explainability Layer</div>
+              <div class="detail-collapsible-subtitle">Risk drivers, AI reasoning, validation context, and supervisor signals.</div>
+            </div>
+            <div class="detail-collapsible-meta">
+              <span class="ai-explain-model-source" id="explain-model-source">Model: Rule-Based + AI Agents</span>
+              <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+            </div>
+          </summary>
+          <div class="detail-collapsible-body">
+            <!-- Decision Trail -->
+            <div class="detail-section">
+              <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
+                <span>🔗</span> AI Agent Decision Trail
+                <span class="badge low" style="font-size:9px;margin-left:auto;">Auditable</span>
+              </div>
+              <div class="explain-trail" id="explain-decision-trail"></div>
+            </div>
 
-        <!-- Decision Trail -->
-        <div class="detail-section">
-          <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-            <span>🔗</span> AI Agent Decision Trail
-            <span class="badge low" style="font-size:9px;margin-left:auto;">Auditable</span>
-          </div>
-          <div class="explain-trail" id="explain-decision-trail"></div>
-        </div>
+            <!-- Dimension Drill-Down -->
+            <div class="detail-section">
+              <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
+                <span>📊</span> Dimension Explainability
+                <span style="font-size:10px;color:var(--text3);margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;">Click any dimension to expand</span>
+              </div>
+              <div class="dim-explain-grid" id="explain-dimensions"></div>
+            </div>
 
-        <!-- Dimension Drill-Down -->
-        <div class="detail-section">
-          <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-            <span>📊</span> Dimension Explainability
-            <span style="font-size:10px;color:var(--text3);margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;">Click any dimension to expand</span>
+            <!-- AI Confidence & Summary -->
+            <div class="detail-section">
+              <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
+                <span>🎯</span> AI Confidence & Reasoning Summary
+              </div>
+              <div id="explain-confidence-summary"></div>
+            </div>
           </div>
-          <div class="dim-explain-grid" id="explain-dimensions"></div>
-        </div>
-
-        <!-- AI Confidence & Summary -->
-        <div class="detail-section">
-          <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-            <span>🎯</span> AI Confidence & Reasoning Summary
-          </div>
-          <div id="explain-confidence-summary"></div>
-        </div>
+        </details>
       </div>
 
       <!-- AI Agent Results -->
@@ -1405,32 +1423,51 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Tab: KYC Documents & Verifications (hidden by default) -->
   <div id="detail-tab-kyc-docs" style="display:none;">
-    <div class="card" id="detail-enhanced-requirements-section" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.025);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:12px;flex-wrap:wrap;">
-        <div>
-          <div class="card-title">Enhanced Review Requirements</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px;">Generated requirement snapshot for this application</div>
+    <div class="detail-collapsible-card" id="detail-enhanced-requirements-section" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.025);">
+      <details id="detail-enhanced-requirements-details">
+        <summary>
+          <div class="detail-collapsible-copy">
+            <div class="detail-collapsible-title">Enhanced Review Requirements</div>
+            <div class="detail-collapsible-subtitle">Generated requirement snapshot for this application.</div>
+          </div>
+          <div class="detail-collapsible-meta">
+            <span class="detail-collapsible-summary-line" id="detail-enhanced-requirements-summary-copy">Loading enhanced requirements…</span>
+            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+          </div>
+        </summary>
+        <div class="detail-collapsible-body">
+          <div class="detail-collapsible-inline-header">
+            <div class="detail-collapsible-section-label">Review requirement status, linked evidence, and officer actions.</div>
+            <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
+          </div>
+          <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+          <div id="detail-enhanced-review-summary" style="margin-bottom:12px;"></div>
+          <div id="detail-enhanced-requirements-container">
+            <div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>
+          </div>
         </div>
-        <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
-      </div>
-      <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
-      <div id="detail-enhanced-review-summary" style="margin-bottom:12px;"></div>
-      <div id="detail-enhanced-requirements-container">
-        <div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>
-      </div>
+      </details>
     </div>
 
-    <div class="card" style="border-left:4px solid var(--brand);background:rgba(43,47,143,0.02);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <div>
-          <div class="card-title">KYC Documents &amp; Verifications</div>
-          <div style="font-size:11px;color:var(--text3);">Each document with inline AI verification results</div>
-        </div>
-        <span class="ai-advisory-badge">🤖 AI Verification — Advisory Only</span>
-        <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
-      </div>
-      <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI Verification Results — Advisory Only</div><div class="ai-adv-sub">Document verification checks below are AI-generated and advisory. Officer review is required before relying on these results for compliance decisions.</div></div></div>
-      <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
+    <div class="detail-collapsible-card" id="detail-kyc-documents-panel" style="border-left:4px solid var(--brand);background:rgba(43,47,143,0.02);">
+      <details id="detail-kyc-documents-details">
+        <summary>
+          <div class="detail-collapsible-copy">
+            <div class="detail-collapsible-title">KYC Documents &amp; Verifications</div>
+            <div class="detail-collapsible-subtitle">Each document with inline AI verification results.</div>
+          </div>
+          <div class="detail-collapsible-meta">
+            <span class="detail-collapsible-summary-line" id="detail-kyc-documents-summary-copy">Loading KYC document status…</span>
+            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+          </div>
+        </summary>
+        <div class="detail-collapsible-body">
+          <div class="detail-collapsible-inline-header">
+            <span class="ai-advisory-badge">🤖 AI Verification — Advisory Only</span>
+            <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
+          </div>
+          <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI Verification Results — Advisory Only</div><div class="ai-adv-sub">Document verification checks below are AI-generated and advisory. Officer review is required before relying on these results for compliance decisions.</div></div></div>
+          <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
           <div class="form-group" style="margin:0;">
             <div class="form-label">Document Type</div>
@@ -1465,8 +1502,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()">Cancel</button>
           <button class="btn btn-primary btn-sm" onclick="submitBoDocUpload()">Upload to Record</button>
         </div>
-      </div>
-      <div id="detail-docs-with-verification"></div>
+          </div>
+          <div id="detail-docs-with-verification"></div>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -6002,6 +6041,72 @@ function renderPilotEvidenceSummaryBanner(app) {
   '</div>';
 }
 
+function setDetailsExpandedState(detailsId, expanded) {
+  var details = document.getElementById(detailsId);
+  if (!details) return;
+  details.open = !!expanded;
+}
+
+function explainabilityNeedsAttention(app, screeningSummary) {
+  var memoData = app && app.latestMemo ? app.latestMemo : {};
+  var memoMeta = app && app.latestMemoMeta ? app.latestMemoMeta : {};
+  var validation = String(memoData.validation_status || memoMeta.validation_status || '').toLowerCase();
+  var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
+  if (app && (app.memoIsStale || app.memoRequiresRegeneration || app.supervisorRequiresRerun)) return true;
+  if (validation && ['pass', 'approved'].indexOf(validation) < 0) return true;
+  if (supervisor && ['CONSISTENT'].indexOf(supervisor) < 0) return true;
+  if (app && !hasAuthoritativeRisk(app)) return true;
+  return !!(screeningSummary && screeningSummary.screening_freshness && screeningSummary.screening_freshness.status === 'parse_error');
+}
+
+function updateExplainabilityPanelState(app, screeningSummary) {
+  setDetailsExpandedState('detail-ai-explainability-details', explainabilityNeedsAttention(app, screeningSummary));
+}
+
+function buildKycDocumentPanelSummary(app, summary) {
+  summary = summary || computeDocumentReadinessSummary(app);
+  var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
+  var verifiedCount = docs.filter(function(doc) {
+    var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status).toLowerCase();
+    var results = doc.verification_results || {};
+    var warnings = Array.isArray(results.warnings) ? results.warnings : [];
+    var overall = normalizeDetailValue(results.overall || results.status).toLowerCase();
+    return (doc.verification_success === true || verStatus === 'verified') && overall !== 'flagged' && overall !== 'failed' && warnings.length === 0;
+  }).length;
+  var parts = [
+    summary.missingCount + ' missing',
+    verifiedCount + ' verified',
+    summary.issueCount + ' need attention'
+  ];
+  if (summary.pepIncompleteCount > 0) parts.push(summary.pepIncompleteCount + ' PEP incomplete');
+  return parts.join(' · ');
+}
+
+function updateKycDocumentsPanelState(app, summary) {
+  var summaryEl = document.getElementById('detail-kyc-documents-summary-copy');
+  if (summaryEl) summaryEl.textContent = buildKycDocumentPanelSummary(app, summary);
+  setDetailsExpandedState('detail-kyc-documents-details', !!(summary && summary.isIncomplete));
+}
+
+function buildEnhancedRequirementsPanelSummary(summary, requirements) {
+  summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
+  var required = Number(summary.total || (Array.isArray(requirements) ? requirements.length : 0) || 0);
+  var satisfied = Number(summary.accepted_count || 0) + Number(summary.waived_count || 0);
+  var missing = Number(summary.unresolved_count || 0);
+  return required + ' required · ' + satisfied + ' satisfied · ' + missing + ' missing';
+}
+
+function shouldExpandEnhancedRequirements(summary, requirements) {
+  summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
+  return !!(summary.approval_blocked || Number(summary.unresolved_count || 0) > 0 || Number(summary.pending_client_count || 0) > 0 || Number(summary.submitted_awaiting_review_count || 0) > 0);
+}
+
+function updateEnhancedRequirementsPanelState(summary, requirements) {
+  var summaryEl = document.getElementById('detail-enhanced-requirements-summary-copy');
+  if (summaryEl) summaryEl.textContent = buildEnhancedRequirementsPanelSummary(summary, requirements);
+  setDetailsExpandedState('detail-enhanced-requirements-details', shouldExpandEnhancedRequirements(summary, requirements));
+}
+
 function evidenceClassDomId(docId, suffix) {
   return 'pilot-evidence-' + String(docId || '').replace(/[^A-Za-z0-9_-]/g, '_') + '-' + suffix;
 }
@@ -6604,6 +6709,7 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('detail-screening-review').innerHTML = renderDocumentReadinessBanner(documentReadiness) + freshnessBanner + screeningMeta;
   renderScreeningReviewPanel(app, currentScreeningReviewFocus);
   renderExplainabilityPanel(app, screeningSummary);
+  updateExplainabilityPanelState(app, screeningSummary);
 
   var memoEl = document.getElementById('detail-memo');
   if (app.latestMemo && app.latestMemo.sections) {
@@ -6688,6 +6794,8 @@ function renderAuthoritativeAppDetail(app, options) {
   }).join('') : '<div style="padding:32px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📂</div><div style="font-size:13px;color:var(--text2);font-weight:500;">No documents uploaded yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Documents uploaded by the client will appear here with their verification results.</div></div>';
   document.getElementById('detail-documents').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
   document.getElementById('detail-docs-with-verification').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
+  updateKycDocumentsPanelState(app, documentReadiness);
+  updateEnhancedRequirementsPanelState(getEnhancedReviewSummary(app), []);
   loadApplicationEnhancedRequirements(app).catch(function(e) {
     console.warn('Enhanced requirements display failed:', e);
   });
@@ -6971,6 +7079,7 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
   var container = document.getElementById('detail-enhanced-review-summary');
   if (!container) return;
   summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
+  updateEnhancedRequirementsPanelState(summary, requirements || []);
   var blockedText = summary.approval_blocked ? 'Yes' : 'No';
   var blockedTone = summary.approval_blocked ? 'red' : 'green';
   var triggerText = (summary.trigger_labels || []).length ? summary.trigger_labels.join(', ') : '—';
@@ -7128,17 +7237,34 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
     var group = groups[key];
     var rows = group.items.map(function(req) {
       var reason = enhancedRequirementTriggerReason(req);
+      var evidenceBits = [
+        '<div style="font-size:12px;color:var(--text2);font-weight:600;">' + escapeHtml(enhancedRequirementLinkedDocumentLabel(req)) + '</div>'
+      ];
+      if (reason && reason !== 'Requirement reason not recorded') {
+        evidenceBits.push('<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:normal;">' + escapeHtml(reason) + '</div>');
+      }
+      if (req.requested_at || req.client_response_at || req.linked_document_id) {
+        evidenceBits.push('<div style="margin-top:6px;">' + enhancedRequirementClientSubmissionSummary(req) + '</div>');
+      }
+      if (req.linked_rmi_item_id) {
+        evidenceBits.push('<div style="font-size:11px;color:var(--text3);margin-top:4px;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>');
+      }
+      if (req.review_notes) {
+        evidenceBits.push('<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;">Review notes: ' + escapeHtml(req.review_notes) + '</div>');
+      }
       return '<tr>' +
-        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(req.requirement_key || '') + '</div></td>' +
-        '<td>' + enhancedRequirementDetailBadge(req.audience || '—', req.audience === 'client' ? 'green' : (req.audience === 'both' ? 'purple' : '')) + '</td>' +
-        '<td>' + escapeHtml(String(req.requirement_type || '—').replace(/_/g, ' ')) + '</td>' +
-        '<td>' + escapeHtml(String(req.subject_scope || '—').replace(/_/g, ' ')) + '</td>' +
-        '<td>' + enhancedRequirementStatusBadge(req.status) + '</td>' +
-        '<td>' + enhancedRequirementBoolBadge(req.blocking_approval, 'Yes', 'No') + '</td>' +
-        '<td>' + enhancedRequirementBoolBadge(req.waivable, 'Yes', 'No') + '</td>' +
-        '<td>' + enhancedRequirementBoolBadge(req.mandatory, 'Yes', 'No') + '</td>' +
-        '<td><div style="font-size:12px;color:var(--text2);">' + escapeHtml(req.generation_source || '—') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;max-width:260px;white-space:normal;">' + escapeHtml(reason) + '</div></td>' +
-        '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Requested: ' + escapeHtml(enhancedRequirementDate(req.requested_at)) + (req.requested_by ? ' by ' + escapeHtml(req.requested_by) : '') + '</div>' + enhancedRequirementClientSubmissionSummary(req) + (req.linked_rmi_item_id ? '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>' : '') + '</td>' +
+        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:normal;">' + escapeHtml(req.requirement_key || '') + '</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">' +
+          enhancedRequirementDetailBadge(req.audience || '—', req.audience === 'client' ? 'green' : (req.audience === 'both' ? 'purple' : '')) +
+          enhancedRequirementDetailBadge(String(req.requirement_type || '—').replace(/_/g, ' '), '') +
+          enhancedRequirementDetailBadge(String(req.subject_scope || '—').replace(/_/g, ' '), '') +
+        '</div></td>' +
+        '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' +
+          enhancedRequirementStatusBadge(req.status) +
+          enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') +
+          enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') +
+          (req.waivable ? enhancedRequirementDetailBadge('Waivable', 'amber') : '') +
+        '</div></td>' +
+        '<td style="min-width:220px;max-width:320px;">' + evidenceBits.join('') + '</td>' +
         '<td>' + renderApplicationEnhancedRequirementActions(req) + '</td>' +
       '</tr>';
     }).join('');
@@ -7147,7 +7273,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
         '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + (group.category ? ' · ' + escapeHtml(group.category) : '') + '</div></div>' +
         enhancedRequirementDetailBadge(group.items.length + ' requirement' + (group.items.length === 1 ? '' : 's'), 'purple') +
       '</div>' +
-      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Status</th><th>Blocking</th><th>Waivable</th><th>Mandatory</th><th>Source / Reason</th><th>Timeline</th><th>Back-office actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Status</th><th>Evidence / Current State</th><th>Back-office actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '</div>';
   }).join('');
 
@@ -7173,6 +7299,7 @@ async function loadApplicationEnhancedRequirements(app, generationResult) {
     var appKey = encodeURIComponent((app && (app.id || app.ref)) || '');
     var resp = await boApiCall('GET', '/applications/' + appKey + '/enhanced-requirements');
     if (currentApp && resp.enhanced_review_summary) currentApp.enhancedReviewSummary = resp.enhanced_review_summary;
+    updateEnhancedRequirementsPanelState(resp.enhanced_review_summary, resp.requirements || []);
     try {
       renderApplicationEnhancedRequirements(resp.requirements || [], generationResult, resp.enhanced_review_summary);
     } catch (renderErr) {
@@ -13405,6 +13532,8 @@ function activateCaseCommandTarget(tab, anchorId) {
   if (!anchorId) return;
   var target = document.getElementById(anchorId);
   if (!target) return;
+  var nestedDetails = target.matches && target.matches('details') ? target : (target.querySelector ? target.querySelector('details') : null);
+  if (nestedDetails && !nestedDetails.open) nestedDetails.open = true;
   if (typeof target.scrollIntoView === 'function') {
     try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     catch (err) { target.scrollIntoView(); }
@@ -13515,7 +13644,7 @@ function getCaseCommandBlockers(app) {
       documentParts.join(' · ') + '. Review the KYC documents tab before approval.',
       'Review documents',
       'kyc-docs',
-      'detail-documents',
+      'detail-kyc-documents-panel',
       true
     );
   }
