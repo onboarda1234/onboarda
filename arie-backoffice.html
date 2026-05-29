@@ -503,6 +503,13 @@ a { color:var(--brand); text-decoration:none; }
 .login-btn:disabled { opacity:0.6; cursor:not-allowed; }
 .login-error { background:var(--red-bg); color:var(--red); padding:10px 14px; border-radius:var(--radius-sm); font-size:13px; margin-bottom:16px; display:none; align-items:center; gap:8px; }
 .login-error.show { display:flex; }
+.shell-warning-banner { display:none; align-items:flex-start; justify-content:space-between; gap:16px; margin:16px 24px 0; padding:12px 16px; border-radius:10px; border:1px solid #f59e0b; background:#fffbeb; color:#92400e; }
+.shell-warning-banner.show { display:flex; }
+.shell-warning-banner-main { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.shell-warning-banner-title { font-size:13px; font-weight:700; }
+.shell-warning-banner-text { font-size:12px; line-height:1.45; }
+.shell-warning-banner-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.shell-warning-banner-list { font-weight:600; }
 .login-footer { text-align:center; margin-top:24px; font-size:12px; color:var(--text3); }
 .login-footer a { color:var(--brand); font-weight:600; }
 .login-remember { display:flex; align-items:center; gap:8px; margin-bottom:18px; font-size:13px; color:var(--text2); }
@@ -895,6 +902,16 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <option value="co">Login as: Compliance Officer</option>
       <option value="analyst">Login as: Analyst</option>
     </select>
+  </div>
+</div>
+
+<div class="shell-warning-banner" id="dashboard-load-warning" role="status" aria-live="polite">
+  <div class="shell-warning-banner-main">
+    <div class="shell-warning-banner-title">Dashboard data warning</div>
+    <div class="shell-warning-banner-text" id="dashboard-load-warning-text">Signed in. Some dashboard data failed to load. You can continue working, or retry loading background data.</div>
+  </div>
+  <div class="shell-warning-banner-actions">
+    <button class="btn btn-outline btn-sm" type="button" id="dashboard-load-warning-retry" onclick="retryDashboardLoad()">Retry load</button>
   </div>
 </div>
 
@@ -3733,240 +3750,295 @@ function mapApplicationFromApi(a) {
   };
 }
 
-// Try to load data from API, fall back to mock data
+var BACKOFFICE_LAST_LOAD_FAILURES = [];
+
+function clearDashboardLoadWarning() {
+  BACKOFFICE_LAST_LOAD_FAILURES = [];
+  var banner = document.getElementById('dashboard-load-warning');
+  var textEl = document.getElementById('dashboard-load-warning-text');
+  if (textEl) {
+    textEl.textContent = 'Signed in. Some dashboard data failed to load. You can continue working, or retry loading background data.';
+  }
+  if (banner) banner.classList.remove('show');
+}
+
+function showDashboardLoadWarning(failedModules) {
+  var uniqueFailures = (Array.isArray(failedModules) ? failedModules : []).filter(Boolean).filter(function(label, idx, arr) {
+    return arr.indexOf(label) === idx;
+  });
+  BACKOFFICE_LAST_LOAD_FAILURES = uniqueFailures.slice();
+  var banner = document.getElementById('dashboard-load-warning');
+  var textEl = document.getElementById('dashboard-load-warning-text');
+  if (textEl) {
+    var baseText = 'Signed in. Some dashboard data failed to load. You can continue working, or retry loading background data.';
+    if (uniqueFailures.length) {
+      baseText += ' Failed modules: ' + uniqueFailures.join(', ') + '.';
+    }
+    textEl.textContent = baseText;
+  }
+  if (banner) banner.classList.add('show');
+}
+
+async function safeLoadModule(label, loaderFn, failures) {
+  try {
+    await loaderFn();
+    return true;
+  } catch (err) {
+    console.error(label + ' failed to load', err);
+    if (Array.isArray(failures)) failures.push(label);
+    return false;
+  }
+}
+
+async function retryDashboardLoad() {
+  var retryBtn = document.getElementById('dashboard-load-warning-retry');
+  if (retryBtn) {
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'Retrying...';
+  }
+  try {
+    var loadedCleanly = await loadFromAPI();
+    populateOfficerDropdowns();
+    renderDashboardRecent();
+    if (loadedCleanly) {
+      clearDashboardLoadWarning();
+      showToast('Dashboard data reloaded.', 'success');
+    }
+  } catch (err) {
+    console.error('Retrying dashboard data load failed', err);
+    showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES.length ? BACKOFFICE_LAST_LOAD_FAILURES : ['Background data']);
+  } finally {
+    if (retryBtn) {
+      retryBtn.disabled = false;
+      retryBtn.textContent = 'Retry load';
+    }
+  }
+}
+
+// Try to load data from API, keeping the authenticated shell usable when non-critical modules fail.
 async function loadFromAPI() {
   if (!BO_AUTH_TOKEN) return false;
-  try {
-    // Load applications from API
+
+  clearDashboardLoadWarning();
+  var failures = [];
+
+  await safeLoadModule('Applications', async function() {
     var appResp = await boApiCall('GET', '/applications?limit=5000');
     if (Array.isArray(appResp.applications)) {
       applicationsApiTotal = Number(appResp.total || appResp.applications.length || 0);
       APPLICATIONS = appResp.applications.map(mapApplicationFromApi);
     }
-
-    await refreshDashboardData();
-
-    // EX-13: Mark data as freshly loaded and start auto-refresh
     _applicationsLastRefreshed = Date.now();
     _updateFreshnessIndicator();
     _startApplicationsAutoRefresh();
+  }, failures);
 
-    // Load users
-    try {
-      var usersResp = await boApiCall('GET', '/users');
-      if (usersResp.users && usersResp.users.length > 0) {
-        USERS = usersResp.users.map(function(u) {
-          var parts = (u.full_name || '').split(' ');
-          return {
-            id: u.id, name: u.full_name, email: u.email, role: u.role,
-            initials: parts.map(function(p) { return p[0]; }).join('').toUpperCase().slice(0,2),
-            status: u.status
-          };
-        });
-        if (BO_AUTH_USER) {
-          var authId = BO_AUTH_USER.id || BO_AUTH_USER.sub || '';
-          var authEmail = BO_AUTH_USER.email || '';
-          var matchedUser = USERS.find(function(u) {
-            return (authId && String(u.id) === String(authId)) || (authEmail && String(u.email).toLowerCase() === String(authEmail).toLowerCase());
-          });
-          if (matchedUser) currentUser = matchedUser;
-        }
-      }
-    } catch(e) {}
+  await safeLoadModule('Dashboard metrics', async function() {
+    var dashboardLoaded = await refreshDashboardData();
+    if (!dashboardLoaded) throw new Error('Could not load canonical dashboard metrics');
+  }, failures);
 
-    // Load risk config — merge API data with frontend defaults (API doesn't store color/label/scoring)
-    try {
-      var riskResp = await boApiCall('GET', '/config/risk-model');
-      if (riskResp.dimensions && riskResp.dimensions.length > 0) {
-        var defaultColors = ['#2563eb','#16a34a','#d97706','#7c3aed','#dc2626'];
-        riskResp.dimensions.forEach(function(apiDim, i) {
-          var localDim = RISK_DIMENSIONS.find(function(d){ return d.id === apiDim.id; }) || RISK_DIMENSIONS[i];
-          if (localDim) {
-            localDim.name = apiDim.name || localDim.name;
-            localDim.weight = apiDim.weight != null ? apiDim.weight : localDim.weight;
-            if (!localDim.color) localDim.color = defaultColors[i] || '#2563eb';
-            if (apiDim.subcriteria) {
-              apiDim.subcriteria.forEach(function(apiSub, si) {
-                var localSub = localDim.subcriteria[si];
-                if (localSub) {
-                  localSub.name = apiSub.name || localSub.name;
-                  localSub.weight = apiSub.weight != null ? apiSub.weight : localSub.weight;
-                } else {
-                  localDim.subcriteria.push({ name: apiSub.name, weight: apiSub.weight || 0, scoring: 'Define scoring 1-4' });
-                }
-              });
-            }
-          }
-        });
-      }
-      if (riskResp.thresholds && riskResp.thresholds.length > 0) {
-        var thresholdDefaults = { LOW:{label:'Low Risk',color:'var(--green)'}, MEDIUM:{label:'Medium Risk',color:'var(--blue)'}, HIGH:{label:'High Risk',color:'var(--amber)'}, VERY_HIGH:{label:'Very High Risk',color:'var(--red)'} };
-        riskResp.thresholds.forEach(function(apiT, i) {
-          if (RISK_THRESHOLDS[i]) {
-            RISK_THRESHOLDS[i].min = apiT.min != null ? apiT.min : RISK_THRESHOLDS[i].min;
-            RISK_THRESHOLDS[i].max = apiT.max != null ? apiT.max : RISK_THRESHOLDS[i].max;
-            RISK_THRESHOLDS[i].level = apiT.level || RISK_THRESHOLDS[i].level;
-            var def = thresholdDefaults[RISK_THRESHOLDS[i].level] || {};
-            if (!RISK_THRESHOLDS[i].label) RISK_THRESHOLDS[i].label = def.label || RISK_THRESHOLDS[i].level;
-            if (!RISK_THRESHOLDS[i].color) RISK_THRESHOLDS[i].color = def.color || 'var(--text3)';
-          }
-        });
-      }
-    } catch(e) {}
-
-    // Load AI agents
-    try {
-      var agentsResp = await boApiCall('GET', '/config/ai-agents');
-      if (agentsResp.agents && agentsResp.agents.length > 0) AI_AGENTS = agentsResp.agents.map(normalizeAIAgentConfig);
-    } catch(e) {}
-
-    try {
-      var checksResp = await boApiCall('GET', '/config/verification-checks');
-      if (checksResp.entity && checksResp.entity.length > 0) {
-        ENTITY_DOC_CHECKS = checksResp.entity.map(function(item) {
-          return {
-            docId: item.doc_type || ('doc-' + String(item.doc_name || 'entity').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-            name: item.doc_name || item.doc_type || 'Untitled Entity Document',
-            checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-              return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
-            }) : []
-          };
-        });
-      }
-      if (checksResp.person && checksResp.person.length > 0) {
-        PERSON_DOC_CHECKS = checksResp.person.map(function(item) {
-          return {
-            docId: item.doc_type || ('doc-' + String(item.doc_name || 'person').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-            name: item.doc_name || item.doc_type || 'Untitled Person Document',
-            checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-              return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
-            }) : []
-          };
-        });
-      }
-    } catch(e) { console.warn('Could not load verification checks:', e); }
-
-    // Load audit log with the same filter path used by the Audit Trail view.
-    try { await loadAuditTrail({ silent: true }); } catch(e) {}
-
-    // Load monitoring alerts from backend
-    try {
-      MONITORING_ALERTS = [];
-      var alertsResp = await boApiCall('GET', '/monitoring/alerts');
-      if (alertsResp.alerts) {
-        MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
-      }
-    } catch(e) { console.warn('Could not load monitoring alerts:', e); }
-
-    // Load periodic reviews from backend
-    try {
-      PERIODIC_REVIEWS = [];
-      var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
-      if (reviewsResp.reviews) {
-        PERIODIC_REVIEWS = reviewsResp.reviews.filter(function(r){ return !!r; }).map(normalizePeriodicReview);
-      }
-    } catch(e) { console.warn('Could not load periodic reviews:', e); }
-
-    // Load monitoring agent statuses from backend
-    try {
-      MONITORING_AGENTS = [];
-      var agentsResp2 = await boApiCall('GET', '/monitoring/agents');
-      if (agentsResp2.agents) {
-        MONITORING_AGENTS = agentsResp2.agents.map(function(ag) {
-          var iconMap = { 'sanctions_screening':'🔍', 'sanctions_pep':'🔍', 'adverse_media':'📡', 'registry':'🏛️', 'pep_monitoring':'👤', 'regulatory':'⚖️', 'risk_drift':'📈', 'document_expiry':'📄' };
-          return {
-            id: ag.id,
-            icon: iconMap[ag.agent_type] || '🤖',
-            name: ag.agent_name || ag.agent_type || 'Agent',
-            clientsMonitored: ag.clients_monitored || 0,
-            sourceScanned: null,
-            registriesChecked: null,
-            profilesAnalyzed: null,
-            regulationsTracked: null,
-            lastRun: ag.last_run ? ag.last_run.split('T')[0].split(' ')[0] : '—',
-            nextRun: ag.next_run ? ag.next_run.split('T')[0].split(' ')[0] : '—',
-            status: (ag.status || 'active').toLowerCase(),
-            alertsGenerated: ag.alerts_generated || 0
-          };
-        });
-      }
-    } catch(e) { console.warn('Could not load monitoring agents:', e); }
-
-    try {
-      MONITORING_DASHBOARD = await boApiCall('GET', '/monitoring/dashboard');
-    } catch(e) {
-      MONITORING_DASHBOARD = null;
-      console.warn('Could not load monitoring dashboard stats:', e);
-    }
-
-    // Load EDD cases from backend
-    await loadEDDCases();
-
-    // Load compliance resources library
-    try {
-      var resourcesResp = await boApiCall('GET', '/resources');
-      if (resourcesResp.resources) {
-        RESOURCES = resourcesResp.resources.map(function(r) {
-          return {
-            id: r.id,
-            slug: r.slug || '',
-            title: r.title || r.file_name || 'Untitled resource',
-            description: r.description || '',
-            category: r.category || 'internal',
-            resourceType: r.resource_type || 'uploaded',
-            fileName: r.file_name || '',
-            mimeType: r.mime_type || '',
-            fileSize: r.file_size || 0,
-            uploadedBy: r.uploaded_by_name || '',
-            createdAt: r.created_at || ''
-          };
-        });
-      }
-    } catch(e) { console.warn('Could not load compliance resources:', e); }
-
-    // Load regulatory intelligence documents
-    try {
-      var regResp = await boApiCall('GET', '/regulatory-intelligence');
-      if (regResp.documents) {
-        REG_DOCUMENTS = regResp.documents.map(function(d) {
+  await safeLoadModule('Users', async function() {
+    var usersResp = await boApiCall('GET', '/users');
+    if (usersResp.users && usersResp.users.length > 0) {
+      USERS = usersResp.users.map(function(u) {
+        var parts = (u.full_name || '').split(' ');
         return {
-            id: d.id,
-            title: d.title || 'Untitled document',
-            regulator: d.regulator || '',
-            jurisdiction: d.jurisdiction || '',
-            docType: d.doc_type || 'Document',
-            pubDate: d.publication_date || '',
-            effDate: d.effective_date || '',
-            uploadedBy: d.uploaded_by_name || '',
-            uploadedAt: d.created_at || '',
-            fileName: d.file_name || '',
-            status: d.status || 'uploaded',
-            sourceText: d.source_text || '',
-            aiSummary: d.analysis_summary || null,
-            analysisSource: d.analysis_source || '',
-            auditTrail: d.audit_trail || [],
-            workflowState: d.workflow_state || ''
-          };
+          id: u.id, name: u.full_name, email: u.email, role: u.role,
+          initials: parts.map(function(p) { return p[0]; }).join('').toUpperCase().slice(0,2),
+          status: u.status
+        };
+      });
+      if (BO_AUTH_USER) {
+        var authId = BO_AUTH_USER.id || BO_AUTH_USER.sub || '';
+        var authEmail = BO_AUTH_USER.email || '';
+        var matchedUser = USERS.find(function(u) {
+          return (authId && String(u.id) === String(authId)) || (authEmail && String(u.email).toLowerCase() === String(authEmail).toLowerCase());
         });
-        if (REG_DOCUMENTS.length > 0 && !REG_CURRENT_DOC_ID) REG_CURRENT_DOC_ID = REG_DOCUMENTS[0].id;
+        if (matchedUser) currentUser = matchedUser;
       }
-    } catch(e) {
-      REG_DOCUMENTS = [];
-      console.warn('Could not load regulatory intelligence documents:', e);
     }
+  }, failures);
 
-    try {
-      ROLE_PERMISSIONS = await boApiCall('GET', '/config/roles-permissions');
-    } catch(e) {
-      ROLE_PERMISSIONS = null;
-      console.warn('Could not load roles and permissions matrix:', e);
+  await safeLoadModule('Risk model configuration', async function() {
+    var riskResp = await boApiCall('GET', '/config/risk-model');
+    if (riskResp.dimensions && riskResp.dimensions.length > 0) {
+      var defaultColors = ['#2563eb','#16a34a','#d97706','#7c3aed','#dc2626'];
+      riskResp.dimensions.forEach(function(apiDim, i) {
+        var localDim = RISK_DIMENSIONS.find(function(d){ return d.id === apiDim.id; }) || RISK_DIMENSIONS[i];
+        if (localDim) {
+          localDim.name = apiDim.name || localDim.name;
+          localDim.weight = apiDim.weight != null ? apiDim.weight : localDim.weight;
+          if (!localDim.color) localDim.color = defaultColors[i] || '#2563eb';
+          if (apiDim.subcriteria) {
+            apiDim.subcriteria.forEach(function(apiSub, si) {
+              var localSub = localDim.subcriteria[si];
+              if (localSub) {
+                localSub.name = apiSub.name || localSub.name;
+                localSub.weight = apiSub.weight != null ? apiSub.weight : localSub.weight;
+              } else {
+                localDim.subcriteria.push({ name: apiSub.name, weight: apiSub.weight || 0, scoring: 'Define scoring 1-4' });
+              }
+            });
+          }
+        }
+      });
     }
+    if (riskResp.thresholds && riskResp.thresholds.length > 0) {
+      var thresholdDefaults = { LOW:{label:'Low Risk',color:'var(--green)'}, MEDIUM:{label:'Medium Risk',color:'var(--blue)'}, HIGH:{label:'High Risk',color:'var(--amber)'}, VERY_HIGH:{label:'Very High Risk',color:'var(--red)'} };
+      riskResp.thresholds.forEach(function(apiT, i) {
+        if (RISK_THRESHOLDS[i]) {
+          RISK_THRESHOLDS[i].min = apiT.min != null ? apiT.min : RISK_THRESHOLDS[i].min;
+          RISK_THRESHOLDS[i].max = apiT.max != null ? apiT.max : RISK_THRESHOLDS[i].max;
+          RISK_THRESHOLDS[i].level = apiT.level || RISK_THRESHOLDS[i].level;
+          var def = thresholdDefaults[RISK_THRESHOLDS[i].level] || {};
+          if (!RISK_THRESHOLDS[i].label) RISK_THRESHOLDS[i].label = def.label || RISK_THRESHOLDS[i].level;
+          if (!RISK_THRESHOLDS[i].color) RISK_THRESHOLDS[i].color = def.color || 'var(--text3)';
+        }
+      });
+    }
+  }, failures);
 
-    return true;
-  } catch(e) {
-    console.warn('Failed to load from API, using mock data:', e);
+  await safeLoadModule('AI agents', async function() {
+    var agentsResp = await boApiCall('GET', '/config/ai-agents');
+    if (agentsResp.agents && agentsResp.agents.length > 0) AI_AGENTS = agentsResp.agents.map(normalizeAIAgentConfig);
+  }, failures);
+
+  await safeLoadModule('Verification checks', async function() {
+    var checksResp = await boApiCall('GET', '/config/verification-checks');
+    if (checksResp.entity && checksResp.entity.length > 0) {
+      ENTITY_DOC_CHECKS = checksResp.entity.map(function(item) {
+        return {
+          docId: item.doc_type || ('doc-' + String(item.doc_name || 'entity').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
+          name: item.doc_name || item.doc_type || 'Untitled Entity Document',
+          checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
+            return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
+          }) : []
+        };
+      });
+    }
+    if (checksResp.person && checksResp.person.length > 0) {
+      PERSON_DOC_CHECKS = checksResp.person.map(function(item) {
+        return {
+          docId: item.doc_type || ('doc-' + String(item.doc_name || 'person').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
+          name: item.doc_name || item.doc_type || 'Untitled Person Document',
+          checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
+            return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
+          }) : []
+        };
+      });
+    }
+  }, failures);
+
+  try { await loadAuditTrail({ silent: true }); } catch(e) {}
+
+  await safeLoadModule('Monitoring alerts', async function() {
+    MONITORING_ALERTS = [];
+    var alertsResp = await boApiCall('GET', '/monitoring/alerts');
+    if (alertsResp.alerts) {
+      MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
+    }
+  }, failures);
+
+  await safeLoadModule('Periodic reviews', async function() {
+    PERIODIC_REVIEWS = [];
+    var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
+    if (reviewsResp.reviews) {
+      PERIODIC_REVIEWS = reviewsResp.reviews.filter(function(r){ return !!r; }).map(normalizePeriodicReview);
+    }
+  }, failures);
+
+  await safeLoadModule('Monitoring agents', async function() {
+    MONITORING_AGENTS = [];
+    var agentsResp2 = await boApiCall('GET', '/monitoring/agents');
+    if (agentsResp2.agents) {
+      MONITORING_AGENTS = agentsResp2.agents.map(function(ag) {
+        var iconMap = { 'sanctions_screening':'🔍', 'sanctions_pep':'🔍', 'adverse_media':'📡', 'registry':'🏛️', 'pep_monitoring':'👤', 'regulatory':'⚖️', 'risk_drift':'📈', 'document_expiry':'📄' };
+        return {
+          id: ag.id,
+          icon: iconMap[ag.agent_type] || '🤖',
+          name: ag.agent_name || ag.agent_type || 'Agent',
+          clientsMonitored: ag.clients_monitored || 0,
+          sourceScanned: null,
+          registriesChecked: null,
+          profilesAnalyzed: null,
+          regulationsTracked: null,
+          lastRun: ag.last_run ? ag.last_run.split('T')[0].split(' ')[0] : '—',
+          nextRun: ag.next_run ? ag.next_run.split('T')[0].split(' ')[0] : '—',
+          status: (ag.status || 'active').toLowerCase(),
+          alertsGenerated: ag.alerts_generated || 0
+        };
+      });
+    }
+  }, failures);
+
+  await safeLoadModule('Monitoring dashboard', async function() {
+    MONITORING_DASHBOARD = await boApiCall('GET', '/monitoring/dashboard');
+  }, failures);
+
+  await safeLoadModule('EDD cases', async function() {
+    await loadEDDCases({ throwOnError: true });
+  }, failures);
+
+  await safeLoadModule('Compliance resources', async function() {
+    var resourcesResp = await boApiCall('GET', '/resources');
+    if (resourcesResp.resources) {
+      RESOURCES = resourcesResp.resources.map(function(r) {
+        return {
+          id: r.id,
+          slug: r.slug || '',
+          title: r.title || r.file_name || 'Untitled resource',
+          description: r.description || '',
+          category: r.category || 'internal',
+          resourceType: r.resource_type || 'uploaded',
+          fileName: r.file_name || '',
+          mimeType: r.mime_type || '',
+          fileSize: r.file_size || 0,
+          uploadedBy: r.uploaded_by_name || '',
+          createdAt: r.created_at || ''
+        };
+      });
+    }
+  }, failures);
+
+  await safeLoadModule('Regulatory intelligence', async function() {
+    var regResp = await boApiCall('GET', '/regulatory-intelligence');
+    if (regResp.documents) {
+      REG_DOCUMENTS = regResp.documents.map(function(d) {
+      return {
+          id: d.id,
+          title: d.title || 'Untitled document',
+          regulator: d.regulator || '',
+          jurisdiction: d.jurisdiction || '',
+          docType: d.doc_type || 'Document',
+          pubDate: d.publication_date || '',
+          effDate: d.effective_date || '',
+          uploadedBy: d.uploaded_by_name || '',
+          uploadedAt: d.created_at || '',
+          fileName: d.file_name || '',
+          status: d.status || 'uploaded',
+          sourceText: d.source_text || '',
+          aiSummary: d.analysis_summary || null,
+          analysisSource: d.analysis_source || '',
+          auditTrail: d.audit_trail || [],
+          workflowState: d.workflow_state || ''
+        };
+      });
+      if (REG_DOCUMENTS.length > 0 && !REG_CURRENT_DOC_ID) REG_CURRENT_DOC_ID = REG_DOCUMENTS[0].id;
+    }
+  }, failures);
+
+  await safeLoadModule('Roles and permissions', async function() {
+    ROLE_PERMISSIONS = await boApiCall('GET', '/config/roles-permissions');
+  }, failures);
+
+  BACKOFFICE_LAST_LOAD_FAILURES = failures.slice();
+  if (failures.length) {
+    showDashboardLoadWarning(failures);
     return false;
   }
+
+  return true;
 }
 
 async function refreshDashboardData() {
@@ -8707,11 +8779,17 @@ function mapEDDCaseFromApi(caseRow) {
   });
 }
 
-async function loadEDDCases() {
+async function loadEDDCases(options) {
+  options = options || {};
   try {
     var resp = await boApiCall('GET', '/edd/cases');
     if (resp.cases) EDD_CASES = resp.cases.map(mapEDDCaseFromApi);
-  } catch(e) { console.warn('Could not load EDD cases:', e); }
+    return true;
+  } catch(e) {
+    console.warn('Could not load EDD cases:', e);
+    if (options.throwOnError) throw e;
+    return false;
+  }
 }
 
 function eddStageBadge(stage) {
@@ -16113,6 +16191,7 @@ async function signOut() {
 }
 
 function showLoginScreen() {
+  clearDashboardLoadWarning();
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('login-email').value = '';
   document.getElementById('login-password').value = '';
@@ -16122,6 +16201,61 @@ function showLoginScreen() {
 
 function hideLoginScreen() {
   document.getElementById('login-overlay').classList.add('hidden');
+}
+
+function applyAuthenticatedShellState() {
+  var nameEl = document.getElementById('sidebar-user-name');
+  var roleEl = document.getElementById('sidebar-user-role');
+  var avatarEl = document.getElementById('sidebar-avatar');
+  if (nameEl) nameEl.textContent = currentUser.name;
+  if (roleEl) roleEl.textContent = ROLE_LABELS[currentUser.role] || currentUser.role;
+  if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){ return w[0]; }).join('');
+  document.body.className = 'role-' + (currentUser.role || 'admin');
+}
+
+function makeAuthError(kind, message, status) {
+  var err = new Error(message || 'Authentication failed');
+  err.kind = kind || 'auth_failed';
+  err.status = status || 0;
+  return err;
+}
+
+async function authenticateOfficer(email, password) {
+  var headers = { 'Content-Type': 'application/json' };
+  var payload = JSON.stringify({ email: email, password: password });
+  var res;
+  try {
+    res = await fetch(BO_API_BASE + '/auth/officer/login', {
+      method: 'POST',
+      headers: headers,
+      credentials: 'include',
+      body: payload
+    });
+  } catch (err) {
+    throw makeAuthError('auth_unavailable', 'Could not sign in because the authentication service is unavailable. Please try again.');
+  }
+
+  var data = {};
+  try { data = await res.json(); } catch (_) {}
+
+  if (!res.ok) {
+    var backendMessage = data && data.error ? data.error : '';
+    if (res.status === 401 || res.status === 403) {
+      throw makeAuthError('invalid_credentials', backendMessage || 'Invalid email or password.', res.status);
+    }
+    throw makeAuthError('auth_unavailable', backendMessage || 'Could not sign in because the authentication service is unavailable. Please try again.', res.status);
+  }
+
+  return data;
+}
+
+function getAuthErrorMessage(err) {
+  if (!err) return 'Could not sign in. Please try again.';
+  if (err.kind === 'invalid_credentials') return err.message || 'Invalid email or password.';
+  if (err.kind === 'auth_unavailable') return err.message || 'Could not sign in because the authentication service is unavailable. Please try again.';
+  if (err.message && /expired/i.test(err.message)) return 'Your session has expired. Please sign in again.';
+  if (err.message && /network/i.test(err.message)) return 'Could not sign in because the authentication service is unavailable. Please try again.';
+  return err.message || 'Could not sign in. Please try again.';
 }
 
 async function handleLogin(e) {
@@ -16142,31 +16276,32 @@ async function handleLogin(e) {
   submitBtn.textContent = 'Signing in...';
   errEl.classList.remove('show');
 
+  var resp;
   try {
-    var resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
+    resp = await authenticateOfficer(email, password);
+  } catch(err) {
+    errText.textContent = getAuthErrorMessage(err);
+    errEl.classList.add('show');
+    return;
+  }
 
+  try {
     setBoAuth(resp.token, resp.user);
-    currentUser = USERS.find(function(u) { return u.email === email; }) || currentUser;
-    // Update sidebar user info
-    var nameEl = document.getElementById('sidebar-user-name');
-    var roleEl = document.getElementById('sidebar-user-role');
-    var avatarEl = document.getElementById('sidebar-avatar');
-    if (nameEl) nameEl.textContent = currentUser.name;
-    if (roleEl) roleEl.textContent = ROLE_LABELS[currentUser.role] || currentUser.role;
-    if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
-    document.body.className = 'role-' + (currentUser.role || 'admin');
+    applyAuthenticatedShellState();
+    hideLoginScreen();
+    if (!applyBackofficeHashRoute()) showView('dashboard');
+    renderDashboardRecent();
 
     AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: 'Signed in via login page', ip:'client' });
 
-    await loadFromAPI();
+    var loadedCleanly = await loadFromAPI();
     populateOfficerDropdowns();
     renderDashboardRecent();
-    if (!applyBackofficeHashRoute()) showView('dashboard');
-    hideLoginScreen();
+    if (!loadedCleanly) showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES);
     showToast('Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
-    errText.textContent = 'Invalid email or password.';
-    errEl.classList.add('show');
+    console.error('Post-login data load failed', err);
+    showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES.length ? BACKOFFICE_LAST_LOAD_FAILURES : ['Background data']);
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = 'Sign In';
@@ -18515,9 +18650,9 @@ function updateWeightDisplay(slider) {
 // ═══════════════════════════════════════════════════════════
 async function boLogin(email, password) {
   try {
-    var resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
+    var resp = await authenticateOfficer(email, password);
     setBoAuth(resp.token, resp.user);
-    currentUser = USERS.find(function(u) { return u.email === email; }) || currentUser;
+    applyAuthenticatedShellState();
     showToast('Signed in as ' + resp.user.name);
     return true;
   } catch(e) {
@@ -18537,16 +18672,20 @@ document.addEventListener('DOMContentLoaded', async function() {
   if (BO_AUTH_TOKEN) {
     try {
       var me = await boApiCall('GET', '/auth/me');
-      await loadFromAPI();
-      populateOfficerDropdowns();
+      setBoAuth(BO_AUTH_TOKEN, (me && (me.user || me)) || BO_AUTH_USER);
       hideLoginScreen();
+      applyAuthenticatedShellState();
       renderDashboardRecent();
-      document.body.className = 'role-' + (currentUser.role || 'admin');
+      var loadedCleanly = await loadFromAPI();
+      populateOfficerDropdowns();
+      renderDashboardRecent();
+      if (!loadedCleanly) showDashboardLoadWarning(BACKOFFICE_LAST_LOAD_FAILURES);
       applyBackofficeHashRoute();
       return;
     } catch(e) {
       console.warn('Token expired, clearing auth');
       BO_AUTH_TOKEN = '';
+      BO_AUTH_USER = null;
     }
   }
 

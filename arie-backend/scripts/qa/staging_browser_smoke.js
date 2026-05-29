@@ -33,6 +33,7 @@ function help() {
     "  STAGING_BASE_URL       Defaults to https://staging.regmind.co.",
     "  STAGING_SMOKE_APP_ID   Application ref/id to open; otherwise first visible row is used.",
     "  STAGING_SMOKE_OUT_DIR  Defaults to /tmp/regmind-staging-browser-smoke.",
+    "  STAGING_SMOKE_FAIL_PATHS Comma-separated API pathnames to simulate as HTTP 503 after sign-in (for resilient-load QA).",
     "  CHROME_PATH            Chrome/Chromium executable path.",
     "  PLAYWRIGHT_NODE_MODULES Directory containing playwright-core, if not installed locally.",
     "  HEADLESS               Defaults to true; set false for headed debugging.",
@@ -83,6 +84,10 @@ const email = process.env.STAGING_QA_EMAIL;
 const password = process.env.STAGING_QA_PASSWORD;
 const appId = process.env.STAGING_SMOKE_APP_ID || "";
 const outDir = process.env.STAGING_SMOKE_OUT_DIR || "/tmp/regmind-staging-browser-smoke";
+const failPaths = String(process.env.STAGING_SMOKE_FAIL_PATHS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 const reportFile = path.join(outDir, "report.json");
 const headless = String(process.env.HEADLESS || "true").toLowerCase() !== "false";
 
@@ -94,6 +99,7 @@ const report = {
   credentialHandling: "STAGING_QA_EMAIL/STAGING_QA_PASSWORD environment variables only; values omitted",
   tokenInjectionUsed: false,
   authBypassUsed: false,
+  simulatedFailurePaths: failPaths,
   requiredSmokeAreas: REQUIRED_SMOKE_AREAS,
   applicationRef: appId || null,
   screenshots: [],
@@ -253,6 +259,26 @@ async function main() {
   });
   const page = await context.newPage();
 
+  if (failPaths.length) {
+    await page.route("**/*", async (route) => {
+      const requestUrl = route.request().url();
+      try {
+        const parsed = new URL(requestUrl);
+        if (failPaths.includes(parsed.pathname)) {
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: `Simulated smoke failure for ${parsed.pathname}` }),
+          });
+          return;
+        }
+      } catch (err) {
+        // Fall through to the original request when URL parsing fails.
+      }
+      await route.continue();
+    });
+  }
+
   page.on("console", (msg) => {
     const entry = { type: msg.type(), text: msg.text() };
     if (msg.type() === "error") report.consoleErrors.push(entry);
@@ -279,6 +305,14 @@ async function main() {
     await page.locator('button:has-text("Login"), button:has-text("Sign In"), button[type="submit"]').first().click();
     await page.waitForSelector('.snav-item[data-view="applications"]', { timeout: 30000 });
     report.checks.loginWithApprovedCredentials = true;
+    report.checks.loginOverlayHidden = await page.locator("#login-overlay.hidden").count().then((count) => count > 0);
+    report.checks.noVisibleLoginErrorAfterSuccess = !(await visible(page, "#login-error.show"));
+    report.observations.loginErrorText = await page.locator("#login-error-text").first().textContent().catch(() => "");
+
+    if (failPaths.length) {
+      await page.waitForSelector("#dashboard-load-warning.show", { timeout: 30000 });
+      report.checks.resilientLoadWarningVisible = await visible(page, "#dashboard-load-warning.show");
+    }
 
     await clickNav(page, "applications");
     await page.waitForSelector("#applications-body tr", { timeout: 30000 });
