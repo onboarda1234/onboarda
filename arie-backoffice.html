@@ -4293,6 +4293,8 @@ var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:nul
 var SCREENING_REVIEW_ROWS = {};
 var SCREENING_EVIDENCE_DETAILS = {};
 var pendingScreeningDisposition = null;
+var INLINE_SCREENING_DISPOSITION_STATE = {};
+var INLINE_SCREENING_DISPOSITION_SUBMITTING = {};
 
 // ═══════════════════════════════════════════════════════════
 // EX-13: Auto-refresh, ETag caching, and staleness indicator
@@ -6460,6 +6462,7 @@ async function fetchApplicationDetail(ref) {
     docs: documents.map(function(doc) { return doc.doc_type; }),
     rmiRequests: detail.rmi_requests || [],
     monitoringAlerts: detail.monitoring_alerts || [],
+    screeningReviews: detail.screening_reviews || [],
     _raw_prescreening: psData,
     prescreeningData: psData,
     latestMemoMeta: detail.latest_memo || null,
@@ -7840,6 +7843,8 @@ function screeningQueueStatusBadge(statusKey, statusLabel) {
   if (statusKey === 'screened_no_match') cls = 'approved';
   else if (statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
   else if (statusKey === 'screening_simulated' || statusKey === 'screening_sandbox' || statusKey === 'screening_not_configured' || statusKey === 'screening_unavailable') cls = 'high';
+  else if (statusKey === 'review_escalated') cls = 'high';
+  else if (statusKey === 'review_follow_up_required') cls = 'pending';
   else if (statusKey === 'review_required') cls = 'high';
   return '<span class="badge ' + cls + '">' + escapeHtml(statusLabel || statusKey || 'Pending') + '</span>';
 }
@@ -7901,6 +7906,234 @@ function screeningReviewHistory(row) {
   }
   if (row.sensitivity_flags && row.sensitivity_flags.length) html += '<div><strong>Sensitivity:</strong> ' + escapeHtml(row.sensitivity_flags.join(', ').replace(/_/g, ' ')) + '</div>';
   html += '</div>';
+  return html;
+}
+
+function screeningReviewSubjectKey(applicationRef, subjectType, subjectName) {
+  return [applicationRef || '', subjectType || '', subjectName || ''].join('|');
+}
+
+function screeningReviewOptionsForInline(disposition) {
+  return screeningDispositionCodeOptions(disposition).map(function(option) {
+    return { value: option[0], label: option[1] };
+  });
+}
+
+function getMergedScreeningReviewRow(app, queueRow, reviewRow, subjectType, subjectName) {
+  if (!app) return queueRow || reviewRow || null;
+  var subjectKey = (subjectType || '') + '|' + (subjectName || '');
+  var reviews = (app.screeningReviews || app.screening_reviews || []);
+  if (!reviewRow && Array.isArray(reviews)) {
+    reviewRow = reviews.find(function(item) {
+      return (item.subject_type || '') + '|' + (item.subject_name || '') === subjectKey;
+    }) || null;
+  }
+  if (!queueRow && SCREENING_QUEUE && Array.isArray(SCREENING_QUEUE.rows)) {
+    queueRow = SCREENING_QUEUE.rows.find(function(item) {
+      return item.application_ref === app.ref && ((item.subject_type || '') + '|' + (item.subject_name || '')) === subjectKey;
+    }) || null;
+  }
+  if (!queueRow && !reviewRow) return null;
+  var merged = Object.assign({
+    application_id: app.id,
+    application_ref: app.ref,
+    company_name: app.company,
+    subject_type: subjectType,
+    subject_name: subjectName
+  }, reviewRow || {}, queueRow || {});
+  if (typeof merged.review_required !== 'boolean') merged.review_required = !!merged.review_actionable;
+  return merged;
+}
+
+function getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row) {
+  var key = screeningReviewSubjectKey(applicationRef, subjectType, subjectName);
+  if (!INLINE_SCREENING_DISPOSITION_STATE[key]) {
+    var pendingSecondReview = row && row.review_four_eyes_status === 'pending_second_review';
+    INLINE_SCREENING_DISPOSITION_STATE[key] = {
+      disposition: pendingSecondReview ? 'cleared' : '',
+      dispositionCode: pendingSecondReview ? 'false_positive_cleared' : '',
+      rationale: '',
+      evidenceReference: '',
+      error: ''
+    };
+  }
+  return INLINE_SCREENING_DISPOSITION_STATE[key];
+}
+
+function setInlineScreeningDispositionChoice(applicationRef, subjectType, subjectName, disposition) {
+  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
+  var options = screeningReviewOptionsForInline(disposition);
+  state.disposition = disposition;
+  state.dispositionCode = options.length === 1 ? options[0].value : '';
+  state.error = '';
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
+function updateInlineScreeningDispositionField(applicationRef, subjectType, subjectName, field, value) {
+  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
+  state[field] = value;
+  if (field === 'rationale' || field === 'evidenceReference' || field === 'dispositionCode') state.error = '';
+}
+
+async function refreshApplicationDetailScreening(subjectType, subjectName) {
+  await loadScreeningQueue();
+  if (!currentApp || !currentApp.ref) return;
+  var detailApp = await fetchApplicationDetail(currentApp.ref);
+  renderAuthoritativeAppDetail(detailApp, {
+    initialTab: 'screening',
+    screeningFocus: {
+      subject_type: subjectType || '',
+      subject_name: subjectName || ''
+    }
+  });
+}
+
+async function submitInlineScreeningDisposition(applicationRef, subjectType, subjectName) {
+  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  if (!row) return;
+  var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
+  if (!canDispositionScreeningDisposition()) {
+    state.error = 'You do not have permission to disposition screening results.';
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
+  var disposition = state.disposition;
+  if (!disposition) {
+    state.error = 'Select a screening disposition before saving.';
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
+  if (disposition === 'cleared' && !canClearScreeningDisposition()) {
+    state.error = 'False-positive clearance requires Compliance Officer, SCO, or Admin role.';
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
+  var dispositionCode = state.dispositionCode || (screeningReviewOptionsForInline(disposition)[0] || {}).value || '';
+  if (!dispositionCode) {
+    state.error = 'Select a disposition code before saving.';
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
+  if (disposition === 'cleared' && !String(state.evidenceReference || '').trim()) {
+    state.error = 'False-positive clearance requires an evidence / provider reference.';
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
+  var rationale = String(state.rationale || '').trim();
+  var rationaleError = screeningDispositionRationaleError(disposition, rationale);
+  if (rationaleError) {
+    state.error = rationaleError;
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
+
+  var key = screeningReviewSubjectKey(applicationRef, subjectType, subjectName);
+  INLINE_SCREENING_DISPOSITION_SUBMITTING[key] = true;
+  state.error = '';
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  try {
+    var resp = await boApiCall('POST', '/screening/review', {
+      application_id: row.application_ref || row.application_id || applicationRef,
+      subject_type: row.subject_type || subjectType,
+      subject_name: row.subject_name || subjectName,
+      disposition: disposition,
+      disposition_code: dispositionCode,
+      rationale: rationale,
+      notes: rationale,
+      evidence_reference: String(state.evidenceReference || '').trim(),
+      source_surface: 'application_detail_screening_tab'
+    });
+    INLINE_SCREENING_DISPOSITION_STATE[key] = {
+      disposition: '',
+      dispositionCode: '',
+      rationale: '',
+      evidenceReference: '',
+      error: ''
+    };
+    showToast(resp.status === 'second_review_required' ? 'First review recorded; awaiting second reviewer' : 'Screening disposition saved. Case blockers have been refreshed.');
+    await refreshApplicationDetailScreening(subjectType, subjectName);
+  } catch (e) {
+    if (String((e && e.message) || '').toLowerCase().indexOf('already been reviewed') !== -1) {
+      state.error = 'This screening item has already been reviewed. Refreshing latest status.';
+      showToast('This screening item has already been reviewed. Refreshing latest status.', 'warning');
+      await refreshApplicationDetailScreening(subjectType, subjectName);
+    } else {
+      state.error = (e && e.message) || 'Failed to save screening disposition';
+      showToast((e && e.message) || 'Failed to save screening disposition', 'error');
+      renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    }
+  } finally {
+    INLINE_SCREENING_DISPOSITION_SUBMITTING[key] = false;
+    if (currentApp && currentApp.ref === applicationRef) {
+      renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    }
+  }
+}
+
+function screeningDispositionAuditLink() {
+  return '<button type="button" class="btn btn-outline btn-sm" onclick="switchDetailTab(\'activity\');loadDecisionRecords();loadAuditTrail({silent:true});">View audit trail</button>';
+}
+
+function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectName) {
+  if (!row || !row.review_required) {
+    if (row && row.review_disposition && !row.review_actionable) {
+      return '<div style="margin-top:12px;padding:12px;border:1px solid #bbf7d0;border-radius:8px;background:#f0fdf4;font-size:12px;color:#166534;">' +
+        '<strong>Screening review recorded.</strong> This item is now read-only from the application detail tab. ' +
+        screeningDispositionAuditLink() +
+      '</div>';
+    }
+    return '';
+  }
+  if (!canDispositionScreeningDisposition()) {
+    return '<div style="margin-top:12px;padding:12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;">You do not have permission to disposition screening results.</div>';
+  }
+
+  var key = screeningReviewSubjectKey(app.ref, subjectType, subjectName);
+  var pendingSecondReview = row.review_four_eyes_status === 'pending_second_review';
+  var state = getInlineScreeningDispositionState(app.ref, subjectType, subjectName, row);
+  var submitting = !!INLINE_SCREENING_DISPOSITION_SUBMITTING[key];
+  var disposition = state.disposition || '';
+  var dispositionOptions = screeningReviewOptionsForInline(disposition);
+  var selectedCode = state.dispositionCode || (dispositionOptions.length === 1 ? dispositionOptions[0].value : '');
+  var clearSelected = disposition === 'cleared';
+  var escalateSelected = disposition === 'escalated';
+  var followUpSelected = disposition === 'follow_up_required';
+  var buttonBase = 'padding:8px 12px;border-radius:999px;border:1px solid var(--border1);background:#fff;font-size:12px;font-weight:600;cursor:pointer;';
+  var buttonActive = 'background:rgba(43,47,143,0.08);border-color:var(--brand);color:var(--brand);';
+  var clearDisabled = !canClearScreeningDisposition();
+  var explanation = pendingSecondReview
+    ? 'A first officer has already recorded a sensitive clear. A distinct second reviewer must confirm it here.'
+    : 'This screening match still requires officer review.';
+  var html = '<div style="margin-top:12px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">';
+  html += '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;"><strong>' + escapeHtml(explanation) + '</strong></div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">';
+  html += '<button type="button" style="' + buttonBase + (clearSelected ? buttonActive : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'cleared\')">' + (pendingSecondReview ? 'Second Review' : 'Clear / False Positive') + '</button>';
+  if (!pendingSecondReview) {
+    html += '<button type="button" style="' + buttonBase + (escalateSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'escalated\')">Escalate</button>';
+    html += '<button type="button" style="' + buttonBase + (followUpSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'follow_up_required\')">Follow-Up Required</button>';
+  }
+  html += '</div>';
+  if (disposition === 'escalated') {
+    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Escalation outcome</div><select class="form-select" ' + (submitting ? 'disabled ' : '') + 'onchange="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'dispositionCode\',this.value)">';
+    html += '<option value="">Select escalation reason</option>';
+    dispositionOptions.forEach(function(option) {
+      html += '<option value="' + escapeHtml(option.value) + '"' + (selectedCode === option.value ? ' selected' : '') + '>' + escapeHtml(option.label) + '</option>';
+    });
+    html += '</select></div>';
+  }
+  if (disposition === 'cleared') {
+    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Evidence / Provider Reference</div><input class="form-input" ' + (submitting ? 'disabled ' : '') + ' value="' + escapeHtml(state.evidenceReference || '') + '" oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'evidenceReference\',this.value)" placeholder="Provider case ID, registry extract, or review-pack reference..." /><div style="font-size:11px;color:var(--text3);margin-top:6px;">Required for false-positive clearance. Stored in audit evidence; do not paste raw PII.</div></div>';
+  }
+  html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Rationale</div><textarea class="form-input" rows="4" ' + (submitting ? 'disabled ' : '') + ' oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'rationale\',this.value)" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;">' + escapeHtml(state.rationale || '') + '</textarea><div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(screeningDispositionRationaleHelp(disposition || 'escalated')) + '</div></div>';
+  if (state.error) {
+    html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;">' + escapeHtml(state.error) + '</div>';
+  }
+  html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
+  html += '<button type="button" class="btn btn-primary" ' + (submitting ? 'disabled ' : '') + ' onclick="submitInlineScreeningDisposition(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\')">' + (submitting ? 'Saving…' : 'Save disposition') + '</button>';
+  html += '<span style="font-size:11px;color:var(--text3);">Backend screening gates remain authoritative.</span>';
+  html += '</div></div>';
   return html;
 }
 
@@ -8602,6 +8835,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (redApplicants.length) body += '<div style="margin-top:10px;"><strong>KYC review flags:</strong> RED outcome for ' + escapeHtml(redApplicants.join(', ')) + '</div>';
   body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml((companyAdverse.matched || monitoringMedia.matched) ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media company match recorded.') + '</div>';
   body += '</div>';
+  body += renderInlineScreeningDispositionPanel(app, reviewRow, 'entity', app.company);
   body += screeningReviewHistory(reviewRow);
 
   return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
@@ -8695,6 +8929,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   }
   body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(facts.adverse_media_hits > 0 ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media person match recorded.') + '</div>';
   body += '</div>';
+  body += renderInlineScreeningDispositionPanel(app, reviewRow, person.subject_type, person.name);
   body += screeningReviewHistory(reviewRow);
 
   return screeningReviewCard(escapeHtml(person.name), badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
@@ -8713,6 +8948,10 @@ function renderScreeningReviewPanel(app, focus) {
   var queueMap = {};
   queueRows.forEach(function(row) {
     queueMap[(row.subject_type || '') + '|' + (row.subject_name || '')] = row;
+  });
+  var reviewMap = {};
+  (app.screeningReviews || app.screening_reviews || []).forEach(function(review) {
+    reviewMap[(review.subject_type || '') + '|' + (review.subject_name || '')] = review;
   });
 
   var html = '';
@@ -8756,7 +8995,12 @@ function renderScreeningReviewPanel(app, focus) {
     html += '</div></div>';
   }
 
-  html += buildEntityScreeningReviewCard(app, queueMap['entity|' + app.company], screeningSummary, focus);
+  html += buildEntityScreeningReviewCard(
+    app,
+    getMergedScreeningReviewRow(app, queueMap['entity|' + app.company], reviewMap['entity|' + app.company], 'entity', app.company),
+    screeningSummary,
+    focus
+  );
 
   var people = [];
   (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, pct:null, pep:d.pep }); });
@@ -8771,7 +9015,12 @@ function renderScreeningReviewPanel(app, focus) {
       var bFocused = screeningFocusMatches(focus, b.subject_type, b.name) ? 1 : 0;
       return bFocused - aFocused;
     }).forEach(function(person) {
-      html += buildPersonScreeningReviewCard(person, app, queueMap[person.subject_type + '|' + person.name], focus);
+      html += buildPersonScreeningReviewCard(
+        person,
+        app,
+        getMergedScreeningReviewRow(app, queueMap[person.subject_type + '|' + person.name], reviewMap[person.subject_type + '|' + person.name], person.subject_type, person.name),
+        focus
+      );
     });
     html += '</div>';
   }
@@ -8834,6 +9083,9 @@ function screeningDispositionRationaleHelp(disposition) {
 }
 
 function screeningDispositionRationaleError(disposition, rationale) {
+  if (!String(rationale || '').trim()) {
+    return 'Please enter a rationale before saving this screening disposition.';
+  }
   if (rationale.length < SCREENING_RATIONALE_MIN_CHARS) {
     return 'Rationale must be at least ' + SCREENING_RATIONALE_MIN_CHARS + ' characters.';
   }
@@ -8848,6 +9100,10 @@ function screeningDispositionRationaleError(disposition, rationale) {
 
 function canClearScreeningDisposition() {
   return !!(currentUser && ['admin', 'sco', 'co'].indexOf(currentUser.role) >= 0);
+}
+
+function canDispositionScreeningDisposition() {
+  return !!(currentUser && ['admin', 'sco', 'co', 'analyst'].indexOf(currentUser.role) >= 0);
 }
 
 function setScreeningDispositionError(message) {
@@ -8963,7 +9219,8 @@ async function submitScreeningDisposition() {
       disposition_code: code,
       rationale: rationale,
       notes: rationale,
-      evidence_reference: evidenceReference
+      evidence_reference: evidenceReference,
+      source_surface: 'screening_queue'
     });
     closeModal('modal-screening-disposition');
     showToast(resp.status === 'second_review_required' ? 'First review recorded; awaiting second reviewer' : 'Screening disposition saved');
@@ -8999,15 +9256,17 @@ async function renderScreening() {
         screeningBadge(row.pep_screening_status || 'not_applicable') +
         '</div>';
       var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReviewByRow(\'' + rowKey + '\')">View</button>';
-      if (row.review_required && !row.review_resolved) {
+      if (row.review_required && row.review_actionable !== false) {
         var clearLabel = row.review_four_eyes_status === 'pending_second_review' ? 'Second Review' : 'Clear';
         if (canClearScreeningDisposition()) {
           actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">' + clearLabel + '</button>';
         } else {
           actions += ' <button class="btn btn-outline btn-sm" disabled title="False-positive clearance requires Compliance Officer, SCO, or Admin role.">Clear</button>';
         }
-        actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'escalated\')">Escalate</button>';
-        actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'follow_up_required\')">Follow-Up</button>';
+        if (row.review_four_eyes_status !== 'pending_second_review') {
+          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'escalated\')">Escalate</button>';
+          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'follow_up_required\')">Follow-Up</button>';
+        }
       }
 
       tr.innerHTML = '<td>' + escapeHtml(row.subject_name) + '</td>' +

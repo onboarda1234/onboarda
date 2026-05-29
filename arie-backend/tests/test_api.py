@@ -4043,6 +4043,201 @@ class TestGovernanceAttemptAudit:
         assert body["status"] == "complete"
         assert body["requires_four_eyes"] is False
         assert body["sensitivity_flags"] == []
+        assert body["review"]["review_actionable"] is False
+
+        queue = http_requests.get(
+            f"{api_server}/api/screening/queue",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert queue.status_code == 200
+        row = next(r for r in queue.json()["rows"] if r["application_ref"] == app_ref and r["subject_name"] == subject_name)
+        assert row["review_required"] is False
+        assert row["review_actionable"] is False
+        assert row["status_key"] == "review_escalated"
+        assert row["status_label"] == "Escalated"
+
+        retry = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "director",
+                "subject_name": subject_name,
+                "disposition": "escalated",
+                "disposition_code": "potential_sanctions_match",
+                "rationale": "Retry should be rejected because the screening item is already reviewed.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert retry.status_code == 409
+
+    def test_screening_follow_up_marks_queue_row_non_actionable(self, api_server):
+        """Follow-up dispositions should clear queue actionability while preserving workflow blockers elsewhere."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1c_follow_up"
+        app_ref = "ARF-2026-PHASE1C-FOLLOW-UP"
+        subject_name = "Follow Up Director"
+        prescreening = {
+            "screening_report": {
+                "screened_at": "2026-04-30T10:00:00Z",
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {"matched": False, "results": [], "api_status": "live"},
+                },
+                "director_screenings": [{
+                    "person_name": subject_name,
+                    "person_type": "director",
+                    "screening": {
+                        "matched": True,
+                        "results": [{"name": subject_name, "is_sanctioned": False, "is_pep": True}],
+                        "api_status": "live",
+                        "screened_at": "2026-04-30T10:00:00Z",
+                    },
+                    "undeclared_pep": True,
+                }],
+                "ubo_screenings": [],
+                "ip_geolocation": {"risk_level": "LOW"},
+                "overall_flags": ["Director PEP match"],
+                "total_hits": 1,
+            }
+        }
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1c_client", "Phase 1C Follow Up Ltd",
+            "Mauritius", "Technology", "SME", "in_review", json.dumps(prescreening),
+        ))
+        conn.execute(
+            "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+            (app_id, subject_name, "Mauritius", "No"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("analyst_phase1c", "analyst", "Analyst Reviewer", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "director",
+                "subject_name": subject_name,
+                "disposition": "follow_up_required",
+                "disposition_code": "needs_more_information",
+                "rationale": "Additional customer clarification is required before a final screening disposition can be made.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["review"]["review_actionable"] is False
+
+        queue = http_requests.get(
+            f"{api_server}/api/screening/queue",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert queue.status_code == 200
+        row = next(r for r in queue.json()["rows"] if r["application_ref"] == app_ref and r["subject_name"] == subject_name)
+        assert row["review_required"] is False
+        assert row["review_actionable"] is False
+        assert row["status_key"] == "review_follow_up_required"
+        assert row["status_label"] == "Follow-Up Required"
+
+    def test_screening_review_subject_must_belong_to_application(self, api_server):
+        """Disposition requests must fail closed when the subject is not part of the application."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1c_subject_mismatch"
+        app_ref = "ARF-2026-PHASE1C-SUBJECT-MISMATCH"
+        conn = get_db()
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "phase1c_client", "Subject Mismatch Ltd", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": "Different Company Name Ltd",
+                "disposition": "escalated",
+                "disposition_code": "material_concern",
+                "rationale": "This should fail because the subject is not part of the application.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["error"].lower()
+
+    def test_screening_review_audit_captures_source_surface(self, api_server):
+        """Inline application-detail reviews should stamp the audit source surface."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1c_screening_source_surface"
+        app_ref = "ARF-2026-PHASE1C-SOURCE-SURFACE"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "phase1c_client", "Source Surface Ltd", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": "Source Surface Ltd",
+                "disposition": "escalated",
+                "disposition_code": "material_concern",
+                "rationale": "Officer escalated the screening match directly from application detail.",
+                "source_surface": "application_detail_screening_tab",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["source_surface"] == "application_detail_screening_tab"
 
     def test_screening_escalated_to_edd_routes_application(self, api_server, monkeypatch):
         """Canonical escalated_to_edd disposition must actuate/preserve EDD workflow."""
