@@ -103,6 +103,7 @@ def _runtime_js(html, config):
                 console.log(JSON.stringify({
                   blockers,
                   html: document.getElementById('detail-case-command-centre').innerHTML,
+                  visibleBlockerCardCount: (document.getElementById('detail-case-command-centre').innerHTML.match(/case-command-blocker-card/g) || []).length,
                   switchTabCalls,
                   targetScrollCalls: CONFIG.resolveTarget ? document.getElementById(CONFIG.resolveTarget.anchorId).scrollCalls : 0
                 }));
@@ -156,6 +157,39 @@ def _base_app(**overrides):
 
 
 class TestCaseCommandCentreRuntime:
+    def test_compact_summary_strip_shows_core_case_context(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        ref="ARF-COMPACT-202",
+                        company="Compact Review Ltd",
+                        status="Pricing Under Review",
+                        risk="HIGH",
+                        finalRiskLevel="HIGH",
+                        assigned="Unassigned",
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Memo missing"]},
+                },
+            )
+        )
+        assert 'ARF-COMPACT-202 · Compact Review Ltd' in result["html"]
+        assert 'case-command-centre-meta' in result["html"]
+        assert 'Stage' in result["html"]
+        assert 'Pricing Under Review' in result["html"]
+        assert 'Risk' in result["html"]
+        assert 'HIGH' in result["html"]
+        assert 'Officer' in result["html"]
+        assert 'Unassigned' in result["html"]
+        assert '>Blocked<' in result["html"]
+
     def test_screening_blocker_is_shown(self):
         html = _read_backoffice()
         result = _run_node(
@@ -243,6 +277,8 @@ class TestCaseCommandCentreRuntime:
         assert "documents" in blocker_ids
         assert "Document review still needs attention." in result["html"]
         assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-documents")\'' in result["html"]
+        assert result["visibleBlockerCardCount"] == len(result["blockers"])
+        assert "1 blocker" in result["html"]
 
     def test_resolve_cta_helper_opens_the_requested_tab(self):
         html = _read_backoffice()
@@ -282,8 +318,8 @@ class TestCaseCommandCentreRuntime:
             )
         )
         assert result["blockers"] == []
-        assert "Ready for officer review." in result["html"]
-        assert "Backend approval gates still run when approval is attempted." in result["html"]
+        assert "No guidance blockers detected." in result["html"]
+        assert "Final approval remains subject to backend approval gates." in result["html"]
 
     def test_backend_approval_gates_remain_unchanged(self):
         html = _read_backoffice()
