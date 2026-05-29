@@ -33,6 +33,7 @@ function help() {
     "  STAGING_BASE_URL       Defaults to https://staging.regmind.co.",
     "  STAGING_SMOKE_APP_ID   Application ref/id to open; otherwise first visible row is used.",
     "  STAGING_SMOKE_OUT_DIR  Defaults to /tmp/regmind-staging-browser-smoke.",
+    "  STAGING_SMOKE_FAIL_PATHS Comma-separated API pathnames to simulate as HTTP 503 after sign-in (for resilient-load QA).",
     "  CHROME_PATH            Chrome/Chromium executable path.",
     "  PLAYWRIGHT_NODE_MODULES Directory containing playwright-core, if not installed locally.",
     "  HEADLESS               Defaults to true; set false for headed debugging.",
@@ -83,6 +84,10 @@ const email = process.env.STAGING_QA_EMAIL;
 const password = process.env.STAGING_QA_PASSWORD;
 const appId = process.env.STAGING_SMOKE_APP_ID || "";
 const outDir = process.env.STAGING_SMOKE_OUT_DIR || "/tmp/regmind-staging-browser-smoke";
+const failPaths = String(process.env.STAGING_SMOKE_FAIL_PATHS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 const reportFile = path.join(outDir, "report.json");
 const headless = String(process.env.HEADLESS || "true").toLowerCase() !== "false";
 
@@ -94,6 +99,7 @@ const report = {
   credentialHandling: "STAGING_QA_EMAIL/STAGING_QA_PASSWORD environment variables only; values omitted",
   tokenInjectionUsed: false,
   authBypassUsed: false,
+  simulatedFailurePaths: failPaths,
   requiredSmokeAreas: REQUIRED_SMOKE_AREAS,
   applicationRef: appId || null,
   screenshots: [],
@@ -144,6 +150,46 @@ async function screenshot(page, name) {
 
 async function visible(page, selector) {
   return page.locator(selector).first().isVisible().catch(() => false);
+}
+
+async function fillLoginForm(page, email, password) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.locator("#login-email").fill(email);
+    await page.locator("#login-password").fill(password);
+    const currentEmail = await page.locator("#login-email").inputValue();
+    const currentPassword = await page.locator("#login-password").inputValue();
+    if (currentEmail === email && currentPassword === password) {
+      return { email: currentEmail, passwordLength: currentPassword.length, attempt: attempt + 1 };
+    }
+    await page.waitForTimeout(250);
+  }
+  const currentEmail = await page.locator("#login-email").inputValue().catch(() => "");
+  const currentPassword = await page.locator("#login-password").inputValue().catch(() => "");
+  return { email: currentEmail, passwordLength: currentPassword.length, attempt: 3 };
+}
+
+async function overlayState(page) {
+  return page.$eval("#login-overlay", (el) => {
+    const style = window.getComputedStyle(el);
+    return {
+      display: style.display,
+      visibility: style.visibility,
+      pointerEvents: style.pointerEvents,
+      hidden: !!el.hidden,
+      ariaHidden: el.getAttribute("aria-hidden"),
+      className: el.className,
+    };
+  });
+}
+
+function isOverlayInactive(state) {
+  return !!state &&
+    state.display === "none" &&
+    state.visibility === "hidden" &&
+    state.pointerEvents === "none" &&
+    state.hidden === true &&
+    state.ariaHidden === "true" &&
+    /\bhidden\b/.test(state.className || "");
 }
 
 async function clickNav(page, view) {
@@ -253,6 +299,26 @@ async function main() {
   });
   const page = await context.newPage();
 
+  if (failPaths.length) {
+    await page.route("**/*", async (route) => {
+      const requestUrl = route.request().url();
+      try {
+        const parsed = new URL(requestUrl);
+        if (failPaths.includes(parsed.pathname)) {
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: `Simulated smoke failure for ${parsed.pathname}` }),
+          });
+          return;
+        }
+      } catch (err) {
+        // Fall through to the original request when URL parsing fails.
+      }
+      await route.continue();
+    });
+  }
+
   page.on("console", (msg) => {
     const entry = { type: msg.type(), text: msg.text() };
     if (msg.type() === "error") report.consoleErrors.push(entry);
@@ -274,13 +340,64 @@ async function main() {
 
   try {
     await page.goto(`${baseUrl}/backoffice`, { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.locator('input[type="email"], input[name="email"], #email').first().fill(email);
-    await page.locator('input[type="password"], input[name="password"], #password').first().fill(password);
+    await page.waitForFunction(() => {
+      const overlay = document.getElementById("login-overlay");
+      const emailInput = document.getElementById("login-email");
+      const passwordInput = document.getElementById("login-password");
+      const submitBtn = document.getElementById("login-submit");
+      if (!overlay || !emailInput || !passwordInput || !submitBtn) return false;
+      const style = window.getComputedStyle(overlay);
+      return style.display === "flex" &&
+        style.visibility === "visible" &&
+        style.pointerEvents !== "none" &&
+        submitBtn.textContent.trim() === "Sign In" &&
+        emailInput.disabled !== true &&
+        passwordInput.disabled !== true;
+    }, { timeout: 30000 });
+    report.observations.loginFormValuesBeforeSubmit = await fillLoginForm(page, email, password);
+    if (report.observations.loginFormValuesBeforeSubmit.email !== email ||
+        report.observations.loginFormValuesBeforeSubmit.passwordLength !== password.length) {
+      throw new Error("Login form values were not retained before submit");
+    }
+    const authResponsePromise = page.waitForResponse((resp) => {
+      try {
+        return new URL(resp.url()).pathname === "/api/auth/officer/login";
+      } catch (err) {
+        return false;
+      }
+    }, { timeout: 30000 });
     await page.locator('button:has-text("Login"), button:has-text("Sign In"), button[type="submit"]').first().click();
-    await page.waitForSelector('.snav-item[data-view="applications"]', { timeout: 30000 });
-    report.checks.loginWithApprovedCredentials = true;
+    const authResponse = await authResponsePromise;
+    report.checks.loginRequestCompleted = true;
+    report.checks.loginWithApprovedCredentials = authResponse.ok();
+    report.observations.loginResponseStatus = authResponse.status();
+    if (!authResponse.ok()) {
+      throw new Error(`Login failed with status ${authResponse.status()}`);
+    }
+    await page.waitForFunction(() => {
+      const overlay = document.getElementById("login-overlay");
+      if (!overlay) return false;
+      const style = window.getComputedStyle(overlay);
+      return style.display === "none" &&
+        style.visibility === "hidden" &&
+        style.pointerEvents === "none" &&
+        overlay.hidden === true &&
+        overlay.getAttribute("aria-hidden") === "true" &&
+        /\bhidden\b/.test(overlay.className || "");
+    }, { timeout: 30000 });
+    report.observations.overlayStateAfterLogin = await overlayState(page);
+    report.checks.loginOverlayHidden = isOverlayInactive(report.observations.overlayStateAfterLogin);
+    report.checks.noVisibleLoginErrorAfterSuccess = !(await visible(page, "#login-error.show"));
+    report.observations.loginErrorText = await page.locator("#login-error-text").first().textContent().catch(() => "");
+    report.checks.shellNavigationInteractive = false;
+
+    if (failPaths.length) {
+      await page.waitForSelector("#dashboard-load-warning.show", { timeout: 30000 });
+      report.checks.resilientLoadWarningVisible = await visible(page, "#dashboard-load-warning.show");
+    }
 
     await clickNav(page, "applications");
+    report.checks.shellNavigationInteractive = true;
     await page.waitForSelector("#applications-body tr", { timeout: 30000 });
     report.checks.applicationsPageLoads = await visible(page, "#view-applications.active");
     await screenshot(page, "applications");
