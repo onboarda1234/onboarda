@@ -242,6 +242,7 @@ class TestCaseCommandCentreRuntime:
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "documents" in blocker_ids
         assert "Document review still needs attention." in result["html"]
+        assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-documents")\'' in result["html"]
 
     def test_resolve_cta_helper_opens_the_requested_tab(self):
         html = _read_backoffice()

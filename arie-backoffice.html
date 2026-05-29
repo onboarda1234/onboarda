@@ -13698,7 +13698,7 @@ function renderCaseCommandCentre(app) {
       '<div class="case-command-blocker-title">' + escapeHtml(blocker.title) + '</div>' +
       '<div class="case-command-blocker-text">' + escapeHtml(blocker.description) + '</div>' +
       '<div class="case-command-blocker-actions">' +
-        '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(' + JSON.stringify(blocker.tab) + ',' + JSON.stringify(blocker.anchorId) + ')">' + escapeHtml(blocker.ctaLabel) + '</button>' +
+        '<button class="btn btn-outline btn-sm" onclick=\'activateCaseCommandTarget(' + JSON.stringify(blocker.tab) + ',' + JSON.stringify(blocker.anchorId) + ')\'>' + escapeHtml(blocker.ctaLabel) + '</button>' +
       '</div>' +
     '</div>';
   }).join('');
