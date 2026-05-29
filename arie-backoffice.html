@@ -13818,9 +13818,20 @@ function getCaseCommandBlockers(app) {
   var screening = getApplicationScreeningSummary(app);
   var screeningTruth = screening.screening_truth_summary || null;
   var screeningReviews = Array.isArray(app.screeningReviews) ? app.screeningReviews : [];
-  var pendingScreeningReviews = screeningReviews.filter(function(review) {
-    return review && review.review_required;
+  var screeningQueueRows = (SCREENING_QUEUE && Array.isArray(SCREENING_QUEUE.rows) ? SCREENING_QUEUE.rows : []).filter(function(row) {
+    return row && row.application_ref === app.ref;
   });
+  var pendingScreeningReviews = screeningQueueRows.filter(function(row) {
+    return row && row.review_required;
+  });
+  if (!pendingScreeningReviews.length) {
+    pendingScreeningReviews = screeningReviews.filter(function(review) {
+      if (!review) return false;
+      if (review.review_required) return true;
+      if (review.review_actionable) return true;
+      return !review.review_resolved && !review.review_disposition;
+    });
+  }
   var documentReadiness = computeDocumentReadinessSummary(app);
   var enhanced = getEnhancedReviewSummary(app);
   var memoData = app.latestMemo || null;

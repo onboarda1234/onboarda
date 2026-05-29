@@ -85,6 +85,7 @@ def _runtime_js(html, config):
                 function getApprovalReadiness() {{ return CONFIG.approvalReadiness || {{ ready:false, blockers:['Blocked'] }}; }}
 
                 var detailLifecycleSummaryOverview = CONFIG.lifecycleSummaryOverview || null;
+                var SCREENING_QUEUE = CONFIG.screeningQueue || {{ metrics:null, rows:[], generated_at:null, load_error:null }};
 
                 document.getElementById('detail-case-command-centre');
                 document.getElementById('detail-activity').textContent = CONFIG.auditFailureMessage || '';
@@ -239,6 +240,37 @@ class TestCaseCommandCentreRuntime:
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "screening-review" in blocker_ids
         assert "A screening result still needs officer review." in result["html"]
+        assert "Resolve screening" in result["html"]
+
+    def test_screening_review_blocker_uses_authoritative_queue_rows(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(ref="ARF-SCREEN-QUEUE-1"),
+                    "screeningQueue": {
+                        "rows": [
+                            {
+                                "application_ref": "ARF-SCREEN-QUEUE-1",
+                                "subject_name": "Queue Match Person",
+                                "subject_type": "director",
+                                "review_required": True,
+                                "review_actionable": True,
+                            }
+                        ]
+                    },
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Screening review pending."]},
+                },
+            )
+        )
+        blocker_ids = [item["id"] for item in result["blockers"]]
+        assert "screening-review" in blocker_ids
         assert "Resolve screening" in result["html"]
 
     def test_memo_missing_blocker_is_shown(self):
