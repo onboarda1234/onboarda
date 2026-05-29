@@ -339,7 +339,8 @@ class TestCaseCommandCentreRuntime:
         assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in html
         assert 'details id="detail-prescreen-summary-details" open' in html
         assert 'Pre-Screening Summary' in html
-        assert 'overview-top-layout' in html
+        assert 'overview-top-layout' not in html
+        assert 'prescreen-summary-card' in html
         assert 'details id="detail-kyc-documents-details"' in html
         assert 'id="detail-kyc-documents-summary-copy"' in html
         assert 'details id="detail-enhanced-requirements-details"' in html
