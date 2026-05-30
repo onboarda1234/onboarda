@@ -132,7 +132,7 @@ class TestPartB_AdvisoryLabeling:
         assert 'AI Agent Pipeline Results' in supervisor_region, \
             "AI Agent Pipeline Results should live under the supervisor tab"
 
-    def test_application_detail_tab_renamed_to_ai_compliance_supervisor(self, backoffice_html):
+    def test_supervisor_tab_renamed_to_ai_compliance_supervisor(self, backoffice_html):
         detail_nav_start = backoffice_html.index('id="tab-overview"')
         detail_nav_end = backoffice_html.index('id="detail-tab-overview"', detail_nav_start)
         detail_nav = backoffice_html[detail_nav_start:detail_nav_end]
