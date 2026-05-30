@@ -134,7 +134,7 @@ def _run_node(script):
 
 
 class TestChangeManagementDiffRuntime:
-    def test_application_detail_panel_renders_when_linked_request_exists(self):
+    def test_application_detail_panel_renders_collapsed_summary_for_informational_request(self):
         html = _read_backoffice()
         result = _run_node(
             _runtime_js(
@@ -147,13 +147,17 @@ class TestChangeManagementDiffRuntime:
                 renderApplicationChangeManagementPanel({
                   changeRequests: [{
                     id: 'CR-TEST-001',
-                    materiality: 'tier1',
-                    status: 'submitted',
+                    materiality: 'tier3',
+                    status: 'approved',
                     source: 'portal_client',
                     created_at: '2026-05-30 10:00:00',
                     changed_fields_count: 1,
-                    risk_review_required: true,
-                    screening_required: true
+                    preview_items: [{
+                      field_name: 'company_name',
+                      old_value: 'Old Name Ltd',
+                      new_value: 'New Name Ltd',
+                      materiality: 'tier3'
+                    }]
                   }]
                 });
                 console.log(JSON.stringify({
@@ -162,11 +166,13 @@ class TestChangeManagementDiffRuntime:
                 """,
             )
         )
-        assert 'Change Management CR-TEST-001' in result["html"]
-        assert 'Tier 1 — Structural' in result["html"]
+        assert '1 linked request' in result["html"]
+        assert 'Tier 3 — Administrative' in result["html"]
+        assert 'Approved' in result["html"]
         assert '1 field changed' in result["html"]
-        assert 'Risk review required' in result["html"]
-        assert 'Review change request' in result["html"]
+        assert 'Expand' in result["html"]
+        assert 'Open change request' in result["html"]
+        assert 'Old Name Ltd' not in result["html"]
 
     def test_application_detail_panel_hides_when_no_requests_exist(self):
         html = _read_backoffice()
@@ -185,6 +191,51 @@ class TestChangeManagementDiffRuntime:
         )
         assert result["html"] == ""
         assert result["display"] == "none"
+
+    def test_application_detail_panel_expands_for_active_material_request_and_toggle_works(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "requestDetail": {}
+                },
+                """
+                currentApp = {
+                  ref: 'ARF-2026-100455',
+                  changeRequests: [{
+                    id: 'CR-TEST-EXPAND',
+                    materiality: 'tier2',
+                    status: 'submitted',
+                    changed_fields_count: 2,
+                    screening_required: true,
+                    risk_review_required: true,
+                    preview_items: [{
+                      field_name: 'company_name',
+                      old_value: null,
+                      new_value: 'Portal QA R11 mnyvqzto',
+                      materiality: 'tier2'
+                    }]
+                  }]
+                };
+                renderApplicationChangeManagementPanel(currentApp);
+                const expandedHtml = document.getElementById('detail-change-management').innerHTML;
+                toggleApplicationChangeManagementPanel('ARF-2026-100455');
+                const collapsedHtml = document.getElementById('detail-change-management').innerHTML;
+                console.log(JSON.stringify({
+                  expandedHtml,
+                  collapsedHtml
+                }));
+                """,
+            )
+        )
+        assert 'CR-TEST-EXPAND' in result["expandedHtml"]
+        assert 'Open full change request' in result["expandedHtml"]
+        assert 'Legal name' in result["expandedHtml"]
+        assert 'Portal QA R11 mnyvqzto' in result["expandedHtml"]
+        assert 'Collapse' in result["expandedHtml"]
+        assert 'Portal QA R11 mnyvqzto' not in result["collapsedHtml"]
+        assert 'Expand' in result["collapsedHtml"]
 
     def test_request_detail_renders_readable_before_after_diff(self):
         html = _read_backoffice()
@@ -234,7 +285,7 @@ class TestChangeManagementDiffRuntime:
         assert 'Risk review required' in result["html"]
         assert '<pre' not in result["html"]
 
-    def test_review_cta_navigates_without_mutation(self):
+    def test_overview_cta_navigates_without_mutation(self):
         html = _read_backoffice()
         result = _run_node(
             _runtime_js(
@@ -250,6 +301,7 @@ class TestChangeManagementDiffRuntime:
                         "materiality": "tier1",
                         "status": "submitted",
                         "changed_fields_count": 1,
+                        "preview_items": [],
                         "items": [],
                         "documents": [],
                         "reviews": []

@@ -1575,6 +1575,7 @@ def _enrich_change_request_records(db, requests: List[Dict[str, Any]]) -> List[D
         app_lookup = {row["id"]: dict(row) for row in app_rows}
 
     item_counts: Dict[str, int] = {}
+    preview_items: Dict[str, List[Dict[str, Any]]] = {}
     if request_ids:
         placeholders = ",".join(["?"] * len(request_ids))
         item_rows = db.execute(
@@ -1588,6 +1589,18 @@ def _enrich_change_request_records(db, requests: List[Dict[str, Any]]) -> List[D
             row["request_id"]: int(row["item_count"] or 0)
             for row in item_rows
         }
+        preview_rows = db.execute(
+            f"""SELECT id, request_id, change_type, field_name, old_value, new_value, materiality,
+                       person_action, person_snapshot, created_at
+                FROM change_request_items
+                WHERE request_id IN ({placeholders})
+                ORDER BY created_at ASC, id ASC""",
+            tuple(request_ids),
+        ).fetchall()
+        for row in preview_rows:
+            bucket = preview_items.setdefault(row["request_id"], [])
+            if len(bucket) < 3:
+                bucket.append(dict(row))
 
     enriched: List[Dict[str, Any]] = []
     for req in requests:
@@ -1596,6 +1609,7 @@ def _enrich_change_request_records(db, requests: List[Dict[str, Any]]) -> List[D
         record["application_ref"] = app_meta.get("ref")
         record["company_name"] = app_meta.get("company_name")
         record["changed_fields_count"] = item_counts.get(record.get("id"), len(record.get("items") or []))
+        record["preview_items"] = preview_items.get(record.get("id"), [])
         record["downstream_obligations"] = _change_request_downstream_obligations(record)
         enriched.append(record)
     return enriched

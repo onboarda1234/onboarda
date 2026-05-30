@@ -9850,6 +9850,76 @@ function openChangeRequestFromApplication(requestId) {
   viewRequestDetail(requestId);
 }
 
+var APP_CHANGE_MANAGEMENT_PANEL_STATE = {};
+
+function cmMaterialityRank(materiality) {
+  var key = String(materiality || '').toLowerCase();
+  if (key === 'tier1') return 3;
+  if (key === 'tier2') return 2;
+  if (key === 'tier3') return 1;
+  return 0;
+}
+
+function cmHighestMateriality(requests) {
+  var best = null;
+  requests.forEach(function(req) {
+    if (!best || cmMaterialityRank(req && req.materiality) > cmMaterialityRank(best.materiality)) {
+      best = req;
+    }
+  });
+  return best || {};
+}
+
+function cmPreviewItems(req) {
+  return Array.isArray(req && req.preview_items) ? req.preview_items.slice(0, 3) : [];
+}
+
+function cmPanelSummaryStatus(requests) {
+  var first = requests[0] || {};
+  return cmStatusLabel(first.status || 'pending_review');
+}
+
+function cmPanelObligationSummary(requests) {
+  var seen = {};
+  var labels = [];
+  requests.forEach(function(req) {
+    cmDownstreamObligations(req).forEach(function(item) {
+      if (!item || !item.label || seen[item.label]) return;
+      seen[item.label] = true;
+      labels.push(item.label);
+    });
+  });
+  if (!labels.length) return 'Downstream review may be required';
+  if (labels.length <= 2) return labels.join(' · ');
+  return labels.slice(0, 2).join(' · ') + ' +' + (labels.length - 2) + ' more';
+}
+
+function cmRequestPreviewRows(req) {
+  var previews = cmPreviewItems(req);
+  if (!previews.length) {
+    return '<div style="font-size:12px;color:var(--text3);">Preview unavailable in the overview panel. Open the full change request for the authoritative diff.</div>';
+  }
+  return previews.map(function(item) {
+    var values = cmResolveDiffValues(item || {});
+    return '<div style="display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,1fr) minmax(0,1fr);gap:10px;padding:10px 0;border-top:1px solid var(--border1);">' +
+      '<div style="font-size:12px;font-weight:700;color:var(--text1);">' + escapeHtml(cmFieldLabel(item)) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);"><span style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.04em;">Before</span>' + cmRenderDiffValue(values.beforeText, (item && item.person_action) === 'add' ? 'Not provided' : 'Unavailable — legacy request', '#475467') + '</div>' +
+      '<div style="font-size:12px;color:var(--text1);"><span style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.04em;">After</span>' + cmRenderDiffValue(values.afterText, (item && item.person_action) === 'remove' ? 'Removed' : 'Not provided', '#0f766e') + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function cmPanelAutoExpand(requests) {
+  return requests.some(function(req) {
+    return cmMaterialityRank(req && req.materiality) >= 2 && cmRequestBlockingState(req).label === 'Blocking review';
+  });
+}
+
+function toggleApplicationChangeManagementPanel(appKey) {
+  APP_CHANGE_MANAGEMENT_PANEL_STATE[appKey] = !APP_CHANGE_MANAGEMENT_PANEL_STATE[appKey];
+  if (currentApp) renderApplicationChangeManagementPanel(currentApp);
+}
+
 function renderApplicationChangeManagementPanel(app) {
   var container = document.getElementById('detail-change-management');
   if (!container) return;
@@ -9868,36 +9938,59 @@ function renderApplicationChangeManagementPanel(app) {
     container.style.display = 'none';
     return;
   }
-  var cards = visible.map(function(req) {
+  var appKey = String((app && (app.ref || app.id)) || 'detail-change-management');
+  if (typeof APP_CHANGE_MANAGEMENT_PANEL_STATE[appKey] === 'undefined') {
+    APP_CHANGE_MANAGEMENT_PANEL_STATE[appKey] = !!cmPanelAutoExpand(visible);
+  }
+  var expanded = !!APP_CHANGE_MANAGEMENT_PANEL_STATE[appKey];
+  var highest = cmHighestMateriality(visible);
+  var totalChanged = requests.reduce(function(total, req) {
+    return total + Number((req && req.changed_fields_count) || 0);
+  }, 0);
+  var requestCountLabel = requests.length === 1 ? '1 linked request' : requests.length + ' linked requests';
+  var changedLabel = totalChanged === 1 ? '1 field changed' : totalChanged + ' fields changed';
+  var compactSummary = requestCountLabel + ' · ' +
+    cmMaterialityMeta(highest.materiality).fullLabel + ' · ' +
+    cmPanelSummaryStatus(visible) + ' · ' +
+    changedLabel + ' · ' +
+    cmPanelObligationSummary(visible);
+  var preview = visible.map(function(req) {
     var blocking = cmRequestBlockingState(req);
-    var changedLabel = (req.changed_fields_count || 0) === 1 ? '1 field changed' : String(req.changed_fields_count || 0) + ' fields changed';
+    var requestChangedLabel = (req.changed_fields_count || 0) === 1 ? '1 field changed' : String(req.changed_fields_count || 0) + ' fields changed';
     return '<div style="border:1px solid var(--border1);border-radius:12px;padding:14px 16px;background:var(--surface);display:grid;gap:10px;">' +
       '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">' +
         '<div>' +
-          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Change Management ' + escapeHtml(req.id || '') + '</div>' +
-          '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + escapeHtml(cmMaterialityMeta(req.materiality).fullLabel) + ' · ' + escapeHtml(cmStatusLabel(req.status)) + '</div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(req.id || '') + '</div>' +
+          '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + escapeHtml(cmStatusLabel(req.status)) + ' · ' + escapeHtml(cmMaterialityMeta(req.materiality).fullLabel) + ' · ' + escapeHtml(requestChangedLabel) + '</div>' +
         '</div>' +
         '<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(180,83,9,0.08);color:' + blocking.tone + ';font-size:11px;font-weight:700;border:1px solid rgba(180,83,9,0.16);">' + escapeHtml(blocking.label) + '</span>' +
       '</div>' +
-      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' +
-        changedLabel +
-        (req.source ? ' · Source: ' + escapeHtml(cmHumanizeSlug(req.source)) : '') +
-        (req.created_at ? ' · Submitted: ' + escapeHtml(String(req.created_at).substring(0, 10)) : '') +
-      '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + cmDownstreamObligationChips(req) + '</div>' +
-      '<div style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">Next:</strong> ' + escapeHtml(cmRequestNextAction(req)) + '</div>' +
-      '<div><button class="btn btn-outline btn-sm" onclick="openChangeRequestFromApplication(\'' + escapeHtml(req.id) + '\')">Review change request</button></div>' +
+      '<div style="display:grid;gap:0;">' + cmRequestPreviewRows(req) + '</div>' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
+        '<div style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">Next:</strong> ' + escapeHtml(cmRequestNextAction(req)) + '</div>' +
+        '<button class="btn btn-outline btn-sm" onclick="openChangeRequestFromApplication(\'' + escapeHtml(req.id) + '\')">Open full change request</button>' +
+      '</div>' +
     '</div>';
   }).join('');
+  var footer = requests.length > visible.length
+    ? '<div style="font-size:12px;color:var(--text3);margin-top:10px;">Showing ' + visible.length + ' of ' + requests.length + ' linked change requests · Open Change Management to view all</div>'
+    : '';
   container.innerHTML = '<div class="detail-section" style="margin-top:16px;">' +
-    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
-      '<div>' +
-        '<div style="font-size:13px;font-weight:800;color:var(--text1);">Change Management</div>' +
-        '<div style="font-size:12px;color:var(--text3);margin-top:4px;line-height:1.5;">Linked open or recent change requests are summarised here so the case workspace shows what changed, why it matters, and where to continue review.</div>' +
+    '<div style="display:grid;gap:12px;padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Change Management</div>' +
+          '<div style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5;">' + escapeHtml(compactSummary) + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          '<button class="btn btn-outline btn-sm" onclick="toggleApplicationChangeManagementPanel(\'' + escapeHtml(appKey) + '\')">' + (expanded ? 'Collapse' : 'Expand') + '</button>' +
+          '<button class="btn btn-outline btn-sm" onclick="' + (visible[0] && visible[0].id ? 'openChangeRequestFromApplication(\'' + escapeHtml(visible[0].id) + '\')' : 'showView(\'change-mgmt\');showChangeMgmtTab(\'requests\');') + '">Open change request</button>' +
+        '</div>' +
       '</div>' +
-      '<button class="btn btn-outline btn-sm" onclick="showView(\'change-mgmt\');showChangeMgmtTab(\'requests\');">Open change management</button>' +
+      '<div style="font-size:11px;color:var(--text3);line-height:1.5;">Overview shows a compact preview only. Full before/after diff review remains in the Change Management detail view.</div>' +
+      (expanded ? '<div style="display:grid;gap:12px;">' + preview + footer + '</div>' : '') +
     '</div>' +
-    '<div style="display:grid;gap:12px;margin-top:12px;">' + cards + '</div>' +
   '</div>';
 }
 
