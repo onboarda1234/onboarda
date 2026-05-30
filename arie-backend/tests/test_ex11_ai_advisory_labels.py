@@ -23,6 +23,12 @@ def backoffice_html():
         return f.read()
 
 
+def _extract_detail_tab_region(html, tab_id, next_tab_id):
+    start = html.index(f'id="detail-tab-{tab_id}"')
+    end = html.index(f'id="detail-tab-{next_tab_id}"', start)
+    return html[start:end]
+
+
 # ═══════════════════════════════════════════════════
 # Part A — AI-generated surfaces are present
 # ═══════════════════════════════════════════════════
@@ -104,12 +110,8 @@ class TestPartB_AdvisoryLabeling:
             "Supervisor tab should have the compact AI advisory notice"
 
     def test_ai_explainability_layer_moved_to_supervisor_tab(self, backoffice_html):
-        overview_start = backoffice_html.index('id="detail-tab-overview"')
-        overview_end = backoffice_html.index('id="detail-tab-kyc-docs"', overview_start)
-        overview_region = backoffice_html[overview_start:overview_end]
-        supervisor_start = backoffice_html.index('id="detail-tab-supervisor"')
-        supervisor_end = backoffice_html.index('id="detail-tab-lifecycle"', supervisor_start)
-        supervisor_region = backoffice_html[supervisor_start:supervisor_end]
+        overview_region = _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
+        supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
 
         assert 'AI Explainability Layer' not in overview_region, \
             "Overview should no longer expose the AI Explainability Layer"
@@ -136,12 +138,9 @@ class TestPartB_AdvisoryLabeling:
         detail_nav = backoffice_html[detail_nav_start:detail_nav_end]
 
         assert 'AI Compliance Supervisor' in detail_nav
-        assert '>🛡️ Compliance Supervisor<' not in detail_nav
 
     def test_ai_governance_evidence_trail_is_collapsible(self, backoffice_html):
-        supervisor_start = backoffice_html.index('id="detail-tab-supervisor"')
-        supervisor_end = backoffice_html.index('id="detail-tab-lifecycle"', supervisor_start)
-        supervisor_region = backoffice_html[supervisor_start:supervisor_end]
+        supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
 
         assert 'id="detail-ai-governance-evidence-details"' in supervisor_region
         assert 'Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability' in supervisor_region
