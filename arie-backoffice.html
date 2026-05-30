@@ -459,6 +459,8 @@ a { color:var(--brand); text-decoration:none; }
 .ai-advisory-banner .ai-adv-text { font-size:11px; font-weight:700; color:#5b21b6; letter-spacing:0.3px; text-transform:uppercase; }
 .ai-advisory-banner .ai-adv-sub { font-size:10px; color:#6d28d9; font-weight:500; margin-top:1px; }
 .ai-advisory-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:4px; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; background:rgba(124,58,237,0.1); color:#7c3aed; border:1px solid rgba(124,58,237,0.3); white-space:nowrap; }
+.ai-advisory-compact { display:flex; align-items:flex-start; gap:8px; padding:9px 12px; border-radius:8px; background:rgba(124,58,237,0.06); border:1px solid rgba(124,58,237,0.22); color:#5b21b6; font-size:12px; line-height:1.45; margin-bottom:12px; }
+.ai-governance-card { border-left:4px solid #7c3aed; background:rgba(124,58,237,0.025); }
 .ai-simulated-banner { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:6px; background:#fffbeb; border:1.5px solid #d97706; margin-bottom:12px; }
 .ai-simulated-banner .ai-sim-icon { font-size:16px; flex-shrink:0; }
 .ai-simulated-banner .ai-sim-text { font-size:11px; font-weight:700; color:#92400e; letter-spacing:0.3px; text-transform:uppercase; }
@@ -927,7 +929,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
     <div class="snav-item" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
     <div class="snav-item" data-view="reg-intel" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
-    <div class="snav-section">Compliance Supervisor</div>
+    <div class="snav-section">AI Compliance Supervisor</div>
     <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Supervisor Dashboard</div>
     <div class="snav-item" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span> Audit Chain</div>
     <div class="snav-section role-admin-only">Administration</div>
@@ -1248,7 +1250,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
     <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
-    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ Compliance Supervisor</button>
+    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Compliance Supervisor</button>
     <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Lifecycle</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
@@ -1311,63 +1313,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <div id="detail-risk-bars"></div>
         <span id="detail-composite-score">0</span>
         <span id="detail-risk-badge"></span>
-      </div>
-
-      <!-- Rule-Based Score Breakdown -->
-      <div class="card">
-        <div class="card-header" style="flex-wrap:wrap;gap:8px;">
-          <div class="card-title">Rule-Based Score Computation</div>
-          <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
-            <span class="badge low" style="font-size:10px;">Deterministic</span>
-            <button class="btn btn-outline btn-sm" onclick="downloadRiskCSV()" title="Download as CSV" style="font-size:11px;padding:4px 10px;">📥 CSV</button>
-            <button class="btn btn-outline btn-sm" onclick="downloadRiskPDF()" title="Download as PDF" style="font-size:11px;padding:4px 10px;">📄 PDF</button>
-          </div>
-        </div>
-        <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">The composite risk score is computed using a weighted average of 5 dimensions. Each dimension score (1–4) is derived from rule-based lookups — not AI. The formula is: <code style="font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;">Composite = (D1×w1 + D2×w2 + D3×w3 + D4×w4 + D5×w5) / (w1+w2+w3+w4+w5) × 25</code></p>
-        <div id="detail-score-breakdown"></div>
-      </div>
-
-      <!-- AI Explainability Layer -->
-      <div class="detail-collapsible-card ai-explain-card" id="ai-explainability-panel">
-        <details id="detail-ai-explainability-details">
-          <summary>
-            <div class="detail-collapsible-copy">
-              <div class="detail-collapsible-title">AI Explainability Layer</div>
-              <div class="detail-collapsible-subtitle">Risk drivers, AI reasoning, validation context, and supervisor signals.</div>
-            </div>
-            <div class="detail-collapsible-meta">
-              <span class="ai-explain-model-source" id="explain-model-source">Model: Rule-Based + AI Agents</span>
-              <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
-            </div>
-          </summary>
-          <div class="detail-collapsible-body">
-            <!-- Decision Trail -->
-            <div class="detail-section">
-              <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-                <span>🔗</span> AI Agent Decision Trail
-                <span class="badge low" style="font-size:9px;margin-left:auto;">Auditable</span>
-              </div>
-              <div class="explain-trail" id="explain-decision-trail"></div>
-            </div>
-
-            <!-- Dimension Drill-Down -->
-            <div class="detail-section">
-              <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-                <span>📊</span> Dimension Explainability
-                <span style="font-size:10px;color:var(--text3);margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;">Click any dimension to expand</span>
-              </div>
-              <div class="dim-explain-grid" id="explain-dimensions"></div>
-            </div>
-
-            <!-- AI Confidence & Summary -->
-            <div class="detail-section">
-              <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-                <span>🎯</span> AI Confidence & Reasoning Summary
-              </div>
-              <div id="explain-confidence-summary"></div>
-            </div>
-          </div>
-        </details>
       </div>
 
       <div id="detail-agents" style="display:none;" aria-hidden="true"></div>
@@ -1544,16 +1489,84 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Tab: AI Supervisor (hidden by default) -->
   <div id="detail-tab-supervisor" style="display:none;">
+    <div class="detail-collapsible-card ai-governance-card" id="ai-governance-evidence-panel">
+      <details id="detail-ai-governance-evidence-details">
+        <summary>
+          <div class="detail-collapsible-copy">
+            <div class="detail-collapsible-title">AI Governance &amp; Evidence Trail</div>
+            <div class="detail-collapsible-subtitle">Advisory labels, evidence provenance, validation context, supervisor review, and risk explainability.</div>
+          </div>
+          <div class="detail-collapsible-meta">
+            <span class="detail-collapsible-summary-line" id="ai-governance-evidence-summary-copy">Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability</span>
+            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+          </div>
+        </summary>
+        <div class="detail-collapsible-body">
+          <div class="ai-advisory-compact"><span style="font-size:16px;">🤖</span><div><strong>AI-generated content is advisory only.</strong> Officer review is required before any compliance decision.</div></div>
+
+          <!-- Rule-Based Score Breakdown -->
+          <div class="card">
+            <div class="card-header" style="flex-wrap:wrap;gap:8px;">
+              <div class="card-title">Rule-Based Score Computation</div>
+              <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+                <span class="badge low" style="font-size:10px;">Deterministic</span>
+                <button class="btn btn-outline btn-sm" onclick="downloadRiskCSV()" title="Download as CSV" style="font-size:11px;padding:4px 10px;">📥 CSV</button>
+                <button class="btn btn-outline btn-sm" onclick="downloadRiskPDF()" title="Download as PDF" style="font-size:11px;padding:4px 10px;">📄 PDF</button>
+              </div>
+            </div>
+            <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">The composite risk score is computed using a weighted average of 5 dimensions. Each dimension score (1–4) is derived from rule-based lookups — not AI. The formula is: <code style="font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;">Composite = (D1×w1 + D2×w2 + D3×w3 + D4×w4 + D5×w5) / (w1+w2+w3+w4+w5) × 25</code></p>
+            <div id="detail-score-breakdown"></div>
+          </div>
+
+          <!-- AI Explainability Layer -->
+          <div class="card ai-explain-card" id="ai-explainability-panel" style="margin-top:14px;">
+            <div class="card-header" style="flex-wrap:wrap;gap:8px;">
+              <div>
+                <div class="card-title">AI Explainability Layer</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px;">Risk drivers, AI reasoning, validation context, and supervisor signals.</div>
+              </div>
+              <span class="ai-explain-model-source" id="explain-model-source" style="margin-left:auto;font-size:11px;color:var(--text3);">Model: Rule-Based + AI Agents</span>
+            </div>
+            <div style="padding:14px;">
+              <!-- Decision Trail -->
+              <div class="detail-section">
+                <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
+                  <span>🔗</span> AI Agent Decision Trail
+                  <span class="badge low" style="font-size:9px;margin-left:auto;">Auditable</span>
+                </div>
+                <div class="explain-trail" id="explain-decision-trail"></div>
+              </div>
+
+              <!-- Dimension Drill-Down -->
+              <div class="detail-section">
+                <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
+                  <span>📊</span> Dimension Explainability
+                  <span style="font-size:10px;color:var(--text3);margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;">Click any dimension to expand</span>
+                </div>
+                <div class="dim-explain-grid" id="explain-dimensions"></div>
+              </div>
+
+              <!-- AI Confidence & Summary -->
+              <div class="detail-section">
+                <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
+                  <span>🎯</span> AI Confidence &amp; Reasoning Summary
+                </div>
+                <div id="explain-confidence-summary"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+
     <div class="card" style="margin-bottom:16px;">
       <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="font-size:18px;">🛡️</span>
-        <span style="font-weight:700;">Compliance Supervisor Pipeline</span>
-        <span class="ai-advisory-badge">🤖 AI-Generated — Advisory Only</span>
+        <span style="font-weight:700;">AI Compliance Supervisor Pipeline</span>
         <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support — Rules-Based Analysis</span>
         <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
         <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Analysis</button>
       </div>
-      <div class="ai-advisory-banner" style="margin:12px 16px 0;"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI-Generated — Advisory Only</div><div class="ai-adv-sub">All supervisor pipeline outputs are AI-generated and advisory. Officer review and sign-off is required before acting on these findings.</div></div></div>
     </div>
 
     <!-- Pipeline Results -->
@@ -1566,7 +1579,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
       <!-- Agent Results -->
       <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Agent Results</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
+        <div class="card-header"><div class="card-title">AI Agent Pipeline Results</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
         <div id="sv-agent-results" style="padding:14px;"></div>
       </div>
 
@@ -2806,7 +2819,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <div class="view" id="view-supervisor">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;">Compliance Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support — Rules-Based</span></h3>
+      <h3 style="font-size:16px;font-weight:700;">AI Compliance Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support — Rules-Based</span></h3>
       <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent analysis pipeline — contradiction detection, confidence evaluation, and compliance rule checks. Agents use deterministic rules and heuristic scoring. Results inform officer review but do not directly gate approval. Approval gating is enforced by the memo supervisor (Generate Memo → Validate → Approve).</p>
     </div>
     <button class="btn btn-primary" onclick="refreshSupervisorDashboard()">🔄 Refresh</button>
@@ -6074,7 +6087,18 @@ function explainabilityNeedsAttention(app, screeningSummary) {
 }
 
 function updateExplainabilityPanelState(app, screeningSummary) {
-  setDetailsExpandedState('detail-ai-explainability-details', explainabilityNeedsAttention(app, screeningSummary));
+  updateGovernanceEvidenceTrailState(app, screeningSummary);
+}
+
+function updateGovernanceEvidenceTrailState(app, screeningSummary) {
+  var needsAttention = explainabilityNeedsAttention(app, screeningSummary);
+  var summaryEl = document.getElementById('ai-governance-evidence-summary-copy');
+  if (summaryEl) {
+    summaryEl.textContent = needsAttention
+      ? 'Review needed · Validation, supervisor, screening, or evidence issue detected · Expand for evidence trail and risk explainability'
+      : 'Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability';
+  }
+  setDetailsExpandedState('detail-ai-governance-evidence-details', needsAttention);
 }
 
 function buildKycDocumentPanelSummary(app, summary) {

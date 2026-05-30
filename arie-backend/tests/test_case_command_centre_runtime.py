@@ -393,12 +393,21 @@ class TestCaseCommandCentreRuntime:
 
     def test_pr2d_overview_and_kyc_ui_cleanup_markup_is_present(self):
         html = _read_backoffice()
+        overview_start = html.index('id="detail-tab-overview"')
+        overview_end = html.index('id="detail-tab-kyc-docs"', overview_start)
+        overview_region = html[overview_start:overview_end]
+        supervisor_start = html.index('id="detail-tab-supervisor"')
+        supervisor_end = html.index('id="detail-tab-lifecycle"', supervisor_start)
+        supervisor_region = html[supervisor_start:supervisor_end]
+
         assert "AI Risk Assessment" not in html
-        assert "AI Agent Pipeline Results" not in html
+        assert "AI Agent Pipeline Results" not in overview_region
         assert "Business Profile" not in html
         assert 'id="detail-application-data" style="display:none;"' in html
-        assert 'details id="detail-ai-explainability-details"' in html
-        assert 'AI Explainability Layer' in html
+        assert 'details id="detail-ai-governance-evidence-details"' in supervisor_region
+        assert 'AI Governance &amp; Evidence Trail' in supervisor_region
+        assert 'AI Explainability Layer' not in overview_region
+        assert 'AI Explainability Layer' in supervisor_region
         assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in html
         assert 'details id="detail-prescreen-summary-details" open' in html
         assert 'Pre-Screening Summary' in html

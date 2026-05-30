@@ -10,7 +10,7 @@ const REQUIRED_SMOKE_AREAS = [
   "Application Detail",
   "KYC Documents",
   "Screening Review",
-  "Compliance Supervisor",
+  "AI Compliance Supervisor",
   "Lifecycle Tab",
   "Case Management",
   "Ongoing Monitoring",
