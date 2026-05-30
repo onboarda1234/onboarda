@@ -3913,6 +3913,16 @@ class ApplicationDetailHandler(BaseHandler):
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
         result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
         result["periodic_reviews"] = _list_periodic_review_projections(db, application_id=result["id"])
+        if user["type"] != "client" and HAS_CHANGE_MANAGEMENT:
+            try:
+                result["change_requests"] = cm.list_change_requests(
+                    db,
+                    application_id=result["id"],
+                    limit=5,
+                )
+            except Exception:
+                logger.exception("Failed to load linked change requests for application %s", result["id"])
+                result["change_requests"] = []
         if user["type"] != "client":
             result["enhanced_review_summary"] = build_enhanced_requirement_operational_summary(
                 db,
@@ -3994,6 +4004,7 @@ class ApplicationDetailHandler(BaseHandler):
         result["supervisor_requires_rerun"] = bool(result.get("memo_is_stale") and result.get("latest_memo"))
         if user["type"] != "client":
             result["officer_corrections"] = _list_application_corrections(db, result["id"])
+        result.setdefault("change_requests", [])
         db.close()
 
         self.success(result)

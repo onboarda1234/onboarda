@@ -609,6 +609,36 @@ class TestDBIntegration:
 
         reqs = cm.list_change_requests(wdb, application_id=app_id)
         assert len(reqs) >= 2
+        enriched = next(req for req in reqs if req["reason"] == "R1")
+        assert enriched["application_ref"].startswith("APP-")
+        assert enriched["company_name"] == "Test Company Ltd"
+        assert enriched["changed_fields_count"] == 1
+        labels = {item["label"] for item in enriched["downstream_obligations"]}
+        assert "Screening review required" in labels
+        assert "Risk review required" in labels
+
+    def test_request_detail_includes_diff_metadata(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "User", "role": "co"}
+
+        items = [{
+            "change_type": "company_details",
+            "field_name": "company_name",
+            "old_value": None,
+            "new_value": "New Test Company Ltd",
+            "materiality": "tier1"
+        }]
+        req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "Name change", items, user)
+
+        detail = cm.get_change_request_detail(wdb, req["id"])
+        assert detail["application_ref"].startswith("APP-")
+        assert detail["company_name"] == "Test Company Ltd"
+        assert detail["changed_fields_count"] == 1
+        assert any(item["label"] == "Screening review required" for item in detail["downstream_obligations"])
+        assert detail["items"][0]["old_value"] is None
+        assert detail["items"][0]["new_value"] == "New Test Company Ltd"
 
     def test_stats(self, db):
         cm = _get_cm()

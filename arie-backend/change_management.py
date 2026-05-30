@@ -1532,6 +1532,88 @@ def get_profile_version_detail(db, version_id: str) -> Optional[Dict]:
 # Query / List Operations
 # ============================================================================
 
+def _change_request_downstream_obligations(request: Dict[str, Any]) -> List[Dict[str, Any]]:
+    obligations: List[Dict[str, Any]] = []
+    if request.get("screening_required"):
+        obligations.append({"code": "screening_required", "label": "Screening review required"})
+    if request.get("risk_review_required"):
+        obligations.append({"code": "risk_review_required", "label": "Risk review required"})
+    if request.get("edd_review_required"):
+        obligations.append({"code": "edd_review_required", "label": "EDD review may be required"})
+    if request.get("memo_addendum_hook"):
+        obligations.append({"code": "memo_addendum_required", "label": "Memo addendum required"})
+    if request.get("periodic_review_acceleration_hook"):
+        obligations.append({"code": "periodic_review_acceleration", "label": "Periodic review acceleration hook"})
+
+    if obligations:
+        return obligations
+
+    materiality = request.get("materiality")
+    if materiality == "tier1":
+        return [{"code": "tier1_advisory", "label": "Tier 1 structural change — downstream compliance review may be required", "advisory": True}]
+    if materiality == "tier2":
+        return [{"code": "tier2_advisory", "label": "Tier 2 operational change — compliance review may be required", "advisory": True}]
+    if materiality == "tier3":
+        return [{"code": "tier3_advisory", "label": "Tier 3 administrative change — fast-track review may be available", "advisory": True}]
+    return []
+
+
+def _enrich_change_request_records(db, requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not requests:
+        return requests
+
+    app_ids = sorted({req.get("application_id") for req in requests if req.get("application_id")})
+    request_ids = [req.get("id") for req in requests if req.get("id")]
+
+    app_lookup: Dict[str, Dict[str, Any]] = {}
+    if app_ids:
+        placeholders = ",".join(["?"] * len(app_ids))
+        app_rows = db.execute(
+            f"SELECT id, ref, company_name FROM applications WHERE id IN ({placeholders})",
+            tuple(app_ids),
+        ).fetchall()
+        app_lookup = {row["id"]: dict(row) for row in app_rows}
+
+    item_counts: Dict[str, int] = {}
+    preview_items: Dict[str, List[Dict[str, Any]]] = {}
+    if request_ids:
+        placeholders = ",".join(["?"] * len(request_ids))
+        item_rows = db.execute(
+            f"""SELECT request_id, COUNT(*) AS item_count
+                FROM change_request_items
+                WHERE request_id IN ({placeholders})
+                GROUP BY request_id""",
+            tuple(request_ids),
+        ).fetchall()
+        item_counts = {
+            row["request_id"]: int(row["item_count"] or 0)
+            for row in item_rows
+        }
+        preview_rows = db.execute(
+            f"""SELECT id, request_id, change_type, field_name, old_value, new_value, materiality,
+                       person_action, person_snapshot, created_at
+                FROM change_request_items
+                WHERE request_id IN ({placeholders})
+                ORDER BY created_at ASC, id ASC""",
+            tuple(request_ids),
+        ).fetchall()
+        for row in preview_rows:
+            bucket = preview_items.setdefault(row["request_id"], [])
+            if len(bucket) < 3:
+                bucket.append(dict(row))
+
+    enriched: List[Dict[str, Any]] = []
+    for req in requests:
+        record = dict(req)
+        app_meta = app_lookup.get(record.get("application_id")) or {}
+        record["application_ref"] = app_meta.get("ref")
+        record["company_name"] = app_meta.get("company_name")
+        record["changed_fields_count"] = item_counts.get(record.get("id"), len(record.get("items") or []))
+        record["preview_items"] = preview_items.get(record.get("id"), [])
+        record["downstream_obligations"] = _change_request_downstream_obligations(record)
+        enriched.append(record)
+    return enriched
+
 def list_change_alerts(
     db,
     application_id: Optional[str] = None,
@@ -1606,7 +1688,7 @@ def list_change_requests(
 
     try:
         rows = db.execute(query, tuple(params)).fetchall()
-        return [dict(r) for r in rows]
+        return _enrich_change_request_records(db, [dict(r) for r in rows])
     except Exception as e:
         logger.error("Failed to list change requests: %s", e)
         return []
@@ -1657,6 +1739,16 @@ def get_change_request_detail(db, request_id: str) -> Optional[Dict]:
             result["reviews"] = [dict(r) for r in reviews]
         except Exception:
             result["reviews"] = []
+
+        result["changed_fields_count"] = len(result["items"])
+        result["downstream_obligations"] = _change_request_downstream_obligations(result)
+        app_meta = db.execute(
+            "SELECT ref, company_name FROM applications WHERE id = ?",
+            (result.get("application_id"),),
+        ).fetchone()
+        if app_meta:
+            result["application_ref"] = app_meta["ref"]
+            result["company_name"] = app_meta["company_name"]
 
         return result
     except Exception as e:
