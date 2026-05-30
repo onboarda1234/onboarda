@@ -1257,6 +1257,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div id="detail-tab-overview">
     <!-- Lifecycle summary: compact actionable strip; full detail remains in Lifecycle tab. -->
     <div id="detail-lifecycle-summary"></div>
+    <div id="detail-change-management"></div>
 
     <div id="detail-company-name" style="height:0;overflow:hidden;font-size:0;line-height:0;" aria-hidden="true">Company Name</div>
     <div id="detail-badges" style="display:none;" aria-hidden="true"></div>
@@ -6462,6 +6463,7 @@ async function fetchApplicationDetail(ref) {
     docs: documents.map(function(doc) { return doc.doc_type; }),
     rmiRequests: detail.rmi_requests || [],
     monitoringAlerts: detail.monitoring_alerts || [],
+    changeRequests: detail.change_requests || [],
     screeningReviews: detail.screening_reviews || [],
     _raw_prescreening: psData,
     prescreeningData: psData,
@@ -6501,6 +6503,7 @@ function renderAuthoritativeAppDetail(app, options) {
     '<div class="detail-row"><span class="label">Last document upload</span><span class="value">' + escapeHtml(app.last_document_upload || '—') + '</span></div>' +
     '<div class="detail-row"><span class="label">Screening refreshed</span><span class="value">' + escapeHtml(app.screening_updated_at || '—') + '</span></div>';
   renderRMIPanel(app);
+  renderApplicationChangeManagementPanel(app);
 
   // Format nested estimated_monthly_activity object into readable string
   function formatMonthlyActivity(obj) {
@@ -9644,11 +9647,258 @@ function loadCMApplications() {
   }).catch(function() {});
 }
 
-function cmMaterialityBadge(m) {
-  if (!m) return '<span style="color:var(--text3);font-size:11px;">—</span>';
-  var colors = { tier1: '#dc3545', tier2: '#fd7e14', tier3: '#28a745' };
-  var labels = { tier1: 'Tier 1', tier2: 'Tier 2', tier3: 'Tier 3' };
-  return '<span style="background:' + (colors[m]||'#6c757d') + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + (labels[m]||m) + '</span>';
+function cmMaterialityMeta(m) {
+  var key = String(m || '').toLowerCase();
+  if (key === 'tier1') return { color: '#dc3545', shortLabel: 'Tier 1', fullLabel: 'Tier 1 — Structural' };
+  if (key === 'tier2') return { color: '#fd7e14', shortLabel: 'Tier 2', fullLabel: 'Tier 2 — Operational' };
+  if (key === 'tier3') return { color: '#28a745', shortLabel: 'Tier 3', fullLabel: 'Tier 3 — Administrative' };
+  return { color: '#6c757d', shortLabel: 'Pending Review', fullLabel: 'Materiality pending review' };
+}
+
+function cmMaterialityBadge(m, mode) {
+  if (!m && mode !== 'full') return '<span style="color:var(--text3);font-size:11px;">—</span>';
+  var meta = cmMaterialityMeta(m);
+  var label = mode === 'full' ? meta.fullLabel : meta.shortLabel;
+  return '<span style="background:' + meta.color + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + escapeHtml(label) + '</span>';
+}
+
+function cmHumanizeSlug(value) {
+  return String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+}
+
+function cmStatusLabel(status) {
+  return cmHumanizeSlug(status || 'pending_review');
+}
+
+function cmFieldLabel(item) {
+  var field = String((item && item.field_name) || '');
+  var labels = {
+    company_name: 'Legal name',
+    brn: 'Business registration number',
+    country: 'Country of incorporation',
+    sector: 'Sector',
+    entity_type: 'Entity type',
+    ownership_structure: 'Ownership structure',
+    jurisdiction: 'Jurisdiction',
+    ownership_pct: 'Ownership percentage',
+    full_name: 'Full name',
+    first_name: 'First name',
+    last_name: 'Last name',
+    date_of_birth: 'Date of birth',
+    nationality: 'Nationality',
+    contact_email: 'Contact email',
+    contact_mobile: 'Contact mobile',
+    trading_name: 'Trading name',
+    business_activity: 'Business activity',
+    registered_address: 'Registered address'
+  };
+  if (labels[field]) return labels[field];
+  if (field) return cmHumanizeSlug(field);
+  var changeType = String((item && item.change_type) || '');
+  if (changeType.indexOf('director_') === 0) return 'Director';
+  if (changeType.indexOf('ubo_') === 0) return 'UBO';
+  if (changeType.indexOf('intermediary_') === 0) return 'Intermediary';
+  if (changeType === 'address_change') return 'Registered address';
+  if (changeType === 'business_activity_change') return 'Business activity';
+  return cmHumanizeSlug(changeType || 'Changed field');
+}
+
+function cmParseStoredValue(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') return value;
+  var trimmed = value.trim();
+  if (!trimmed) return '';
+  if ((trimmed.charAt(0) === '{' && trimmed.charAt(trimmed.length - 1) === '}') ||
+      (trimmed.charAt(0) === '[' && trimmed.charAt(trimmed.length - 1) === ']')) {
+    try { return JSON.parse(trimmed); } catch (e) {}
+  }
+  return value;
+}
+
+function cmPersonSnapshotLabel(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return '';
+  if (snapshot.full_name) return String(snapshot.full_name);
+  if (snapshot.entity_name) return String(snapshot.entity_name);
+  var name = [snapshot.first_name, snapshot.last_name].filter(Boolean).join(' ').trim();
+  if (name) return name;
+  if (snapshot.person_key) return String(snapshot.person_key);
+  return '';
+}
+
+function cmHumanReadableValue(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Array.isArray(value)) {
+    return value.map(cmHumanReadableValue).filter(Boolean).join(', ');
+  }
+  if (typeof value === 'object') {
+    var preferred = ['full_name', 'entity_name', 'company_name', 'jurisdiction', 'country', 'ownership_pct', 'date_of_birth', 'nationality', 'person_key'];
+    var bits = [];
+    preferred.forEach(function(key) {
+      if (value[key] !== undefined && value[key] !== null && value[key] !== '') {
+        bits.push(cmFieldLabel({ field_name: key }) + ': ' + cmHumanReadableValue(value[key]));
+      }
+    });
+    if (!bits.length) {
+      Object.keys(value).slice(0, 4).forEach(function(key) {
+        if (value[key] !== undefined && value[key] !== null && value[key] !== '') {
+          bits.push(cmFieldLabel({ field_name: key }) + ': ' + cmHumanReadableValue(value[key]));
+        }
+      });
+    }
+    return bits.join(' · ');
+  }
+  return String(value);
+}
+
+function cmResolveDiffValues(item) {
+  var beforeValue = item ? item.old_value : null;
+  var afterValue = item ? item.new_value : null;
+  var action = String((item && item.person_action) || '');
+  var snapshot = item && item.person_snapshot;
+  var fieldName = item && item.field_name;
+  if (action === 'add' && (afterValue === null || afterValue === undefined || afterValue === '')) afterValue = snapshot;
+  if (action === 'remove' && (beforeValue === null || beforeValue === undefined || beforeValue === '')) beforeValue = snapshot;
+  var beforeText = cmHumanReadableValue(cmParseStoredValue(beforeValue));
+  var afterText = cmHumanReadableValue(cmParseStoredValue(afterValue));
+  if (!beforeText && action !== 'add' && snapshot && fieldName && snapshot[fieldName] !== undefined && snapshot[fieldName] !== null) {
+    beforeText = cmHumanReadableValue(snapshot[fieldName]);
+  }
+  if (!afterText && action === 'remove') afterText = 'Removed';
+  if (!afterText && action === 'add') afterText = cmPersonSnapshotLabel(snapshot);
+  if (!afterText && action === 'update' && snapshot && !fieldName) afterText = cmPersonSnapshotLabel(snapshot);
+  return { beforeText: beforeText, afterText: afterText };
+}
+
+function cmRenderDiffValue(value, emptyLabel, tone) {
+  if (!value) {
+    return '<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;color:#6b7280;font-size:11px;font-weight:600;">' + escapeHtml(emptyLabel) + '</span>';
+  }
+  return '<span style="color:' + tone + ';font-weight:600;">' + escapeHtml(value) + '</span>';
+}
+
+function cmDownstreamObligations(req) {
+  var provided = Array.isArray(req && req.downstream_obligations) ? req.downstream_obligations : [];
+  if (provided.length) return provided.map(function(item) {
+    return typeof item === 'string' ? { label: item } : item;
+  });
+  var obligations = [];
+  if (req && req.screening_required) obligations.push({ label: 'Screening review required' });
+  if (req && req.risk_review_required) obligations.push({ label: 'Risk review required' });
+  if (req && req.edd_review_required) obligations.push({ label: 'EDD review may be required' });
+  if (req && req.memo_addendum_hook) obligations.push({ label: 'Memo addendum required' });
+  if (obligations.length) return obligations;
+  var materiality = String((req && req.materiality) || '').toLowerCase();
+  if (materiality === 'tier1') return [{ label: 'Tier 1 structural change — downstream compliance review may be required', advisory: true }];
+  if (materiality === 'tier2') return [{ label: 'Tier 2 operational change — compliance review may be required', advisory: true }];
+  if (materiality === 'tier3') return [{ label: 'Tier 3 administrative change — fast-track review may be available', advisory: true }];
+  return [];
+}
+
+function cmDownstreamObligationChips(req) {
+  var obligations = cmDownstreamObligations(req);
+  if (!obligations.length) return '<span style="font-size:11px;color:var(--text3);">No downstream obligations flagged</span>';
+  return obligations.map(function(item) {
+    return '<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:' + (item.advisory ? 'rgba(99,102,241,0.08)' : 'rgba(13,110,253,0.08)') + ';color:' + (item.advisory ? '#4338ca' : '#0d6efd') + ';font-size:11px;font-weight:600;border:1px solid ' + (item.advisory ? 'rgba(67,56,202,0.16)' : 'rgba(13,110,253,0.16)') + ';">' + escapeHtml(item.label || '') + '</span>';
+  }).join(' ');
+}
+
+function cmRequestBlockingState(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  if (['implemented', 'rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Informational', tone: '#6b7280' };
+  return { label: 'Blocking review', tone: '#b45309' };
+}
+
+function cmRequestNextAction(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  if (status === 'draft') return 'Complete the draft before review.';
+  if (status === 'submitted') return 'Begin triage and confirm the material change details.';
+  if (status === 'triage_in_progress') return 'Complete triage and mark the request ready for review.';
+  if (status === 'pending_information') return 'Collect the requested information before review can continue.';
+  if (status === 'ready_for_review') return 'Review the requested changes and downstream obligations.';
+  if (status === 'screening_in_progress') return 'Finish the linked screening review before approval.';
+  if (status === 'risk_review_required') return 'Complete the risk review before approval.';
+  if (status === 'approval_pending') return 'Await approval decision from the authorised reviewer.';
+  if (status === 'approved') return 'Open the request to review approved changes before implementation.';
+  if (status === 'implemented') return 'Implementation completed. Review the final change record if needed.';
+  if (status === 'rejected') return 'Review the rejection outcome and rationale.';
+  if (status === 'cancelled') return 'Request cancelled. No further review action is required.';
+  if (status === 'superseded') return 'A newer request has superseded this change.';
+  return 'Review the request detail.';
+}
+
+function cmRenderDiffRows(items) {
+  var rows = (items || []).map(function(item) {
+    var values = cmResolveDiffValues(item || {});
+    return '<tr style="border-top:1px solid var(--border1);vertical-align:top;">' +
+      '<td style="padding:10px 12px;font-weight:600;color:var(--text1);min-width:180px;">' + escapeHtml(cmFieldLabel(item || {})) + '</td>' +
+      '<td style="padding:10px 12px;min-width:220px;">' + cmRenderDiffValue(values.beforeText, (item && item.person_action) === 'add' ? 'Not provided' : 'Unavailable — legacy request', '#475467') + '</td>' +
+      '<td style="padding:10px 12px;min-width:220px;">' + cmRenderDiffValue(values.afterText, (item && item.person_action) === 'remove' ? 'Removed' : 'Not provided', '#0f766e') + '</td>' +
+      '<td style="padding:10px 12px;">' + cmMaterialityBadge(item && item.materiality, 'full') + '</td>' +
+    '</tr>';
+  });
+  if (!rows.length) {
+    rows.push('<tr><td colspan="4" style="padding:14px;color:var(--text3);font-size:12px;text-align:center;">No stored change items were found for this request.</td></tr>');
+  }
+  return rows.join('');
+}
+
+function openChangeRequestFromApplication(requestId) {
+  showView('change-mgmt');
+  showChangeMgmtTab('requests');
+  viewRequestDetail(requestId);
+}
+
+function renderApplicationChangeManagementPanel(app) {
+  var container = document.getElementById('detail-change-management');
+  if (!container) return;
+  var requests = Array.isArray(app && app.changeRequests) ? app.changeRequests.slice() : [];
+  if (!requests.length) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = '';
+  var visible = requests.filter(function(req) {
+    return !!(req && req.id);
+  }).slice(0, 3);
+  if (!visible.length) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  var cards = visible.map(function(req) {
+    var blocking = cmRequestBlockingState(req);
+    var changedLabel = (req.changed_fields_count || 0) === 1 ? '1 field changed' : String(req.changed_fields_count || 0) + ' fields changed';
+    return '<div style="border:1px solid var(--border1);border-radius:12px;padding:14px 16px;background:var(--surface);display:grid;gap:10px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Change Management ' + escapeHtml(req.id || '') + '</div>' +
+          '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + escapeHtml(cmMaterialityMeta(req.materiality).fullLabel) + ' · ' + escapeHtml(cmStatusLabel(req.status)) + '</div>' +
+        '</div>' +
+        '<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(180,83,9,0.08);color:' + blocking.tone + ';font-size:11px;font-weight:700;border:1px solid rgba(180,83,9,0.16);">' + escapeHtml(blocking.label) + '</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' +
+        changedLabel +
+        (req.source ? ' · Source: ' + escapeHtml(cmHumanizeSlug(req.source)) : '') +
+        (req.created_at ? ' · Submitted: ' + escapeHtml(String(req.created_at).substring(0, 10)) : '') +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + cmDownstreamObligationChips(req) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">Next:</strong> ' + escapeHtml(cmRequestNextAction(req)) + '</div>' +
+      '<div><button class="btn btn-outline btn-sm" onclick="openChangeRequestFromApplication(\'' + escapeHtml(req.id) + '\')">Review change request</button></div>' +
+    '</div>';
+  }).join('');
+  container.innerHTML = '<div class="detail-section" style="margin-top:16px;">' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);">Change Management</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-top:4px;line-height:1.5;">Linked open or recent change requests are summarised here so the case workspace shows what changed, why it matters, and where to continue review.</div>' +
+      '</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="showView(\'change-mgmt\');showChangeMgmtTab(\'requests\');">Open change management</button>' +
+    '</div>' +
+    '<div style="display:grid;gap:12px;margin-top:12px;">' + cards + '</div>' +
+  '</div>';
 }
 
 function cmStatusBadge(s) {
@@ -9793,42 +10043,63 @@ function loadChangeRequests() {
 
 function viewRequestDetail(reqId) {
   apiFetch('/api/change-management/requests/' + reqId).then(function(r) {
-    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">'
-      + '<div><span style="font-size:11px;color:var(--text3);">Request ID</span><br><strong style="font-family:monospace;">' + r.id + '</strong></div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Status</span><br>' + cmStatusBadge(r.status) + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Source</span><br>' + (r.source||'').replace(/_/g,' ') + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Materiality</span><br>' + cmMaterialityBadge(r.materiality) + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Screening</span><br>' + (r.screening_required ? '🔍 Required' : '—') + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Risk Review</span><br>' + (r.risk_review_required ? '⚠️ Required' : '—') + '</div>'
-      + '</div>';
+    var blocking = cmRequestBlockingState(r);
+    var changedCount = (r.changed_fields_count || (r.items && r.items.length) || 0);
+    var changedLabel = changedCount === 1 ? '1 field changed' : changedCount + ' fields changed';
+    var html = '<div style="display:grid;gap:16px;">' +
+      '<div style="border:1px solid var(--border1);border-radius:14px;background:var(--surface2);padding:16px;">' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+          '<div>' +
+            '<div style="font-size:18px;font-weight:800;color:var(--text1);">Change Request ' + escapeHtml(r.id || '') + '</div>' +
+            '<div style="font-size:12px;color:var(--text2);margin-top:6px;">' +
+              escapeHtml((r.application_ref || r.application_id || 'Application') + (r.company_name ? ' · ' + r.company_name : '')) +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
+            cmMaterialityBadge(r.materiality, 'full') +
+            cmStatusBadge(r.status) +
+            '<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(180,83,9,0.08);color:' + blocking.tone + ';font-size:11px;font-weight:700;border:1px solid rgba(180,83,9,0.16);">' + escapeHtml(blocking.label) + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:16px;">' +
+          '<div><span style="font-size:11px;color:var(--text3);">Source</span><br><strong style="font-size:13px;">' + escapeHtml(cmHumanizeSlug(r.source || 'unknown')) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Submitted</span><br><strong style="font-size:13px;">' + escapeHtml((r.submitted_at || r.created_at || '—').substring(0, 10)) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Materiality</span><br><strong style="font-size:13px;">' + escapeHtml(cmMaterialityMeta(r.materiality).fullLabel) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Changed fields</span><br><strong style="font-size:13px;">' + escapeHtml(changedLabel) + '</strong></div>' +
+        '</div>' +
+        '<div style="margin-top:14px;font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">Next review action:</strong> ' + escapeHtml(cmRequestNextAction(r)) + '</div>' +
+        '<div style="margin-top:14px;"><div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:8px;">Downstream obligations</div><div style="display:flex;gap:6px;flex-wrap:wrap;">' + cmDownstreamObligationChips(r) + '</div></div>' +
+      '</div>';
 
-    html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Reason</span><br><p style="font-size:13px;margin-top:4px;">' + (r.reason||'—') + '</p></div>';
+    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+      '<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:8px;">Review rationale</div>' +
+      '<div style="font-size:13px;color:var(--text2);line-height:1.6;">' + escapeHtml(r.reason || 'No narrative reason was stored for this request.') + '</div>' +
+    '</div>';
 
-    // Items
-    if (r.items && r.items.length > 0) {
-      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Change Items (' + r.items.length + ')</span>'
-        + '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;border:1px solid var(--border1);border-radius:6px;">'
-        + '<thead><tr style="background:var(--bg2);"><th style="padding:6px 8px;text-align:left;">Type</th><th style="padding:6px 8px;text-align:left;">Field</th><th style="padding:6px 8px;text-align:left;">Old</th><th style="padding:6px 8px;text-align:left;">New</th><th style="padding:6px 8px;">Tier</th></tr></thead><tbody>';
-      r.items.forEach(function(item) {
-        html += '<tr style="border-top:1px solid var(--border1);"><td style="padding:6px 8px;">' + (item.change_type||'').replace(/_/g,' ') + '</td>'
-          + '<td style="padding:6px 8px;font-family:monospace;font-size:11px;">' + (item.field_name||'—') + '</td>'
-          + '<td style="padding:6px 8px;">' + (item.old_value||'—') + '</td>'
-          + '<td style="padding:6px 8px;">' + (item.new_value||'—') + '</td>'
-          + '<td style="padding:6px 8px;text-align:center;">' + cmMaterialityBadge(item.materiality) + '</td></tr>';
-      });
-      html += '</tbody></table></div>';
-    }
+    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Before / After Diff</div>' +
+          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Review each changed field side by side using the authoritative values stored with this change request.</div>' +
+        '</div>' +
+        '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(changedLabel) + '</span>' +
+      '</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--border1);border-radius:10px;overflow:hidden;">' +
+        '<thead><tr style="background:var(--bg2);"><th style="padding:8px 12px;text-align:left;">Field</th><th style="padding:8px 12px;text-align:left;">Before</th><th style="padding:8px 12px;text-align:left;">After</th><th style="padding:8px 12px;text-align:left;">Impact</th></tr></thead>' +
+        '<tbody>' + cmRenderDiffRows(r.items || []) + '</tbody>' +
+      '</table>' +
+    '</div>';
 
     // Documents
     if (r.documents && r.documents.length > 0) {
-      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Supporting Documents (' + r.documents.length + ')</span><ul style="margin-top:4px;">';
+      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Supporting Documents (' + r.documents.length + ')</span><ul style="margin-top:8px;">';
       r.documents.forEach(function(d) { html += '<li style="font-size:12px;">' + d.doc_name + ' <span style="color:var(--text3);">(' + (d.doc_type||'') + ')</span></li>'; });
       html += '</ul></div>';
     }
 
     // Reviews
     if (r.reviews && r.reviews.length > 0) {
-      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Reviews</span>';
+      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Reviews</span>';
       r.reviews.forEach(function(rev) {
         var decColor = rev.decision === 'approved' ? '#198754' : rev.decision === 'rejected' ? '#dc3545' : '#fd7e14';
         html += '<div style="background:var(--bg2);padding:10px;border-radius:6px;margin-top:6px;">'
@@ -9842,7 +10113,7 @@ function viewRequestDetail(reqId) {
 
     // Risk info
     if (r.pre_change_risk_level || r.post_change_risk_level) {
-      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Risk Impact</span>'
+      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Risk Impact</span>'
         + '<div style="display:flex;gap:20px;margin-top:6px;">'
         + '<div><span style="font-size:11px;">Pre-change:</span> <strong>' + (r.pre_change_risk_level||'—') + '</strong></div>'
         + '<div><span style="font-size:11px;">Post-change:</span> <strong>' + (r.post_change_risk_level||'—') + '</strong></div>'
@@ -9881,6 +10152,7 @@ function viewRequestDetail(reqId) {
       html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">' + actions.join('') + '</div>';
     }
 
+    html += '</div>';
     document.getElementById('cm-request-detail-content').innerHTML = html;
     document.getElementById('cm-request-detail-modal').style.display = '';
   }).catch(function(e) { showToast('Failed to load request: ' + e.message, 'error'); });
