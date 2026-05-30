@@ -41,7 +41,7 @@ def test_authenticated_staging_browser_smoke_covers_required_backoffice_surfaces
         "Application Detail",
         "KYC Documents",
         "Screening Review",
-        "Compliance Supervisor",
+        "AI Compliance Supervisor",
         "Lifecycle Tab",
         "Case Management",
         "Ongoing Monitoring",

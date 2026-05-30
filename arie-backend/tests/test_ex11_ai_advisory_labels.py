@@ -96,20 +96,57 @@ class TestPartB_AdvisoryLabeling:
 
     def test_supervisor_tab_has_advisory_banner(self, backoffice_html):
         sv_match = re.search(
-            r'Compliance Supervisor Pipeline.*?ai-advisory-badge.*?AI-Generated.*?Advisory Only',
+            r'AI Governance &amp; Evidence Trail.*?AI-generated content is advisory only.*?Officer review is required before any compliance decision',
             backoffice_html,
             re.DOTALL
         )
         assert sv_match is not None, \
-            "Supervisor tab header should have advisory badge"
+            "Supervisor tab should have the compact AI advisory notice"
 
-    def test_ai_explainability_layer_replaces_agent_pipeline_summary(self, backoffice_html):
-        assert 'AI Explainability Layer' in backoffice_html, \
-            "Overview should expose the AI Explainability Layer"
+    def test_ai_explainability_layer_moved_to_supervisor_tab(self, backoffice_html):
+        overview_start = backoffice_html.index('id="detail-tab-overview"')
+        overview_end = backoffice_html.index('id="detail-tab-kyc-docs"', overview_start)
+        overview_region = backoffice_html[overview_start:overview_end]
+        supervisor_start = backoffice_html.index('id="detail-tab-supervisor"')
+        supervisor_end = backoffice_html.index('id="detail-tab-lifecycle"', supervisor_start)
+        supervisor_region = backoffice_html[supervisor_start:supervisor_end]
+
+        assert 'AI Explainability Layer' not in overview_region, \
+            "Overview should no longer expose the AI Explainability Layer"
+        assert 'AI Agent Decision Trail' not in overview_region, \
+            "Overview should no longer expose the AI Agent Decision Trail"
+        assert 'Dimension Explainability' not in overview_region, \
+            "Overview should no longer expose dimension explainability"
+        assert 'AI Confidence &amp; Reasoning Summary' not in overview_region, \
+            "Overview should no longer expose AI confidence and reasoning"
+        assert 'AI Governance &amp; Evidence Trail' in supervisor_region, \
+            "Supervisor tab should contain the AI Governance & Evidence Trail"
+        assert 'AI Explainability Layer' in supervisor_region, \
+            "Supervisor tab should expose the AI Explainability Layer"
         assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in backoffice_html, \
             "AI Explainability Layer should describe the explainability context"
-        assert 'AI Agent Pipeline Results' not in backoffice_html, \
+        assert 'AI Agent Pipeline Results' not in overview_region, \
             "Legacy AI Agent Pipeline Results summary should not return to the Overview UI"
+        assert 'AI Agent Pipeline Results' in supervisor_region, \
+            "AI Agent Pipeline Results should live under the supervisor tab"
+
+    def test_application_detail_tab_renamed_to_ai_compliance_supervisor(self, backoffice_html):
+        detail_nav_start = backoffice_html.index('id="tab-overview"')
+        detail_nav_end = backoffice_html.index('id="detail-tab-overview"', detail_nav_start)
+        detail_nav = backoffice_html[detail_nav_start:detail_nav_end]
+
+        assert 'AI Compliance Supervisor' in detail_nav
+        assert '>🛡️ Compliance Supervisor<' not in detail_nav
+
+    def test_ai_governance_evidence_trail_is_collapsible(self, backoffice_html):
+        supervisor_start = backoffice_html.index('id="detail-tab-supervisor"')
+        supervisor_end = backoffice_html.index('id="detail-tab-lifecycle"', supervisor_start)
+        supervisor_region = backoffice_html[supervisor_start:supervisor_end]
+
+        assert 'id="detail-ai-governance-evidence-details"' in supervisor_region
+        assert 'Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability' in supervisor_region
+        assert 'updateGovernanceEvidenceTrailState' in backoffice_html
+        assert "setDetailsExpandedState('detail-ai-governance-evidence-details'" in backoffice_html
 
     def test_kyc_documents_tab_has_advisory(self, backoffice_html):
         kyc_match = re.search(
@@ -148,9 +185,9 @@ class TestPartB_AdvisoryLabeling:
             backoffice_html, re.DOTALL
         ), "Case Aggregate panel should have advisory badge"
         assert re.search(
-            r'Agent Results.*?ai-advisory-badge.*?Advisory',
+            r'AI Agent Pipeline Results.*?ai-advisory-badge.*?Advisory',
             backoffice_html, re.DOTALL
-        ), "Agent Results panel should have advisory badge"
+        ), "AI Agent Pipeline Results panel should have advisory badge"
         assert re.search(
             r'Contradictions Detected.*?ai-advisory-badge.*?Advisory',
             backoffice_html, re.DOTALL
