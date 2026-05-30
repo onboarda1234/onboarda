@@ -74,20 +74,24 @@ def _runtime_js(html, config):
                 const app = CONFIG.currentApp;
                 const rationaleEmpty = screeningDispositionRationaleError('escalated', '   ');
                 const unresolvedHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                const resolvedRow = Object.assign({}, row, {
+                  review_required: false,
+                  review_disposition: 'cleared',
+                  review_disposition_code: 'false_positive_cleared',
+                  review_actionable: false
+                });
                 const resolvedHtml = renderInlineScreeningDispositionPanel(
                   app,
-                  Object.assign({}, row, {
-                    review_required: false,
-                    review_disposition: 'escalated',
-                    review_actionable: false
-                  }),
+                  resolvedRow,
                   row.subject_type,
                   row.subject_name
                 );
+                const resolvedBadgeHtml = screeningReviewBadge(resolvedRow);
                 console.log(JSON.stringify({
                   rationaleEmpty,
                   unresolvedHtml,
-                  resolvedHtml
+                  resolvedHtml,
+                  resolvedBadgeHtml
                 }));
                 """
             ),
@@ -206,3 +210,5 @@ class TestInlineScreeningRuntime:
         assert "read-only" in result["resolvedHtml"]
         assert "View audit trail" in result["resolvedHtml"]
         assert "Save disposition" not in result["resolvedHtml"]
+        assert "False Positive Cleared" in result["resolvedBadgeHtml"]
+        assert "Review Required" not in result["resolvedBadgeHtml"]

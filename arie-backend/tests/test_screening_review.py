@@ -81,6 +81,10 @@ def test_upsert_screening_review_persists_and_survives_queue_reload(db, temp_db)
     assert row["review_disposition"] == "cleared"
     assert "false positive" in row["review_notes"].lower()
     assert row["reviewed_by"] == "Test Admin"
+    assert row["review_required"] is False
+    assert row["review_actionable"] is False
+    assert row["status_key"] == "reviewed_false_positive_cleared"
+    assert row["status_label"] == "False Positive Cleared"
 
 
 def test_screening_review_rationale_flows_into_memo():
@@ -201,7 +205,7 @@ def test_false_positive_clearance_queue_label_is_reviewed_not_raw_clear(db, temp
 
     assert row["screening_state"] == "completed_match"
     assert row["status_key"] == "reviewed_false_positive_cleared"
-    assert row["status_label"] == "Reviewed - False Positive Cleared"
+    assert row["status_label"] == "False Positive Cleared"
     assert row["review_resolved"] is True
     assert row["canonical_disposition"] == "false_positive_cleared"
     assert row["defensible_clear"] is False
