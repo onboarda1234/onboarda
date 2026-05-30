@@ -12169,6 +12169,21 @@ def _screening_review_false_positive_clearance_contract(review):
     )
 
 
+def _screening_review_is_actionable(review):
+    if not review:
+        return False
+    disposition = str(review.get("disposition") or "").strip().lower()
+    canonical_disposition = _screening_review_canonical_disposition(review)
+    if not disposition and not canonical_disposition:
+        return False
+    if _screening_review_false_positive_clearance_contract(review):
+        return False
+    if disposition == "cleared" or canonical_disposition == "false_positive_cleared":
+        requires_four_eyes = _truthy_review_flag(review.get("requires_four_eyes"))
+        return bool(requires_four_eyes and not review.get("second_reviewer_id"))
+    return False
+
+
 def _screening_review_audit_targets(app_ref, review):
     targets = []
     for value in (app_ref, review.get("application_ref"), review.get("application_id")):
@@ -12338,6 +12353,7 @@ def _screening_review_payload_fields(review):
             "requires_four_eyes": False,
             "review_four_eyes_status": "not_required",
             "review_resolved": False,
+            "review_actionable": False,
             "audit_confirmed": False,
             "sensitivity_flags": [],
             "second_reviewed_by": None,
@@ -12355,6 +12371,7 @@ def _screening_review_payload_fields(review):
     disposition = review.get("disposition")
     canonical_disposition = _screening_review_canonical_disposition(review)
     review_resolved = _screening_review_false_positive_clearance_contract(review)
+    review_actionable = _screening_review_is_actionable(review)
     sensitivity_flags = safe_json_loads(review.get("sensitivity_flags")) or []
     if not isinstance(sensitivity_flags, list):
         sensitivity_flags = []
@@ -12370,6 +12387,7 @@ def _screening_review_payload_fields(review):
         "requires_four_eyes": requires_four_eyes,
         "review_four_eyes_status": four_eyes_status,
         "review_resolved": review_resolved,
+        "review_actionable": review_actionable,
         "audit_confirmed": _truthy_review_flag(review.get("audit_confirmed")),
         "sensitivity_flags": sensitivity_flags,
         "second_reviewed_by": review.get("second_reviewer_name"),
@@ -12905,6 +12923,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         report = {}
 
     if subject_type == "entity":
+        subject_matches_application = str(subject_name or "").strip() == str(app.get("company_name") or "").strip()
         monitoring_media = _monitoring_company_media_facts(
             _load_application_monitoring_alerts(db, app["id"])
         )
@@ -12924,6 +12943,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         if facts["adverse_media_hit"] or company_adverse.get("matched") or monitoring_media["matched"]:
             context.append("Company adverse media match")
         return {
+            "subject_found": subject_matches_application,
             "watchlist_status": _screening_legacy_status(
                 company_state,
                 company_subject["has_provider_sanctions_hit"] or has_company_match,
@@ -12953,6 +12973,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         person = next((p for p in people if (p.get("full_name") or "") == subject_name), {})
         combined = (report.get("director_screenings") or []) + (report.get("ubo_screenings") or [])
         item = next((i for i in combined if (i.get("person_name") or i.get("name")) == subject_name), {})
+        subject_found = bool(person or item)
         declared_pep = _declared_pep_from_screening_item(item, person.get("is_pep", "No"))
         screening = (item or {}).get("screening") or {}
         facts = _screening_hit_facts(screening)
@@ -12967,6 +12988,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         if facts.get("adverse_media_hits", 0) > 0:
             context.append("Adverse media")
         return {
+            "subject_found": subject_found,
             "watchlist_status": _screening_legacy_status(
                 person_state,
                 subject["has_provider_sanctions_hit"],
@@ -13273,6 +13295,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif company_review_fields.get("review_resolved"):
                 entity_status_key = "reviewed_false_positive_cleared"
                 entity_status_label = "Reviewed - False Positive Cleared"
+            elif company_review_fields.get("review_disposition") == "escalated" and not company_review_fields.get("review_actionable"):
+                entity_status_key = "review_escalated"
+                entity_status_label = "Escalated"
+            elif company_review_fields.get("review_disposition") == "follow_up_required" and not company_review_fields.get("review_actionable"):
+                entity_status_key = "review_follow_up_required"
+                entity_status_label = "Follow-Up Required"
             elif company_state == _SCR_COMPLETED_MATCH:
                 entity_status_key = "review_required"
                 entity_status_label = "Review Required"
@@ -13345,7 +13373,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                     int(company_media_alerts["total_hits"] or 0),
                 ) or (report or {}).get("total_hits", 0),
                 "provider_evidence": _screening_provider_evidence(company_results),
-                "review_required": company_requires_review and not company_review_fields.get("review_resolved"),
+                "review_required": company_requires_review and (not company_review or company_review_fields.get("review_actionable")),
                 **company_review_fields,
             })
 
@@ -13411,6 +13439,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif person_review_fields.get("review_resolved"):
                 status_key = "reviewed_false_positive_cleared"
                 status_label = "Reviewed - False Positive Cleared"
+            elif person_review_fields.get("review_disposition") == "escalated" and not person_review_fields.get("review_actionable"):
+                status_key = "review_escalated"
+                status_label = "Escalated"
+            elif person_review_fields.get("review_disposition") == "follow_up_required" and not person_review_fields.get("review_actionable"):
+                status_key = "review_follow_up_required"
+                status_label = "Follow-Up Required"
             elif (
                 person_state == _SCR_COMPLETED_MATCH
                 or has_sanctions_hit
@@ -13457,8 +13491,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 )
             )
             review_disposition = person_review_fields["review_disposition"]
-            review_resolved = person_review_fields["review_resolved"]
-            if requires_review and not review_resolved:
+            review_actionable = person_review_fields["review_actionable"]
+            if requires_review and (not person_review or review_actionable):
                 application_requires_review = True
 
             entity_context = []
@@ -13518,11 +13552,11 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "flag_count": len(overall_flags),
                 "total_hits": facts["total_hits"],
                 "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
-                "review_required": requires_review and not review_resolved,
+                "review_required": requires_review and (not person_review or review_actionable),
                 **person_review_fields,
             })
 
-        if company_requires_review and not _screening_review_is_resolved(company_review):
+        if company_requires_review and (not company_review or company_review_fields.get("review_actionable")):
             application_requires_review = True
         if application_requires_review:
             metrics["applications_requiring_review"] += 1
@@ -13573,6 +13607,7 @@ class ScreeningReviewHandler(BaseHandler):
         raw_disposition = (data.get("disposition") or "").strip().lower()
         notes = (data.get("notes") or "").strip()
         raw_disposition_code = (data.get("disposition_code") or "").strip().lower()
+        source_surface = str(data.get("source_surface") or "").strip().lower()
         disposition, disposition_code, canonical_disposition = _normalise_screening_review_disposition(
             raw_disposition,
             raw_disposition_code,
@@ -13599,11 +13634,12 @@ class ScreeningReviewHandler(BaseHandler):
                 "rationale": rationale,
                 "notes": notes,
                 "evidence_reference": evidence_reference,
+                "source_surface": source_surface,
             },
             (
                 "application_id", "subject_type", "subject_name", "disposition",
                 "disposition_code", "canonical_disposition", "rationale", "notes",
-                "evidence_reference",
+                "evidence_reference", "source_surface",
             ),
         )
 
@@ -13679,6 +13715,35 @@ class ScreeningReviewHandler(BaseHandler):
         except Exception as e:
             context_error = True
             logger.warning("Could not derive screening review sensitivity context for %s/%s: %s", app["ref"], subject_name, e)
+
+        if not existing_review and not context_error and not bool((row_context or {}).get("subject_found")):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 404,
+                "Screening subject was not found on this application",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("Screening subject was not found on this application", 404)
+
+        existing_review_fields = _screening_review_payload_fields(existing_review)
+        if existing_review and not existing_review_fields.get("review_actionable"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 409,
+                "This screening item has already been reviewed",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("This screening item has already been reviewed", 409)
+
+        if (
+            existing_review
+            and existing_review_fields.get("review_four_eyes_status") == "pending_second_review"
+            and disposition != "cleared"
+        ):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 409,
+                "This screening clear already awaits a second reviewer",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("This screening clear already awaits a second reviewer", 409)
 
         sensitivity_flags = _screening_sensitive_flags(
             app,
@@ -13846,6 +13911,7 @@ class ScreeningReviewHandler(BaseHandler):
             "source": (row_context or {}).get("source"),
             "api_status": (row_context or {}).get("api_status"),
             "screening_state": (row_context or {}).get("screening_state"),
+            "source_surface": source_surface or "screening_queue",
             "requires_four_eyes": requires_four_eyes,
             "four_eyes_status": review_status,
             "sensitivity_flags": sensitivity_flags,

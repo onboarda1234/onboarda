@@ -103,14 +103,13 @@ class TestPartB_AdvisoryLabeling:
         assert sv_match is not None, \
             "Supervisor tab header should have advisory badge"
 
-    def test_ai_agent_pipeline_has_advisory_banner(self, backoffice_html):
-        agent_match = re.search(
-            r'AI Agent Pipeline Results.*?ai-advisory-badge.*?AI-Generated.*?Advisory Only',
-            backoffice_html,
-            re.DOTALL
-        )
-        assert agent_match is not None, \
-            "AI Agent Pipeline Results should have advisory badge"
+    def test_ai_explainability_layer_replaces_agent_pipeline_summary(self, backoffice_html):
+        assert 'AI Explainability Layer' in backoffice_html, \
+            "Overview should expose the AI Explainability Layer"
+        assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in backoffice_html, \
+            "AI Explainability Layer should describe the explainability context"
+        assert 'AI Agent Pipeline Results' not in backoffice_html, \
+            "Legacy AI Agent Pipeline Results summary should not return to the Overview UI"
 
     def test_kyc_documents_tab_has_advisory(self, backoffice_html):
         kyc_match = re.search(
