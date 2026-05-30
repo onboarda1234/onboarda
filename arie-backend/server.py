@@ -12413,6 +12413,31 @@ def _screening_review_is_resolved(review):
     return _screening_review_payload_fields(review)["review_resolved"]
 
 
+def _screening_review_completed_status(review_fields):
+    review_fields = review_fields or {}
+    if review_fields.get("review_actionable"):
+        return None
+
+    disposition = str(review_fields.get("review_disposition") or "").strip().lower()
+    canonical_disposition = str(
+        review_fields.get("canonical_disposition")
+        or review_fields.get("review_disposition_code")
+        or ""
+    ).strip().lower()
+
+    if canonical_disposition == "false_positive_cleared" or disposition == "cleared":
+        return "reviewed_false_positive_cleared", "False Positive Cleared"
+    if canonical_disposition == "needs_more_information" or disposition == "follow_up_required":
+        return "review_follow_up_required", "Follow-Up Required"
+    if canonical_disposition == "escalated_to_edd":
+        return "review_escalated", "Escalated to EDD"
+    if canonical_disposition in _SCREENING_WORKFLOW_EDD_DISPOSITIONS or disposition == "escalated":
+        return "review_escalated", "Escalated"
+    if disposition or canonical_disposition:
+        return "reviewed", "Reviewed"
+    return None
+
+
 def _screening_disposition_edd_trigger_flags(canonical_disposition):
     code = str(canonical_disposition or "").strip().lower()
     if code == "needs_more_information":
@@ -13296,6 +13321,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
 
         company_review = review_map.get(("entity", app["company_name"])) or review_map.get(("company", app["company_name"]))
         company_review_fields = _screening_review_payload_fields(company_review)
+        company_review_status = _screening_review_completed_status(company_review_fields)
         if directors or ubos or report:
             # Priority A: explicit, truthful entity status_label / status_key.
             # Provider-derived states drive the label so non-terminal cases
@@ -13303,15 +13329,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             if not report:
                 entity_status_key = "awaiting_screening"
                 entity_status_label = "Awaiting Screening"
-            elif company_review_fields.get("review_resolved"):
-                entity_status_key = "reviewed_false_positive_cleared"
-                entity_status_label = "Reviewed - False Positive Cleared"
-            elif company_review_fields.get("review_disposition") == "escalated" and not company_review_fields.get("review_actionable"):
-                entity_status_key = "review_escalated"
-                entity_status_label = "Escalated"
-            elif company_review_fields.get("review_disposition") == "follow_up_required" and not company_review_fields.get("review_actionable"):
-                entity_status_key = "review_follow_up_required"
-                entity_status_label = "Follow-Up Required"
+            elif company_review_status:
+                entity_status_key, entity_status_label = company_review_status
             elif company_state == _SCR_COMPLETED_MATCH:
                 entity_status_key = "review_required"
                 entity_status_label = "Review Required"
@@ -13424,6 +13443,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             person_provider_mode = person_screening_truth.get("provider_mode")
             person_review = review_map.get((subject_type, person_name))
             person_review_fields = _screening_review_payload_fields(person_review)
+            person_review_status = _screening_review_completed_status(person_review_fields)
 
             if not report:
                 person_state = _SCR_NOT_STARTED
@@ -13447,15 +13467,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif not item:
                 status_key = "incomplete_record"
                 status_label = "Incomplete Screening Record"
-            elif person_review_fields.get("review_resolved"):
-                status_key = "reviewed_false_positive_cleared"
-                status_label = "Reviewed - False Positive Cleared"
-            elif person_review_fields.get("review_disposition") == "escalated" and not person_review_fields.get("review_actionable"):
-                status_key = "review_escalated"
-                status_label = "Escalated"
-            elif person_review_fields.get("review_disposition") == "follow_up_required" and not person_review_fields.get("review_actionable"):
-                status_key = "review_follow_up_required"
-                status_label = "Follow-Up Required"
+            elif person_review_status:
+                status_key, status_label = person_review_status
             elif (
                 person_state == _SCR_COMPLETED_MATCH
                 or has_sanctions_hit

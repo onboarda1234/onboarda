@@ -7844,6 +7844,7 @@ async function loadScreeningQueue() {
 function screeningQueueStatusBadge(statusKey, statusLabel) {
   var cls = 'pending';
   if (statusKey === 'screened_no_match') cls = 'approved';
+  else if (statusKey === 'reviewed_false_positive_cleared' || statusKey === 'reviewed') cls = 'approved';
   else if (statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
   else if (statusKey === 'screening_simulated' || statusKey === 'screening_sandbox' || statusKey === 'screening_not_configured' || statusKey === 'screening_unavailable') cls = 'high';
   else if (statusKey === 'review_escalated') cls = 'high';
@@ -7865,7 +7866,7 @@ function screeningQueueContextCell(row) {
 function screeningReviewBadge(row) {
   if (!row || !row.review_disposition) return '';
   var labelMap = {
-    cleared: 'Officer Cleared',
+    cleared: 'False Positive Cleared',
     escalated: 'Escalated',
     follow_up_required: 'Follow-Up Required'
   };
@@ -7874,6 +7875,8 @@ function screeningReviewBadge(row) {
   var completeSecond = row.review_four_eyes_status === 'complete';
   var cls = status === 'cleared' ? 'approved' : status === 'escalated' ? 'high' : 'pending';
   if (pendingSecond) cls = 'pending';
+  var label = labelMap[status] || status;
+  if (status === 'escalated' && row.review_disposition_code === 'escalated_to_edd') label = 'Escalated to EDD';
   var meta = row.reviewed_by ? ' by ' + row.reviewed_by : '';
   var code = row.review_disposition_code ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Code: ' + escapeHtml(row.review_disposition_code.replace(/_/g, ' ')) + '</div>' : '';
   var second = pendingSecond
@@ -7881,7 +7884,7 @@ function screeningReviewBadge(row) {
     : completeSecond
       ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Second review: ' + escapeHtml(row.second_reviewed_by || 'Recorded') + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>'
       : '';
-  return '<div style="margin-top:4px;"><span class="badge ' + cls + '">' + escapeHtml(pendingSecond ? 'Second Review Required' : (labelMap[status] || status)) + '</span>' +
+  return '<div style="margin-top:4px;"><span class="badge ' + cls + '">' + escapeHtml(pendingSecond ? 'Second Review Required' : label) + '</span>' +
     (meta ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(meta + (row.reviewed_at ? ' • ' + String(row.reviewed_at).substring(0, 19).replace('T', ' ') : '')) + '</div>' : '') +
     code +
     (row.review_evidence_reference ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Evidence/reference: ' + escapeHtml(row.review_evidence_reference) + '</div>' : '') +
