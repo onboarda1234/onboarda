@@ -35,14 +35,14 @@ def test_lifecycle_tab_shell_sections_exist():
     for title in (
         "Review Setup Summary",
         "Active Work",
-        "Current Review Workspace",
         "Completion Gate",
         "Required Evidence",
         "Cross-module Links",
-        "Memo Status",
+        "Agent Signals",
         "History",
     ):
         assert title in html
+    assert "Memo Status" not in html
 
 
 def test_lifecycle_tab_loader_uses_existing_projection_endpoints():
@@ -136,8 +136,8 @@ def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
     assert "var currentReviewActive = !!activeReview;" in section
     assert "var activeWorkItems = currentReviewActive ?" in section
     assert "var currentReviewCardHtml = currentReviewActive" in section
-    assert "lifecycleDetailCard('Current Review Workspace'" in section
     assert "lifecycleDetailCard('Active Work'" in section
+    assert "Current Review Workspace" not in section
 
 
 def test_lifecycle_legacy_baseline_visible_for_scheduled_review_setup():
@@ -146,7 +146,7 @@ def test_lifecycle_legacy_baseline_visible_for_scheduled_review_setup():
     end = html.index("async function loadLifecycleDetailTab(force)", start)
     section = html[start:end]
     assert "var setupReviewDetail = activeReview || (context && context.setupReviewDetail)" in section
-    assert "Manual legacy baseline controls appear here once a periodic review schedule exists" in section
+    assert "No active periodic review." in section
     assert "lifecycleManualLegacyBaselineControls(setupReviewDetail.id" in section
     load_start = html.index("async function loadLifecycleDetailTab(force)")
     load_end = html.index("// ═══════════════════════════════════════════════════════════", load_start)
@@ -158,8 +158,8 @@ def test_lifecycle_legacy_baseline_visible_for_scheduled_review_setup():
 def test_lifecycle_workspace_uses_scrollable_responsive_layout():
     html = _read_backoffice()
     assert ".lifecycle-detail-root" in html
-    assert ".lifecycle-top-grid" in html
-    assert ".lifecycle-card-grid" in html
+    assert ".lifecycle-section-stack" in html
+    assert "grid-template-columns:repeat(6,minmax(0,1fr))" in html
     assert ".lifecycle-workspace-layout" in html
     assert ".lifecycle-workspace-panels" in html
     assert ".lifecycle-evidence-list" in html
@@ -229,7 +229,7 @@ def test_lifecycle_memo_gate_adds_officer_rationale_outcome_and_completion_actio
     helper_start = html.index("window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};")
     helper_end = html.index("async function saveLifecycleMaterialChange(reviewId)", helper_start)
     helper_section = html[helper_start:helper_end]
-    memo_start = html.index("var memoBody = activeReview")
+    memo_start = html.index("var memoControlsBody = activeReview")
     memo_end = html.index("var historyItems = historical.filter", memo_start)
     memo_section = html[memo_start:memo_end]
     assert "window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};" in helper_section
