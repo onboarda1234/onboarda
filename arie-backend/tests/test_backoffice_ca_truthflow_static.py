@@ -46,7 +46,7 @@ def test_backoffice_company_review_includes_top_level_company_results():
 def test_backoffice_screening_review_renders_provider_evidence_details():
     html = BACKOFFICE_HTML.read_text()
 
-    assert "Provider evidence details" in html
+    assert "Evidence groups" in html
     assert "modal-screening-evidence" in html
     assert "screening-evidence-body" in html
     assert "function openScreeningEvidenceDrawer" in html
@@ -57,15 +57,23 @@ def test_backoffice_screening_review_renders_provider_evidence_details():
     assert "Provider profile ID" in html
 
     region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
-    assert "provider_case_identifier" in region
-    assert "provider_alert_identifier" in region
-    assert "provider_risk_identifier" in region
-    assert "provider_profile_identifier" in region
-    assert "media_title" in region
-    assert "media_snippet" in region
-    assert "registerScreeningEvidence" in region
-    assert "openScreeningEvidenceDrawer" in region
-    assert "target=\"_blank\" rel=\"noopener\"" in region
+    assert "providerEvidenceRecordCard" in region
+    assert "evidencePrimaryCategoryLabel" in region
+    assert "evidenceSensitivityLabel" in region
+    assert "Show evidence" in region
+    assert "evidence records grouped for this" in region
+    record_region = _function_region(html, "providerEvidenceRecordCard", "providerResultHighlights")
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+    title_region = _function_region(html, "evidenceSourceTitle", "evidenceSourcePublisher")
+    assert "provider_case_identifier" in record_region
+    assert "provider_alert_identifier" in record_region
+    assert "provider_risk_identifier" in record_region
+    assert "provider_profile_identifier" in record_region
+    assert "registerScreeningEvidence" in record_region
+    assert "openScreeningEvidenceDrawer" in record_region
+    assert "target=\"_blank\" rel=\"noopener\"" in record_region
+    assert "media_title" in title_region
+    assert "media_snippet" in drawer_region
 
 
 def test_backoffice_screening_evidence_drawer_renders_structured_review_fields():
@@ -157,12 +165,17 @@ def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
     assert "function groupProviderEvidenceHits" in html
     assert "function evidenceGroupedIdentifiers" in html
     assert "_group_count" in grouping_region
+    assert "_group_records" in grouping_region
+    assert "_group_record_keys" in grouping_region
+    assert "_grouped_profile_identifiers" in grouping_region
     assert "_grouped_risk_identifiers" in grouping_region
     assert "_grouped_alert_identifiers" in grouping_region
     assert "var seen = {};" in grouped_ids_region
     assert "return grouped.length > 1 ? grouped : [];" in grouped_ids_region
     assert "var hits = groupProviderEvidenceHits" in provider_region
-    assert "evidence records grouped for this profile/category" in provider_region
+    assert "Evidence groups" in provider_region
+    assert "providerEvidenceRecordCard(record, context, index, recordIndex)" in provider_region
+    assert "evidence records grouped for this provider profile/category" in provider_region
     assert "Evidence records grouped" in drawer_region
     assert "Grouped alert IDs" in drawer_region
     assert "Grouped risk IDs" in drawer_region
