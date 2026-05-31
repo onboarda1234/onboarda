@@ -76,6 +76,28 @@ def test_backoffice_screening_review_renders_provider_evidence_details():
     assert "media_snippet" in drawer_region
 
 
+def test_backoffice_screening_review_adds_declared_vs_provider_comparison():
+    html = BACKOFFICE_HTML.read_text()
+
+    comparison_region = _function_region(html, "screeningComparisonAssessment", "screeningComparisonPrimaryHit")
+    panel_region = _function_region(html, "buildScreeningComparisonPanel", "providerResultHighlights")
+    entity_region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
+    person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
+
+    assert "Declared vs Provider Match" in html
+    assert "Comparison shown against highest-risk provider match." in html
+    assert "Missing Declared Data" in comparison_region
+    assert "Missing Provider Data" in comparison_region
+    assert "Likely Match" in comparison_region
+    assert "Conflict" in comparison_region
+    assert "Not Comparable" in comparison_region
+    assert "Provider match" in panel_region
+    assert "Declared in application" in panel_region
+    assert "Assessment" in panel_region
+    assert "buildScreeningComparisonPanel('entity'" in entity_region
+    assert "buildScreeningComparisonPanel('person'" in person_region
+
+
 def test_backoffice_screening_evidence_drawer_renders_structured_review_fields():
     html = BACKOFFICE_HTML.read_text()
 
@@ -243,7 +265,8 @@ def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
     assert "reviewRow && reviewRow.provider_evidence" in entity_region
     assert "reviewRow && reviewRow.provider_evidence" in person_region
     assert "providerResultHighlights(companyResults, {" in entity_region
-    assert "providerResultHighlights([].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []), {" in person_region
+    assert "var personProviderResults = [].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []);" in person_region
+    assert "providerResultHighlights(personProviderResults, personProviderContext);" in person_region
     assert "provider: company.source || company.provider || screeningSummary.provider" in entity_region
     assert "provider: facts.source || screeningSummary.provider" in person_region
 
