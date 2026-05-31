@@ -422,12 +422,15 @@ class TestCaseCommandCentreRuntime:
         html = _read_backoffice()
         assert "<th>Source / Reason</th>" not in html
         assert "<th>Timeline</th>" not in html
-        assert "<th>Evidence / Current State</th>" in html
+        assert "<th>Linked Evidence</th>" in html
+        assert "<th>Actions</th>" in html
+        assert "Requirement details" in html
+        assert "Triggered by" in html
         assert "No upload controls were added to Enhanced Review Requirements." not in html
         enhanced_section = _extract_between(
             html,
             '<div class="detail-collapsible-card" id="detail-enhanced-requirements-section"',
-            '<div class="detail-collapsible-card" id="detail-kyc-documents-panel"',
+            '<div class="detail-collapsible-card" id="detail-document-history-panel"',
         )
         assert "Upload Document" not in enhanced_section
         assert "Document Type" not in enhanced_section
@@ -437,7 +440,7 @@ class TestCaseCommandCentreRuntime:
         kyc_section = _extract_between(
             html,
             '<div class="detail-collapsible-card" id="detail-kyc-documents-panel"',
-            '<!-- Tab: Screening Review (hidden by default) -->',
+            '<div class="detail-collapsible-card" id="detail-enhanced-requirements-section"',
         )
         assert "Upload Document" in kyc_section
         assert "Document Type" in kyc_section
