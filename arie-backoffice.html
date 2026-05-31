@@ -1393,38 +1393,12 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Tab: KYC Documents & Verifications (hidden by default) -->
   <div id="detail-tab-kyc-docs" style="display:none;">
-    <div class="detail-collapsible-card" id="detail-enhanced-requirements-section" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.025);">
-      <details id="detail-enhanced-requirements-details">
-        <summary>
-          <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">Enhanced Review Requirements</div>
-            <div class="detail-collapsible-subtitle">Generated requirement snapshot for this application.</div>
-          </div>
-          <div class="detail-collapsible-meta">
-            <span class="detail-collapsible-summary-line" id="detail-enhanced-requirements-summary-copy">Loading enhanced requirements…</span>
-            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
-          </div>
-        </summary>
-        <div class="detail-collapsible-body">
-          <div class="detail-collapsible-inline-header">
-            <div class="detail-collapsible-section-label">Review requirement status, linked evidence, and officer actions.</div>
-            <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
-          </div>
-          <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
-          <div id="detail-enhanced-review-summary" style="margin-bottom:12px;"></div>
-          <div id="detail-enhanced-requirements-container">
-            <div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>
-          </div>
-        </div>
-      </details>
-    </div>
-
     <div class="detail-collapsible-card" id="detail-kyc-documents-panel" style="border-left:4px solid var(--brand);background:rgba(43,47,143,0.02);">
       <details id="detail-kyc-documents-details">
         <summary>
           <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">KYC Documents &amp; Verifications</div>
-            <div class="detail-collapsible-subtitle">Each document with inline AI verification results.</div>
+            <div class="detail-collapsible-title">Standard KYC Documents</div>
+            <div class="detail-collapsible-subtitle">Baseline onboarding documents and officer verification results.</div>
           </div>
           <div class="detail-collapsible-meta">
             <span class="detail-collapsible-summary-line" id="detail-kyc-documents-summary-copy">Loading KYC document status…</span>
@@ -1474,6 +1448,50 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         </div>
           </div>
           <div id="detail-docs-with-verification"></div>
+        </div>
+      </details>
+    </div>
+
+    <div class="detail-collapsible-card" id="detail-enhanced-requirements-section" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.025);">
+      <details id="detail-enhanced-requirements-details">
+        <summary>
+          <div class="detail-collapsible-copy">
+            <div class="detail-collapsible-title">Enhanced Review Requirements</div>
+            <div class="detail-collapsible-subtitle">Onboarding evidence required due to risk, screening, PEP, or adverse media triggers.</div>
+          </div>
+          <div class="detail-collapsible-meta">
+            <span class="detail-collapsible-summary-line" id="detail-enhanced-requirements-summary-copy">Loading enhanced requirements…</span>
+            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+          </div>
+        </summary>
+        <div class="detail-collapsible-body">
+          <div class="detail-collapsible-inline-header">
+            <div class="detail-collapsible-section-label">Onboarding-only requirements that can block approval until accepted or waived.</div>
+            <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
+          </div>
+          <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+          <div id="detail-enhanced-review-summary" style="margin-bottom:12px;"></div>
+          <div id="detail-enhanced-requirements-container">
+            <div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="detail-collapsible-card" id="detail-document-history-panel" style="border-left:4px solid #64748b;background:rgba(100,116,139,0.025);">
+      <details id="detail-document-history-details">
+        <summary>
+          <div class="detail-collapsible-copy">
+            <div class="detail-collapsible-title">Document Verification History</div>
+            <div class="detail-collapsible-subtitle">Read-only upload and verification timeline from the KYC repository.</div>
+          </div>
+          <div class="detail-collapsible-meta">
+            <span class="detail-collapsible-summary-line" id="detail-document-history-summary-copy">Loading document history…</span>
+            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
+          </div>
+        </summary>
+        <div class="detail-collapsible-body">
+          <div id="detail-document-history-container"></div>
         </div>
       </details>
     </div>
@@ -6130,12 +6148,49 @@ function updateKycDocumentsPanelState(app, summary) {
   setDetailsExpandedState('detail-kyc-documents-details', !!(summary && summary.isIncomplete));
 }
 
+function buildDocumentVerificationHistorySummary(app) {
+  var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
+  return docs.length
+    ? docs.length + ' uploaded document' + (docs.length === 1 ? '' : 's')
+    : 'No uploaded document history yet';
+}
+
+function updateDocumentVerificationHistoryPanelState(app) {
+  var summaryEl = document.getElementById('detail-document-history-summary-copy');
+  if (summaryEl) summaryEl.textContent = buildDocumentVerificationHistorySummary(app);
+  setDetailsExpandedState('detail-document-history-details', false);
+}
+
+function renderDocumentVerificationHistory(app) {
+  var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
+  if (!docs.length) {
+    return '<div style="padding:18px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);text-align:center;">No uploaded document history yet.</div>';
+  }
+  var rows = docs.slice().sort(function(a, b) {
+    return String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || ''));
+  }).map(function(doc) {
+    var verStatus = normalizeDetailValue(doc.verification_status_label || doc.verification_state || doc.verification_status);
+    var reviewStatus = normalizeDetailValue(doc.review_status || 'pending');
+    return '<tr>' +
+      '<td style="padding:8px 10px;font-weight:600;">' + escapeHtml(doc.doc_name || doc.doc_type || 'Document') + '</td>' +
+      '<td style="padding:8px 10px;color:var(--text2);">' + escapeHtml(normalizeDetailValue(doc.doc_type)) + '</td>' +
+      '<td style="padding:8px 10px;color:var(--text2);">' + escapeHtml(normalizeDetailValue(doc.uploaded_at)) + '</td>' +
+      '<td style="padding:8px 10px;color:var(--text2);">' + escapeHtml(verStatus) + '</td>' +
+      '<td style="padding:8px 10px;color:var(--text2);">' + escapeHtml(reviewStatus) + '</td>' +
+    '</tr>';
+  }).join('');
+  return '<div style="overflow:auto;border:1px solid var(--border1);border-radius:10px;background:var(--surface);">' +
+    '<table class="data-table" style="font-size:12px;"><thead><tr><th>Document</th><th>Type</th><th>Uploaded</th><th>Verification</th><th>Officer Review</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+  '</div>';
+}
+
 function buildEnhancedRequirementsPanelSummary(summary, requirements) {
   summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
   var required = Number(summary.total || (Array.isArray(requirements) ? requirements.length : 0) || 0);
-  var satisfied = Number(summary.accepted_count || 0) + Number(summary.waived_count || 0);
   var missing = Number(summary.unresolved_count || 0);
-  return required + ' required · ' + satisfied + ' satisfied · ' + missing + ' missing';
+  var waived = Number(summary.waived_count || 0);
+  var accepted = Number(summary.accepted_count || 0);
+  return required + ' required · ' + missing + ' missing · ' + accepted + ' accepted · ' + waived + ' waived';
 }
 
 function shouldExpandEnhancedRequirements(summary, requirements) {
@@ -6839,7 +6894,10 @@ function renderAuthoritativeAppDetail(app, options) {
   }).join('') : '<div style="padding:32px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📂</div><div style="font-size:13px;color:var(--text2);font-weight:500;">No documents uploaded yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Documents uploaded by the client will appear here with their verification results.</div></div>';
   document.getElementById('detail-documents').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
   document.getElementById('detail-docs-with-verification').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
+  var documentHistoryContainer = document.getElementById('detail-document-history-container');
+  if (documentHistoryContainer) documentHistoryContainer.innerHTML = renderDocumentVerificationHistory(app);
   updateKycDocumentsPanelState(app, documentReadiness);
+  updateDocumentVerificationHistoryPanelState(app);
   updateEnhancedRequirementsPanelState(getEnhancedReviewSummary(app), []);
   loadApplicationEnhancedRequirements(app).catch(function(e) {
     console.warn('Enhanced requirements display failed:', e);
@@ -6963,11 +7021,21 @@ function enhancedRequirementDetailBadge(text, tone) {
 
 function enhancedRequirementStatusBadge(status) {
   var normalized = String(status || 'generated').toLowerCase();
+  var labels = {
+    generated: 'Missing',
+    requested: 'Missing',
+    uploaded: 'Under Review',
+    under_review: 'Under Review',
+    accepted: 'Accepted',
+    waived: 'Waived',
+    rejected: 'Rejected',
+    cancelled: 'Not Required'
+  };
   var tone = ['accepted','waived','cancelled'].indexOf(normalized) >= 0 ? 'green'
     : normalized === 'rejected' ? 'red'
     : ['uploaded','under_review','requested'].indexOf(normalized) >= 0 ? 'amber'
     : 'purple';
-  return enhancedRequirementDetailBadge(normalized.replace(/_/g, ' '), tone);
+  return enhancedRequirementDetailBadge(labels[normalized] || normalized.replace(/_/g, ' '), tone);
 }
 
 function enhancedRequirementBoolBadge(value, yesLabel, noLabel) {
@@ -7039,6 +7107,37 @@ function enhancedRequirementClientSubmissionSummary(req) {
   return parts.map(function(part) {
     return '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">' + escapeHtml(part) + '</div>';
   }).join('');
+}
+
+function enhancedRequirementSourceLabel(req) {
+  var ctx = (req && req.trigger_context) || {};
+  return req.generation_source || ctx.generation_source || req.trigger_category || req.trigger_key || 'Onboarding risk trigger';
+}
+
+function enhancedRequirementTimelineLabel(req) {
+  var ctx = (req && req.trigger_context) || {};
+  return ctx.timeline || ctx.lifecycle_stage || 'Onboarding';
+}
+
+function renderEnhancedRequirementDetails(req) {
+  var reason = enhancedRequirementTriggerReason(req);
+  var rows = [
+    ['Triggered by', reason && reason !== '—' ? reason : (req.trigger_label || req.trigger_key || 'Onboarding review trigger')],
+    ['Source', enhancedRequirementSourceLabel(req)],
+    ['Timeline', enhancedRequirementTimelineLabel(req)],
+    ['Audience', req.audience || '—'],
+    ['Requirement type', String(req.requirement_type || '—').replace(/_/g, ' ')],
+    ['Subject scope', String(req.subject_scope || '—').replace(/_/g, ' ')]
+  ].map(function(item) {
+    return '<div><span style="color:var(--text3);font-size:10px;text-transform:uppercase;font-weight:700;">' + escapeHtml(item[0]) + '</span><div style="font-size:12px;color:var(--text2);margin-top:2px;">' + escapeHtml(item[1]) + '</div></div>';
+  }).join('');
+  var clientSummary = enhancedRequirementClientSubmissionSummary(req);
+  return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<div style="font-size:11px;font-weight:800;color:var(--text1);margin-bottom:8px;">Requirement details</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">' + rows + '</div>' +
+    (req.linked_rmi_item_id ? '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>' : '') +
+    (clientSummary ? '<div style="margin-top:8px;">' + clientSummary + '</div>' : '') +
+  '</div>';
 }
 
 function enhancedRequirementDocumentOptions(req) {
@@ -7169,10 +7268,14 @@ function renderApplicationEnhancedRequirementActions(req) {
     workflowAcceptHtml = '<button class="btn btn-outline btn-sm" onclick="saveWorkflowTestEvidenceAcceptance(\'' + escapeHtml(String(linkedDoc.id)) + '\', \'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;margin-top:6px;">Accept linked synthetic evidence for workflow only</button>';
   }
   if (!canUpdateApplicationEnhancedRequirements()) {
-    return '<div style="font-size:11px;color:var(--text3);">Read-only</div>' +
+    return '<details style="min-width:220px;">' +
+      '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--brand);list-style-position:inside;">Expand</summary>' +
+      '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Read-only</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(linkedLabel) + '</div>' +
       workflowAcceptHtml +
-      (req.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;max-width:260px;">' + escapeHtml(req.review_notes) + '</div>' : '');
+      (req.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;max-width:260px;">' + escapeHtml(req.review_notes) + '</div>' : '') +
+      renderEnhancedRequirementDetails(req) +
+    '</details>';
   }
 
   var controlId = enhancedRequirementControlId(req.id);
@@ -7188,27 +7291,39 @@ function renderApplicationEnhancedRequirementActions(req) {
     requestHtml = '<button class="btn btn-outline btn-sm" onclick="requestApplicationEnhancedRequirementFromClient(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Request from client</button>';
   }
 
-  return '<div style="min-width:260px;">' +
-    '<select id="er-status-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-bottom:6px;">' +
-      '<option value="">No status change</option>' +
-      '<option value="under_review">Mark under review</option>' +
-      '<option value="accepted">Accept</option>' +
-      '<option value="rejected">Reject</option>' +
-    '</select>' +
-    '<select id="er-doc-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-bottom:6px;">' +
-      enhancedRequirementDocumentOptions(req) +
-    '</select>' +
-    '<textarea id="er-notes-' + escapeHtml(controlId) + '" placeholder="Internal review notes" rows="2" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;resize:vertical;">' + escapeHtml(req.review_notes || '') + '</textarea>' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">' +
-      '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>' +
-      '<div style="display:flex;gap:6px;align-items:center;">' +
-        requestHtml +
-        '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
+  return '<details style="min-width:260px;">' +
+    '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--brand);list-style-position:inside;">Expand</summary>' +
+    '<div style="margin-top:8px;">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;">' +
+        '<label style="font-size:11px;color:var(--text2);font-weight:700;">Status' +
+          '<select id="er-status-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-top:4px;">' +
+            '<option value="">No status change</option>' +
+            '<option value="under_review">Mark under review</option>' +
+            '<option value="accepted">Accept</option>' +
+            '<option value="rejected">Reject</option>' +
+          '</select>' +
+        '</label>' +
+        '<label style="font-size:11px;color:var(--text2);font-weight:700;">Linked evidence' +
+          '<select id="er-doc-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-top:4px;">' +
+            enhancedRequirementDocumentOptions(req) +
+          '</select>' +
+        '</label>' +
       '</div>' +
+      '<label style="display:block;font-size:11px;color:var(--text2);font-weight:700;margin-top:8px;">Officer notes' +
+        '<textarea id="er-notes-' + escapeHtml(controlId) + '" placeholder="Internal review notes" rows="2" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;resize:vertical;margin-top:4px;">' + escapeHtml(req.review_notes || '') + '</textarea>' +
+      '</label>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">' +
+        '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          requestHtml +
+          '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
+        '</div>' +
+      '</div>' +
+      workflowAcceptHtml +
+      waiverHtml +
+      renderEnhancedRequirementDetails(req) +
     '</div>' +
-    workflowAcceptHtml +
-    waiverHtml +
-  '</div>';
+  '</details>';
 }
 
 function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {
@@ -7281,35 +7396,24 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
   }).map(function(key) {
     var group = groups[key];
     var rows = group.items.map(function(req) {
-      var reason = enhancedRequirementTriggerReason(req);
       var evidenceBits = [
         '<div style="font-size:12px;color:var(--text2);font-weight:600;">' + escapeHtml(enhancedRequirementLinkedDocumentLabel(req)) + '</div>'
       ];
-      if (reason && reason !== 'Requirement reason not recorded') {
-        evidenceBits.push('<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:normal;">' + escapeHtml(reason) + '</div>');
-      }
       if (req.requested_at || req.client_response_at || req.linked_document_id) {
         evidenceBits.push('<div style="margin-top:6px;">' + enhancedRequirementClientSubmissionSummary(req) + '</div>');
-      }
-      if (req.linked_rmi_item_id) {
-        evidenceBits.push('<div style="font-size:11px;color:var(--text3);margin-top:4px;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>');
       }
       if (req.review_notes) {
         evidenceBits.push('<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;">Review notes: ' + escapeHtml(req.review_notes) + '</div>');
       }
+      var blockingBits = '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
+        enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') +
+        enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') +
+      '</div>';
       return '<tr>' +
-        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:normal;">' + escapeHtml(req.requirement_key || '') + '</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">' +
-          enhancedRequirementDetailBadge(req.audience || '—', req.audience === 'client' ? 'green' : (req.audience === 'both' ? 'purple' : '')) +
-          enhancedRequirementDetailBadge(String(req.requirement_type || '—').replace(/_/g, ' '), '') +
-          enhancedRequirementDetailBadge(String(req.subject_scope || '—').replace(/_/g, ' '), '') +
-        '</div></td>' +
-        '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' +
-          enhancedRequirementStatusBadge(req.status) +
-          enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') +
-          enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') +
-          (req.waivable ? enhancedRequirementDetailBadge('Waivable', 'amber') : '') +
-        '</div></td>' +
+        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:normal;">' + escapeHtml(req.requirement_key || '') + '</div></td>' +
+        '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' + enhancedRequirementStatusBadge(req.status) + '</div></td>' +
         '<td style="min-width:220px;max-width:320px;">' + evidenceBits.join('') + '</td>' +
+        '<td>' + blockingBits + '</td>' +
         '<td>' + renderApplicationEnhancedRequirementActions(req) + '</td>' +
       '</tr>';
     }).join('');
@@ -7318,7 +7422,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
         '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + (group.category ? ' · ' + escapeHtml(group.category) : '') + '</div></div>' +
         enhancedRequirementDetailBadge(group.items.length + ' requirement' + (group.items.length === 1 ? '' : 's'), 'purple') +
       '</div>' +
-      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Status</th><th>Evidence / Current State</th><th>Back-office actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Status</th><th>Linked Evidence</th><th>Blocking</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '</div>';
   }).join('');
 

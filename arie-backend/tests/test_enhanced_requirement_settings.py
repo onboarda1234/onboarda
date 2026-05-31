@@ -417,8 +417,15 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "boApiCall('PATCH'" in html
     assert "boApiCall('POST'" in html
     assert "generation_source: 'manual_backoffice_refresh'" in html
-    assert "Back-office actions" in html
-    assert "Internal review notes" in html
+    assert "Standard KYC Documents" in html
+    assert "Document Verification History" in html
+    assert "Onboarding evidence required due to risk, screening, PEP, or adverse media triggers." in html
+    assert "Onboarding-only requirements that can block approval until accepted or waived." in html
+    assert "Actions" in html
+    assert "Officer notes" in html
+    assert "Requirement details" in html
+    assert "Triggered by" in html
+    assert "Timeline" in html
     assert "Waiver reason" in html
     assert "Save update" in html
     assert "Request from client" in html
@@ -519,6 +526,43 @@ def test_backoffice_application_enhanced_requirements_loader_guards_summary_and_
     assert "No enhanced requirements generated for this application." in render_block
     assert "req.requirement_label || req.requirement_key || ''" in render_block
     assert "container.innerHTML = '<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;\">' + requirementSummary + '</div>' + groupHtml;" in render_block
+
+
+def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
+    repo_root = Path(__file__).resolve().parents[2]
+    html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
+
+    kyc_panel_pos = html.index('id="detail-kyc-documents-panel"')
+    enhanced_panel_pos = html.index('id="detail-enhanced-requirements-section"')
+    history_panel_pos = html.index('id="detail-document-history-panel"')
+    assert kyc_panel_pos < enhanced_panel_pos < history_panel_pos
+
+    assert "Standard KYC Documents" in html
+    assert "Enhanced Review Requirements" in html
+    assert "Document Verification History" in html
+    assert 'details id="detail-document-history-details"' in html
+    assert "setDetailsExpandedState('detail-document-history-details', false)" in html
+    assert "buildDocumentVerificationHistorySummary" in html
+    assert "renderDocumentVerificationHistory(app)" in html
+
+    render_block = html.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[1]
+    render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]
+    assert "<th>Source / Reason</th>" not in render_block
+    assert "<th>Timeline</th>" not in render_block
+    assert "<th>Linked Evidence</th>" in render_block
+    assert "<th>Blocking</th>" in render_block
+    assert "<th>Actions</th>" in render_block
+
+    actions_block = html.split("function renderApplicationEnhancedRequirementActions(req) {", 1)[1]
+    actions_block = actions_block.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[0]
+    assert "<details" in actions_block
+    assert "Expand" in actions_block
+    assert "Officer notes" in actions_block
+    assert "Save update" in actions_block
+    assert "Waiver reason" in actions_block
+    assert "renderEnhancedRequirementDetails(req)" in actions_block
+    assert "Upload Document" not in actions_block
+    assert "Upload to Record" not in actions_block
 
 
 def test_backoffice_edd_consolidation_routes_to_applications_without_deleting_legacy_view():
