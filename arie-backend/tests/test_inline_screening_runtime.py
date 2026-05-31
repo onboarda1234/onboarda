@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import textwrap
 
 
@@ -47,6 +48,8 @@ def _runtime_js(html, config):
                 var SCREENING_EVIDENCE_DETAILS = {{}};
                 var INLINE_SCREENING_DISPOSITION_STATE = CONFIG.inlineState || {{}};
                 var INLINE_SCREENING_DISPOSITION_SUBMITTING = CONFIG.inlineSubmitting || {{}};
+                var renderHost = {{ innerHTML: '' }};
+                var boCalls = [];
 
                 function escapeHtml(value) {{
                   return String(value == null ? '' : value)
@@ -57,7 +60,93 @@ def _runtime_js(html, config):
                     .replace(/'/g, '&#39;');
                 }}
 
+                function classifyScreeningHits(results) {{
+                  var rows = Array.isArray(results) ? results : [];
+                  var facts = {{
+                    total: rows.length,
+                    sanctions_hits: 0,
+                    pep_hits: 0,
+                    adverse_media_hits: 0,
+                    other_hits: 0
+                  }};
+                  rows.forEach(function(row) {{
+                    if (!row || typeof row !== 'object') return;
+                    if (row.is_sanctioned) facts.sanctions_hits += 1;
+                    if (row.is_pep) facts.pep_hits += 1;
+                    if (row.is_adverse_media) facts.adverse_media_hits += 1;
+                  }});
+                  facts.other_hits = Math.max(
+                    0,
+                    facts.total - facts.sanctions_hits - facts.pep_hits - facts.adverse_media_hits
+                  );
+                  return facts;
+                }}
+
+                function screeningProviderModeFromRecord(record) {{
+                  record = record || {{}};
+                  var raw = String(record.provider_mode || record.status || record.provider_status || '').trim().toLowerCase();
+                  if (raw === 'not_configured') return 'not_configured';
+                  if (raw === 'failed' || raw === 'error' || raw === 'unavailable') return 'failed';
+                  if (raw === 'sandbox' || raw === 'sandbox_provider') return 'sandbox_provider';
+                  if (raw === 'simulated' || raw === 'simulated_fallback') return 'simulated_fallback';
+                  if (raw === 'live' || raw === 'live_provider' || raw === 'complete' || raw === 'completed') return 'live_provider';
+                  return record.matched || (Array.isArray(record.results) && record.results.length) ? 'live_provider' : 'pending';
+                }}
+
+                function deriveScreeningTruth(record) {{
+                  record = record || {{}};
+                  var providerMode = screeningProviderModeFromRecord(record);
+                  var results = Array.isArray(record.results) ? record.results : [];
+                  var hasMatch = !!record.matched || results.length > 0;
+                  var canonicalState = providerMode;
+                  var terminal = false;
+                  var screeningResult = hasMatch ? 'match' : 'unknown';
+                  var availability = 'pending';
+                  if (providerMode === 'live_provider') {{
+                    canonicalState = hasMatch ? 'completed_match' : 'completed_clear';
+                    terminal = true;
+                    screeningResult = hasMatch ? 'match' : 'clear';
+                    availability = 'available';
+                  }} else if (providerMode === 'not_configured') {{
+                    availability = 'not_configured';
+                  }} else if (providerMode === 'failed') {{
+                    availability = 'failed';
+                  }} else if (providerMode === 'sandbox_provider') {{
+                    availability = 'sandbox';
+                  }} else if (providerMode === 'simulated_fallback') {{
+                    availability = 'simulated';
+                  }}
+                  return {{
+                    canonical_state: canonicalState,
+                    provider_mode: providerMode,
+                    provider_availability: availability,
+                    screening_result: screeningResult,
+                    terminal: terminal,
+                    defensible_clear: canonicalState === 'completed_clear' && providerMode === 'live_provider',
+                    legacy_status:
+                      canonicalState === 'completed_clear'
+                        ? 'clear'
+                        : canonicalState === 'completed_match'
+                          ? 'match'
+                          : canonicalState === 'not_configured'
+                            ? 'not_configured'
+                            : canonicalState === 'failed'
+                              ? 'unavailable'
+                              : 'pending'
+                  }};
+                }}
+
+                var document = {{
+                  getElementById(id) {{
+                    if (id === 'detail-screening-review') return renderHost;
+                    return null;
+                  }}
+                }};
+
                 function showToast() {{}}
+                function renderDocumentReadinessBanner() {{ return ''; }}
+                function computeDocumentReadinessSummary() {{ return {{}}; }}
+                function getApplicationScreeningSummary(app) {{ return (app && app._screeningSummary) || {{}}; }}
                 function renderScreeningReviewPanel() {{}}
                 async function loadScreeningQueue() {{}}
                 async function fetchApplicationDetail() {{ return CONFIG.currentApp || null; }}
@@ -65,7 +154,7 @@ def _runtime_js(html, config):
                 function switchDetailTab() {{}}
                 function loadDecisionRecords() {{}}
                 function loadAuditTrail() {{}}
-                async function boApiCall() {{ return {{ status: 'complete' }}; }}
+                async function boApiCall(method, path) {{ boCalls.push([method, path]); return {{ status: 'complete' }}; }}
                 """
             ),
             region,
@@ -194,6 +283,167 @@ def _runtime_js(html, config):
                   subject_name: 'Vladimir Putin',
                   provider: 'complyadvantage'
                 });
+                const triageApp = CONFIG.triageApp || {
+                  id: 12,
+                  ref: 'ARF-TRIAGE-12',
+                  company: 'Triage Holdings Ltd',
+                  directors: [{
+                    name: 'Jane Director',
+                    nat: 'RU',
+                    dob: '1970-01-01',
+                    pep: 'No',
+                    first_name: 'Jane',
+                    last_name: 'Director',
+                    aliases: ['J. Director']
+                  }],
+                  ubos: [{
+                    name: 'John Harbor',
+                    nat: 'MU',
+                    dob: '1980-02-02',
+                    pct: 40,
+                    pep: 'No',
+                    first_name: 'John',
+                    last_name: 'Harbor',
+                    aliases: []
+                  }],
+                  screeningReviews: [{
+                    subject_type: 'entity',
+                    subject_name: 'Triage Holdings Ltd',
+                    review_required: false,
+                    review_actionable: false,
+                    review_disposition: 'cleared',
+                    review_disposition_code: 'false_positive_cleared',
+                    status_key: 'reviewed_false_positive_cleared',
+                    status_label: 'False Positive Cleared',
+                    reviewed_by: 'Aisha Sudally',
+                    reviewed_at: '2026-05-31T10:00:00Z'
+                  }],
+                  _screeningSummary: {
+                    screening_mode: 'live',
+                    screened_at: '2026-05-31T09:00:00Z',
+                    screening_run_recorded: true,
+                    company_screening: {
+                      found: true,
+                      source: 'complyadvantage',
+                      api_status: 'live',
+                      matched: false,
+                      results: []
+                    },
+                    report: {
+                      director_screenings: [{
+                        person_name: 'Jane Director',
+                        declared_pep: 'No',
+                        screening: {
+                          source: 'complyadvantage',
+                          api_status: 'live',
+                          matched: true,
+                          results: [{
+                            name: 'Jane Director',
+                            provider: 'complyadvantage',
+                            match_category: 'PEP',
+                            is_pep: true,
+                            date_of_birth: '1970-01-01',
+                            nationality: 'Russia',
+                            risk_type_labels: ['PEP'],
+                            indicators: []
+                          }, {
+                            name: 'Jane Director',
+                            provider: 'complyadvantage',
+                            match_category: 'Provider Screening Hit',
+                            risk_type_labels: [],
+                            indicators: []
+                          }]
+                        }
+                      }],
+                      ubo_screenings: [{
+                        person_name: 'John Harbor',
+                        declared_pep: 'No',
+                        screening: {
+                          source: 'complyadvantage',
+                          api_status: 'live',
+                          matched: true,
+                          results: [{
+                            name: 'John Harbor',
+                            provider: 'complyadvantage',
+                            match_category: 'Sanctions',
+                            is_sanctioned: true,
+                            country: 'Mauritius',
+                            indicators: []
+                          }]
+                        }
+                      }]
+                    }
+                  }
+                };
+                const triageQueueRows = [{
+                  application_ref: 'ARF-TRIAGE-12',
+                  subject_type: 'director',
+                  subject_name: 'Jane Director',
+                  status_key: 'review_required',
+                  status_label: 'Review Required',
+                  review_required: true,
+                  review_actionable: true,
+                  provider_evidence: [{
+                    name: 'Jane Director',
+                    provider: 'complyadvantage',
+                    match_category: 'PEP',
+                    is_pep: true,
+                    date_of_birth: '1970-01-01',
+                    nationality: 'Russia',
+                    indicators: []
+                  }]
+                }, {
+                  application_ref: 'ARF-TRIAGE-12',
+                  subject_type: 'ubo',
+                  subject_name: 'John Harbor',
+                  status_key: 'review_follow_up_required',
+                  status_label: 'Follow-Up Required',
+                  review_required: false,
+                  review_actionable: false,
+                  review_disposition: 'follow_up_required',
+                  review_disposition_code: 'needs_more_information',
+                  provider_evidence: [{
+                    name: 'John Harbor',
+                    provider: 'complyadvantage',
+                    match_category: 'Sanctions',
+                    is_sanctioned: true,
+                    indicators: []
+                  }]
+                }];
+                const triageQueueMap = {};
+                triageQueueRows.forEach(function(row) {
+                  triageQueueMap[(row.subject_type || '') + '|' + (row.subject_name || '')] = row;
+                });
+                SCREENING_QUEUE = { rows: triageQueueRows.slice() };
+                const triageReviewMap = {};
+                (triageApp.screeningReviews || []).forEach(function(review) {
+                  triageReviewMap[(review.subject_type || '') + '|' + (review.subject_name || '')] = review;
+                });
+                const triageSubjects = buildScreeningTriageSubjects(
+                  triageApp,
+                  getApplicationScreeningSummary(triageApp),
+                  triageQueueMap,
+                  triageReviewMap
+                );
+                let capturedFocus = null;
+                const originalRender = renderScreeningReviewPanel;
+                currentApp = triageApp;
+                renderScreeningReviewPanel = function(appArg, focusArg) {
+                  capturedFocus = {
+                    application_ref: appArg && appArg.ref,
+                    subject_type: focusArg && focusArg.subject_type,
+                    subject_name: focusArg && focusArg.subject_name
+                  };
+                };
+                setScreeningReviewFocus('director', 'Jane Director');
+                const boCallsAfterFocus = boCalls.length;
+                renderScreeningReviewPanel = originalRender;
+                currentScreeningReviewFocus = { subject_type: 'director', subject_name: 'Jane Director' };
+                renderScreeningReviewPanel(triageApp, currentScreeningReviewFocus);
+                const triageCockpitHtml = renderHost.innerHTML;
+                currentScreeningReviewFocus = { subject_type: 'entity', subject_name: 'Triage Holdings Ltd' };
+                renderScreeningReviewPanel(triageApp, currentScreeningReviewFocus);
+                const resolvedCockpitHtml = renderHost.innerHTML;
                 console.log(JSON.stringify({
                   rationaleEmpty,
                   clearCounter,
@@ -205,7 +455,23 @@ def _runtime_js(html, config):
                   dedupedQueueStatusHtml,
                   providerHighlightsHtml,
                   comparisonRows,
-                  comparisonHtml
+                  comparisonHtml,
+                  triageSubjectOrder: triageSubjects.map(function(subject) {
+                    return subject.subject_name + '|' + subject.display_status_label;
+                  }),
+                  triageSubjectSummaries: triageSubjects.map(function(subject) {
+                    return {
+                      name: subject.subject_name,
+                      type: subject.subject_type,
+                      status: subject.display_status_label,
+                      hits: subject.hit_count,
+                      categories: subject.category_labels
+                    };
+                  }),
+                  capturedFocus,
+                  boCallsAfterFocus,
+                  triageCockpitHtml,
+                  resolvedCockpitHtml
                 }));
                 """
             ),
@@ -299,13 +565,22 @@ def _queue_runtime_js(html):
 
 def _run_node(script):
     assert shutil.which("node"), "Node.js is required for runtime tests"
-    result = subprocess.run(
-        ["node", "-e", script],
-        cwd=os.path.dirname(BACKOFFICE_PATH),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+        handle.write(script)
+        script_path = handle.name
+    try:
+        result = subprocess.run(
+            ["node", script_path],
+            cwd=os.path.dirname(BACKOFFICE_PATH),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
 
@@ -457,3 +732,38 @@ class TestInlineScreeningRuntime:
         assert "Missing Declared Data" in result["comparisonRows"]
         assert "Missing Provider Data" in result["comparisonRows"]
         assert "Not Comparable" in result["comparisonRows"]
+
+    def test_screening_triage_cockpit_orders_subjects_and_focuses_without_mutation(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "currentUser": {"role": "co", "name": "Officer Test"},
+                    "currentApp": _app(),
+                    "row": _row(),
+                },
+            )
+        )
+        assert result["triageSubjectOrder"] == [
+            "Jane Director|Review Required",
+            "John Harbor|Follow-Up Required",
+            "Triage Holdings Ltd|False Positive Cleared",
+        ]
+        assert result["capturedFocus"] == {
+            "application_ref": "ARF-TRIAGE-12",
+            "subject_type": "director",
+            "subject_name": "Jane Director",
+        }
+        assert result["boCallsAfterFocus"] == 0
+        assert "Screening Subjects" in result["triageCockpitHtml"]
+        assert "Select one subject to review comparison, evidence, and disposition state." in result["triageCockpitHtml"]
+        assert "Jane Director" in result["triageCockpitHtml"]
+        assert "John Harbor" in result["triageCockpitHtml"]
+        assert "Triage Holdings Ltd" in result["triageCockpitHtml"]
+        assert "Declared vs Provider Match" in result["triageCockpitHtml"]
+        assert "Evidence groups" in result["triageCockpitHtml"]
+        assert "Save disposition" in result["triageCockpitHtml"]
+        assert "Triage Holdings Ltd" in result["resolvedCockpitHtml"]
+        assert "read-only" in result["resolvedCockpitHtml"]
+        assert "Save disposition" not in result["resolvedCockpitHtml"]
