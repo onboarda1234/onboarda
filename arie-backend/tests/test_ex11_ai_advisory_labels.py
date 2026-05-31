@@ -121,8 +121,18 @@ class TestPartB_AdvisoryLabeling:
             "Overview should no longer expose dimension explainability"
         assert 'AI Confidence &amp; Reasoning Summary' not in overview_region, \
             "Overview should no longer expose AI confidence and reasoning"
+        assert 'Rule-Based Score Computation' in overview_region, \
+            "Overview should expose deterministic rule-based score computation"
+        assert 'Deterministic' in overview_region, \
+            "Overview score computation should keep its deterministic badge"
+        assert 'downloadRiskCSV()' in overview_region, \
+            "Overview score computation should keep the CSV export action"
+        assert 'downloadRiskPDF()' in overview_region, \
+            "Overview score computation should keep the PDF export action"
         assert 'AI Governance &amp; Evidence Trail' in supervisor_region, \
             "Supervisor tab should contain the AI Governance & Evidence Trail"
+        assert 'Rule-Based Score Computation' not in supervisor_region, \
+            "Supervisor tab should not contain deterministic rule-based score computation"
         assert 'AI Explainability Layer' in supervisor_region, \
             "Supervisor tab should expose the AI Explainability Layer"
         assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in backoffice_html, \
