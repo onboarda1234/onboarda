@@ -98,6 +98,28 @@ def test_backoffice_screening_review_adds_declared_vs_provider_comparison():
     assert "buildScreeningComparisonPanel('person'" in person_region
 
 
+def test_backoffice_screening_review_renders_triage_cockpit_layout():
+    html = BACKOFFICE_HTML.read_text()
+
+    triage_region = _function_region(html, "screeningSubjectTypeLabel", "screeningReviewCard")
+    review_region = _function_region(html, "renderScreeningReviewPanel", "openScreeningReview")
+
+    assert "function screeningTriageDisplayStatusLabel" in html
+    assert "function screeningTriagePriority" in html
+    assert "function screeningTriageSubjectListItem" in html
+    assert "function setScreeningReviewFocus" in html
+    assert "function buildScreeningTriageSubjects" in html
+    assert "Second Review Required" in triage_region
+    assert "No Provider Match" in html
+    assert "screeningQueueStatusBadge(subject.status_key, subject.display_status_label)" in triage_region
+    assert "Screening Subjects" in review_region
+    assert "Select one subject to review comparison, evidence, and disposition state." in review_region
+    assert "screeningTriageSubjectListItem(subject" in review_region
+    assert "selectedSubject.kind === 'entity'" in review_region
+    assert "buildEntityScreeningReviewCard(app, selectedSubject.reviewRow, screeningSummary, focus)" in review_region
+    assert "buildPersonScreeningReviewCard(selectedSubject.person, app, selectedSubject.reviewRow, focus)" in review_region
+
+
 def test_backoffice_screening_evidence_drawer_renders_structured_review_fields():
     html = BACKOFFICE_HTML.read_text()
 

@@ -9153,6 +9153,125 @@ function screeningFocusMatches(focus, subjectType, subjectName) {
   return (focus.subject_type || '') === (subjectType || '') && (focus.subject_name || '') === (subjectName || '');
 }
 
+function screeningSubjectTypeLabel(subjectType) {
+  var value = String(subjectType || '').trim().toLowerCase();
+  if (value === 'ubo') return 'UBO';
+  if (value === 'entity') return 'Entity';
+  if (value === 'director') return 'Director';
+  if (value === 'shareholder') return 'Shareholder';
+  if (value === 'intermediary') return 'Intermediary';
+  if (value === 'applicant') return 'Applicant';
+  if (!value) return 'Subject';
+  return value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, ' ');
+}
+
+function screeningTriageCategoryChipLabel(label) {
+  var normalized = String(label || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.indexOf('adverse') !== -1 || normalized.indexOf('media') !== -1) return 'Adverse Media';
+  if (normalized.indexOf('watchlist') !== -1 || normalized.indexOf('warning') !== -1) return 'Watchlist';
+  if (normalized.indexOf('pep') !== -1) return 'PEP';
+  if (normalized.indexOf('sanction') !== -1) return 'Sanctions';
+  if (normalized.indexOf('provider screening hit') !== -1) return 'Provider Hit';
+  return label;
+}
+
+function screeningTriageCategoryOrder(label) {
+  var normalized = String(label || '').trim().toLowerCase();
+  if (normalized === 'pep') return 1;
+  if (normalized === 'sanctions') return 2;
+  if (normalized === 'adverse media') return 3;
+  if (normalized === 'watchlist') return 4;
+  if (normalized === 'provider hit') return 5;
+  return 6;
+}
+
+function screeningTriageCategoryChipClass(label) {
+  var normalized = String(label || '').trim().toLowerCase();
+  if (normalized === 'pep' || normalized === 'sanctions') return 'high';
+  if (normalized === 'adverse media' || normalized === 'watchlist' || normalized === 'provider hit') return 'pending';
+  return 'draft';
+}
+
+function screeningTriageCategoryLabels(results, facts) {
+  var labels = [];
+  var seen = {};
+  (Array.isArray(results) ? results : []).forEach(function(hit) {
+    evidenceCategories(hit).forEach(function(category) {
+      var label = screeningTriageCategoryChipLabel(category);
+      if (!label || seen[label]) return;
+      seen[label] = true;
+      labels.push(label);
+    });
+  });
+  if (!labels.length) {
+    if ((facts && facts.pep_hits) > 0) labels.push('PEP');
+    if ((facts && facts.sanctions_hits) > 0) labels.push('Sanctions');
+    if ((facts && facts.adverse_media_hits) > 0) labels.push('Adverse Media');
+    if ((facts && facts.other_hits) > 0) labels.push('Provider Hit');
+  }
+  return labels.sort(function(a, b) {
+    return screeningTriageCategoryOrder(a) - screeningTriageCategoryOrder(b) || String(a).localeCompare(String(b));
+  }).slice(0, 4);
+}
+
+function screeningTriageDisplayStatusLabel(row, fallbackStatusLabel) {
+  if (row && row.review_required && row.review_actionable !== false && row.review_four_eyes_status === 'pending_second_review') {
+    return 'Second Review Required';
+  }
+  var reviewLabel = screeningReviewDisplayLabel(row);
+  if (reviewLabel) return reviewLabel;
+  if (row && row.status_label) return row.status_label;
+  return fallbackStatusLabel || 'Review Required';
+}
+
+function screeningTriagePriority(subject) {
+  if (!subject) return 99;
+  if (subject.review_required && subject.review_actionable !== false && subject.review_four_eyes_status !== 'pending_second_review') return 1;
+  if (subject.review_four_eyes_status === 'pending_second_review') return 2;
+  var dispositionCode = String(subject.review_disposition_code || subject.review_disposition || '').toLowerCase();
+  var statusLabel = String(subject.display_status_label || '').toLowerCase();
+  var statusKey = String(subject.status_key || '').toLowerCase();
+  if (dispositionCode === 'follow_up_required' || dispositionCode === 'needs_more_information' || statusLabel.indexOf('follow-up') !== -1) return 3;
+  if (dispositionCode === 'escalated' || dispositionCode === 'escalated_to_edd' || dispositionCode === 'material_concern' || statusLabel.indexOf('escalat') !== -1 || statusKey === 'review_escalated') return 4;
+  if (statusKey === 'screened_no_match' || statusLabel === 'no provider match') return 6;
+  return 5;
+}
+
+function screeningTriageHitSummary(subject) {
+  var count = Number(subject && subject.hit_count || 0);
+  return count + ' hit' + (count === 1 ? '' : 's');
+}
+
+function screeningTriageSubjectListItem(subject, isSelected) {
+  if (!subject) return '';
+  var tags = (subject.category_labels || []).map(function(label) {
+    return screeningTagBadge(label, screeningTriageCategoryChipClass(label));
+  }).join('');
+  var selectedStyles = isSelected
+    ? 'border-color:var(--brand);background:rgba(43,47,143,0.06);box-shadow:0 0 0 2px rgba(43,47,143,0.08);'
+    : 'border-color:var(--border1);background:#fff;';
+  return '<button type="button" onclick="setScreeningReviewFocus(\'' + escapeHtml(subject.subject_type) + '\',\'' + escapeHtml(subject.subject_name) + '\')" style="display:block;width:100%;text-align:left;padding:12px;border:1px solid transparent;border-radius:10px;cursor:pointer;' + selectedStyles + '">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
+      '<div style="min-width:0;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);line-height:1.4;">' + escapeHtml(subject.subject_name) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(screeningSubjectTypeLabel(subject.subject_type)) + (subject.provider_label ? ' · ' + escapeHtml(subject.provider_label) : '') + '</div>' +
+      '</div>' +
+      '<div style="flex-shrink:0;">' + screeningQueueStatusBadge(subject.status_key, subject.display_status_label) + '</div>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text2);margin-top:8px;">' + escapeHtml(screeningTriageHitSummary(subject)) + '</div>' +
+    (tags ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' + tags + '</div>' : '') +
+  '</button>';
+}
+
+function setScreeningReviewFocus(subjectType, subjectName) {
+  currentScreeningReviewFocus = {
+    subject_type: subjectType || '',
+    subject_name: subjectName || ''
+  };
+  if (currentApp) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
 function screeningReviewCard(title, badgesHtml, bodyHtml, isFocused) {
   return '<div class="card" style="' + (isFocused ? 'border:2px solid var(--brand);box-shadow:0 0 0 3px rgba(43,47,143,0.08);' : '') + '">' +
     '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">' +
@@ -9362,6 +9481,150 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   return screeningReviewCard(escapeHtml(person.name), badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
 }
 
+function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap) {
+  var subjects = [];
+  var entityReviewRow = getMergedScreeningReviewRow(app, queueMap['entity|' + app.company], reviewMap['entity|' + app.company], 'entity', app.company);
+  var company = screeningSummary.company_screening || {};
+  var companySanctions = company.sanctions || {};
+  var companyAdverse = company.adverse_media || {};
+  var monitoringMedia = companyMonitoringMediaFacts(app);
+  var companyRecords = [company, companySanctions, companyAdverse];
+  var companyHits = combinedScreeningFacts(companyRecords);
+  if (monitoringMedia.matched) {
+    companyHits.matched = true;
+    companyHits.adverse_media_hits = Math.max(companyHits.adverse_media_hits || 0, monitoringMedia.total_hits || 0);
+    companyHits.total_hits = Math.max(companyHits.total_hits || 0, monitoringMedia.total_hits || 0);
+  }
+  var companyResults = []
+    .concat((company && company.results) || [])
+    .concat((companySanctions && companySanctions.results) || [])
+    .concat((companyAdverse && companyAdverse.results) || [])
+    .concat(monitoringMedia.results || [])
+    .concat((entityReviewRow && entityReviewRow.provider_evidence) || []);
+  companyResults = dedupScreeningResults(companyResults);
+  if (!companyResults.length && Array.isArray(company.results)) companyResults = company.results;
+  var companyTruth = deriveScreeningTruth(companySanctions && Object.keys(companySanctions).length ? companySanctions : company);
+  var companyFallbackStatusKey = screeningSummary.screening_run_recorded
+    ? (companyTruth.canonical_state === 'completed_clear'
+        ? (companyHits.matched ? 'review_required' : 'screened_no_match')
+        : (companyTruth.canonical_state === 'completed_match'
+            ? 'review_required'
+            : (companyTruth.canonical_state === 'simulated_fallback'
+                ? 'screening_simulated'
+                : (companyTruth.canonical_state === 'sandbox_provider'
+                    ? 'screening_sandbox'
+                    : (companyTruth.canonical_state === 'not_configured'
+                        ? 'screening_not_configured'
+                        : (companyTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))))
+    : 'awaiting_screening';
+  var companyFallbackStatusLabel = screeningSummary.screening_run_recorded
+    ? (companyFallbackStatusKey === 'screened_no_match'
+        ? 'No Provider Match'
+        : (companyFallbackStatusKey === 'review_required'
+            ? 'Review Required'
+            : (companyFallbackStatusKey === 'screening_simulated'
+                ? 'Simulated Screening — Not Live'
+                : (companyFallbackStatusKey === 'screening_sandbox'
+                    ? 'Sandbox Screening — Not Production Live'
+                    : (companyFallbackStatusKey === 'screening_not_configured'
+                        ? 'Screening Not Configured'
+                        : (companyFallbackStatusKey === 'screening_unavailable' ? 'Screening Unavailable' : 'Screening Pending Provider'))))))
+    : 'Awaiting Screening';
+  subjects.push({
+    kind: 'entity',
+    subject_type: 'entity',
+    subject_name: app.company,
+    reviewRow: entityReviewRow,
+    status_key: entityReviewRow ? entityReviewRow.status_key : companyFallbackStatusKey,
+    display_status_label: screeningTriageDisplayStatusLabel(entityReviewRow, entityReviewRow ? entityReviewRow.status_label : companyFallbackStatusLabel),
+    hit_count: companyHits.total_hits || 0,
+    category_labels: screeningTriageCategoryLabels(companyResults, companyHits),
+    review_required: entityReviewRow ? entityReviewRow.review_required : companyFallbackStatusKey === 'review_required',
+    review_actionable: entityReviewRow ? entityReviewRow.review_actionable : false,
+    review_four_eyes_status: entityReviewRow ? entityReviewRow.review_four_eyes_status : '',
+    review_disposition: entityReviewRow ? entityReviewRow.review_disposition : '',
+    review_disposition_code: entityReviewRow ? entityReviewRow.review_disposition_code : '',
+    provider_label: formatProviderName(company.source || company.provider || screeningSummary.provider)
+  });
+
+  var people = [];
+  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, dob:d.dob, pct:null, pep:d.pep, first_name:d.first_name, last_name:d.last_name, aliases:d.aliases }); });
+  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:u.nat, dob:u.dob, pct:u.pct, pep:u.pep, first_name:u.first_name, last_name:u.last_name, aliases:u.aliases }); });
+
+  people.forEach(function(person) {
+    var reviewRow = getMergedScreeningReviewRow(app, queueMap[person.subject_type + '|' + person.name], reviewMap[person.subject_type + '|' + person.name], person.subject_type, person.name);
+    var screeningRecord = null;
+    if (screeningSummary.report) {
+      var combined = (screeningSummary.report.director_screenings || []).concat(screeningSummary.report.ubo_screenings || []);
+      screeningRecord = combined.find(function(item) {
+        return (item.person_name || item.name) === person.name;
+      }) || null;
+    }
+    var screening = (screeningRecord || {}).screening || null;
+    var facts = screeningResultFacts(screening);
+    var personDeclaredPep = declaredPepFromScreeningRecord(screeningRecord, person.pep);
+    var personTruth = deriveScreeningTruth(screening || {});
+    var personFallbackStatusKey = screening
+      ? (personTruth.canonical_state === 'completed_clear'
+          ? (personDeclaredPep ? 'declared_pep_review' : 'screened_no_match')
+          : (personTruth.canonical_state === 'completed_match'
+              ? 'review_required'
+              : (personTruth.canonical_state === 'simulated_fallback'
+                  ? 'screening_simulated'
+                  : (personTruth.canonical_state === 'sandbox_provider'
+                      ? 'screening_sandbox'
+                      : (personTruth.canonical_state === 'not_configured'
+                          ? 'screening_not_configured'
+                          : (personTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))))
+      : 'awaiting_screening';
+    var personFallbackStatusLabel = screening
+      ? (personFallbackStatusKey === 'screened_no_match'
+          ? 'No Provider Match'
+          : (personFallbackStatusKey === 'declared_pep_review'
+              ? 'Declared PEP Review'
+              : (personFallbackStatusKey === 'review_required'
+                  ? 'Review Required'
+                  : (personFallbackStatusKey === 'screening_simulated'
+                      ? (personDeclaredPep ? 'Declared PEP — Simulated Screening' : 'Simulated Screening — Not Live')
+                      : (personFallbackStatusKey === 'screening_sandbox'
+                          ? (personDeclaredPep ? 'Declared PEP — Sandbox Screening' : 'Sandbox Screening — Not Production Live')
+                          : (personFallbackStatusKey === 'screening_not_configured'
+                              ? (personDeclaredPep ? 'Declared PEP — Screening Not Configured' : 'Screening Not Configured')
+                              : (personFallbackStatusKey === 'screening_unavailable'
+                                  ? (personDeclaredPep ? 'Declared PEP — Screening Unavailable' : 'Screening Unavailable')
+                                  : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))))
+      : 'Awaiting Screening';
+    var personProviderResults = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
+    subjects.push({
+      kind: 'person',
+      person: person,
+      subject_type: person.subject_type,
+      subject_name: person.name,
+      reviewRow: reviewRow,
+      status_key: reviewRow ? reviewRow.status_key : personFallbackStatusKey,
+      display_status_label: screeningTriageDisplayStatusLabel(reviewRow, reviewRow ? reviewRow.status_label : personFallbackStatusLabel),
+      hit_count: facts.total_hits || 0,
+      category_labels: screeningTriageCategoryLabels(personProviderResults, facts),
+      review_required: reviewRow ? reviewRow.review_required : personFallbackStatusKey === 'review_required',
+      review_actionable: reviewRow ? reviewRow.review_actionable : false,
+      review_four_eyes_status: reviewRow ? reviewRow.review_four_eyes_status : '',
+      review_disposition: reviewRow ? reviewRow.review_disposition : '',
+      review_disposition_code: reviewRow ? reviewRow.review_disposition_code : '',
+      provider_label: formatProviderName(facts.source || screeningSummary.provider)
+    });
+  });
+
+  subjects.forEach(function(subject) {
+    subject.priority = screeningTriagePriority(subject);
+  });
+  subjects.sort(function(a, b) {
+    return a.priority - b.priority ||
+      ((b.hit_count || 0) - (a.hit_count || 0)) ||
+      String(a.subject_name || '').localeCompare(String(b.subject_name || ''));
+  });
+  return subjects;
+}
+
 function renderScreeningReviewPanel(app, focus) {
   var host = document.getElementById('detail-screening-review');
   if (!host || !app) return;
@@ -9402,6 +9665,18 @@ function renderScreeningReviewPanel(app, focus) {
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
 
+  var triageSubjects = buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap);
+  var selectedSubject = triageSubjects.find(function(subject) {
+    return screeningFocusMatches(focus, subject.subject_type, subject.subject_name);
+  }) || triageSubjects[0] || null;
+  if (selectedSubject) {
+    currentScreeningReviewFocus = {
+      subject_type: selectedSubject.subject_type,
+      subject_name: selectedSubject.subject_name
+    };
+    focus = currentScreeningReviewFocus;
+  }
+
   // Sumsub webhook KYC verification result (Finding S-13)
   var wh = screeningSummary.sumsub_webhook;
   if (wh) {
@@ -9421,36 +9696,29 @@ function renderScreeningReviewPanel(app, focus) {
     }
     html += '</div></div>';
   }
-
-  html += buildEntityScreeningReviewCard(
-    app,
-    getMergedScreeningReviewRow(app, queueMap['entity|' + app.company], reviewMap['entity|' + app.company], 'entity', app.company),
-    screeningSummary,
-    focus
-  );
-
-  var people = [];
-  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, dob:d.dob, pct:null, pep:d.pep, first_name:d.first_name, last_name:d.last_name, aliases:d.aliases }); });
-  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:u.nat, dob:u.dob, pct:u.pct, pep:u.pep, first_name:u.first_name, last_name:u.last_name, aliases:u.aliases }); });
-
-  if (!people.length) {
-    html += '<div class="card"><div class="card-header"><div class="card-title">Individual Screening Subjects</div></div><div style="padding:18px;font-size:12px;color:var(--text3);">No directors or UBOs are loaded for this application yet.</div></div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">';
+  html += '<div class="card" style="flex:1 1 300px;min-width:280px;max-width:360px;">';
+  html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;"><div><div class="card-title">Screening Subjects</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Select one subject to review comparison, evidence, and disposition state.</div></div><div style="margin-left:auto;font-size:11px;color:var(--text3);font-weight:700;">' + escapeHtml(String(triageSubjects.length)) + ' total</div></div>';
+  if (!triageSubjects.length) {
+    html += '<div style="padding:18px;font-size:12px;color:var(--text3);">No screening subjects are available for this application yet.</div>';
   } else {
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:16px;">';
-    people.sort(function(a, b) {
-      var aFocused = screeningFocusMatches(focus, a.subject_type, a.name) ? 1 : 0;
-      var bFocused = screeningFocusMatches(focus, b.subject_type, b.name) ? 1 : 0;
-      return bFocused - aFocused;
-    }).forEach(function(person) {
-      html += buildPersonScreeningReviewCard(
-        person,
-        app,
-        getMergedScreeningReviewRow(app, queueMap[person.subject_type + '|' + person.name], reviewMap[person.subject_type + '|' + person.name], person.subject_type, person.name),
-        focus
-      );
+    html += '<div style="display:flex;flex-direction:column;gap:10px;padding:0 18px 18px;">';
+    triageSubjects.forEach(function(subject) {
+      html += screeningTriageSubjectListItem(subject, selectedSubject && subject.subject_type === selectedSubject.subject_type && subject.subject_name === selectedSubject.subject_name);
     });
     html += '</div>';
   }
+  html += '</div>';
+  html += '<div style="flex:2 1 720px;min-width:320px;">';
+  if (!selectedSubject) {
+    html += '<div class="card"><div class="card-header"><div class="card-title">Selected Screening Workspace</div></div><div style="padding:18px;font-size:12px;color:var(--text3);">No screening subjects are loaded for this application yet.</div></div>';
+  } else if (selectedSubject.kind === 'entity') {
+    html += buildEntityScreeningReviewCard(app, selectedSubject.reviewRow, screeningSummary, focus);
+  } else {
+    html += buildPersonScreeningReviewCard(selectedSubject.person, app, selectedSubject.reviewRow, focus);
+  }
+  html += '</div>';
+  html += '</div>';
 
   host.innerHTML = html;
 }
