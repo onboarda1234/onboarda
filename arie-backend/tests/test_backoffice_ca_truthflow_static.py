@@ -74,7 +74,7 @@ def test_backoffice_screening_evidence_drawer_renders_structured_review_fields()
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
     assert "Why this needs review" in drawer_region
     assert "Evidence summary" in drawer_region
-    assert "Technical traceability" in html
+    assert "Technical provider details" in html
     assert "Media Evidence" in drawer_region
     assert "PEP Evidence" in drawer_region
     assert "Sanctions / Watchlist Evidence" in drawer_region
@@ -104,7 +104,7 @@ def test_backoffice_screening_evidence_drawer_is_evidence_first_before_traceabil
     assert "function evidenceTraceabilitySection" in html
     assert "<details" in html
     assert "<summary" in html
-    assert "Technical traceability" in html
+    assert "Technical provider details" in html
 
 
 def test_backoffice_screening_evidence_drawer_uses_review_friendly_fallbacks():
@@ -241,7 +241,7 @@ def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     assert "function declaredPepFromScreeningRecord" in html
     region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
     assert "declaredPepFromScreeningRecord(screeningRecord, person.pep)" in region
-    assert "screeningBadge(personDeclaredPep ? 'declared' : 'not_declared')" in region
+    assert "screeningTagBadge('Declared PEP'" in region
     assert "Declared PEP:</strong> ' + escapeHtml(personDeclaredPep ? 'Yes' : 'No')" in region
     assert "Declared PEP:</strong> ' + escapeHtml(person.pep === 'Yes' ? 'Yes' : 'No')" not in region
 
