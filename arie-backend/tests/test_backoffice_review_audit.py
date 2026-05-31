@@ -781,12 +781,16 @@ class TestDayThreeApprovalBlockerUX:
         ), "r", encoding="utf-8") as f:
             return f.read()
 
-    def test_application_detail_has_visible_approval_blocker_panel(self):
+    def test_application_detail_hides_duplicate_approval_blocker_panel(self):
         html = self._read_backoffice()
         assert 'id="detail-approval-blockers"' in html
         assert "function getApplicationApprovalBlockers(app)" in html
         assert "function renderApprovalBlockersPanel(app)" in html
         assert "renderApprovalBlockersPanel(app);" in html
+        fn_start = html.index("function renderApprovalBlockersPanel(app)")
+        fn_region = html[fn_start:fn_start + 900]
+        assert "panel.style.display = 'none'" in fn_region
+        assert "Application approval blocked:" not in fn_region
 
     def test_application_approval_uses_single_blocker_source(self):
         html = self._read_backoffice()
@@ -795,12 +799,17 @@ class TestDayThreeApprovalBlockerUX:
         assert "getApplicationApprovalBlockers(app)" in fn_region
         assert "ready: blockers.length === 0" in fn_region
 
-    def test_application_approve_button_is_disabled_when_blockers_exist(self):
+    def test_application_approve_button_opens_modal_when_blockers_exist(self):
         html = self._read_backoffice()
         fn_start = html.index("function renderApprovalBlockersPanel(app)")
-        fn_region = html[fn_start:fn_start + 1800]
-        assert "approveBtn.disabled = true" in fn_region
-        assert "Approval blocked:" in fn_region
+        fn_region = html[fn_start:fn_start + 900]
+        assert "approveBtn.disabled = false" in fn_region
+        assert "Open approval decision modal to review blockers" in fn_region
+
+        decision_start = html.index("function renderDecisionReadiness(decision)")
+        decision_region = html[decision_start:decision_start + 1800]
+        assert "confirmBtn.disabled = true" in decision_region
+        assert "Approval blocked:" in decision_region
         assert "Compliance memo has not been approved" in html
         assert "Screening has not been run" in html
 

@@ -15420,30 +15420,16 @@ function renderCaseCommandCentre(app) {
 function renderApprovalBlockersPanel(app) {
   var panel = document.getElementById('detail-approval-blockers');
   var approveBtn = document.getElementById('btn-approve');
-  if (!panel) return;
   var readiness = getApprovalReadiness(app);
-  if (readiness.ready) {
-    panel.style.display = 'block';
-    panel.style.background = '#dcfce7';
-    panel.style.borderColor = '#bbf7d0';
-    panel.style.color = '#166534';
-    panel.innerHTML = '<strong>Application approval readiness:</strong> No obvious client-side blockers detected. Backend gates still perform final validation.';
-    if (approveBtn) {
-      approveBtn.disabled = false;
-      approveBtn.title = 'Open approval decision modal.';
-    }
-    return;
+  if (panel) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
   }
-  panel.style.display = 'block';
-  panel.style.background = '#fef3c7';
-  panel.style.borderColor = '#fde68a';
-  panel.style.color = '#92400e';
-  panel.innerHTML = '<strong>Application approval blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
-    readiness.blockers.map(function(b) { return '<li>' + escapeHtml(b) + '</li>'; }).join('') +
-    '</ul><div style="margin-top:8px;color:var(--text2);">Resolve these items before using the Approve action. More Info, screening review, memo generation, and EDD actions remain available.</div>';
   if (approveBtn) {
-    approveBtn.disabled = true;
-    approveBtn.title = 'Approval blocked: ' + readiness.blockers.join(' ');
+    approveBtn.disabled = false;
+    approveBtn.title = readiness.ready
+      ? 'Open approval decision modal.'
+      : 'Open approval decision modal to review blockers.';
   }
 }
 
