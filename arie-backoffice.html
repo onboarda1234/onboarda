@@ -8400,6 +8400,21 @@ function evidenceCategoryPriority(hit, context) {
   return 9;
 }
 
+function evidencePrimaryCategoryLabel(hit) {
+  var categories = evidenceCategories(hit || {});
+  var label = categories.slice().sort(function(a, b) {
+    return evidenceCategoryPriority({ match_categories: [a] }) - evidenceCategoryPriority({ match_categories: [b] });
+  })[0] || '';
+  return label || 'Provider screening hit';
+}
+
+function evidenceSensitivityLabel(hit) {
+  var priority = evidenceCategoryPriority(hit || {});
+  if (priority <= 2) return 'High sensitivity';
+  if (priority <= 4) return 'Elevated sensitivity';
+  return 'Review context';
+}
+
 function screeningEvidenceKey(hit, context, index) {
   hit = hit || {};
   context = context || {};
@@ -8466,6 +8481,13 @@ function evidenceBadgeList(values) {
   }).join('') + '</div>';
 }
 
+function evidenceInlineBadgeList(values) {
+  values = (Array.isArray(values) ? values : []).filter(Boolean);
+  return values.map(function(v) {
+    return '<span class="badge pending">' + escapeHtml(v) + '</span>';
+  }).join('');
+}
+
 function mergeUniqueList(target, values) {
   target = Array.isArray(target) ? target : [];
   (Array.isArray(values) ? values : [values]).forEach(function(value) {
@@ -8476,13 +8498,17 @@ function mergeUniqueList(target, values) {
 
 function providerEvidenceGroupKey(hit, context) {
   hit = hit || {};
-  var categories = evidenceCategories(hit).join('|').toLowerCase();
+  var categories = evidencePrimaryCategoryLabel(hit).toLowerCase();
+  var provider = formatProviderName(hit.provider || hit.source || (context || {}).provider || 'complyadvantage').toLowerCase();
+  var profileIdentifier = hit.provider_profile_identifier || hit.profile_identifier || '';
+  var sourceIdentifier = hit.provider_match_identifier || hit.match_identifier || hit.provider_alert_identifier || hit.alert_identifier || hit.provider_case_identifier || hit.case_identifier || '';
   var label = evidencePrimaryLabel(hit, context).toLowerCase();
+  var strategy = profileIdentifier ? 'profile' : (categories ? 'category' : (sourceIdentifier ? 'source' : 'fallback'));
   return [
-    hit.provider_case_identifier || hit.case_identifier || '',
-    hit.provider_profile_identifier || hit.profile_identifier || '',
-    label,
-    categories
+    strategy,
+    provider,
+    profileIdentifier || categories || sourceIdentifier || label,
+    categories || label
   ].join('|');
 }
 
@@ -8492,14 +8518,19 @@ function groupProviderEvidenceHits(results, context) {
   (Array.isArray(results) ? results : []).forEach(function(hit) {
     hit = hit || {};
     var key = providerEvidenceGroupKey(hit, context || {});
+    var identity = screeningResultIdentity(hit);
     if (!byKey[key]) {
       byKey[key] = Object.assign({}, hit, {
-        _group_count: 1,
+        _group_count: 0,
+        _group_records: [],
+        _group_record_keys: {},
         _grouped_risk_identifiers: [],
-        _grouped_alert_identifiers: []
+        _grouped_alert_identifiers: [],
+        _grouped_profile_identifiers: [],
+        _group_categories: evidenceCategories(hit)
       });
       grouped.push(byKey[key]);
-    } else {
+    } else if (!byKey[key]._group_record_keys[identity]) {
       byKey[key]._group_count += 1;
       byKey[key].summary = byKey[key].summary || hit.summary;
       byKey[key].media_title = byKey[key].media_title || hit.media_title || hit.title;
@@ -8508,11 +8539,92 @@ function groupProviderEvidenceHits(results, context) {
       byKey[key].risk_type_labels = mergeUniqueList(byKey[key].risk_type_labels, hit.risk_type_labels || []);
       byKey[key].risk_type_keys = mergeUniqueList(byKey[key].risk_type_keys, hit.risk_type_keys || []);
       byKey[key].match_categories = mergeUniqueList(byKey[key].match_categories, hit.match_categories || hit.match_category || []);
+      byKey[key]._group_categories = mergeUniqueList(byKey[key]._group_categories, evidenceCategories(hit));
+    }
+    if (!byKey[key]._group_record_keys[identity]) {
+      byKey[key]._group_record_keys[identity] = true;
+      byKey[key]._group_records.push(Object.assign({}, hit));
+      byKey[key]._group_count = byKey[key]._group_records.length;
     }
     mergeUniqueList(byKey[key]._grouped_risk_identifiers, hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier);
     mergeUniqueList(byKey[key]._grouped_alert_identifiers, hit.provider_alert_identifier || hit.alert_identifier);
+    mergeUniqueList(byKey[key]._grouped_profile_identifiers, hit.provider_profile_identifier || hit.profile_identifier);
   });
   return grouped;
+}
+
+function evidenceBirthDate(hit) {
+  var direct = hit.date_of_birth || hit.birth_date || hit.dob || hit.year_of_birth || '';
+  if (direct) return direct;
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.date_of_birth || value.birth_date || value.dob || value.year_of_birth;
+  });
+  return found.value.date_of_birth || found.value.birth_date || found.value.dob || found.value.year_of_birth || '';
+}
+
+function evidenceNationality(hit) {
+  var direct = hit.nationality || hit.country || hit.country_code || '';
+  if (direct) return direct;
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.nationality || value.country || value.country_code;
+  });
+  return found.value.nationality || found.value.country || found.value.country_code || '';
+}
+
+function evidenceMatchStrength(hit) {
+  var direct = hit.match_strength || hit.match_score || hit.similarity || hit.confidence || '';
+  if (direct !== null && direct !== undefined && direct !== '') return direct;
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.match_strength || value.match_score || value.similarity || value.confidence;
+  });
+  return found.value.match_strength || found.value.match_score || found.value.similarity || found.value.confidence || '';
+}
+
+function providerEvidenceTechnicalDetails(hit) {
+  var technicalRows = [
+    ['Provider case ID', hit.provider_case_identifier || hit.case_identifier || ''],
+    ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier || ''],
+    ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier || ''],
+    ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier || '']
+  ].filter(function(row) { return row[1]; }).map(function(row) {
+    return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <span style="font-family:monospace;">' + escapeHtml(String(row[1])) + '</span></div>';
+  }).join('');
+  if (!technicalRows) return '';
+  return '<details style="margin-top:8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
+    '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--text1);">Technical provider details</summary>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + technicalRows + '</div>' +
+  '</details>';
+}
+
+function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
+  var categories = evidenceCategories(hit);
+  var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
+  var discovered = hit.discovered_at || (context && context.screened_at) || '';
+  var mediaUrl = hit.media_url || hit.url;
+  var mediaSnippet = hit.media_snippet || hit.snippet || '';
+  var summary = hit.summary || mediaSnippet || evidenceReviewRationale(hit.provider || hit.source || (context || {}).provider, categories, hit, evidencePrimaryLabel(hit, context));
+  var evidenceKey = registerScreeningEvidence(hit, context || {}, String(groupIndex) + '_' + String(recordIndex));
+  var rows = [
+    ['Match name', evidencePrimaryLabel(hit, context)],
+    ['Role / scope', evidenceSubjectLabel(hit, (context || {}).subject_type)],
+    ['DOB / year of birth', evidenceBirthDate(hit)],
+    ['Nationality / country', evidenceNationality(hit)],
+    ['Match strength', evidenceMatchStrength(hit)],
+    ['Last screened', discovered ? String(discovered).replace('T', ' ').slice(0, 19) : '']
+  ].filter(function(row) { return evidenceDisplayValue(row[1]); }).map(function(row) {
+    return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong>' + escapeHtml(evidenceDisplayValue(row[1])) + '</strong></div>';
+  }).join('');
+  return '<div style="margin-top:10px;padding:10px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
+    '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(evidencePrimaryLabel(hit, context)) + '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">' + evidenceInlineBadgeList(categories) + '</div>' +
+    (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
+    (riskLabels ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;"><strong>Risk labels:</strong> ' + escapeHtml(riskLabels) + '</div>' : '') +
+    (summary ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(summary) + '</div>' : '') +
+    providerEvidenceTechnicalDetails(hit) +
+    '<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" onclick="openScreeningEvidenceDrawer(\'' + evidenceKey + '\')">View evidence</button>' +
+    (mediaUrl ? ' <a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a>' : '') +
+    '</div>' +
+  '</div>';
 }
 
 function firstEvidenceIndicatorValue(hit, predicate) {
@@ -8667,55 +8779,45 @@ function providerResultHighlights(results, context) {
     return evidenceCategoryPriority(a, context) - evidenceCategoryPriority(b, context);
   });
   if (!hits.length) return '';
-  return '<div style="margin-top:10px;"><strong>Provider evidence details</strong>' + hits.slice(0, 8).map(function(hit, index) {
-    var parts = [evidencePrimaryLabel(hit, context)];
+  return '<div style="margin-top:10px;"><strong>Evidence groups</strong>' + hits.map(function(hit, index) {
     var categories = evidenceCategories(hit);
-    if (categories.length) parts.push(categories.join(', '));
-    var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
-    var caseId = hit.provider_case_identifier || hit.case_identifier || '';
-    var alertId = hit.provider_alert_identifier || hit.alert_identifier || '';
-    var profileId = hit.provider_profile_identifier || hit.profile_identifier || '';
+    var groupLabel = evidencePrimaryCategoryLabel(hit);
+    var groupCount = hit._group_count || ((hit._group_records || []).length) || 1;
+    var sensitivity = evidenceSensitivityLabel(hit);
+    var providerName = formatProviderName(hit.provider || hit.source || context.provider) || 'ComplyAdvantage';
     var discovered = hit.discovered_at ? String(hit.discovered_at).replace('T', ' ').slice(0, 19) : '';
+    var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
+    var groupSummary = hit.summary || evidenceReviewRationale(providerName, categories, hit, evidencePrimaryLabel(hit, context));
     var indicatorDetails = providerIndicatorDetails(hit.indicators || []);
-    var summary = hit.summary ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(hit.summary) + '</div>' : '';
-    var mediaUrl = hit.media_url || hit.url;
-    var mediaTitle = hit.media_title || hit.title;
-    var mediaSnippet = hit.media_snippet || hit.snippet;
-    var evidenceKey = registerScreeningEvidence(hit, context || {}, index);
-    var media = (mediaTitle || mediaSnippet || mediaUrl)
-      ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' +
-        escapeHtml([mediaTitle, mediaSnippet].filter(Boolean).join(' — ')) +
-        (mediaUrl ? ' <a href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">source</a>' : '') +
-        '</div>'
-      : '';
+    var records = (hit._group_records || []).map(function(record, recordIndex) {
+      return providerEvidenceRecordCard(record, context, index, recordIndex);
+    }).join('');
     var traceRows = [
-      ['Provider', formatProviderName(hit.provider || hit.source || context.provider) || 'ComplyAdvantage'],
-      ['Category', categories.join(', ')],
+      ['Provider', providerName],
+      ['Category', groupLabel],
+      ['Highest sensitivity', sensitivity],
       ['Risk labels', riskLabels],
       ['Discovered', discovered]
     ].filter(function(row) { return row[1]; }).map(function(row) {
-      return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <span style="font-family:' + (row[0].indexOf('ID') !== -1 ? 'monospace' : 'inherit') + ';">' + escapeHtml(String(row[1])) + '</span></div>';
+      return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong>' + escapeHtml(String(row[1])) + '</strong></div>';
     }).join('');
-    var technicalRows = [
-      ['Provider case ID', caseId],
-      ['Provider alert ID', alertId],
-      ['Provider profile ID', profileId],
-      ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier]
-    ].filter(function(row) { return row[1]; }).map(function(row) {
-      return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <span style="font-family:monospace;">' + escapeHtml(String(row[1])) + '</span></div>';
-    }).join('');
-    var groupedNote = hit._group_count && hit._group_count > 1
-      ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(String(hit._group_count) + ' evidence records grouped for this profile/category. IDs are available in the evidence drawer.') + '</div>'
-      : '';
-    return '<div style="margin-top:8px;padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-      '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(parts.filter(Boolean).join(' — ') || 'Provider match') + '</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:6px;font-size:11px;color:var(--text2);">' + traceRows + '</div>' +
-      groupedNote + summary + media + indicatorDetails +
-      (technicalRows ? '<details style="margin-top:8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:#fff;"><summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--text1);">Technical provider details</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + technicalRows + '</div></details>' : '') +
-      '<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" onclick="openScreeningEvidenceDrawer(\'' + evidenceKey + '\')">View evidence</button>' +
-      (mediaUrl ? ' <a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a>' : '') +
+    var profileNote = (hit._grouped_profile_identifiers && hit._grouped_profile_identifiers.length)
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(String(groupCount) + ' evidence records grouped for this provider profile/category.') + '</div>'
+      : '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(String(groupCount) + ' evidence records grouped for this category.') + '</div>';
+    return '<details style="margin-top:8px;padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+      '<summary style="cursor:pointer;display:flex;align-items:center;gap:8px;list-style:none;">' +
+        '<span style="font-weight:700;color:var(--text1);">' + escapeHtml(groupLabel) + ' · ' + escapeHtml(String(groupCount)) + ' evidence record' + (groupCount === 1 ? '' : 's') + '</span>' +
+        '<span class="badge ' + (evidenceCategoryPriority(hit, context) <= 2 ? 'high' : 'pending') + '">' + escapeHtml(sensitivity) + '</span>' +
+        '<span style="margin-left:auto;font-size:11px;color:var(--brand);font-weight:700;">Show evidence</span>' +
+      '</summary>' +
+      '<div style="margin-top:8px;font-size:11px;color:var(--text2);line-height:1.6;">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 12px;">' + traceRows + '</div>' +
+        profileNote +
+        '<div style="margin-top:6px;">' + escapeHtml(groupSummary) + '</div>' +
+        indicatorDetails +
+        records +
       '</div>' +
-    '</div>';
+    '</details>';
   }).join('') + '</div>';
 }
 

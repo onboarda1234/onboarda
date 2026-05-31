@@ -103,10 +103,56 @@ def _runtime_js(html, config):
                   risk_type_labels: ['PEP'],
                   provider_case_identifier: 'ca-case-uuid-123456',
                   provider_alert_identifier: 'alert-uuid-654321',
-                  provider_profile_identifier: 'profile-uuid-abcdef',
+                  provider_profile_identifier: 'profile-uuid-pep',
                   provider_risk_identifier: 'risk-uuid-fedcba',
                   discovered_at: '2026-05-30T10:15:00Z',
                   summary: 'Potential PEP hit.',
+                  date_of_birth: '1952-10-07',
+                  nationality: 'RU',
+                  match_strength: 'High',
+                  indicators: []
+                }, {
+                  name: 'Vladimir Putin',
+                  provider: 'complyadvantage',
+                  match_category: 'PEP',
+                  risk_type_labels: ['PEP'],
+                  provider_case_identifier: 'ca-case-uuid-123457',
+                  provider_alert_identifier: 'alert-uuid-654322',
+                  provider_profile_identifier: 'profile-uuid-pep',
+                  provider_risk_identifier: 'risk-uuid-fedcbb',
+                  discovered_at: '2026-05-30T10:16:00Z',
+                  summary: 'Matched to provider PEP records.',
+                  year_of_birth: '1952',
+                  country: 'RU',
+                  match_strength: 'Medium',
+                  indicators: []
+                }, {
+                  name: 'Vladimir Putin',
+                  provider: 'complyadvantage',
+                  match_category: 'Provider Screening Hit',
+                  risk_type_labels: [],
+                  provider_case_identifier: 'ca-case-uuid-223456',
+                  provider_alert_identifier: 'alert-uuid-754321',
+                  provider_profile_identifier: 'profile-uuid-watch',
+                  provider_risk_identifier: 'risk-uuid-aedcba',
+                  discovered_at: '2026-05-30T10:18:00Z',
+                  summary: 'Provider screening hit.',
+                  date_of_birth: '1952-10-07',
+                  nationality: 'RU',
+                  indicators: []
+                }, {
+                  name: 'Vladimir Putin',
+                  provider: 'complyadvantage',
+                  match_category: 'Provider Screening Hit',
+                  risk_type_labels: [],
+                  provider_case_identifier: 'ca-case-uuid-223457',
+                  provider_alert_identifier: 'alert-uuid-754322',
+                  provider_profile_identifier: 'profile-uuid-watch',
+                  provider_risk_identifier: 'risk-uuid-aedcbb',
+                  discovered_at: '2026-05-30T10:19:00Z',
+                  summary: 'Provider screening hit duplicate evidence.',
+                  year_of_birth: '1952',
+                  country: 'RU',
                   indicators: []
                 }], {
                   application_ref: 'ARF-SCREEN-11',
@@ -356,6 +402,11 @@ class TestInlineScreeningRuntime:
                 },
             )
         )
+        assert "Evidence groups" in result["providerHighlightsHtml"]
+        assert "PEP · 2 evidence records" in result["providerHighlightsHtml"]
+        assert "Provider Screening Hit · 2 evidence records" in result["providerHighlightsHtml"]
+        assert result["providerHighlightsHtml"].count("Vladimir Putin") >= 4
+        assert "Show evidence" in result["providerHighlightsHtml"]
         assert "Technical provider details" in result["providerHighlightsHtml"]
         assert "Provider case ID" in result["providerHighlightsHtml"]
         assert "<details" in result["providerHighlightsHtml"]
