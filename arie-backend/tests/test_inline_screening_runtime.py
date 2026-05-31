@@ -160,6 +160,40 @@ def _runtime_js(html, config):
                   subject_name: row.subject_name,
                   provider: 'complyadvantage'
                 });
+                const comparisonRows = screeningComparisonRows([
+                  { label: 'Name', declared: 'Vladimir Putin', provider: 'Vladimir Putin', kind: 'name' },
+                  { label: 'DOB', declared: '1952-10-07', provider: '1952', kind: 'date' },
+                  { label: 'Nationality', declared: 'RU', provider: 'Russia', kind: 'country' },
+                  { label: 'PEP declaration', declared: 'No', provider: 'Yes', kind: 'pep' },
+                  { label: 'Aliases', declared: '', provider: 'V. Putin', kind: 'aliases' },
+                  { label: 'Registration number', declared: 'BRN-123', provider: '', kind: 'text' },
+                  { label: 'Provider category / source', declared: '', provider: 'PEP · ComplyAdvantage', kind: 'informational' }
+                ]);
+                const comparisonHtml = buildScreeningComparisonPanel('person', {
+                  subject_type: 'director',
+                  name: 'Vladimir Putin',
+                  nat: 'RU',
+                  dob: '1952-10-07',
+                  pep: 'No'
+                }, [{
+                  name: 'Vladimir Putin',
+                  provider: 'complyadvantage',
+                  match_category: 'PEP',
+                  risk_type_labels: ['PEP'],
+                  provider_profile_identifier: 'profile-uuid-pep',
+                  date_of_birth: '1952',
+                  nationality: 'Russia',
+                  aliases: ['V. Putin'],
+                  indicators: []
+                }], {
+                  declaredPep: 'No',
+                  providerPep: 'Yes'
+                }, {
+                  application_ref: 'ARF-SCREEN-11',
+                  subject_type: 'director',
+                  subject_name: 'Vladimir Putin',
+                  provider: 'complyadvantage'
+                });
                 console.log(JSON.stringify({
                   rationaleEmpty,
                   clearCounter,
@@ -169,7 +203,9 @@ def _runtime_js(html, config):
                   resolvedHtml,
                   resolvedBadgeHtml,
                   dedupedQueueStatusHtml,
-                  providerHighlightsHtml
+                  providerHighlightsHtml,
+                  comparisonRows,
+                  comparisonHtml
                 }));
                 """
             ),
@@ -279,6 +315,9 @@ def _app():
         "id": 11,
         "ref": "ARF-SCREEN-11",
         "company": "Inline Screening Ltd",
+        "brn": "BRN-123",
+        "country": "Mauritius",
+        "entityType": "SME",
         "screeningReviews": [],
     }
 
@@ -410,3 +449,11 @@ class TestInlineScreeningRuntime:
         assert "Technical provider details" in result["providerHighlightsHtml"]
         assert "Provider case ID" in result["providerHighlightsHtml"]
         assert "<details" in result["providerHighlightsHtml"]
+        assert "Declared vs Provider Match" in result["comparisonHtml"]
+        assert "Comparison shown against highest-risk provider match." in result["comparisonHtml"]
+        assert "Match" in result["comparisonRows"]
+        assert "Likely Match" in result["comparisonRows"]
+        assert "Conflict" in result["comparisonRows"]
+        assert "Missing Declared Data" in result["comparisonRows"]
+        assert "Missing Provider Data" in result["comparisonRows"]
+        assert "Not Comparable" in result["comparisonRows"]

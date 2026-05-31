@@ -8415,6 +8415,247 @@ function evidenceSensitivityLabel(hit) {
   return 'Review context';
 }
 
+var SCREENING_COUNTRY_EQUIVALENTS = {
+  ru: 'russia',
+  russia: 'russia',
+  'russian federation': 'russia',
+  us: 'united states',
+  usa: 'united states',
+  'united states': 'united states',
+  'united states of america': 'united states',
+  uk: 'united kingdom',
+  gb: 'united kingdom',
+  'great britain': 'united kingdom',
+  'united kingdom': 'united kingdom',
+  mu: 'mauritius',
+  mauritius: 'mauritius',
+  za: 'south africa',
+  'south africa': 'south africa',
+  ae: 'united arab emirates',
+  uae: 'united arab emirates',
+  'united arab emirates': 'united arab emirates'
+};
+
+function screeningComparisonNormalizedText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function screeningComparisonDisplayValue(value) {
+  if (value == null) return '';
+  if (Array.isArray(value)) {
+    var arrayValue = value.map(function(item) { return String(item || '').trim(); }).filter(Boolean);
+    return arrayValue.join(', ');
+  }
+  if (typeof value === 'object') return '';
+  return String(value || '').trim();
+}
+
+function screeningComparisonAliases(value) {
+  if (Array.isArray(value)) {
+    return value.map(function(item) { return String(item || '').trim(); }).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(/[;,|]/).map(function(item) { return item.trim(); }).filter(Boolean);
+  }
+  return [];
+}
+
+function screeningComparisonBirthYear(value) {
+  var text = screeningComparisonDisplayValue(value);
+  if (!text) return '';
+  var match = text.match(/\b(19|20)\d{2}\b/);
+  return match ? match[0] : '';
+}
+
+function screeningComparisonCanonicalCountry(value) {
+  var normalized = screeningComparisonNormalizedText(value);
+  if (!normalized) return '';
+  return SCREENING_COUNTRY_EQUIVALENTS[normalized] || normalized;
+}
+
+function screeningComparisonFirstMeaningfulValue() {
+  for (var i = 0; i < arguments.length; i++) {
+    var value = arguments[i];
+    if (Array.isArray(value) && value.length) return value;
+    if (value == null) continue;
+    if (typeof value === 'string' && value.trim() === '') continue;
+    return value;
+  }
+  return '';
+}
+
+function screeningComparisonAssessmentBadge(label) {
+  var cls = 'draft';
+  if (label === 'Match') cls = 'approved';
+  else if (label === 'Likely Match') cls = 'medium';
+  else if (label === 'Conflict') cls = 'high';
+  else if (label === 'Missing Declared Data' || label === 'Missing Provider Data' || label === 'Not Comparable') cls = 'draft';
+  return '<span class="badge ' + cls + '">' + escapeHtml(label) + '</span>';
+}
+
+function screeningComparisonAssessment(declaredValue, providerValue, kind) {
+  var declaredText = screeningComparisonDisplayValue(declaredValue);
+  var providerText = screeningComparisonDisplayValue(providerValue);
+  if (kind === 'informational' && (declaredText || providerText)) return 'Not Comparable';
+  if (!declaredText && !providerText) return '';
+  if (!declaredText) return 'Missing Declared Data';
+  if (!providerText) return 'Missing Provider Data';
+  if (kind === 'pep') {
+    var declaredPep = screeningComparisonNormalizedText(declaredText);
+    var providerPep = screeningComparisonNormalizedText(providerText);
+    if ((declaredPep === 'yes' || declaredPep === 'declared pep') && (providerPep === 'yes' || providerPep === 'pep match')) return 'Match';
+    if ((declaredPep === 'no' || declaredPep === 'not declared') && (providerPep === 'no' || providerPep === 'no pep match')) return 'Match';
+    return 'Conflict';
+  }
+  if (kind === 'country') {
+    if (screeningComparisonNormalizedText(declaredText) === screeningComparisonNormalizedText(providerText)) return 'Match';
+    if (screeningComparisonCanonicalCountry(declaredText) === screeningComparisonCanonicalCountry(providerText)) return 'Likely Match';
+    return 'Conflict';
+  }
+  if (kind === 'date') {
+    if (screeningComparisonNormalizedText(declaredText) === screeningComparisonNormalizedText(providerText)) return 'Match';
+    var declaredYear = screeningComparisonBirthYear(declaredText);
+    var providerYear = screeningComparisonBirthYear(providerText);
+    if (declaredYear && providerYear && declaredYear === providerYear) return 'Likely Match';
+    return 'Conflict';
+  }
+  if (kind === 'aliases') {
+    var declaredAliases = screeningComparisonAliases(declaredText);
+    var providerAliases = screeningComparisonAliases(providerText);
+    var matched = declaredAliases.some(function(alias) {
+      return providerAliases.some(function(providerAlias) {
+        return screeningComparisonNormalizedText(alias) === screeningComparisonNormalizedText(providerAlias);
+      });
+    });
+    return matched ? 'Likely Match' : 'Not Comparable';
+  }
+  if (kind === 'name') {
+    var declaredName = screeningComparisonNormalizedText(declaredText);
+    var providerName = screeningComparisonNormalizedText(providerText);
+    if (declaredName === providerName) return 'Match';
+    if (declaredName && providerName && (declaredName.indexOf(providerName) !== -1 || providerName.indexOf(declaredName) !== -1)) return 'Likely Match';
+    return 'Conflict';
+  }
+  if (screeningComparisonNormalizedText(declaredText) === screeningComparisonNormalizedText(providerText)) return 'Match';
+  return 'Conflict';
+}
+
+function screeningComparisonPrimaryHit(results, context) {
+  var groups = groupProviderEvidenceHits(Array.isArray(results) ? results : [], context || {}).sort(function(a, b) {
+    return evidenceCategoryPriority(a, context || {}) - evidenceCategoryPriority(b, context || {});
+  });
+  if (!groups.length) return null;
+  return (groups[0]._group_records && groups[0]._group_records[0]) || groups[0];
+}
+
+function screeningComparisonAliasesFromHit(hit) {
+  var direct = screeningComparisonAliases(hit.aliases || hit.alias_names || hit.alternative_names || hit.alt_names);
+  if (direct.length) return direct;
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.aliases || value.alias_names || value.alternative_names || value.alt_names;
+  });
+  return screeningComparisonAliases(found.value.aliases || found.value.alias_names || found.value.alternative_names || found.value.alt_names);
+}
+
+function screeningComparisonEntityFieldRows(app, hit, context) {
+  var declaredAddress = screeningComparisonFirstMeaningfulValue(
+    (app && app.prescreeningData && app.prescreeningData.registered_address),
+    app && app.registeredAddress,
+    app && app.address
+  );
+  var providerAddress = screeningComparisonFirstMeaningfulValue(
+    hit && hit.address,
+    hit && hit.registered_address,
+    hit && hit.jurisdiction,
+    hit && hit.country
+  );
+  return [
+    { label: 'Legal name', declared: app && app.company, provider: evidencePrimaryLabel(hit || {}, context || {}), kind: 'name' },
+    { label: 'Registration number', declared: app && app.brn, provider: hit && (hit.registration_number || hit.incorporation_number || hit.company_number), kind: 'text' },
+    { label: 'Incorporation country', declared: app && app.country, provider: hit && (hit.country || hit.jurisdiction || hit.country_code), kind: 'country' },
+    { label: 'Entity type', declared: app && (app.entityType || app.entity_type), provider: hit && (hit.entity_type || hit.company_type || hit.legal_form), kind: 'text' },
+    { label: 'Address / jurisdiction', declared: declaredAddress, provider: providerAddress, kind: 'text' },
+    { label: 'Provider category / source', declared: '', provider: ((hit ? evidencePrimaryCategoryLabel(hit) : '') + ((hit && (hit.provider || hit.source)) ? ' · ' + formatProviderName(hit.provider || hit.source) : '')).replace(/^ · /, ''), kind: 'informational' }
+  ];
+}
+
+function screeningComparisonPersonFieldRows(person, hit, options, context) {
+  options = options || {};
+  var pepContext = evidencePepContext(hit || {});
+  var providerRole = screeningComparisonFirstMeaningfulValue(
+    hit && hit.position,
+    pepContext.position,
+    hit && hit.subject_scope
+  );
+  var providerCountry = screeningComparisonFirstMeaningfulValue(
+    hit && hit.country,
+    hit && hit.country_code,
+    pepContext.country
+  );
+  var providerAliases = screeningComparisonAliasesFromHit(hit || {});
+  var declaredAliases = screeningComparisonAliases((person && person.aliases) || [person && person.first_name, person && person.last_name].filter(Boolean).join(' '));
+  return [
+    { label: 'Name', declared: person && person.name, provider: evidencePrimaryLabel(hit || {}, context || {}), kind: 'name' },
+    { label: 'Date of birth / year of birth', declared: person && person.dob, provider: evidenceBirthDate(hit || {}), kind: 'date' },
+    { label: 'Nationality', declared: person && person.nat, provider: evidenceNationality(hit || {}), kind: 'country' },
+    { label: 'Country / residence / jurisdiction', declared: person && person.nat, provider: providerCountry, kind: 'country' },
+    { label: 'Role in application', declared: person && person.subject_type, provider: providerRole, kind: providerRole ? 'text' : '' },
+    { label: 'PEP declaration', declared: options.declaredPep, provider: options.providerPep, kind: 'pep' },
+    { label: 'Aliases / alternative names', declared: declaredAliases, provider: providerAliases, kind: 'aliases' }
+  ];
+}
+
+function screeningComparisonRows(rows) {
+  return (rows || []).map(function(row) {
+    var declared = screeningComparisonDisplayValue(row.declared);
+    var provider = screeningComparisonDisplayValue(row.provider);
+    if (!declared && !provider) return '';
+    var assessment = screeningComparisonAssessment(row.declared, row.provider, row.kind || 'text');
+    return '<tr>' +
+      '<td style="padding:10px 12px;border-bottom:1px solid var(--border1);font-weight:600;color:var(--text1);vertical-align:top;">' + escapeHtml(row.label) + '</td>' +
+      '<td style="padding:10px 12px;border-bottom:1px solid var(--border1);color:var(--text2);vertical-align:top;">' + escapeHtml(declared || 'Not provided') + '</td>' +
+      '<td style="padding:10px 12px;border-bottom:1px solid var(--border1);color:var(--text2);vertical-align:top;">' + escapeHtml(provider || 'Not available in provider payload') + '</td>' +
+      '<td style="padding:10px 12px;border-bottom:1px solid var(--border1);vertical-align:top;">' + screeningComparisonAssessmentBadge(assessment || 'Not Comparable') + '</td>' +
+    '</tr>';
+  }).filter(Boolean).join('');
+}
+
+function buildScreeningComparisonPanel(mode, declaredSubject, results, options, context) {
+  var primaryHit = screeningComparisonPrimaryHit(results, context || {});
+  if (!primaryHit) return '';
+  var rows = mode === 'entity'
+    ? screeningComparisonEntityFieldRows(declaredSubject || {}, primaryHit, context || {})
+    : screeningComparisonPersonFieldRows(declaredSubject || {}, primaryHit, options || {}, context || {});
+  var body = screeningComparisonRows(rows);
+  if (!body) return '';
+  return '<div style="margin-top:14px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);">Declared vs Provider Match</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Comparison shown against highest-risk provider match.</div>' +
+      '</div>' +
+      '<span class="badge draft">' + escapeHtml(evidencePrimaryCategoryLabel(primaryHit)) + '</span>' +
+    '</div>' +
+    '<div style="overflow:auto;margin-top:10px;">' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<thead><tr>' +
+          '<th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border1);color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:0.04em;">Attribute</th>' +
+          '<th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border1);color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:0.04em;">Declared in application</th>' +
+          '<th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border1);color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:0.04em;">Provider match</th>' +
+          '<th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border1);color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:0.04em;">Assessment</th>' +
+        '</tr></thead>' +
+        '<tbody>' + body + '</tbody>' +
+      '</table>' +
+    '</div>' +
+  '</div>';
+}
+
 function screeningEvidenceKey(hit, context, index) {
   hit = hit || {};
   context = context || {};
@@ -8996,6 +9237,13 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
   body += '<div><strong>Company screening source:</strong> ' + escapeHtml(company.source || 'Not recorded') + (company.api_status ? ' (' + escapeHtml(company.api_status) + ')' : '') + '</div>';
   body += '<div style="margin-top:6px;"><strong>Stored screening summary:</strong> ' + escapeHtml(companyHits.matched ? 'Provider recorded company/entity matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')) + '</div>';
+  body += buildScreeningComparisonPanel('entity', app, companyResults, {}, {
+    application_ref: app.ref,
+    subject_type: 'entity',
+    subject_name: app.company,
+    provider: company.source || company.provider || screeningSummary.provider,
+    screened_at: screeningSummary.screened_at
+  });
   body += providerResultHighlights(companyResults, {
     application_ref: app.ref,
     subject_type: 'entity',
@@ -9089,7 +9337,8 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
     body += '<div style="margin-top:6px;"><strong>Undeclared PEP:</strong> ' + escapeHtml(undeclaredPep ? 'Yes' : 'No') + '</div>';
     body += '<div style="margin-top:6px;"><strong>Stored provider result:</strong> ' + escapeHtml(facts.matched ? 'Provider recorded one or more potential matches that require officer review.' : 'No provider matches were recorded for this screening subject.') + '</div>';
     if ((screeningRecord || {}).undeclared_pep) body += '<div style="margin-top:6px;"><strong>Undeclared PEP flag:</strong> Provider evidence indicates possible undeclared PEP exposure.</div>';
-    body += providerResultHighlights([].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []), {
+    var personProviderResults = [].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []);
+    var personProviderContext = {
       application_ref: app.ref,
       subject_type: person.subject_type,
       subject_name: person.name,
@@ -9098,7 +9347,12 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
       declared_pep: personDeclaredPep ? 'Yes' : 'No',
       provider_detected_pep: providerPep ? 'Yes' : 'No',
       undeclared_pep: undeclaredPep ? 'Yes' : 'No'
-    });
+    };
+    body += buildScreeningComparisonPanel('person', person, personProviderResults, {
+      declaredPep: personDeclaredPep ? 'Yes' : 'No',
+      providerPep: providerPep ? 'Yes' : 'No'
+    }, personProviderContext);
+    body += providerResultHighlights(personProviderResults, personProviderContext);
   }
   body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(facts.adverse_media_hits > 0 ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media person match recorded.') + '</div>';
   body += '</div>';
@@ -9176,8 +9430,8 @@ function renderScreeningReviewPanel(app, focus) {
   );
 
   var people = [];
-  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, pct:null, pep:d.pep }); });
-  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:null, pct:u.pct, pep:u.pep }); });
+  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, dob:d.dob, pct:null, pep:d.pep, first_name:d.first_name, last_name:d.last_name, aliases:d.aliases }); });
+  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:u.nat, dob:u.dob, pct:u.pct, pep:u.pep, first_name:u.first_name, last_name:u.last_name, aliases:u.aliases }); });
 
   if (!people.length) {
     html += '<div class="card"><div class="card-header"><div class="card-title">Individual Screening Subjects</div></div><div style="padding:18px;font-size:12px;color:var(--text3);">No directors or UBOs are loaded for this application yet.</div></div>';
