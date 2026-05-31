@@ -1317,6 +1317,20 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
       <div id="detail-agents" style="display:none;" aria-hidden="true"></div>
 
+      <!-- Rule-Based Score Breakdown -->
+      <div class="card">
+        <div class="card-header" style="flex-wrap:wrap;gap:8px;">
+          <div class="card-title">Rule-Based Score Computation</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+            <span class="badge low" style="font-size:10px;">Deterministic</span>
+            <button class="btn btn-outline btn-sm" onclick="downloadRiskCSV()" title="Download as CSV" style="font-size:11px;padding:4px 10px;">📥 CSV</button>
+            <button class="btn btn-outline btn-sm" onclick="downloadRiskPDF()" title="Download as PDF" style="font-size:11px;padding:4px 10px;">📄 PDF</button>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">The composite risk score is computed using a weighted average of 5 dimensions. Each dimension score (1–4) is derived from rule-based lookups — not AI. The formula is: <code style="font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;">Composite = (D1×w1 + D2×w2 + D3×w3 + D4×w4 + D5×w5) / (w1+w2+w3+w4+w5) × 25</code></p>
+        <div id="detail-score-breakdown"></div>
+      </div>
+
       <!-- Compliance Memo -->
       <div class="memo-card">
         <div class="memo-header">
@@ -1503,20 +1517,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         </summary>
         <div class="detail-collapsible-body">
           <div class="ai-advisory-compact"><span style="font-size:16px;">🤖</span><div><strong>AI-generated content is advisory only.</strong> Officer review is required before any compliance decision.</div></div>
-
-          <!-- Rule-Based Score Breakdown -->
-          <div class="card">
-            <div class="card-header" style="flex-wrap:wrap;gap:8px;">
-              <div class="card-title">Rule-Based Score Computation</div>
-              <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
-                <span class="badge low" style="font-size:10px;">Deterministic</span>
-                <button class="btn btn-outline btn-sm" onclick="downloadRiskCSV()" title="Download as CSV" style="font-size:11px;padding:4px 10px;">📥 CSV</button>
-                <button class="btn btn-outline btn-sm" onclick="downloadRiskPDF()" title="Download as PDF" style="font-size:11px;padding:4px 10px;">📄 PDF</button>
-              </div>
-            </div>
-            <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">The composite risk score is computed using a weighted average of 5 dimensions. Each dimension score (1–4) is derived from rule-based lookups — not AI. The formula is: <code style="font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;">Composite = (D1×w1 + D2×w2 + D3×w3 + D4×w4 + D5×w5) / (w1+w2+w3+w4+w5) × 25</code></p>
-            <div id="detail-score-breakdown"></div>
-          </div>
 
           <!-- AI Explainability Layer -->
           <div class="card ai-explain-card" id="ai-explainability-panel" style="margin-top:14px;">
