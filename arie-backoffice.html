@@ -224,9 +224,8 @@ a { color:var(--brand); text-decoration:none; }
 .lifecycle-detail-hero h2 { font-size:20px; line-height:1.2; font-weight:800; color:var(--text1); margin:0; }
 .lifecycle-detail-hero p { margin-top:6px; font-size:12px; color:var(--text3); max-width:780px; line-height:1.5; }
 .lifecycle-detail-banner { background:#edf4ff; border:1px solid #c7d7fe; color:#29487d; border-radius:14px; padding:13px 15px; font-size:13px; line-height:1.45; }
-.lifecycle-metrics-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
-.lifecycle-top-grid { display:grid; grid-template-columns:minmax(280px,0.9fr) minmax(320px,1.1fr); gap:16px; align-items:start; }
-.lifecycle-card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; align-items:start; }
+.lifecycle-metrics-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; }
+.lifecycle-section-stack { display:flex; flex-direction:column; gap:16px; }
 .lifecycle-full-span { grid-column:1/-1; }
 .lifecycle-detail-card { background:#ffffff; border:1px solid #dfe7f2; border-radius:16px; box-shadow:0 12px 28px rgba(16,24,40,0.06); overflow:hidden; margin-bottom:0; min-width:0; }
 .lifecycle-detail-card-header { display:flex; align-items:flex-start; gap:12px; padding:16px 18px; border-bottom:1px solid #dfe7f2; background:linear-gradient(180deg,#ffffff 0%,#fbfdff 100%); }
@@ -242,13 +241,13 @@ a { color:var(--brand); text-decoration:none; }
 .lifecycle-workspace-panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; min-width:0; }
 .lifecycle-workspace-panels > * { min-width:0; }
 @media (max-width:1180px) {
-  .lifecycle-top-grid,
+  .lifecycle-metrics-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .lifecycle-workspace-layout { grid-template-columns:1fr; }
   .lifecycle-workspace-steps { position:static; max-height:none; overflow:visible; padding-right:0; }
 }
 @media (max-width:760px) {
   .lifecycle-detail-hero { padding:15px; }
-  .lifecycle-card-grid,
+  .lifecycle-metrics-grid,
   .lifecycle-workspace-panels { grid-template-columns:1fr; }
   .lifecycle-evidence-list { max-height:none; overflow:visible; padding-right:0; }
 }
@@ -11589,8 +11588,7 @@ function lifecycleAgentSignalsPanel(summary) {
   var bucket = (summary && summary.agent_signals) || {};
   var signals = Array.isArray(bucket.items) ? bucket.items : [];
   if (!signals.length) {
-    return '<div style="font-size:12px;color:var(--text2);">No active Agent 6/7/8/10 lifecycle signals are projected for this client right now.</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Agents may surface signals only; officer attestations, rationale, outcome, completion state, and memo conclusion remain officer-owned.</div>';
+    return '<div style="font-size:12px;color:var(--text2);">No agent signals requiring action.</div>';
   }
   var shown = signals.slice(0, 6).map(lifecycleAgentSignalRow).join('');
   var extra = signals.length > 6
@@ -12131,7 +12129,7 @@ function renderLifecycleRequiredEvidenceCard(reviewId, requiredItems, evidenceLi
     ? evidenceItems.map(function(item) {
         return lifecycleEvidenceRequirementRow(reviewIdText, item, evidenceLinks, documents);
       }).join('')
-    : '<div style="font-size:12px;color:var(--text2);">No evidence-backed requirements are projected for this review.</div>';
+    : '<div style="font-size:12px;color:var(--text2);">No required evidence is currently open.</div>';
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
       lifecycleDetailBadge('Evidence requirements: ' + String(evidenceItems.length), evidenceItems.length ? 'slate' : 'green') +
       lifecycleDetailBadge('Open evidence blockers: ' + String(openCount), openCount ? 'amber' : 'green') +
@@ -12795,7 +12793,6 @@ function renderLifecycleDetailTab(context) {
   var requiredOpenCount = lifecycleOpenEvidenceRequirements(requiredItems, evidenceLinks, applicationDocuments).length;
   var operationalBlockerCount = Number((activeReview && activeReview.blocker_count) || (activeReviewProjection && activeReviewProjection.blocker_count) || 0);
   var completionBlockerCount = Number((activeReview && activeReview.completion_blocker_count) || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0);
-  var memoStateLabel = activeReview ? (activeReview.memo_status || 'not_started') : 'no_active_review';
   var lifecycleBanner = '<div class="lifecycle-detail-banner">' +
     '<strong style="color:#153a7d;">Lifecycle owns periodic review only.</strong> Screening, EDD, Change Management, Monitoring, and KYC Documents remain owner workflows and are projected here without duplicating their state.' +
   '</div>';
@@ -12806,7 +12803,6 @@ function renderLifecycleDetailTab(context) {
     lifecycleDetailMetric('Completion blockers', String(completionBlockerCount), completionBlockerCount ? 'amber' : 'green') +
     lifecycleDetailMetric('Required evidence open', String(requiredOpenCount), requiredOpenCount ? 'amber' : 'green') +
     lifecycleDetailMetric('Agent signals', String(agentSignalCount), agentSignalCount ? 'blue' : 'slate') +
-    lifecycleDetailMetric('Memo status', String(memoStateLabel).replace(/_/g, ' '), activeReview && activeReview.memo_status === 'generated' ? 'green' : 'slate') +
   '</div>';
 
   var setupBody = '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
@@ -12834,7 +12830,7 @@ function renderLifecycleDetailTab(context) {
       lifecycleWorkspaceSection('Manual Legacy Review Baseline', 'Back-office-only imported-book baseline. Available before the scheduled review becomes active.', lifecycleManualLegacyBaselineControls(setupReviewDetail.id, setupReviewDetail, setupReviewProjection), '#334155') +
     '</div>';
   } else {
-    setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">Lifecycle is now the client-level periodic review workspace. Manual legacy baseline controls appear here once a periodic review schedule exists; active review execution controls appear when a review becomes due or open.</div>';
+    setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">No active periodic review.</div>';
   }
 
   var activeWorkBody = activeWorkItems.length
@@ -12843,7 +12839,58 @@ function renderLifecycleDetailTab(context) {
 
   var workspaceBody = currentReviewActive
     ? lifecycleCurrentReviewWorkspaceBody(summary, activeReview, activeReviewItem, requiredItems, activeReviewProjection, evidenceLinks, applicationDocuments)
-    : '<div style="font-size:12px;color:var(--text2);">No active periodic review is open for this client yet. Use Active Work to launch the next owner workflow without duplicating screening, EDD, or change-management steps.</div>';
+    : activeWorkBody;
+
+  var memoDraft = activeReview ? lifecycleMemoDraft(activeReview) : { rationale: '', outcome: '' };
+  var memoGate = activeReview ? lifecycleMemoGateState(activeReview, activeReviewProjection, memoDraft) : null;
+  var memoControlsBody = activeReview
+    ? '<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border1);">' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+          lifecycleDetailBadge(activeReview.memo_status || 'Not started', activeReview.memo_status === 'generated' ? 'green' : 'amber') +
+          lifecycleDetailBadge(activeReview.periodic_review_memo_id ? ('Memo #' + String(activeReview.periodic_review_memo_id)) : 'No memo ID yet', 'slate') +
+          lifecycleDetailBadge('Onboarding memo unchanged', 'blue') +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
+          '<div>' +
+            '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer rationale</label>' +
+            '<textarea id="lifecycle-review-rationale-' + activeReview.id + '" rows="4" oninput="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;" placeholder="Officer judgment only. Explain the review conclusion in regulator-defensible terms.">' + escapeHtml(memoDraft.rationale || '') + '</textarea>' +
+            '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+              '<div style="font-size:11px;color:var(--text3);">Saved to canonical periodic review state. No AI-authored conclusion is inserted here.</div>' +
+              '<button class="btn btn-outline btn-sm" onclick="saveLifecycleOfficerRationale(\'' + activeReview.id + '\')">Save rationale</button>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Outcome</label>' +
+            '<select id="lifecycle-review-outcome-' + activeReview.id + '" onchange="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' +
+              '<option value="">Select outcome…</option>' +
+              '<option value="no_change"' + (memoDraft.outcome === 'no_change' ? ' selected' : '') + '>Continue — No Change</option>' +
+              '<option value="enhanced_monitoring"' + (memoDraft.outcome === 'enhanced_monitoring' ? ' selected' : '') + '>Continue — Enhanced Monitoring</option>' +
+              '<option value="edd_required"' + (memoDraft.outcome === 'edd_required' ? ' selected' : '') + '>Escalate to EDD</option>' +
+            '</select>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Outcome writes the canonical periodic review outcome only and does not mutate the onboarding memo.</div>' +
+          '</div>' +
+          '<div style="padding:12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">' +
+            '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">Memo readiness</div>' +
+            '<div id="lifecycle-memo-readiness-' + activeReview.id + '" style="display:grid;grid-template-columns:1fr;gap:8px;font-size:12px;color:var(--text2);">' +
+              (memoGate ? [
+                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Officer rationale</span><strong style="color:' + (memoGate.rationaleReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.rationaleReady ? 'Ready' : 'Required') + '</strong></div>',
+                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Outcome selection</span><strong style="color:' + (memoGate.outcomeReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.outcomeReady ? 'Ready' : 'Required') + '</strong></div>',
+                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Operational blockers</span><strong style="color:' + (!memoGate.operationalSummary.length ? 'var(--green)' : 'var(--red)') + ';">' + (!memoGate.operationalSummary.length ? 'Clear' : (memoGate.operationalSummary.length + ' open')) + '</strong></div>',
+                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Completion blockers</span><strong style="color:' + (!memoGate.adjustedCompletionSummary.length ? 'var(--green)' : 'var(--amber)') + ';">' + (!memoGate.adjustedCompletionSummary.length ? 'Clear' : (memoGate.adjustedCompletionSummary.length + ' open')) + '</strong></div>',
+                (memoGate.unresolvedSummary.length
+                  ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Still blocking: ' + memoGate.unresolvedSummary.map(escapeHtml).join(' • ') + '</div>'
+                  : '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Ready to write the canonical review outcome and trigger deterministic periodic-review memo generation.</div>')
+              ].join('')
+              : '') +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
+            '<div style="font-size:11px;color:var(--text3);max-width:520px;">Periodic review memo generation remains deterministic and separate from onboarding memo generation.</div>' +
+            '<button class="btn btn-primary btn-sm" id="lifecycle-review-complete-btn-' + activeReview.id + '" onclick="completeLifecycleReviewAndGenerateMemo(\'' + activeReview.id + '\')"' + ((memoGate && memoGate.ready) ? '' : ' disabled') + '>' + (activeReview.memo_status === 'generated' ? 'Complete review & regenerate memo' : 'Complete review & generate memo') + '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    : '';
 
   var completionSummary = [];
   if (activeReview && Array.isArray(activeReview.completion_blocker_summary) && activeReview.completion_blocker_summary.length) {
@@ -12867,68 +12914,20 @@ function renderLifecycleDetailTab(context) {
           (blockerSummary.length ? blockerSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No operational blockers projected.</div>') +
         '</div>' +
         '<div><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Completion blockers</div>' +
-          (completionSummary.length ? completionSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No completion blockers projected.</div>') +
+          (completionSummary.length ? completionSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No completion blockers for the current lifecycle state.</div>') +
         '</div>' +
-      '</div>'
-    : '<div style="font-size:12px;color:var(--text2);">Completion readiness will appear here when a periodic review is active for this client.</div>';
+      '</div>' +
+      memoControlsBody
+    : '<div style="font-size:12px;color:var(--text2);">No completion blockers for the current lifecycle state.</div>';
 
   var requiredEvidenceBody = activeReview
     ? renderLifecycleRequiredEvidenceCard(activeReview.id, requiredItems, evidenceLinks, applicationDocuments)
-    : '<div style="font-size:12px;color:var(--text2);">Evidence requirements will appear here for the active periodic review once Lifecycle has a current review context.</div>';
+    : '<div style="font-size:12px;color:var(--text2);">No required evidence is currently open.</div>';
 
   var crossLinksBody = linkageEdges.length
     ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + linkageEdges.map(lifecycleDetailEdgeChip).join('') + '</div>' +
       '<div style="font-size:12px;color:var(--text2);">Lifecycle consumes these linked owner-workflow objects without duplicating Screening, EDD, Change Management, or KYC repository state.</div>'
-    : '<div style="font-size:12px;color:var(--text2);">No lifecycle linkage edges are currently projected for this client.</div>';
-
-  var memoDraft = activeReview ? lifecycleMemoDraft(activeReview) : { rationale: '', outcome: '' };
-  var memoGate = activeReview ? lifecycleMemoGateState(activeReview, activeReviewProjection, memoDraft) : null;
-  var memoBody = activeReview
-    ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
-        lifecycleDetailBadge(activeReview.memo_status || 'Not started', activeReview.memo_status === 'generated' ? 'green' : 'amber') +
-        lifecycleDetailBadge(activeReview.periodic_review_memo_id ? ('Memo #' + String(activeReview.periodic_review_memo_id)) : 'No memo ID yet', 'slate') +
-        lifecycleDetailBadge('Onboarding memo unchanged', 'blue') +
-      '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
-        '<div>' +
-          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer rationale</label>' +
-          '<textarea id="lifecycle-review-rationale-' + activeReview.id + '" rows="4" oninput="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;" placeholder="Officer judgment only. Explain the review conclusion in regulator-defensible terms.">' + escapeHtml(memoDraft.rationale || '') + '</textarea>' +
-          '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
-            '<div style="font-size:11px;color:var(--text3);">Saved to canonical periodic review state via <code>periodic_reviews.officer_rationale</code>. No AI-authored conclusion is inserted here.</div>' +
-            '<button class="btn btn-outline btn-sm" onclick="saveLifecycleOfficerRationale(\'' + activeReview.id + '\')">Save rationale</button>' +
-          '</div>' +
-        '</div>' +
-        '<div>' +
-          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Outcome</label>' +
-          '<select id="lifecycle-review-outcome-' + activeReview.id + '" onchange="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' +
-            '<option value="">Select outcome…</option>' +
-            '<option value="no_change"' + (memoDraft.outcome === 'no_change' ? ' selected' : '') + '>Continue — No Change</option>' +
-            '<option value="enhanced_monitoring"' + (memoDraft.outcome === 'enhanced_monitoring' ? ' selected' : '') + '>Continue — Enhanced Monitoring</option>' +
-            '<option value="edd_required"' + (memoDraft.outcome === 'edd_required' ? ' selected' : '') + '>Escalate to EDD</option>' +
-          '</select>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Outcome writes the canonical periodic review <code>outcome</code> field only. It does not write the legacy <code>decision</code> field and does not mutate the onboarding memo.</div>' +
-        '</div>' +
-        '<div style="padding:12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">' +
-          '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">Memo readiness</div>' +
-          '<div id="lifecycle-memo-readiness-' + activeReview.id + '" style="display:grid;grid-template-columns:1fr;gap:8px;font-size:12px;color:var(--text2);">' +
-            (memoGate ? [
-              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Officer rationale</span><strong style="color:' + (memoGate.rationaleReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.rationaleReady ? 'Ready' : 'Required') + '</strong></div>',
-              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Outcome selection</span><strong style="color:' + (memoGate.outcomeReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.outcomeReady ? 'Ready' : 'Required') + '</strong></div>',
-              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Operational blockers</span><strong style="color:' + (!memoGate.operationalSummary.length ? 'var(--green)' : 'var(--red)') + ';">' + (!memoGate.operationalSummary.length ? 'Clear' : (memoGate.operationalSummary.length + ' open')) + '</strong></div>',
-              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Completion blockers</span><strong style="color:' + (!memoGate.adjustedCompletionSummary.length ? 'var(--green)' : 'var(--amber)') + ';">' + (!memoGate.adjustedCompletionSummary.length ? 'Clear' : (memoGate.adjustedCompletionSummary.length + ' open')) + '</strong></div>',
-              (memoGate.unresolvedSummary.length
-                ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Still blocking: ' + memoGate.unresolvedSummary.map(escapeHtml).join(' • ') + '</div>'
-                : '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Ready to write the canonical review outcome and trigger deterministic periodic-review memo generation.</div>')
-            ].join('')
-            : '') +
-          '</div>' +
-        '</div>' +
-        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
-          '<div style="font-size:11px;color:var(--text3);max-width:520px;">Periodic review memo generation remains deterministic and separate from onboarding memo generation. The completion action below writes the canonical review outcome and triggers the periodic-review memo path only when the readiness gate is clear.</div>' +
-          '<button class="btn btn-primary btn-sm" id="lifecycle-review-complete-btn-' + activeReview.id + '" onclick="completeLifecycleReviewAndGenerateMemo(\'' + activeReview.id + '\')"' + ((memoGate && memoGate.ready) ? '' : ' disabled') + '>' + (activeReview.memo_status === 'generated' ? 'Complete review & regenerate memo' : 'Complete review & generate memo') + '</button>' +
-        '</div>' +
-      '</div>'
-    : '<div style="font-size:12px;color:var(--text2);">Memo status will appear once a current review is active. Onboarding memo behaviour remains unchanged.</div>';
+    : '<div style="font-size:12px;color:var(--text2);">No cross-module links are currently projected.</div>';
 
   var historyItems = historical.filter(function(item) { return item.type === 'review'; });
   var historyBody = historyItems.length
@@ -12942,10 +12941,10 @@ function renderLifecycleDetailTab(context) {
           '</div>' +
         '</div>';
       }).join('')
-    : '<div style="font-size:12px;color:var(--text2);">Historical periodic reviews will appear here once review history exists for this client.</div>';
+    : '<div style="font-size:12px;color:var(--text2);">No historical periodic reviews yet.</div>';
 
   var currentReviewCardHtml = currentReviewActive
-    ? '<div class="lifecycle-full-span">' + lifecycleDetailCard('Current Review Workspace', 'Officer controls and system-derived panels for the active periodic review.', workspaceBody, '#4f46e5') + '</div>'
+    ? lifecycleDetailCard('Active Work', 'Officer controls and system-derived panels for the active periodic review.', workspaceBody, '#4f46e5')
     : lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client when no periodic review is active.', activeWorkBody, '#2563eb');
 
   container.innerHTML =
@@ -12959,16 +12958,13 @@ function renderLifecycleDetailTab(context) {
     '</div>' +
     lifecycleBanner +
     metricsRow +
-    '<div class="lifecycle-top-grid">' +
-      lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
-      lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
-    '</div>' +
-    currentReviewCardHtml +
-    '<div class="lifecycle-card-grid">' +
+    '<div class="lifecycle-section-stack">' +
+      currentReviewCardHtml +
       lifecycleDetailCard('Required Evidence', 'Canonical evidence requirements linked to the existing KYC document repository.', requiredEvidenceBody, '#0f766e') +
       lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
       lifecycleDetailCard('Agent Signals', 'Agent 6/7/8/10 decision-support signals projected into Lifecycle without mutating officer-owned review state.', lifecycleAgentSignalsPanel(summary), '#2557d6') +
-      lifecycleDetailCard('Memo Status', 'Periodic review memo state remains separate from onboarding memo state.', memoBody, '#6d28d9') +
+      lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
+      lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
       lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
     '</div>' +
     '</div>';
