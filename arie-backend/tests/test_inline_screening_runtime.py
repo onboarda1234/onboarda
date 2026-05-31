@@ -32,7 +32,7 @@ def _extract_between(html, start_marker, end_marker):
 def _runtime_js(html, config):
     region = _extract_between(
         html,
-        "function screeningQueueStatusBadge(statusKey, statusLabel) {",
+        "function screeningDispositionStatusChip(row) {",
         "async function renderScreening(options) {",
     )
     return "\n".join(
@@ -167,6 +167,7 @@ def _runtime_js(html, config):
                 const followUpCounter = screeningDispositionRationaleCounterText('follow_up_required', 'Need more info');
                 const escalateCounter = screeningDispositionRationaleCounterText('escalated', 'Escalation ready');
                 const unresolvedHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                const subjectKey = screeningReviewSubjectKey(app.ref, row.subject_type, row.subject_name);
                 const resolvedRow = Object.assign({}, row, {
                   review_required: false,
                   review_disposition: 'cleared',
@@ -181,10 +182,43 @@ def _runtime_js(html, config):
                   row.subject_type,
                   row.subject_name
                 );
+                INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
+                  disposition: 'cleared',
+                  dispositionCode: 'false_positive_cleared',
+                  rationale: 'Too short',
+                  evidenceReference: 'CA-case-1',
+                  error: ''
+                };
+                const invalidClearHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
+                  disposition: 'cleared',
+                  dispositionCode: 'false_positive_cleared',
+                  rationale: 'Officer reviewed the provider evidence, date-of-birth mismatch, nationality mismatch, and client file and confirmed this is a false positive.',
+                  evidenceReference: 'CA-case-100 and passport copy pack 12',
+                  error: ''
+                };
+                const validClearHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
+                  disposition: 'follow_up_required',
+                  dispositionCode: 'needs_more_information',
+                  rationale: 'Short',
+                  evidenceReference: '',
+                  error: ''
+                };
+                const invalidFollowUpHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
+                  disposition: 'follow_up_required',
+                  dispositionCode: 'needs_more_information',
+                  rationale: 'Need client clarification on nationality and alias history.',
+                  evidenceReference: '',
+                  error: ''
+                };
+                const validFollowUpHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
                 const resolvedBadgeHtml = screeningReviewBadge(resolvedRow);
                 const dedupedQueueStatusHtml =
                   screeningQueueStatusBadge(resolvedRow.status_key, resolvedRow.status_label) +
                   screeningReviewBadge(resolvedRow, { suppressChip: screeningReviewDisplayLabel(resolvedRow) === resolvedRow.status_label });
+                const resolvedSupportBadgeHtml = screeningQueueSignalBadge('pending', resolvedRow);
                 const providerHighlightsHtml = providerResultHighlights([{
                   name: 'Vladimir Putin',
                   provider: 'complyadvantage',
@@ -465,9 +499,16 @@ def _runtime_js(html, config):
                       type: subject.subject_type,
                       status: subject.display_status_label,
                       hits: subject.hit_count,
-                      categories: subject.category_labels
+                      categories: subject.category_labels,
+                      hitSummary: screeningTriageHitSummary(subject)
                     };
                   }),
+                  invalidClearHtml,
+                  validClearHtml,
+                  invalidFollowUpHtml,
+                  validFollowUpHtml,
+                  resolvedSupportBadgeHtml,
+                  declaredPepZeroHitSummary: screeningTriageHitSummary({ declared_pep: true, hit_count: 0 }),
                   capturedFocus,
                   boCallsAfterFocus,
                   triageCockpitHtml,
@@ -529,13 +570,15 @@ def _queue_runtime_js(html):
                       subject_name: 'Jane Director',
                       subject_type: 'director',
                       company_name: 'Inline Screening Ltd',
-                      watchlist_status: 'clear',
+                      watchlist_status: 'pending',
                       pep_declared_status: 'not_declared',
-                      pep_screening_status: 'clear',
+                      pep_screening_status: 'pending',
                       status_key: 'reviewed_false_positive_cleared',
                       status_label: 'False Positive Cleared',
                       review_required: false,
-                      review_actionable: false
+                      review_actionable: false,
+                      review_disposition: 'cleared',
+                      review_disposition_code: 'false_positive_cleared'
                     }]
                   };
                 }
@@ -548,12 +591,186 @@ def _queue_runtime_js(html):
                   markScreeningQueueDirty();
                   await renderScreening({ force: SCREENING_QUEUE_DIRTY });
                   console.log(JSON.stringify({
-                    dirtyAfterRender: SCREENING_QUEUE_DIRTY,
-                    calledPaths,
-                    renderedRows: tbody.rows.length,
-                    queueRowLabel: SCREENING_QUEUE.rows[0].status_label
-                  }));
+                  dirtyAfterRender: SCREENING_QUEUE_DIRTY,
+                  calledPaths,
+                  renderedRows: tbody.rows.length,
+                  queueRowLabel: SCREENING_QUEUE.rows[0].status_label,
+                  renderedHtml: tbody.rows[0] ? tbody.rows[0].innerHTML : ''
+                }));
                 })().catch((err) => {
+                  console.error(err);
+                  process.exit(1);
+                });
+                """
+            ),
+        ]
+    )
+
+
+def _show_view_runtime_js(html):
+    region = _extract_between(
+        html,
+        "function showView(name, navItem) {",
+        "// ═══════════════════════════════════════════════════════════\n// RENDER FUNCTIONS",
+    )
+    return "\n".join(
+        [
+            textwrap.dedent(
+                """
+                var currentUser = { role: 'co', name: 'Officer Test' };
+                var SCREENING_QUEUE = { rows: [] };
+                var SCREENING_QUEUE_DIRTY = false;
+                var renderScreeningCalls = [];
+                function showToast() {}
+                function renderApplications() {}
+                function renderUsers() {}
+                function renderAudit() {}
+                function renderRolesPermissions() {}
+                function renderScreening(options) { renderScreeningCalls.push(options || {}); }
+                function renderMonitoring() {}
+                function renderLifecycle() {}
+                function renderEDD() {}
+                function renderChangeMgmt() {}
+                function renderCases() {}
+                function renderKPIDashboard() {}
+                function renderRegIntel() {}
+                function renderRiskModel() {}
+                function renderAIChecks() {}
+                function renderAgentsPipeline() {}
+                function renderResources() {}
+                function refreshSupervisorDashboard() {}
+                function refreshSupervisorAudit() {}
+                function renderAgentHealth() {}
+                function renderReportsPage() {}
+                function loadEnhancedRequirementRules() {}
+                function checkAPIStatus() {}
+                function renderSettings() {}
+                function toggleMobileMenu() {}
+                var topbar = { textContent: '' };
+                var screeningView = {
+                  classList: {
+                    added: [],
+                    removed: [],
+                    add(v) { this.added.push(v); },
+                    remove(v) { this.removed.push(v); }
+                  }
+                };
+                var dashboardView = {
+                  classList: {
+                    add() {},
+                    remove() {}
+                  }
+                };
+                var sidebar = {
+                  classList: {
+                    contains() { return false; }
+                  }
+                };
+                var navScreening = {
+                  classList: {
+                    add() {},
+                    remove() {}
+                  }
+                };
+                var navItems = [navScreening];
+                var document = {
+                  querySelectorAll(selector) {
+                    if (selector === '.view') return [dashboardView, screeningView];
+                    if (selector === '.snav-item') return navItems;
+                    return [];
+                  },
+                  querySelector(selector) {
+                    if (selector === '.sidebar') return sidebar;
+                    if (selector === '.snav-item[data-view=\"screening-queue\"]') return navScreening;
+                    if (selector === '.snav-item[data-view=\"screening\"]') return navScreening;
+                    return null;
+                  },
+                  getElementById(id) {
+                    if (id === 'view-screening') return screeningView;
+                    if (id === 'topbar-title') return topbar;
+                    return null;
+                  }
+                };
+                """
+            ),
+            region,
+            textwrap.dedent(
+                """
+                showView('screening-queue');
+                console.log(JSON.stringify({
+                  renderScreeningCalls,
+                  title: topbar.textContent
+                }));
+                """
+            ),
+        ]
+    )
+
+
+def _activity_log_runtime_js(html):
+    region = _extract_between(
+        html,
+        "function safeParseAuditDetail(detail) {",
+        "// ═══════════════════════════════════════════════════════════\n// NOTES",
+    )
+    return "\n".join(
+        [
+            textwrap.dedent(
+                """
+                var currentApp = { id: 11 };
+                var BO_AUTH_TOKEN = 'token';
+                var container = { innerHTML: '' };
+                function escapeHtml(value) {
+                  return String(value == null ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+                }
+                async function boApiCall() {
+                  return {
+                    entries: [
+                      {
+                        action: 'Screening Review',
+                        detail: JSON.stringify({
+                          subject_name: 'John Harbor',
+                          subject_type: 'ubo',
+                          disposition: 'cleared',
+                          disposition_code: 'false_positive_cleared',
+                          rationale: 'Name and date-of-birth mismatch; provider profile is not the declared UBO.',
+                          evidence_reference: 'CA-case-019e1b0f-second-review',
+                          source_surface: 'application_detail_screening_tab',
+                          four_eyes_status: 'second_review_complete'
+                        }),
+                        user_name: 'Aisha Sudally',
+                        user_role: 'co',
+                        timestamp: '2026-05-31T14:22:00Z'
+                      },
+                      {
+                        action: 'Status Change',
+                        detail: 'Application moved to review.',
+                        user_name: 'Ops User',
+                        user_role: 'co',
+                        timestamp: '2026-05-31T14:10:00Z'
+                      }
+                    ]
+                  };
+                }
+                var document = {
+                  getElementById(id) {
+                    if (id === 'detail-activity') return container;
+                    return null;
+                  }
+                };
+                """
+            ),
+            region,
+            textwrap.dedent(
+                """
+                loadActivityLog(currentApp).then(function() {
+                  console.log(JSON.stringify({ html: container.innerHTML }));
+                }).catch(function(err) {
                   console.error(err);
                   process.exit(1);
                 });
@@ -676,6 +893,27 @@ class TestInlineScreeningRuntime:
         assert "Saving…" in result["unresolvedHtml"]
         assert "disabled" in result["unresolvedHtml"]
 
+    def test_inline_save_button_only_enables_when_rationale_is_valid(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "currentUser": {"role": "co", "name": "Officer Test"},
+                    "currentApp": _app(),
+                    "row": _row(),
+                },
+            )
+        )
+        assert "Save disposition" in result["unresolvedHtml"]
+        assert "disabled" in result["unresolvedHtml"]
+        assert "Select a screening action to enable save." in result["unresolvedHtml"]
+        assert "disabled" in result["invalidClearHtml"]
+        assert "Please enter a rationale" not in result["validClearHtml"]
+        assert "disabled" not in result["validClearHtml"]
+        assert "disabled" in result["invalidFollowUpHtml"]
+        assert "disabled" not in result["validFollowUpHtml"]
+
     def test_resolved_hit_is_rendered_read_only(self):
         html = _read_backoffice()
         result = _run_node(
@@ -694,6 +932,8 @@ class TestInlineScreeningRuntime:
         assert "False Positive Cleared" in result["resolvedBadgeHtml"]
         assert "Review Required" not in result["resolvedBadgeHtml"]
         assert result["dedupedQueueStatusHtml"].count("False Positive Cleared") == 1
+        assert "Pending" not in result["resolvedSupportBadgeHtml"]
+        assert "False Positive Cleared" in result["resolvedSupportBadgeHtml"]
 
     def test_screening_queue_dirty_flag_forces_refetch(self):
         html = _read_backoffice()
@@ -703,6 +943,14 @@ class TestInlineScreeningRuntime:
         assert result["queueRowLabel"] == "False Positive Cleared"
         assert result["calledPaths"]
         assert "/screening/queue?refresh=" in result["calledPaths"][0]
+        assert "Pending" not in result["renderedHtml"]
+        assert "False Positive Cleared" in result["renderedHtml"]
+
+    def test_screening_queue_sidebar_alias_routes_to_screening_renderer(self):
+        html = _read_backoffice()
+        result = _run_node(_show_view_runtime_js(html))
+        assert result["title"] == "Screening Queue"
+        assert result["renderScreeningCalls"] == [{"force": True}]
 
     def test_provider_identifiers_are_collapsed_under_technical_details(self):
         html = _read_backoffice()
@@ -761,9 +1009,23 @@ class TestInlineScreeningRuntime:
         assert "Jane Director" in result["triageCockpitHtml"]
         assert "John Harbor" in result["triageCockpitHtml"]
         assert "Triage Holdings Ltd" in result["triageCockpitHtml"]
+        assert "DIR" in result["triageCockpitHtml"]
+        assert "UBO" in result["triageCockpitHtml"]
+        assert "ENT" in result["triageCockpitHtml"]
         assert "Declared vs Provider Match" in result["triageCockpitHtml"]
         assert "Evidence groups" in result["triageCockpitHtml"]
         assert "Save disposition" in result["triageCockpitHtml"]
         assert "Triage Holdings Ltd" in result["resolvedCockpitHtml"]
         assert "read-only" in result["resolvedCockpitHtml"]
         assert "Save disposition" not in result["resolvedCockpitHtml"]
+        assert result["declaredPepZeroHitSummary"] == "Declared PEP · No provider matches"
+
+    def test_activity_log_formats_screening_reviews_for_officers(self):
+        html = _read_backoffice()
+        result = _run_node(_activity_log_runtime_js(html))
+        assert "Screening Review Completed" in result["html"]
+        assert "Subject:</strong> John Harbor" in result["html"]
+        assert "False Positive Cleared" in result["html"]
+        assert "Technical audit details" in result["html"]
+        assert "application_detail_screening_tab" in result["html"]
+        assert "Status Change" in result["html"]
