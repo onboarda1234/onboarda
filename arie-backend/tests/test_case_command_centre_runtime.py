@@ -388,7 +388,8 @@ class TestCaseCommandCentreRuntime:
         html = _read_backoffice()
         assert "function getApprovalReadiness(app)" in html
         assert "getApplicationApprovalBlockers(app)" in html
-        assert "approveBtn.disabled = true" in html
+        assert "confirmBtn.disabled = true" in html
+        assert "Open approval decision modal to review blockers." in html
         assert "Backend gates still perform final validation." in html
 
     def test_pr2d_overview_and_kyc_ui_cleanup_markup_is_present(self):
