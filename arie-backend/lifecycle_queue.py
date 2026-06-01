@@ -555,6 +555,8 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
                      findings_present: bool,
                      memo_context: Optional[Dict[str, Any]],
                      now: datetime) -> Dict[str, Any]:
+    from investigation_scope import is_routine_onboarding_policy_case
+
     payload = _parse_edd_fixture_payload(_row_get(row, "trigger_notes"))
     stage = _row_get(row, "stage", "triggered") or "triggered"
     origin_context = (_row_get(row, "origin_context")
@@ -610,6 +612,12 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
         "decision": _row_get(row, "decision"),
         "linked_monitoring_alert_id": linked_alert,
         "linked_periodic_review_id": linked_review,
+        "is_legacy_onboarding_policy_case": is_routine_onboarding_policy_case(row),
+        "scope": (
+            "routine_onboarding_enhanced_review"
+            if is_routine_onboarding_policy_case(row)
+            else "formal_investigation"
+        ),
         "findings_present": bool(findings_present),
         "memo_context": memo_context,
         "fixture_payload": payload,
@@ -817,7 +825,12 @@ def _fetch_edd(db, *, application_id=None, include="active",
         sql += f" AND {fx_excl}"
         params.extend(fx_p)
     sql += " ORDER BY triggered_at DESC"
-    return db.execute(sql, params).fetchall() or []
+    rows = db.execute(sql, params).fetchall() or []
+    if application_id is None:
+        from investigation_scope import is_formal_investigation_case
+
+        rows = [row for row in rows if is_formal_investigation_case(row)]
+    return rows
 
 
 def build_lifecycle_queue(

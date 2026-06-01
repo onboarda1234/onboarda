@@ -13,6 +13,11 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from investigation_scope import (
+    routine_onboarding_suppression_detail,
+    should_suppress_routine_onboarding_investigation,
+)
+
 logger = logging.getLogger(__name__)
 try:
     from edd_completion import collect_edd_completion_status, edd_completion_satisfies_route
@@ -158,6 +163,43 @@ def actuate_edd_routing(
             result["skipped"] = True
             return result
 
+        if should_suppress_routine_onboarding_investigation(edd_routing, supervisor_result):
+            result["skipped"] = True
+            result["formal_case_suppressed"] = True
+            suppression = routine_onboarding_suppression_detail(edd_routing, supervisor_result)
+            try:
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, "
+                    "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        (user or {}).get("sub") or "system",
+                        (user or {}).get("name") or "system",
+                        (user or {}).get("role") or "system",
+                        "edd_routing.actuated",
+                        "application:" + str(app_dict.get("ref") or application_id),
+                        json.dumps(
+                            {
+                                "policy_version": edd_routing.get("policy_version", ""),
+                                "route": edd_routing.get("route"),
+                                "triggers": list(edd_routing.get("triggers") or []),
+                                "evaluated_at": edd_routing.get("evaluated_at", ""),
+                                "edd_case_id": None,
+                                "edd_case_created": False,
+                                "status_changed": False,
+                                "status_preserved": True,
+                                "origin": "routine_onboarding_enhanced_review",
+                                **suppression,
+                            },
+                            default=str,
+                            sort_keys=True,
+                        ),
+                        client_ip or "",
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("Failed to write suppressed EDD actuation audit row: %s", exc)
+            return result
+
         completion = {}
         if collect_edd_completion_status is not None:
             completion = collect_edd_completion_status(db, application_id, routing=edd_routing)
@@ -219,6 +261,9 @@ def actuate_edd_routing(
         policy_version = edd_routing.get("policy_version", "")
         evaluated_at = edd_routing.get("evaluated_at", "")
         mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+        routing_source = str(edd_routing.get("source") or "").strip().lower()
+        case_trigger_source = routing_source if routing_source in {"screening_update"} else "policy_routing"
+        case_origin_context = "onboarding_escalation" if routing_source in {"screening_update"} else None
         trigger_notes = (
             "Auto-routed to EDD by policy " + str(policy_version)
             + " | triggers: " + ", ".join(triggers[:8])
@@ -250,7 +295,7 @@ def actuate_edd_routing(
                     {
                         "ts": datetime.now().isoformat(),
                         "author": (user or {}).get("name") or "system",
-                        "source": "policy_routing",
+                        "source": case_trigger_source,
                         "policy_version": policy_version,
                         "triggers": triggers,
                         "mandatory_escalation_reasons": mandatory_reasons,
@@ -272,7 +317,7 @@ def actuate_edd_routing(
                     {
                         "ts": datetime.now().isoformat(),
                         "author": (user or {}).get("name") or "system",
-                        "source": "policy_routing",
+                        "source": case_trigger_source,
                         "policy_version": policy_version,
                         "triggers": triggers,
                         "mandatory_escalation_reasons": mandatory_reasons,
@@ -290,27 +335,45 @@ def actuate_edd_routing(
                 risk_score,
                 "triggered",
                 assigned_officer,
-                "policy_routing",
+                case_trigger_source,
                 trigger_notes,
                 initial_note,
             )
             if getattr(db, "is_postgres", False):
-                row = db.execute(
-                    "INSERT INTO edd_cases (application_id, client_name, "
-                    "risk_level, risk_score, stage, assigned_officer, "
-                    "trigger_source, trigger_notes, edd_notes) "
-                    "VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
-                    insert_params,
-                ).fetchone()
+                try:
+                    row = db.execute(
+                        "INSERT INTO edd_cases (application_id, client_name, "
+                        "risk_level, risk_score, stage, assigned_officer, "
+                        "trigger_source, trigger_notes, edd_notes, origin_context) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                        (*insert_params, case_origin_context),
+                    ).fetchone()
+                except Exception:
+                    row = db.execute(
+                        "INSERT INTO edd_cases (application_id, client_name, "
+                        "risk_level, risk_score, stage, assigned_officer, "
+                        "trigger_source, trigger_notes, edd_notes) "
+                        "VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+                        insert_params,
+                    ).fetchone()
                 case_id = row["id"]
             else:
-                cursor = db.execute(
-                    "INSERT INTO edd_cases (application_id, client_name, "
-                    "risk_level, risk_score, stage, assigned_officer, "
-                    "trigger_source, trigger_notes, edd_notes) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
-                    insert_params,
-                )
+                try:
+                    cursor = db.execute(
+                        "INSERT INTO edd_cases (application_id, client_name, "
+                        "risk_level, risk_score, stage, assigned_officer, "
+                        "trigger_source, trigger_notes, edd_notes, origin_context) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (*insert_params, case_origin_context),
+                    )
+                except Exception:
+                    cursor = db.execute(
+                        "INSERT INTO edd_cases (application_id, client_name, "
+                        "risk_level, risk_score, stage, assigned_officer, "
+                        "trigger_source, trigger_notes, edd_notes) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        insert_params,
+                    )
                 case_id = getattr(cursor, "lastrowid", None)
                 if case_id is None:
                     case_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
