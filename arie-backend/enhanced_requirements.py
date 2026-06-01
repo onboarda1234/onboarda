@@ -91,6 +91,49 @@ APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "cancelled": (),
 }
 
+PRESENTATION_REQUIREMENT_TYPES = (
+    "evidence",
+    "portal_disclosure",
+    "internal_control",
+)
+
+_EVIDENCE_TYPE_TERMS = (
+    "adverse_media_explanation",
+    "bank_statement",
+    "document",
+    "evidence",
+    "financial_statement",
+    "funds_evidence",
+    "proof",
+    "source_of_funds",
+    "source_of_wealth",
+    "supporting_document",
+    "wealth_declaration",
+)
+
+_PORTAL_DISCLOSURE_TERMS = (
+    "declaration",
+    "declared_pep",
+    "pep_declaration",
+    "pep_jurisdiction",
+    "pep_position",
+    "pep_role",
+    "portal_form",
+    "questionnaire",
+    "self_declared_pep",
+)
+
+_INTERNAL_CONTROL_TERMS = (
+    "approval_control",
+    "enhanced_monitoring",
+    "mandatory_senior_review",
+    "monitoring_flag",
+    "ongoing_monitoring_flag",
+    "second_line",
+    "senior_review",
+    "supervisor_review",
+)
+
 EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
     "high_or_very_high_risk": "high_or_very_high_risk",
     "declared_pep_present": "pep",
@@ -639,6 +682,258 @@ def serialize_application_requirement(row):
     item["waiver_roles"] = _loads_json(item.get("waiver_roles"), [])
     item["trigger_context"] = _loads_json(item.get("trigger_context"), {})
     return item
+
+
+def classify_requirement_presentation_type(requirement):
+    """Classify one enhanced requirement for officer-facing workflow display.
+
+    This deliberately does not change the persisted requirement_type.  Existing
+    records keep their lifecycle semantics; the presentation type only prevents
+    portal disclosures and internal controls from being rendered as missing
+    documents.
+    """
+    requirement = requirement or {}
+    req_type = _clean_text(requirement.get("requirement_type")).lower()
+    key = _clean_text(requirement.get("requirement_key")).lower()
+    label = _clean_text(requirement.get("requirement_label")).lower()
+    trigger = _clean_text(requirement.get("trigger_key")).lower()
+    haystack = " ".join((key, label, trigger)).replace("-", "_")
+
+    if req_type == "document":
+        return "evidence"
+    if req_type in ("review_task", "internal_control"):
+        return "internal_control"
+    if req_type in ("declaration", "explanation"):
+        if any(term in haystack for term in _INTERNAL_CONTROL_TERMS):
+            return "internal_control"
+        if any(term in haystack for term in _EVIDENCE_TYPE_TERMS):
+            return "evidence"
+        return "portal_disclosure"
+
+    if any(term in haystack for term in _INTERNAL_CONTROL_TERMS):
+        return "internal_control"
+    if any(term in haystack for term in _PORTAL_DISCLOSURE_TERMS):
+        return "portal_disclosure"
+    if any(term in haystack for term in _EVIDENCE_TYPE_TERMS):
+        return "evidence"
+    return "evidence"
+
+
+def _pep_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "declared_yes", "confirmed_pep"}
+
+
+def _first_value(data, keys):
+    data = data or {}
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, "", []):
+            return value
+    return ""
+
+
+def _load_portal_pep_disclosures(db, app):
+    """Return PEP declaration data captured from the portal/application form."""
+    app = _row_dict(app) or {}
+    app_id = app.get("id")
+    if not app_id:
+        return []
+    disclosures = []
+    for table, party_type in (("directors", "director"), ("ubos", "ubo")):
+        if not _table_exists(db, table):
+            continue
+        try:
+            rows = db.execute(
+                f"""
+                SELECT id, person_key, full_name, nationality, is_pep,
+                       pep_declaration, date_of_birth, created_at
+                FROM {table}
+                WHERE application_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (app_id,),
+            ).fetchall()
+        except Exception:
+            continue
+        for row in rows:
+            party = _row_dict(row) or {}
+            declaration = _loads_json(party.get("pep_declaration"), {})
+            if not isinstance(declaration, dict):
+                declaration = {}
+            declared = (
+                _pep_bool(party.get("is_pep"))
+                or _pep_bool(declaration.get("declared_pep"))
+                or _pep_bool(declaration.get("client_declared_pep"))
+            )
+            has_capture = declared or any(
+                _first_value(declaration, keys)
+                for keys in (
+                    ("pep_role_type", "role_type", "pep_type"),
+                    ("position_title", "public_function", "public_position"),
+                    ("pep_country_jurisdiction", "country_jurisdiction", "jurisdiction", "country"),
+                    ("relationship_type",),
+                    ("source_of_wealth_detail", "source_of_wealth_note"),
+                    ("source_of_funds_detail", "source_of_funds_note"),
+                    ("notes",),
+                )
+            )
+            if not has_capture:
+                continue
+            disclosures.append({
+                "subject_type": party_type,
+                "subject_id": party.get("id"),
+                "person_key": party.get("person_key"),
+                "subject_name": party.get("full_name") or "Unnamed party",
+                "declared_pep": declared,
+                "pep_status": declaration.get("pep_status") or ("declared_yes" if declared else "declared_no"),
+                "pep_role_type": _first_value(declaration, ("pep_role_type", "role_type", "pep_type")),
+                "position_title": _first_value(declaration, ("position_title", "public_function", "public_position")),
+                "jurisdiction": _first_value(declaration, ("pep_country_jurisdiction", "country_jurisdiction", "jurisdiction", "country")),
+                "relationship_type": _first_value(declaration, ("relationship_type",)) or ("self" if declared else ""),
+                "related_pep_name": _first_value(declaration, ("related_pep_name",)),
+                "source_of_wealth_detail": _first_value(declaration, ("source_of_wealth_detail", "source_of_wealth_note")),
+                "source_of_funds_detail": _first_value(declaration, ("source_of_funds_detail", "source_of_funds_note")),
+                "notes": _first_value(declaration, ("notes",)),
+                "submitted_at": declaration.get("submitted_at") or declaration.get("captured_at") or party.get("created_at"),
+                "submitted_by": app.get("client_id"),
+                "source": "client_portal_application_form",
+            })
+    return disclosures
+
+
+def _portal_disclosure_summary(requirement, disclosures):
+    key = _clean_text((requirement or {}).get("requirement_key")).lower()
+    label = "Portal response"
+    if "jurisdiction" in key:
+        label = "PEP jurisdiction"
+    elif "role" in key or "position" in key:
+        label = "PEP role / position"
+    elif "pep_declaration" in key or "declared_pep" in key:
+        label = "PEP declaration"
+
+    if not disclosures:
+        return {
+            "status": "not_submitted",
+            "status_label": "Not submitted in portal",
+            "summary": "Not submitted in portal",
+            "fields": [],
+            "responses": [],
+        }
+
+    fields = []
+    for disclosure in disclosures:
+        subject = disclosure.get("subject_name") or "Unnamed party"
+
+        def add(field_label, value):
+            value = _clean_text(value)
+            if value:
+                fields.append({
+                    "label": field_label,
+                    "value": value,
+                    "subject": subject,
+                    "subject_type": disclosure.get("subject_type"),
+                })
+
+        if "jurisdiction" in key:
+            add("Jurisdiction", disclosure.get("jurisdiction"))
+        elif "role" in key or "position" in key:
+            add("Role/type", disclosure.get("pep_role_type"))
+            add("Position/title", disclosure.get("position_title"))
+            add("Relationship", disclosure.get("relationship_type"))
+        elif "source_of_wealth" in key:
+            add("Source of wealth", disclosure.get("source_of_wealth_detail"))
+        elif "source_of_funds" in key:
+            add("Source of funds", disclosure.get("source_of_funds_detail"))
+        else:
+            add("Declared PEP", "Yes" if disclosure.get("declared_pep") else "No")
+            add("Role/type", disclosure.get("pep_role_type"))
+            add("Position/title", disclosure.get("position_title"))
+            add("Jurisdiction", disclosure.get("jurisdiction"))
+            add("Relationship", disclosure.get("relationship_type"))
+
+    visible_values = [f"{field['subject']}: {field['label']} {field['value']}" for field in fields[:4]]
+    summary = "; ".join(visible_values) if visible_values else f"{label} captured in portal"
+    return {
+        "status": "captured",
+        "status_label": "Captured from portal",
+        "summary": summary,
+        "fields": fields,
+        "responses": disclosures,
+        "submitted_at": max([d.get("submitted_at") for d in disclosures if d.get("submitted_at")] or [None]),
+        "submitted_by": next((d.get("submitted_by") for d in disclosures if d.get("submitted_by")), None),
+    }
+
+
+def _internal_control_summary(requirement, app):
+    requirement = requirement or {}
+    app = _row_dict(app) or {}
+    status = _clean_text(requirement.get("status") or "generated").lower()
+    key = _clean_text(requirement.get("requirement_key")).lower()
+    completed = status in ("accepted", "waived", "cancelled")
+    status_label = "Completed" if completed else "Pending"
+    resolve_label = "Open relevant control"
+    target_tab = "overview"
+    summary = _clean_text(requirement.get("requirement_description")) or "Internal control must be completed before closure where applicable."
+
+    if "senior" in key or "supervisor" in key:
+        resolve_label = "Open AI Compliance Supervisor"
+        target_tab = "supervisor"
+        if completed:
+            summary = "Senior/supervisor review has been recorded as completed for this requirement."
+        else:
+            summary = "Senior/supervisor review is pending. Use the supervisor workflow before closing this requirement."
+    elif "monitoring" in key:
+        resolve_label = "View monitoring status"
+        target_tab = "lifecycle"
+        if completed:
+            summary = "Monitoring control has been recorded as completed for this requirement."
+        else:
+            app_status = _clean_text(app.get("status")).lower()
+            if app_status == "approved":
+                summary = "Monitoring setup/status should be reviewed in Lifecycle / Monitoring."
+            else:
+                summary = "Monitoring will activate after approval where the onboarding decision requires it."
+        status_label = "Enabled" if completed and "monitoring" in key else status_label
+
+    return {
+        "status": "completed" if completed else "pending",
+        "status_label": status_label,
+        "summary": summary,
+        "resolve_label": resolve_label,
+        "target_tab": target_tab,
+    }
+
+
+def decorate_application_requirements_for_backoffice(db, app, requirements):
+    """Add read-only workflow taxonomy/enrichment for back-office rendering."""
+    app = _row_dict(app) or {}
+    disclosures = _load_portal_pep_disclosures(db, app)
+    decorated = []
+    for requirement in requirements or []:
+        item = serialize_application_requirement(requirement) if not isinstance(requirement, dict) else dict(requirement)
+        if not item:
+            continue
+        display_type = classify_requirement_presentation_type(item)
+        item["requirement_display_type"] = display_type
+        item["requirement_display_type_label"] = {
+            "evidence": "Evidence requirement",
+            "portal_disclosure": "Portal disclosure",
+            "internal_control": "Internal control",
+        }.get(display_type, "Evidence requirement")
+        item["accepts_document_upload"] = (
+            display_type == "evidence"
+            and _clean_text(item.get("requirement_type")).lower() == "document"
+        )
+        if display_type == "portal_disclosure":
+            item["portal_disclosure"] = _portal_disclosure_summary(item, disclosures)
+        elif display_type == "internal_control":
+            item["internal_control"] = _internal_control_summary(item, app)
+        decorated.append(item)
+    return decorated
 
 
 def validate_rule_payload(data, existing=None):
@@ -1491,6 +1786,11 @@ def _blank_enhanced_operational_summary():
         "next_action_code": "none",
         "status_label": "Clear",
         "trigger_labels": [],
+        "type_counts": {
+            "evidence": 0,
+            "portal_disclosure": 0,
+            "internal_control": 0,
+        },
         "last_updated_at": None,
         "missing_generated_requirements": False,
         "invalid_waiver_count": 0,
@@ -1650,6 +1950,9 @@ def _build_enhanced_operational_summary_from_items(db, app, items, validation=No
             summary["waived_count"] += 1
         if status == "under_review":
             under_review_count += 1
+        display_type = classify_requirement_presentation_type(item)
+        if display_type in summary["type_counts"]:
+            summary["type_counts"][display_type] += 1
         label = _clean_text(item.get("trigger_label") or item.get("trigger_key"))
         if label and label not in trigger_labels:
             trigger_labels.append(label)
