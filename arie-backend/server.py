@@ -591,8 +591,9 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         evaluated_at = edd_routing.get("evaluated_at", "")
         mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
         routing_source = str(edd_routing.get("source") or "").strip().lower()
-        case_trigger_source = routing_source if routing_source in {"screening_update"} else "policy_routing"
-        case_origin_context = "onboarding_escalation" if routing_source in {"screening_update"} else None
+        explicit_onboarding_sources = {"screening_update", "officer_correction"}
+        case_trigger_source = routing_source if routing_source in explicit_onboarding_sources else "policy_routing"
+        case_origin_context = "onboarding_escalation" if routing_source in explicit_onboarding_sources else None
         trigger_notes = (
             "Auto-routed to EDD by policy " + str(policy_version)
             + " | triggers: " + ", ".join(triggers[:8])
@@ -4966,7 +4967,7 @@ class ApplicationCorrectionHandler(BaseHandler):
             refreshed_app_dict = dict(refreshed_app) if refreshed_app else {}
             from routing_actuator import (
                 apply_routing_decision,
-                SOURCE_RISK_RECOMPUTE,
+                SOURCE_OFFICER_CORRECTION,
             )
 
             risk_dict = {
@@ -4982,7 +4983,7 @@ class ApplicationCorrectionHandler(BaseHandler):
                 risk_dict=risk_dict,
                 user=user,
                 client_ip=client_ip or "",
-                source=SOURCE_RISK_RECOMPUTE,
+                source=SOURCE_OFFICER_CORRECTION,
             )
             downstream["edd_routing"] = routing_outcome
             downstream["edd_routing_evaluated"] = bool(routing_outcome.get("ran"))

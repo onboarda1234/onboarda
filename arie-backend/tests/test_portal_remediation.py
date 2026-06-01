@@ -990,7 +990,7 @@ def test_declared_pep_edd_required_still_allows_preapproval_decision(api_server)
     assert conn.execute(
         "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
         (app_id,),
-    ).fetchone()["c"] == 1
+    ).fetchone()["c"] == 0
     attestation = conn.execute(
         "SELECT detail FROM audit_log WHERE target=? AND action='KYC Attestation Submitted' ORDER BY id DESC LIMIT 1",
         (ref,),
@@ -1069,7 +1069,7 @@ def test_crypto_edd_required_after_preapproval_can_upload_and_submit_kyc(api_ser
     assert conn.execute(
         "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
         (app_id,),
-    ).fetchone()["c"] == 1
+    ).fetchone()["c"] == 0
     _cleanup_application(conn, app_id, ref)
     conn.commit()
     conn.close()

@@ -262,8 +262,9 @@ def actuate_edd_routing(
         evaluated_at = edd_routing.get("evaluated_at", "")
         mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
         routing_source = str(edd_routing.get("source") or "").strip().lower()
-        case_trigger_source = routing_source if routing_source in {"screening_update"} else "policy_routing"
-        case_origin_context = "onboarding_escalation" if routing_source in {"screening_update"} else None
+        explicit_onboarding_sources = {"screening_update", "officer_correction"}
+        case_trigger_source = routing_source if routing_source in explicit_onboarding_sources else "policy_routing"
+        case_origin_context = "onboarding_escalation" if routing_source in explicit_onboarding_sources else None
         trigger_notes = (
             "Auto-routed to EDD by policy " + str(policy_version)
             + " | triggers: " + ", ".join(triggers[:8])

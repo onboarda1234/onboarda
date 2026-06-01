@@ -24,6 +24,7 @@ ROUTINE_ONBOARDING_ROUTING_SOURCES = frozenset(
 EXPLICIT_INVESTIGATION_ROUTING_SOURCES = frozenset(
     {
         "screening_update",
+        "officer_correction",
         "officer_decision",
         "manual",
         "manual_onboarding_escalation",

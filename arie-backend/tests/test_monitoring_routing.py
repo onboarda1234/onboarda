@@ -29,6 +29,7 @@ that PR-01 and PR-02 share schema setup behaviour.
 import json
 import os
 import sys
+import uuid
 
 import pytest
 
@@ -358,7 +359,7 @@ class TestRouteToPeriodicReview:
 class TestRouteToEDD:
     def test_creates_edd_and_links(self, routing_db, audit_sink):
         from monitoring_routing import route_alert_to_edd
-        app = "test-app-edd-create"
+        app = f"test-app-edd-create-{uuid.uuid4().hex[:8]}"
         alert_id = _insert_alert(routing_db, application_id=app)
         result = route_alert_to_edd(
             routing_db, alert_id,
