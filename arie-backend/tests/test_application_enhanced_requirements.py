@@ -1543,6 +1543,186 @@ def test_lifecycle_document_link_validation_and_invalid_status(enhanced_app_api_
     assert json.loads(audit["after_state"])["linked_document_id"] == valid_doc
 
 
+def test_backoffice_enhanced_requirement_upload_links_document_under_review_and_audits(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+    import server as server_module
+
+    original_has_s3 = server_module.HAS_S3
+    server_module.HAS_S3 = False
+    try:
+        conn = get_db()
+        app_id = _insert_application(conn, risk_level="HIGH", status="kyc_documents")
+        conn.execute(
+            "UPDATE applications SET pre_approval_decision='PRE_APPROVE' WHERE id=?",
+            (app_id,),
+        )
+        _generate(conn, app_id)
+        req_id = _first_requirement_id(conn, app_id)
+        conn.commit()
+        conn.close()
+
+        resp = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_headers("co"),
+            files={"file": ("source-of-funds.pdf", b"%PDF-1.4\n% officer enhanced evidence\n", "application/pdf")},
+            timeout=5,
+        )
+    finally:
+        server_module.HAS_S3 = original_has_s3
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "uploaded"
+    assert body["requirement"]["status"] == "under_review"
+    assert body["requirement"]["linked_document_id"] == body["document"]["id"]
+    assert body["document"]["doc_type"] == "enhanced_requirement"
+    assert body["document"]["verification_status"] == "pending"
+    assert body["agent1_verification"]["triggered"] is False
+
+    conn = get_db()
+    req = conn.execute("SELECT * FROM application_enhanced_requirements WHERE id=?", (req_id,)).fetchone()
+    doc = conn.execute("SELECT * FROM documents WHERE id=?", (req["linked_document_id"],)).fetchone()
+    audit = conn.execute(
+        """
+        SELECT detail, before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.officer_uploaded'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+
+    assert req["status"] == "under_review"
+    assert req["linked_document_id"] == body["document"]["id"]
+    assert req["uploaded_at"]
+    assert doc["doc_name"] == "source-of-funds.pdf"
+    assert doc["doc_type"] == "enhanced_requirement"
+    assert doc["slot_key"] == f"enhanced_requirement:{req_id}"
+    assert doc["verification_status"] == "pending"
+    metadata = json.loads(doc["verification_results"])
+    assert metadata["source_surface"] == "kyc_enhanced_requirement_row"
+    assert metadata["enhanced_requirement_id"] == str(req_id)
+    assert metadata["verification_triggered"] is False
+    assert audit is not None
+    detail = json.loads(audit["detail"])
+    before = json.loads(audit["before_state"])
+    after = json.loads(audit["after_state"])
+    assert detail["application_id"] == app_id
+    assert detail["requirement_id"] == req_id
+    assert detail["document_id"] == doc["id"]
+    assert detail["filename"] == "source-of-funds.pdf"
+    assert detail["source_surface"] == "kyc_enhanced_requirement_row"
+    assert detail["resulting_requirement_status"] == "under_review"
+    assert detail["auto_accepted"] is False
+    assert before["status"] == "generated"
+    assert after["status"] == "under_review"
+
+
+def test_backoffice_enhanced_requirement_upload_validation_permissions_and_gates(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+    import server as server_module
+
+    original_has_s3 = server_module.HAS_S3
+    original_max_upload_mb = server_module.MAX_UPLOAD_MB
+    server_module.HAS_S3 = False
+    try:
+        conn = get_db()
+        app_id = _insert_application(conn, risk_level="HIGH", status="kyc_documents")
+        other_app_id = _insert_application(conn, risk_level="HIGH", status="kyc_documents")
+        locked_app_id = _insert_application(conn, risk_level="HIGH", status="submitted")
+        conn.execute(
+            "UPDATE applications SET pre_approval_decision='PRE_APPROVE' WHERE id IN (?,?)",
+            (app_id, other_app_id),
+        )
+        _generate(conn, app_id)
+        _generate(conn, other_app_id)
+        _generate(conn, locked_app_id)
+        req_id = _first_requirement_id(conn, app_id)
+        other_req_id = _first_requirement_id(conn, other_app_id)
+        locked_req_id = _first_requirement_id(conn, locked_app_id)
+        explanation_req = _first_requirement_id(conn, app_id, offset=1)
+        conn.execute(
+            "UPDATE application_enhanced_requirements SET requirement_type='explanation' WHERE id=?",
+            (explanation_req,),
+        )
+        accepted_req = _first_requirement_id(conn, app_id, offset=2)
+        conn.execute(
+            "UPDATE application_enhanced_requirements SET status='accepted' WHERE id=?",
+            (accepted_req,),
+        )
+        conn.commit()
+        conn.close()
+
+        analyst = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_headers("analyst"),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        wrong_app = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{other_req_id}/upload",
+            headers=_headers("co"),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        missing_req = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/999999/upload",
+            headers=_headers("co"),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        invalid_type = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_headers("co"),
+            files={"file": ("malware.exe", b"MZ...", "application/octet-stream")},
+            timeout=5,
+        )
+        server_module.MAX_UPLOAD_MB = 0
+        oversized = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_headers("co"),
+            files={"file": ("oversized.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        server_module.MAX_UPLOAD_MB = original_max_upload_mb
+        text_req = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{explanation_req}/upload",
+            headers=_headers("co"),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        accepted = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{accepted_req}/upload",
+            headers=_headers("co"),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        locked = requests.post(
+            f"{base_url}/api/applications/{locked_app_id}/enhanced-requirements/{locked_req_id}/upload",
+            headers=_headers("co"),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+    finally:
+        server_module.HAS_S3 = original_has_s3
+        server_module.MAX_UPLOAD_MB = original_max_upload_mb
+
+    assert analyst.status_code == 403
+    assert wrong_app.status_code == 404
+    assert missing_req.status_code == 404
+    assert invalid_type.status_code == 400
+    assert oversized.status_code == 400
+    assert "File exceeds" in oversized.json()["error"]
+    assert text_req.status_code == 400
+    assert accepted.status_code == 409
+    assert locked.status_code == 409
+    assert "KYC upload is locked" in locked.json()["error"]
+
+
 def test_lifecycle_reopen_waived_requires_admin_or_sco(enhanced_app_api_server):
     base_url, db_path = enhanced_app_api_server
     _sync_db_path(db_path)
