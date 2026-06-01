@@ -126,8 +126,9 @@ def test_enhanced_review_memo_section_says_not_triggered_when_no_requirements(me
     memo, _, _, _ = build_compliance_memo(_app_for_memo(memo_enhanced_db, app_id, summary), [], [], [])
     section = memo["sections"]["enhanced_review_edd"]
 
-    assert section["title"] == "Enhanced Review / EDD"
+    assert section["title"] == "Onboarding Enhanced Review"
     assert "Not triggered based on the current application data" in section["content"]
+    assert "Enhanced Review / EDD" not in section["title"]
     assert memo["metadata"]["enhanced_review_status"] == "not_triggered"
 
 
@@ -208,6 +209,7 @@ def test_enhanced_review_memo_summary_redacts_client_text_and_raw_context(memo_e
     memo_blob = json.dumps(memo, sort_keys=True)
 
     assert "Triggered: Yes" in section_text
+    assert memo["sections"]["enhanced_review_edd"]["title"] == "Onboarding Enhanced Review"
     assert "Requested from client" in section_text
     assert "client response submitted" in section_text
     assert "Officer-approved documentary alternative reviewed" in section_text
@@ -275,3 +277,24 @@ def test_enhanced_review_memo_includes_backoffice_only_and_senior_review_items(m
     section_text = memo["sections"]["enhanced_review_edd"]["content"]
     assert "back-office/internal" in section_text
     assert "Senior review tasks" in section_text
+
+
+def test_enhanced_review_memo_copy_does_not_blend_onboarding_with_edd(memo_enhanced_db):
+    from enhanced_requirements import build_enhanced_review_memo_summary
+    from memo_handler import build_compliance_memo
+
+    app_id = _insert_application(memo_enhanced_db, risk_level="HIGH")
+    _generate(memo_enhanced_db, app_id)
+
+    summary = build_enhanced_review_memo_summary(memo_enhanced_db, app_id)
+    memo, _, _, _ = build_compliance_memo(
+        _app_for_memo(memo_enhanced_db, app_id, summary),
+        [],
+        [],
+        [],
+    )
+
+    section = memo["sections"]["enhanced_review_edd"]
+    assert section["title"] == "Onboarding Enhanced Review"
+    assert "Enhanced Review / EDD" not in json.dumps(section)
+    assert "Onboarding Enhanced Review" in json.dumps(section)

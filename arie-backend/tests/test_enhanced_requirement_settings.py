@@ -440,8 +440,8 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "generation_source: 'manual_backoffice_refresh'" in html
     assert "Standard KYC Documents" in html
     assert "Document Verification History" in html
-    assert "Onboarding evidence required due to risk, screening, PEP, or adverse media triggers." in html
-    assert "Onboarding-only requirements that can block approval until accepted or waived." in html
+    assert "Onboarding evidence, disclosures, and controls required because of risk, PEP, screening, jurisdiction, or sector triggers." in html
+    assert "Enhanced Review Requirements are onboarding evidence requirements. Formal investigation cases are managed in Lifecycle." in html
     assert "Actions" in html
     assert "Officer notes" in html
     assert "Requirement details" in html
@@ -648,8 +648,9 @@ def test_backoffice_edd_consolidation_routes_to_applications_without_deleting_le
 
     assert 'id="view-edd"' in html
     assert 'id="legacy-edd-consolidation-notice"' in html
-    assert "Enhanced Review cases are now managed from Applications" in html
-    assert "Open Applications — Enhanced Review" in html
+    assert "Formal investigation cases are managed in Lifecycle" in html
+    assert "Use KYC Documents for onboarding Enhanced Review Requirements." in html
+    assert "Open Applications — Enhanced Requirements" in html
     assert "Open Applications — Approval Blocked" in html
 
     assert "function openApplicationsEnhancedReview(filterValue)" in html

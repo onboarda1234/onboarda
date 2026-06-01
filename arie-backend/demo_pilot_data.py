@@ -148,7 +148,7 @@ DEMO_SCENARIOS = [
             "Crypto sector triggers HIGH sector risk floor automatically.",
             "Cross-border activity with high-risk operating countries.",
             "The AI routes to Opus (thorough model) because risk score exceeds 55.",
-            "Result: REVIEW or APPROVE_WITH_CONDITIONS with stringent EDD requirements.",
+            "Result: REVIEW or APPROVE_WITH_CONDITIONS with stringent Enhanced Review requirements.",
         ],
         "application": {
             "company_name": "Atlas Digital Assets DMCC",

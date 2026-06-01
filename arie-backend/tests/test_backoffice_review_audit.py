@@ -665,11 +665,11 @@ class TestPrePhaseSixBackofficeUX:
         assert "EDD Pipeline</div>" not in nav
         assert 'id="view-edd"' in html
         assert 'id="legacy-edd-consolidation-notice"' in html
-        assert "Enhanced Review cases are now managed from Applications" in html
-        assert "Open Applications — Enhanced Review" in html
+        assert "Formal investigation cases are managed in Lifecycle" in html
+        assert "Open Applications — Enhanced Requirements" in html
         assert "Open Applications — Approval Blocked" in html
         assert "showView('edd')" in html
-        assert "SLA due date, senior reviewer assignment, structured EDD findings" in html
+        assert "SLA, findings, senior review, and outcome controls" in html
 
     def test_applications_page_has_search_and_page_size_controls(self):
         html = self._read_backoffice()

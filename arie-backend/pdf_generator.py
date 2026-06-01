@@ -5,7 +5,7 @@ Sprint 4: Branded as "Onboarda Compliance Report" / "Powered by RegMind".
 
 Produces immutable, branded PDF snapshots of compliance memos with:
     - Onboarda/RegMind branding (config-driven)
-    - Full structured memo including Enhanced Review / EDD summary
+    - Full structured memo including onboarding Enhanced Review summary
     - Risk rating badges, decision highlighting
     - Validation status, supervisor verdict
     - Approval metadata, generation timestamp
@@ -488,8 +488,8 @@ def generate_memo_pdf(
     html += '<h2>6. Document Verification</h2>'
     html += _render_section_content(sections.get("document_verification", {}))
 
-    # ── Section 7: Enhanced Review / EDD ──
-    html += '<h2>7. Enhanced Review / EDD</h2>'
+    # ── Section 7: Onboarding Enhanced Review ──
+    html += '<h2>7. Onboarding Enhanced Review</h2>'
     html += _render_section_content(sections.get("enhanced_review_edd", {}))
 
     # ── Section 8: AI Explainability Layer ──

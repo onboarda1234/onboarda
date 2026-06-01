@@ -430,11 +430,11 @@ def _build_enhanced_review_memo_section(summary):
     summary = summary if isinstance(summary, dict) else _enhanced_review_empty_summary()
     if not summary.get("triggered"):
         content = (
-            "Enhanced Review / EDD: Not triggered based on the current application "
+            "Onboarding Enhanced Review: Not triggered based on the current application "
             "data and available routing information."
         )
         return {
-            "title": "Enhanced Review / EDD",
+            "title": "Onboarding Enhanced Review",
             "triggered": False,
             "overall_status": "not_triggered",
             "content": content,
@@ -515,7 +515,7 @@ def _build_enhanced_review_memo_section(summary):
         content_parts.append("Warnings: " + "; ".join(str(w) for w in warnings[:5]) + ".")
 
     return {
-        "title": "Enhanced Review / EDD",
+        "title": "Onboarding Enhanced Review",
         "triggered": True,
         "overall_status": summary.get("overall_status") or "incomplete",
         "mandatory_outstanding_count": mandatory_outstanding,

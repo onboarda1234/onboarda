@@ -18,7 +18,7 @@ def test_backoffice_memo_renderer_includes_enhanced_review_section():
     region = html[start:end]
 
     assert "enhanced_review_edd" in region
-    assert "Enhanced Review / EDD" in region
+    assert "Onboarding Enhanced Review" in region
     assert "deterministic lifecycle summary" in region
 
 

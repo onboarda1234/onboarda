@@ -894,7 +894,7 @@ def test_backoffice_html_exposes_officer_correction_controls():
     assert "Person / PEP information" in src
     assert "Risk information" in src
     assert "Reason / Evidence" in src
-    assert "Correction saved. RegMind updated the risk, EDD requirements, memo status, and approval blockers where required." in src
+    assert "Correction saved. RegMind updated the risk, Enhanced Review requirements, memo status, and approval blockers where required." in src
     assert "Correction Target" not in src
     assert "Evidence Source" not in src
     assert "Correction Note" not in src

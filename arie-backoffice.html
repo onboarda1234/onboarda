@@ -1457,7 +1457,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <summary>
           <div class="detail-collapsible-copy">
             <div class="detail-collapsible-title">Enhanced Review Requirements</div>
-            <div class="detail-collapsible-subtitle">Onboarding evidence required due to risk, screening, PEP, or adverse media triggers.</div>
+            <div class="detail-collapsible-subtitle">Onboarding evidence, disclosures, and controls required because of risk, PEP, screening, jurisdiction, or sector triggers.</div>
           </div>
           <div class="detail-collapsible-meta">
             <span class="detail-collapsible-summary-line" id="detail-enhanced-requirements-summary-copy">Loading enhanced requirements…</span>
@@ -1466,7 +1466,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         </summary>
         <div class="detail-collapsible-body">
           <div class="detail-collapsible-inline-header">
-            <div class="detail-collapsible-section-label">Onboarding-only requirements that can block approval until accepted or waived.</div>
+            <div class="detail-collapsible-section-label">Enhanced Review Requirements are onboarding evidence requirements. Formal investigation cases are managed in Lifecycle.</div>
             <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
           </div>
           <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
@@ -1687,27 +1687,27 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
 </div>
 
-<!-- ═══════════════ EDD PIPELINE ═══════════════ -->
+<!-- ═══════════════ INVESTIGATION QUEUE ═══════════════ -->
 <div class="view" id="view-edd">
   <div class="card" id="legacy-edd-consolidation-notice" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.04);">
     <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
       <div style="max-width:760px;">
-        <div class="card-title">Enhanced Review cases are now managed from Applications</div>
+        <div class="card-title">Formal investigation cases are managed in Lifecycle</div>
         <p style="margin:6px 0 0;font-size:13px;color:var(--text2);line-height:1.5;">
-          Use Applications as the operational command centre for Enhanced Review status, approval-blocked files, client submissions, officer review, requests, memo visibility, and approval readiness.
+          Use KYC Documents for onboarding Enhanced Review Requirements. Use this queue for formal post-onboarding or manually escalated investigation cases with SLA, findings, senior review, and outcome controls.
         </p>
         <p style="margin:8px 0 0;font-size:12px;color:var(--text3);line-height:1.5;">
-          This legacy EDD case view is retained for governance continuity where old EDD case fields remain unique: SLA due date, senior reviewer assignment, structured EDD findings, case-stage transitions, and closure controls.
+          Existing onboarding-created investigation cases are not hidden in this release; they remain visible for governance continuity and are labelled as investigation cases rather than onboarding evidence requirements.
         </p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <button class="btn btn-primary btn-sm" onclick="openApplicationsEnhancedReview('active')">Open Applications — Enhanced Review</button>
+        <button class="btn btn-primary btn-sm" onclick="openApplicationsEnhancedReview('active')">Open Applications — Enhanced Requirements</button>
         <button class="btn btn-outline btn-sm" onclick="openApplicationsEnhancedReview('approval_blocked')">Open Applications — Approval Blocked</button>
       </div>
     </div>
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
-    <div class="stat-card"><div class="stat-card-label">EDD Cases Active</div><div class="stat-card-value" style="color:#7c3aed;" id="edd-stat-active">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Investigation Cases Active</div><div class="stat-card-value" style="color:#7c3aed;" id="edd-stat-active">0</div></div>
     <div class="stat-card"><div class="stat-card-label">Awaiting Senior Review</div><div class="stat-card-value" style="color:var(--amber);" id="edd-stat-awaiting">0</div></div>
     <div class="stat-card"><div class="stat-card-label">Completed This Month</div><div class="stat-card-value" style="color:var(--green);" id="edd-stat-completed">0</div></div>
   </div>
@@ -1725,16 +1725,16 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
-      <thead><tr><th>Client</th><th>Risk</th><th>Score</th><th>EDD Stage</th><th>Assigned Officer</th><th>Days in EDD</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Client</th><th>Risk</th><th>Score</th><th>Investigation Stage</th><th>Assigned Officer</th><th>Days in Investigation</th><th>Actions</th></tr></thead>
       <tbody id="edd-body"></tbody>
     </table>
   </div>
 </div>
 
-<!-- EDD Case Detail Modal -->
+<!-- Investigation Case Detail Modal -->
 <div class="modal-overlay" id="modal-edd-detail">
   <div class="modal" style="width:750px;max-height:85vh;overflow-y:auto;">
-    <div class="modal-header"><h3 id="edd-modal-title">EDD Case Detail</h3><button class="modal-close" onclick="closeModal('modal-edd-detail')">&times;</button></div>
+    <div class="modal-header"><h3 id="edd-modal-title">Investigation Case Detail</h3><button class="modal-close" onclick="closeModal('modal-edd-detail')">&times;</button></div>
     <div class="modal-body" id="edd-modal-body"></div>
     <div class="modal-footer" id="edd-modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-edd-detail')">Close</button>
@@ -2541,8 +2541,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <div class="view" id="view-enhanced-requirements">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;">Enhanced / EDD Requirements</h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Rules are grouped by trigger and stored as back-office configuration.</p>
+      <h3 style="font-size:16px;font-weight:700;">Enhanced Review Requirement Settings</h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Onboarding enhanced evidence, disclosure, and control rules grouped by trigger. Formal investigation cases remain in Lifecycle.</p>
     </div>
     <button class="btn btn-primary role-er-write" id="er-add-btn" onclick="showEnhancedRequirementForm()">Add Rule</button>
   </div>
@@ -4625,7 +4625,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', lifecycle:'Lifecycle Queue', edd:'EDD Pipeline', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   // Close mobile menu on navigation
@@ -7423,7 +7423,7 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
       '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
         '<div>' +
           '<div style="font-size:12px;font-weight:800;color:var(--text1);">' + escapeHtml(summaryLine) + '</div>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Next action: ' + escapeHtml(summary.next_action || 'No enhanced review required') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Onboarding enhanced evidence, disclosures, and controls. Next action: ' + escapeHtml(summary.next_action || 'No enhanced review required') + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Triggers: ' + escapeHtml(triggerText) + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
@@ -10676,7 +10676,7 @@ async function updateEDDStats() {
 
 function openEDDDetail(caseId) {
   var c = EDD_CASES.find(function(x) { return x.id === caseId; });
-  if (!c) { showToast('EDD case not found'); return; }
+  if (!c) { showToast('Investigation case not found'); return; }
   currentEDDCase = c;
 
   var days = Math.floor((new Date() - new Date(c.triggered_at)) / 86400000);
@@ -10693,17 +10693,17 @@ function openEDDDetail(caseId) {
   var seniorReviewer = c.senior_reviewer || '';
 
   var html = '<div class="detail-section">' +
-    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">EDD Case Summary</div>' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Investigation Case Summary</div>' +
     '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + escapeHtml(c.client_name) + '</span></div>' +
     '<div class="detail-row"><span class="label">Application</span><span class="value" style="font-family:monospace;">' + escapeHtml(c.application_id) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadgeForRecord(c) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(c)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">EDD Required</span><span class="value" style="font-weight:700;">Yes</span></div>' +
+    '<div class="detail-row"><span class="label">Formal EDD Investigation</span><span class="value" style="font-weight:700;">Yes</span></div>' +
     '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</span></div>' +
     '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(eddTriggerText(c)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">EDD Opened</span><span class="value">' + (c.triggered_at || '').split('T')[0] + '</span></div>' +
-    '<div class="detail-row"><span class="label">Days in EDD</span><span class="value" style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + ' days</span></div>' +
+    '<div class="detail-row"><span class="label">Investigation Opened</span><span class="value">' + (c.triggered_at || '').split('T')[0] + '</span></div>' +
+    '<div class="detail-row"><span class="label">Days in Investigation</span><span class="value" style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + ' days</span></div>' +
     '<div class="detail-row"><span class="label">SLA Due</span><span class="value">' + escapeHtml(slaDate || '—') + '</span></div>' +
     '<div class="detail-row"><span class="label">Senior Reviewer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === seniorReviewer; }); return u ? u.name : (seniorReviewer || '—'); })()) + '</span></div>' +
     '</div>';
@@ -10720,7 +10720,7 @@ function openEDDDetail(caseId) {
 
   if (blockers.length) {
     html += '<div style="margin-top:16px;padding:10px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;color:#92400e;font-size:12px;">' +
-      '<strong>EDD blockers:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
+      '<strong>Investigation blockers:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
       blockers.map(function(b) { return '<li>' + escapeHtml(b) + '</li>'; }).join('') +
       '</ul></div>';
   }
@@ -10739,7 +10739,7 @@ function openEDDDetail(caseId) {
   var notes = c.edd_notes || [];
   if (notes.length) {
     html += '<div class="detail-section" style="margin-top:16px;">' +
-      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">EDD Notes &amp; Activity</div>';
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Investigation Notes &amp; Activity</div>';
     notes.forEach(function(n) {
       html += '<div style="padding:8px 12px;margin-bottom:6px;background:var(--bg2);border-radius:var(--radius-sm);font-size:13px;border-left:3px solid #7c3aed;">' +
         '<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><strong>' + escapeHtml(n.author || 'System') + '</strong><span style="color:var(--text3);font-size:11px;">' + (n.ts || '').split('T')[0] + '</span></div>' +
@@ -10774,13 +10774,13 @@ function openEDDDetail(caseId) {
       '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Actions</div>' +
       '<div style="margin-bottom:12px;">' +
         '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Add Note</label>' +
-        '<textarea id="edd-action-note" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Add a note about this EDD case..."></textarea>' +
+        '<textarea id="edd-action-note" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Add a note about this investigation case..."></textarea>' +
       '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
 
     // Stage-appropriate action buttons
     var transitions = { triggered: ['information_gathering', 'analysis'], information_gathering: ['analysis'], analysis: ['pending_senior_review'], pending_senior_review: ['edd_approved', 'edd_rejected', 'analysis'] };
-    var btnLabels = { information_gathering: 'Start Info Gathering', analysis: 'Begin Analysis', pending_senior_review: 'Submit for Senior Review', edd_approved: 'Approve EDD', edd_rejected: 'Reject EDD' };
+    var btnLabels = { information_gathering: 'Start Info Gathering', analysis: 'Begin Analysis', pending_senior_review: 'Submit for Senior Review', edd_approved: 'Approve Investigation', edd_rejected: 'Reject Investigation' };
     var btnStyles = { edd_approved: 'background:var(--green);color:white;border-color:var(--green);', edd_rejected: 'background:var(--red);color:white;border-color:var(--red);' };
 
     var allowed = transitions[c.stage] || [];
@@ -10799,7 +10799,7 @@ function openEDDDetail(caseId) {
       '<button class="btn btn-outline btn-sm" onclick="closeModal(\'modal-edd-detail\');openAppDetail(\'' + escapeHtml(app.ref) + '\');">View Full Application Detail</button></div>';
   }
 
-  document.getElementById('edd-modal-title').textContent = 'EDD Case — ' + c.client_name;
+  document.getElementById('edd-modal-title').textContent = 'Investigation Case — ' + c.client_name;
   document.getElementById('edd-modal-body').innerHTML = html;
   document.getElementById('modal-edd-detail').classList.add('open');
   // PR-C Scope C — additive lifecycle context section (read-only).
@@ -10825,12 +10825,12 @@ async function saveEDDFindings(caseId) {
     if (Object.keys(patch).length) {
       await boApiCall('PATCH', '/edd/cases/' + caseId, patch);
     }
-    showToast('EDD SLA and findings saved');
+    showToast('Investigation SLA and findings saved');
     await loadEDDCases();
     renderEDD();
     openEDDDetail(caseId);
   } catch(err) {
-    showToast('Failed to save EDD findings: ' + (err.message || 'Unknown error'), 'error');
+    showToast('Failed to save investigation findings: ' + (err.message || 'Unknown error'), 'error');
   }
 }
 
@@ -10838,7 +10838,7 @@ async function advanceEDDStage(caseId, newStage) {
   var note = document.getElementById('edd-action-note') ? document.getElementById('edd-action-note').value.trim() : '';
   var needsGate = ['pending_senior_review','edd_approved','edd_rejected'].indexOf(newStage) >= 0;
   if (needsGate && currentEDDCase && currentEDDCase.case_status && !currentEDDCase.case_status.can_enter_review_or_close) {
-    showToast('Save SLA due date, senior reviewer, and complete EDD findings before this transition.', 'error');
+    showToast('Save SLA due date, senior reviewer, and complete investigation findings before this transition.', 'error');
     return;
   }
 
@@ -10859,13 +10859,13 @@ async function advanceEDDStage(caseId, newStage) {
   try {
     await boApiCall('PATCH', '/edd/cases/' + caseId, body);
     var stageLabels = { information_gathering: 'Information Gathering', analysis: 'Analysis', pending_senior_review: 'Senior Review', edd_approved: 'Approved', edd_rejected: 'Rejected' };
-    showToast('EDD case advanced to: ' + (stageLabels[newStage] || newStage));
+    showToast('Investigation case advanced to: ' + (stageLabels[newStage] || newStage));
     // Reload EDD data
     await loadEDDCases();
     renderEDD();
     closeModal('modal-edd-detail');
   } catch(err) {
-    showToast('Failed to update EDD case: ' + (err.message || 'Unknown error'), 'error');
+    showToast('Failed to update investigation case: ' + (err.message || 'Unknown error'), 'error');
   }
 }
 
@@ -14988,7 +14988,7 @@ function renderMemoGenerated(memo) {
     })],
     ['Monitoring Summary', renderMemoMonitoring(data.monitoring_screening_summary || {})],
     ['Required Items', renderMemoRequiredItems(data.required_items || [])],
-    ['EDD Summary', renderMemoEDD(data.edd_summary || {})],
+    ['Investigation Case Summary', renderMemoEDD(data.edd_summary || {})],
     ['Risk Reassessment', renderMemoKeyValue(data.risk_reassessment || {}, {
       outcome: 'Outcome',
       rationale: 'Rationale'
@@ -15061,11 +15061,11 @@ function renderMemoRequiredItems(items) {
 
 function renderMemoEDD(e) {
   if (!e.triggered) {
-    return '<div style="font-size:12px;color:var(--text3);">EDD not triggered.</div>';
+    return '<div style="font-size:12px;color:var(--text3);">Formal investigation case not triggered.</div>';
   }
   var rows = '<div class="detail-row"><span class="label">Triggered</span><span class="value">Yes</span></div>';
   if (e.linked_edd_id) {
-    rows += '<div class="detail-row"><span class="label">Linked EDD</span><span class="value">#' + escapeHtml(String(e.linked_edd_id)) + '</span></div>';
+    rows += '<div class="detail-row"><span class="label">Linked investigation</span><span class="value">#' + escapeHtml(String(e.linked_edd_id)) + '</span></div>';
   }
   if (e.key_findings_summary) {
     rows += '<div class="detail-row"><span class="label">Findings</span><span class="value">' + escapeHtml(e.key_findings_summary) + '</span></div>';
@@ -15079,7 +15079,7 @@ function renderMemoArtifactRefs(a) {
   rows += '<div class="detail-row"><span class="label">Linked alerts</span><span class="value">' +
     (alerts.length ? alerts.map(function(x) { return '#' + escapeHtml(String(x)); }).join(', ') : '—') +
     '</span></div>';
-  rows += '<div class="detail-row"><span class="label">Linked EDD</span><span class="value">' +
+  rows += '<div class="detail-row"><span class="label">Linked investigation</span><span class="value">' +
     (a.linked_edd ? '#' + escapeHtml(String(a.linked_edd)) : '—') + '</span></div>';
   rows += '<div class="detail-row"><span class="label">Onboarding memo</span><span class="value">' +
     (a.onboarding_memo_reference ? escapeHtml(String(a.onboarding_memo_reference)) : '—') + '</span></div>';
@@ -15353,7 +15353,7 @@ function getMemoApprovalBlockers(app, validationResult) {
   var supervisor = memoSupervisorBlock(memoData, memoMeta);
   var supervisorVerdict = String(supervisor.verdict || result.supervisor_status || memoMeta.supervisor_status || '').toUpperCase();
   if (supervisor.mandatory_escalation) {
-    blockers.push('Complete mandatory escalation or EDD and regenerate the memo before approval.');
+    blockers.push('Complete mandatory escalation or formal investigation and regenerate the memo before approval.');
   } else if (supervisorVerdict === 'INCONSISTENT' || supervisor.can_approve === false) {
     blockers.push('Resolve supervisor inconsistencies before memo approval.');
   } else if (supervisorVerdict === 'CONSISTENT_WITH_WARNINGS') {
@@ -15366,7 +15366,7 @@ function getMemoApprovalBlockers(app, validationResult) {
   var routing = metadata.edd_routing || {};
   var appStatus = String((app && (app.statusRaw || app.status)) || '').toLowerCase();
   if (routing.route === 'edd' && appStatus !== 'edd_required' && appStatus !== 'edd_approved') {
-    blockers.push('Route this case to EDD before memo approval.');
+    blockers.push('Route this case to a formal investigation before memo approval.');
   }
 
   return blockers;
@@ -15660,9 +15660,9 @@ function getCaseCommandBlockers(app) {
           : 'Resolve Enhanced Review';
     addBlocker(
       'enhanced-review',
-      'KYC / Enhanced Review',
-      'Enhanced Review requirements need attention.',
-      enhancedDetail,
+      'KYC / Enhanced Evidence',
+      'Enhanced Evidence Requirements are still outstanding.',
+      'Resolve required onboarding evidence before approval. ' + enhancedDetail,
       enhancedCta,
       'kyc-docs',
       'detail-enhanced-requirements-section',
@@ -15672,10 +15672,10 @@ function getCaseCommandBlockers(app) {
   } else if (status === 'edd_required' || status === 'edd_in_progress' || status === 'edd_approved' || status === 'pending_senior_review') {
     addBlocker(
       'edd',
-      'EDD',
-      'Enhanced due diligence is still in progress.',
-      'Review lifecycle EDD state before approval.',
-      'Review EDD',
+      'Investigation Case',
+      'Investigation Case is open.',
+      'Resolve findings and senior review in Lifecycle before approval.',
+      'Open investigation case',
       'lifecycle',
       'detail-tab-lifecycle',
       true,
@@ -16641,7 +16641,7 @@ async function submitOfficerCorrection() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/corrections', payload);
     closeModal('modal-officer-correction');
     await refreshCurrentAppDetail();
-    showToast('Correction saved. RegMind updated the risk, EDD requirements, memo status, and approval blockers where required.');
+    showToast('Correction saved. RegMind updated the risk, Enhanced Review requirements, memo status, and approval blockers where required.');
   } catch (err) {
     setOfficerCorrectionError(err.message || 'Failed to save correction.');
   }
@@ -19673,7 +19673,7 @@ async function saveSystemSettings() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ENHANCED / EDD REQUIREMENT SETTINGS
+// ENHANCED REVIEW REQUIREMENT SETTINGS
 // ═══════════════════════════════════════════════════════════
 var ENHANCED_REQUIREMENT_RULES = [];
 var ENHANCED_REQUIREMENT_META = {};
@@ -20249,7 +20249,7 @@ function renderMemoSections(data) {
       (sec.mitigants||['None identified']).forEach(function(m) { html += '<div class="memo-mitigant">• ' + m + '</div>'; });
       html += '</div></div>';
     }
-    // Enhanced Review / EDD — deterministic lifecycle summary
+    // Onboarding Enhanced Review — deterministic lifecycle summary
     else if (key === 'enhanced_review_edd') {
       var er = sec.summary || {};
       var erOutstanding = (er.outstanding || []).length;

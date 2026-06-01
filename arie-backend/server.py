@@ -10136,8 +10136,8 @@ ROLE_PERMISSION_MATRIX = [
     {"id": "manage_roles_permissions", "label": "Manage roles & permissions", "roles": ["admin"]},
     {"id": "view_audit_trail", "label": "View audit trail", "roles": ["admin", "sco"]},
     {"id": "system_settings", "label": "System settings", "roles": ["admin"]},
-    {"id": "manage_enhanced_requirements", "label": "Manage Enhanced / EDD requirements", "roles": ["admin", "sco"]},
-    {"id": "view_enhanced_requirements", "label": "View Enhanced / EDD requirements", "roles": ["admin", "sco", "co"]},
+    {"id": "manage_enhanced_requirements", "label": "Manage Enhanced Review requirements", "roles": ["admin", "sco"]},
+    {"id": "view_enhanced_requirements", "label": "View Enhanced Review requirements", "roles": ["admin", "sco", "co"]},
 ]
 
 

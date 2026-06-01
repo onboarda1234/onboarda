@@ -312,16 +312,43 @@ class TestCaseCommandCentreRuntime:
                         "next_action": "Resolve outstanding enhanced review requirements.",
                         "next_action_code": "resolve_blockers",
                     },
-                    "approvalReadiness": {"ready": False, "blockers": ["EDD required"]},
+                    "approvalReadiness": {"ready": False, "blockers": ["Enhanced review required"]},
                 },
             )
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "enhanced-review" in blocker_ids
         assert result["blockers"][0]["id"] == "enhanced-review"
-        assert "Enhanced Review requirements need attention." in result["html"]
+        assert result["blockers"][0]["category"] == "KYC / Enhanced Evidence"
+        assert result["blockers"][0]["title"] == "Enhanced Evidence Requirements are still outstanding."
+        assert "Resolve required onboarding evidence before approval." in result["html"]
+        assert "Enhanced due diligence is still in progress." not in result["html"]
         assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-enhanced-requirements-section")\'' in result["html"]
         assert "Next: Resolve Enhanced Review." in result["html"]
+
+    def test_formal_investigation_blocker_targets_lifecycle(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(status="EDD Required", statusRaw="edd_required"),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "enhancedSummary": {},
+                    "approvalReadiness": {"ready": False, "blockers": ["Formal investigation is open"]},
+                },
+            )
+        )
+        investigation = [item for item in result["blockers"] if item["id"] == "edd"][0]
+        assert investigation["category"] == "Investigation Case"
+        assert investigation["title"] == "Investigation Case is open."
+        assert investigation["ctaLabel"] == "Open investigation case"
+        assert investigation["tab"] == "lifecycle"
+        assert 'onclick=\'activateCaseCommandTarget("lifecycle","detail-tab-lifecycle")\'' in result["html"]
 
     def test_document_blocker_is_shown_when_document_issues_exist(self):
         html = _read_backoffice()
@@ -422,6 +449,22 @@ class TestCaseCommandCentreRuntime:
         assert 'id="detail-kyc-documents-summary-copy"' in html
         assert 'details id="detail-enhanced-requirements-details"' in html
         assert 'id="detail-enhanced-requirements-summary-copy"' in html
+        assert 'Enhanced Review Requirements are onboarding evidence requirements. Formal investigation cases are managed in Lifecycle.' in html
+        assert 'Onboarding evidence, disclosures, and controls required because of risk, PEP, screening, jurisdiction, or sector triggers.' in html
+
+    def test_pr5a_investigation_queue_copy_is_distinct_from_onboarding_evidence(self):
+        html = _read_backoffice()
+        edd_view = _extract_between(
+            html,
+            '<div class="view" id="view-edd">',
+            '<!-- ═══════════════ ONGOING MONITORING ═══════════════ -->',
+        )
+        assert "Formal investigation cases are managed in Lifecycle" in edd_view
+        assert "Use KYC Documents for onboarding Enhanced Review Requirements." in edd_view
+        assert "Investigation Case Detail" in edd_view
+        assert "Investigation Cases Active" in edd_view
+        assert "Enhanced Review cases are now managed from Applications" not in edd_view
+        assert "EDD Cases Active" not in edd_view
 
     def test_pr2d_enhanced_requirements_table_is_slimmed_without_upload_controls(self):
         html = _read_backoffice()

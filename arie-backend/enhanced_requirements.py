@@ -1554,7 +1554,7 @@ def _memo_overall_status(active_items, unresolved_mandatory, unresolved_blocking
 
 
 def build_enhanced_review_memo_summary(db, application_id):
-    """Build a sanitized Enhanced Review / EDD summary for memo generation.
+    """Build a sanitized onboarding Enhanced Review summary for memo generation.
 
     The summary is officer/auditor-facing but deliberately excludes raw
     trigger_context JSON, raw screening payloads, full client free text, and
@@ -2181,12 +2181,12 @@ def format_enhanced_requirements_approval_error(validation):
     )
     if detail:
         return (
-            "Enhanced Review requirements remain unresolved. "
+            "Onboarding Enhanced Review requirements remain unresolved. "
             f"{counts}. Items: {detail}. "
             "Accept mandatory/blocking requirements or record a valid senior waiver before approval."
         )
     return (
-        "Enhanced Review requirements remain unresolved. "
+        "Onboarding Enhanced Review requirements remain unresolved. "
         f"{counts}. Accept mandatory/blocking requirements or record a valid senior waiver before approval."
     )
 
