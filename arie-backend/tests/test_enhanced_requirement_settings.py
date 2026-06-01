@@ -452,7 +452,7 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/decision" not in block
     assert "/memo" not in block
     assert "/edd/" not in block.lower()
-    assert "/documents" not in block
+    assert "/documents/' + encodeURIComponent(uploadedDocId) + '/verify" in block
     assert "/supervisor" not in block
 
     assert "/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements" in portal_html
@@ -561,8 +561,25 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     assert "Save update" in actions_block
     assert "Waiver reason" in actions_block
     assert "renderEnhancedRequirementDetails(req)" in actions_block
-    assert "Upload Document" not in actions_block
+    assert "Upload document" in actions_block
+    assert "handleApplicationEnhancedRequirementUpload" in actions_block
+    assert "standard secure document pipeline" in actions_block
     assert "Upload to Record" not in actions_block
+
+
+def test_pr6b_enhanced_requirement_inline_upload_uses_real_pipeline_hooks():
+    repo_root = Path(__file__).resolve().parents[2]
+    html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
+
+    assert "function enhancedRequirementUploadEligible(req)" in html
+    assert "function selectApplicationEnhancedRequirementUpload(requirementId)" in html
+    assert "async function handleApplicationEnhancedRequirementUpload(requirementId, input)" in html
+    assert "kyc_enhanced_requirement_row" not in html
+    assert "standard secure document pipeline" in html
+    assert "'/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/upload'" in html
+    assert "'/documents/' + encodeURIComponent(uploadedDocId) + '/verify'" in html
+    assert "Document uploaded and linked to enhanced requirement" in html
+    assert "Unable to upload enhanced requirement document" in html
 
 
 def test_backoffice_edd_consolidation_routes_to_applications_without_deleting_legacy_view():

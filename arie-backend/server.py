@@ -9647,6 +9647,411 @@ class ApplicationEnhancedRequirementRequestHandler(BaseHandler):
             db.close()
 
 
+class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
+    """POST /api/applications/:id/enhanced-requirements/:requirement_id/upload.
+
+    Officer inline upload for one application enhanced requirement. This uses
+    the same validation, durable storage, document row, and slot-versioning
+    model as ordinary KYC document uploads, then links the new document to the
+    requirement and leaves the requirement in under-review state.
+    """
+
+    def _cleanup_upload_artifacts(self, file_path=None, s3_key=None):
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Back-office enhanced requirement local upload cleanup failed: %s", exc)
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, message = s3.delete_document(s3_key)
+                if not success:
+                    logger.warning("Back-office enhanced requirement S3 cleanup failed for %s: %s", s3_key, message)
+            except Exception as exc:
+                logger.warning("Back-office enhanced requirement S3 cleanup exception for %s: %s", s3_key, exc)
+
+    def _audit_inline_upload_rejected(self, user, target, reason_code, message, *, filename="", declared_size=None, db=None, status_code=400):
+        detail = {
+            "event": "application_enhanced_requirement.officer_upload_rejected",
+            "outcome": "rejected",
+            "reason_code": reason_code,
+            "message": str(message or "")[:500],
+            "filename": os.path.basename(str(filename or ""))[:180],
+            "declared_size": declared_size,
+            "source_surface": "kyc_enhanced_requirement_row",
+            "response_code": status_code,
+        }
+        try:
+            self.log_audit(
+                user,
+                f"Enhanced Requirement Upload Rejected: {reason_code}",
+                target or "enhanced-requirement-upload",
+                json.dumps(detail, sort_keys=True),
+                db=db,
+                commit=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "enhanced_requirement_upload_rejection_audit_failed=true reason_code=%s target=%s error=%s",
+                reason_code,
+                target,
+                exc,
+            )
+
+    def post(self, app_id, requirement_id):
+        user = self.require_auth(roles=APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES)
+        if not user:
+            return
+        if not self.check_rate_limit("enhanced_requirement_officer_upload", max_attempts=20, window_seconds=60):
+            return
+
+        db = get_db()
+        file_path = None
+        s3_key = None
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id, risk_level, status, onboarding_lane, pre_approval_decision "
+                "FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                self._audit_inline_upload_rejected(
+                    user, app_id, "application_not_found", "Application not found", db=db, status_code=404
+                )
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="upload")
+            if prerequisite_error:
+                self._audit_inline_upload_rejected(
+                    user,
+                    app["ref"],
+                    reason_code,
+                    prerequisite_error,
+                    db=db,
+                    status_code=409,
+                )
+                return self.error(prerequisite_error, 409)
+
+            requirement_row = db.execute(
+                """
+                SELECT *
+                FROM application_enhanced_requirements
+                WHERE id = ? AND application_id = ? AND active = 1
+                """,
+                (requirement_id, app["id"]),
+            ).fetchone()
+            if not requirement_row:
+                return self.error("Enhanced requirement not found for this application", 404)
+            before = serialize_application_requirement(requirement_row)
+            if str(before.get("requirement_type") or "").lower() != "document":
+                return self.error("This enhanced requirement does not accept document uploads", 400)
+            if str(before.get("status") or "").lower() in ("accepted", "waived", "cancelled"):
+                return self.error("This enhanced requirement is already resolved and cannot accept uploads", 409)
+
+            if "file" not in self.request.files:
+                self._audit_inline_upload_rejected(user, app["ref"], "missing_file", "No file provided", db=db)
+                return self.error("No file provided", 400)
+            file_info = self.request.files["file"][0]
+            filename = os.path.basename(file_info["filename"] or "")
+            body = file_info["body"]
+            content_type = file_info.get("content_type", "application/octet-stream")
+            file_sha256 = hashlib.sha256(body).hexdigest()
+
+            if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+                self._audit_inline_upload_rejected(
+                    user,
+                    app["ref"],
+                    "file_too_large",
+                    f"File exceeds {MAX_UPLOAD_MB}MB limit",
+                    filename=filename,
+                    declared_size=len(body),
+                    db=db,
+                )
+                return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
+
+            is_valid, reason, upload_error = FileUploadValidator.validate_with_reason(
+                filename,
+                content_type,
+                body,
+            )
+            if not is_valid:
+                self._audit_inline_upload_rejected(
+                    user,
+                    app["ref"],
+                    reason or "file_rejected",
+                    f"File rejected: {upload_error}",
+                    filename=filename,
+                    declared_size=len(body),
+                    db=db,
+                )
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            document_id = uuid.uuid4().hex[:16]
+            ext = os.path.splitext(filename)[1].lower()
+            safe_name = f"{app['id']}_{document_id}{ext}"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
+            with open(file_path, "wb") as f:
+                f.write(body)
+
+            if HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, key_or_error = s3.upload_document(
+                        file_data=body,
+                        client_id=app["id"],
+                        doc_type="enhanced_requirement",
+                        filename=safe_name,
+                        content_type=content_type,
+                        metadata={
+                            "original_name": filename,
+                            "enhanced_requirement_id": str(requirement_id),
+                            "source_surface": "kyc_enhanced_requirement_row",
+                        },
+                    )
+                    if success:
+                        s3_key = key_or_error
+                    else:
+                        logger.error("Back-office enhanced requirement S3 upload failed for %s: %s", document_id, key_or_error)
+                        if is_production() or is_staging():
+                            self._cleanup_upload_artifacts(file_path=file_path)
+                            self._audit_inline_upload_rejected(
+                                user, app["ref"], "durable_storage_failed",
+                                "Document upload failed: unable to store document durably",
+                                filename=filename, declared_size=len(body), db=db, status_code=500,
+                            )
+                            return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                except Exception as exc:
+                    logger.error("Back-office enhanced requirement S3 upload exception for %s: %s", document_id, exc)
+                    if is_production() or is_staging():
+                        self._cleanup_upload_artifacts(file_path=file_path)
+                        self._audit_inline_upload_rejected(
+                            user, app["ref"], "durable_storage_exception",
+                            "Document upload failed: unable to store document durably",
+                            filename=filename, declared_size=len(body), db=db, status_code=500,
+                        )
+                        return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+            elif is_production() or is_staging():
+                self._cleanup_upload_artifacts(file_path=file_path)
+                self._audit_inline_upload_rejected(
+                    user, app["ref"], "durable_storage_unavailable",
+                    "Document upload failed: S3 storage is not available",
+                    filename=filename, declared_size=len(body), db=db, status_code=500,
+                )
+                return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
+
+            verification_metadata = {
+                "source": "enhanced_requirement_upload",
+                "source_surface": "kyc_enhanced_requirement_row",
+                "enhanced_requirement_id": str(requirement_id),
+                "officer_uploaded": True,
+                "verification_triggered": False,
+                "verification_trigger_path": "/api/documents/{document_id}/verify",
+            }
+            replacement = _prepare_document_slot_replacement(
+                db,
+                application_id=app["id"],
+                new_document_id=document_id,
+                doc_type="enhanced_requirement",
+                person_id=None,
+                slot_key=_document_slot_key("enhanced_requirement", enhanced_requirement_id=requirement_id),
+                actor_user=user,
+                replaced_reason="enhanced_requirement_replacement",
+                extra_document_ids=[before.get("linked_document_id")] if before.get("linked_document_id") else None,
+            )
+            previous_documents = replacement["previous_documents"]
+            db.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, s3_key,
+                 file_size, mime_type, slot_key, is_current, version,
+                 verification_status, verification_results, review_status, file_sha256)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    document_id,
+                    app["id"],
+                    "enhanced_requirement",
+                    filename,
+                    file_path,
+                    s3_key,
+                    len(body),
+                    content_type,
+                    replacement["slot_key"],
+                    True,
+                    replacement["version"],
+                    STATE_PENDING,
+                    json.dumps(verification_metadata, sort_keys=True),
+                    "pending",
+                    file_sha256,
+                ),
+            )
+            _finalize_document_slot_replacement(db, app["id"], previous_documents, document_id)
+
+            now = datetime.now(timezone.utc).isoformat()
+            db.execute(
+                """
+                UPDATE application_enhanced_requirements
+                   SET status = 'under_review',
+                       linked_document_id = ?,
+                       uploaded_at = ?,
+                       reviewed_at = NULL,
+                       reviewed_by = NULL,
+                       updated_by = ?,
+                       updated_at = ?
+                 WHERE id = ? AND application_id = ?
+                """,
+                (document_id, now, user.get("sub", ""), now, before["id"], app["id"]),
+            )
+            after = serialize_application_requirement(
+                db.execute(
+                    "SELECT * FROM application_enhanced_requirements WHERE id = ? AND application_id = ?",
+                    (before["id"], app["id"]),
+                ).fetchone()
+            )
+            changes = {
+                "status": {"before": before.get("status"), "after": "under_review"},
+                "linked_document_id": {"before": before.get("linked_document_id"), "after": document_id},
+                "uploaded_at": {"before": before.get("uploaded_at"), "after": now},
+            }
+            audit_detail = {
+                "event": "application_enhanced_requirement.officer_uploaded",
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "requirement_id": after.get("id"),
+                "requirement_key": after.get("requirement_key"),
+                "requirement_label": after.get("requirement_label"),
+                "document_id": document_id,
+                "filename": filename,
+                "file_size": len(body),
+                "actor": user.get("sub", ""),
+                "actor_role": user.get("role", ""),
+                "timestamp": now,
+                "source_surface": "kyc_enhanced_requirement_row",
+                "resulting_requirement_status": after.get("status"),
+                "verification_status": STATE_PENDING,
+                "verification_triggered": False,
+                "verification_trigger_path": "/api/documents/{document_id}/verify",
+                "auto_accepted": False,
+                "changes": changes,
+            }
+            target = f"application:{app['ref']}"
+            self.log_audit(
+                user,
+                "Upload",
+                app["ref"],
+                f"Document uploaded: {filename} (enhanced_requirement) enhanced_requirement_id={requirement_id}",
+                db=db,
+                commit=False,
+            )
+            self.log_audit(
+                user,
+                "application_enhanced_requirement.officer_uploaded",
+                target,
+                json.dumps(audit_detail, sort_keys=True),
+                db=db,
+                before_state=before,
+                after_state=after,
+                commit=False,
+            )
+            self.log_audit(
+                user,
+                "application_enhanced_requirement.status_changed",
+                target,
+                json.dumps(audit_detail, sort_keys=True),
+                db=db,
+                before_state=before,
+                after_state=after,
+                commit=False,
+            )
+            self.log_audit(
+                user,
+                "application_enhanced_requirement.document_linked",
+                target,
+                json.dumps(audit_detail, sort_keys=True),
+                db=db,
+                before_state=before,
+                after_state=after,
+                commit=False,
+            )
+            if previous_documents:
+                self.log_audit(
+                    user,
+                    "document.replaced",
+                    app["ref"],
+                    json.dumps({
+                        "event": "document.replaced",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "doc_type": "enhanced_requirement",
+                        "slot_key": replacement["slot_key"],
+                        "enhanced_requirement_id": str(requirement_id),
+                        "old_document_id": previous_documents[0]["id"],
+                        "old_document_ids": [row["id"] for row in previous_documents],
+                        "new_document_id": document_id,
+                        "actor": user.get("sub", ""),
+                        "timestamp": now,
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state={"documents": previous_documents},
+                    after_state={"document_id": document_id, "version": replacement["version"], "is_current": True},
+                )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="enhanced_requirement_document_uploaded",
+                reason="Enhanced requirement document upload changed memo evidence.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state={"requirement": before, "documents": previous_documents},
+                after_state={"requirement": after, "document_id": document_id},
+            )
+            summary = build_enhanced_requirement_operational_summary(db, app["id"], app_row=app)
+            db.commit()
+            self.success({
+                "status": "uploaded",
+                "requirement": after,
+                "document": {
+                    "id": document_id,
+                    "doc_name": filename,
+                    "doc_type": "enhanced_requirement",
+                    "file_size": len(body),
+                    "mime_type": content_type,
+                    "slot_key": replacement["slot_key"],
+                    "is_current": True,
+                    "version": replacement["version"],
+                    "verification_status": STATE_PENDING,
+                    "replaced_document_ids": [row["id"] for row in previous_documents],
+                },
+                "enhanced_review_summary": summary,
+                "agent1_verification": {
+                    "triggered": False,
+                    "trigger_path": "/api/documents/{document_id}/verify",
+                },
+            }, 201)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+            logger.error(
+                "application enhanced requirement upload failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to upload enhanced requirement document", 500)
+        finally:
+            db.close()
+
+
 class ApplicationEnhancedRequirementsGenerateHandler(BaseHandler):
     """POST /api/applications/:id/enhanced-requirements/generate."""
 
@@ -21534,6 +21939,7 @@ def make_app():
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/upload", ApplicationEnhancedRequirementUploadHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/request", ApplicationEnhancedRequirementRequestHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)", ApplicationEnhancedRequirementDetailHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements", ApplicationEnhancedRequirementsHandler),

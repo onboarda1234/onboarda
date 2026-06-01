@@ -7055,6 +7055,13 @@ function enhancedRequirementRequestEligible(req) {
     ['generated','under_review','rejected'].indexOf(status) >= 0;
 }
 
+function enhancedRequirementUploadEligible(req) {
+  if (!req || req.active === false || !canUpdateApplicationEnhancedRequirements()) return false;
+  var type = String(req.requirement_type || '').toLowerCase();
+  var status = String(req.status || 'generated').toLowerCase();
+  return type === 'document' && ['accepted','waived','cancelled'].indexOf(status) < 0;
+}
+
 function enhancedRequirementTriggerReason(req) {
   if (req.trigger_reason) return req.trigger_reason;
   var ctx = req.trigger_context || {};
@@ -7290,6 +7297,13 @@ function renderApplicationEnhancedRequirementActions(req) {
   if (canRequestApplicationEnhancedRequirementsFromClient() && enhancedRequirementRequestEligible(req)) {
     requestHtml = '<button class="btn btn-outline btn-sm" onclick="requestApplicationEnhancedRequirementFromClient(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Request from client</button>';
   }
+  var uploadHtml = '';
+  if (enhancedRequirementUploadEligible(req)) {
+    var uploadLabel = req.linked_document_id ? 'Replace document' : 'Upload document';
+    uploadHtml =
+      '<input type="file" id="er-upload-' + escapeHtml(controlId) + '" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="handleApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\', this)" />' +
+      '<button class="btn btn-outline btn-sm" onclick="selectApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">' + escapeHtml(uploadLabel) + '</button>';
+  }
 
   return '<details style="min-width:260px;">' +
     '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--brand);list-style-position:inside;">Expand</summary>' +
@@ -7315,10 +7329,12 @@ function renderApplicationEnhancedRequirementActions(req) {
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">' +
         '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          uploadHtml +
           requestHtml +
           '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
         '</div>' +
       '</div>' +
+      (uploadHtml ? '<div style="font-size:10px;color:var(--text3);margin-top:5px;">Uploads use the standard secure document pipeline and move this requirement to Under Review for officer assessment.</div>' : '') +
       workflowAcceptHtml +
       waiverHtml +
       renderEnhancedRequirementDetails(req) +
@@ -7520,6 +7536,87 @@ async function saveApplicationEnhancedRequirement(requirementId) {
   } catch (err) {
     setEnhancedRequirementDetailMessage('Unable to update enhanced requirement: ' + (err.message || 'Unknown error'), 'red');
     showToast('Unable to update enhanced requirement', 'error');
+  }
+}
+
+function selectApplicationEnhancedRequirementUpload(requirementId) {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!canUpdateApplicationEnhancedRequirements()) {
+    showToast('You do not have permission to upload enhanced requirement documents', 'error');
+    return;
+  }
+  var controlId = enhancedRequirementControlId(requirementId);
+  var input = document.getElementById('er-upload-' + controlId);
+  if (input) input.click();
+}
+
+async function handleApplicationEnhancedRequirementUpload(requirementId, input) {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!canUpdateApplicationEnhancedRequirements()) {
+    showToast('You do not have permission to upload enhanced requirement documents', 'error');
+    return;
+  }
+  var file = input && input.files && input.files[0];
+  if (!file) return;
+  if (file.size > boDocUploadMaxBytes()) {
+    showToast('File too large — maximum ' + boDocUploadMaxLabel(), 'error');
+    if (input) input.value = '';
+    return;
+  }
+
+  var req = APPLICATION_ENHANCED_REQUIREMENTS.find(function(item) {
+    return String(item.id) === String(requirementId);
+  });
+  if (!enhancedRequirementUploadEligible(req)) {
+    showToast('This enhanced requirement cannot accept a document upload', 'error');
+    if (input) input.value = '';
+    return;
+  }
+
+  var detailsEl = input && input.closest ? input.closest('details') : null;
+  var uploadBtn = detailsEl ? detailsEl.querySelector('button[onclick*="selectApplicationEnhancedRequirementUpload"]') : null;
+  if (uploadBtn) {
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Uploading…';
+  }
+
+  try {
+    var formData = new FormData();
+    formData.append('file', file);
+    var result = await boApiCall(
+      'POST',
+      '/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/upload',
+      formData
+    );
+    var uploadedDocId = result && result.document && result.document.id;
+    if (uploadedDocId) {
+      try {
+        await boApiCall('POST', '/documents/' + encodeURIComponent(uploadedDocId) + '/verify');
+      } catch (verifyErr) {
+        console.warn('Post-upload verification failed for enhanced requirement document:', verifyErr);
+        setEnhancedRequirementDetailMessage('Document uploaded and linked. Verification could not be started automatically; use document verification controls if needed.', 'amber');
+      }
+    }
+    var appRef = currentApp.ref || currentApp.id;
+    showToast('Document uploaded and linked to enhanced requirement');
+    await loadFromAPI();
+    await openAppDetail(appRef, { initialTab: 'kyc-docs' });
+  } catch (err) {
+    console.warn('Enhanced requirement document upload failed:', err);
+    setEnhancedRequirementDetailMessage('Unable to upload enhanced requirement document: ' + (err.message || 'Unknown error'), 'red');
+    showToast(err.message || 'Enhanced requirement document upload failed', 'error');
+  } finally {
+    if (input) input.value = '';
+    if (uploadBtn) {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = req && req.linked_document_id ? 'Replace document' : 'Upload document';
+    }
   }
 }
 
