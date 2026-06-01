@@ -269,6 +269,27 @@ def test_rule_serialization_accepts_text_or_native_json_fields():
     assert serialize_rule(native_backed)["applies_when"] == {"risk_level": "high"}
 
 
+def test_pr6c_requirement_presentation_type_classification():
+    from enhanced_requirements import classify_requirement_presentation_type
+
+    cases = [
+        ("company_sof_evidence", "Company Source of Funds evidence", "document", "evidence"),
+        ("pep_declaration_details", "PEP declaration details", "declaration", "portal_disclosure"),
+        ("pep_jurisdiction", "PEP jurisdiction", "declaration", "portal_disclosure"),
+        ("pep_role_position", "PEP role/position", "declaration", "portal_disclosure"),
+        ("mandatory_senior_review", "Mandatory senior review", "review_task", "internal_control"),
+        ("ongoing_monitoring_flag", "Ongoing monitoring flag", "internal_control", "internal_control"),
+        ("unknown_requirement", "Unknown requirement", "", "evidence"),
+    ]
+
+    for key, label, req_type, expected in cases:
+        assert classify_requirement_presentation_type({
+            "requirement_key": key,
+            "requirement_label": label,
+            "requirement_type": req_type,
+        }) == expected
+
+
 def test_admin_can_create_update_disable_enable_and_audit(enhanced_req_api_server):
     payload = _new_rule_payload()
     create_resp = requests.post(
@@ -441,7 +462,8 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "applicationMatchesEnhancedFilter" in html
     assert "buildEnhancedOperationalSummaryFallback" in html
     assert 'id="detail-enhanced-review-summary"' in html
-    assert "Operational summary" in html
+    assert "Portal disclosure" in html
+    assert "Internal control" in html
     assert "Approval blocked" in html
 
     block = html.split("// APPLICATION ENHANCED REVIEW REQUIREMENTS — back-office display/actions", 1)[1]
@@ -525,7 +547,7 @@ def test_backoffice_application_enhanced_requirements_loader_guards_summary_and_
     assert "renderEnhancedReviewOperationalSummary(operationalSummary, requirements);" in render_block
     assert "No enhanced requirements generated for this application." in render_block
     assert "req.requirement_label || req.requirement_key || ''" in render_block
-    assert "container.innerHTML = '<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;\">' + requirementSummary + '</div>' + groupHtml;" in render_block
+    assert "container.innerHTML = groupHtml;" in render_block
 
 
 def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
@@ -549,7 +571,7 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]
     assert "<th>Source / Reason</th>" not in render_block
     assert "<th>Timeline</th>" not in render_block
-    assert "<th>Linked Evidence</th>" in render_block
+    assert "<th>Workflow / Evidence</th>" in render_block
     assert "<th>Blocking</th>" in render_block
     assert "<th>Actions</th>" in render_block
 
@@ -564,6 +586,8 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     assert "Upload document" in actions_block
     assert "handleApplicationEnhancedRequirementUpload" in actions_block
     assert "standard secure document pipeline" in actions_block
+    assert "enhancedRequirementPortalDisclosureHtml(req)" in actions_block
+    assert "enhancedRequirementInternalControlHtml(req)" in actions_block
     assert "Upload to Record" not in actions_block
 
 
@@ -572,12 +596,44 @@ def test_pr6b_enhanced_requirement_inline_upload_uses_real_pipeline_hooks():
     html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
 
     assert "function enhancedRequirementUploadEligible(req)" in html
+    assert "function enhancedRequirementPresentationType(req)" in html
     assert "function selectApplicationEnhancedRequirementUpload(requirementId)" in html
     assert "async function handleApplicationEnhancedRequirementUpload(requirementId, input)" in html
     assert "kyc_enhanced_requirement_row" not in html
     assert "standard secure document pipeline" in html
     assert "'/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/upload'" in html
     assert "'/documents/' + encodeURIComponent(uploadedDocId) + '/verify'" in html
+
+
+def test_pr6c_backoffice_renders_typed_enhanced_requirement_workflows():
+    repo_root = Path(__file__).resolve().parents[2]
+    html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
+
+    assert "function enhancedRequirementPresentationType(req)" in html
+    assert "function enhancedRequirementPortalDisclosureHtml(req)" in html
+    assert "function enhancedRequirementInternalControlHtml(req)" in html
+    assert "Portal disclosure" in html
+    assert "Internal control" in html
+    assert "Not submitted in portal" in html
+    assert "Captured from portal" in html
+    assert "Open AI Compliance Supervisor" in html
+    assert "View monitoring status" in html
+    assert "Enhanced Review Requirements · " in html
+    assert "Portal disclosures: " in html
+    assert "Internal controls: " in html
+
+    actions_block = html.split("function renderApplicationEnhancedRequirementActions(req) {", 1)[1]
+    actions_block = actions_block.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[0]
+    assert "documentSelectHtml = displayType === 'evidence'" in actions_block
+    assert "enhancedRequirementUploadEligible(req)" in actions_block
+    assert "Mark reviewed" in actions_block
+    assert "Mark completed" in actions_block
+
+    render_block = html.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[1]
+    render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]
+    assert "<th>Workflow / Evidence</th>" in render_block
+    assert "enhancedRequirementWorkflowSummaryHtml(req)" in render_block
+    assert "enhancedRequirementTypeBadge(req)" in render_block
     assert "Document uploaded and linked to enhanced requirement" in html
     assert "Unable to upload enhanced requirement document" in html
 

@@ -1232,6 +1232,86 @@ def test_api_permissions_for_diagnostics_read_and_generate(enhanced_app_api_serv
     assert client_read.status_code == 403
 
 
+def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        """
+        INSERT INTO directors
+        (application_id, person_key, full_name, nationality, is_pep, pep_declaration, date_of_birth)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            app_id,
+            "director-1",
+            "Amina Public",
+            "AE",
+            "Yes",
+            json.dumps({
+                "declared_pep": True,
+                "client_declared_pep": True,
+                "pep_role_type": "Domestic PEP",
+                "position_title": "Deputy Minister",
+                "pep_country_jurisdiction": "United Arab Emirates",
+                "relationship_type": "self",
+                "source_of_wealth_detail": "Declared business holdings.",
+            }),
+            "1975-01-01",
+        ),
+    )
+    conn.commit()
+    _generate(conn, app_id)
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    by_key = {item["requirement_key"]: item for item in body["requirements"]}
+
+    assert by_key["company_sof_evidence"]["requirement_display_type"] == "evidence"
+    assert by_key["company_sof_evidence"]["accepts_document_upload"] is True
+
+    declaration = by_key["pep_declaration_details"]
+    assert declaration["requirement_display_type"] == "portal_disclosure"
+    assert declaration["accepts_document_upload"] is False
+    assert declaration["portal_disclosure"]["status_label"] == "Captured from portal"
+    rendered = json.dumps(declaration["portal_disclosure"])
+    assert "Amina Public" in rendered
+    assert "Deputy Minister" in rendered
+    assert "United Arab Emirates" in rendered
+
+    jurisdiction = by_key["pep_jurisdiction"]
+    assert jurisdiction["requirement_display_type"] == "portal_disclosure"
+    assert jurisdiction["portal_disclosure"]["fields"][0]["value"] == "United Arab Emirates"
+
+    role = by_key["pep_role_position"]
+    assert role["requirement_display_type"] == "portal_disclosure"
+    assert "Deputy Minister" in json.dumps(role["portal_disclosure"])
+
+    senior = by_key["mandatory_senior_review"]
+    assert senior["requirement_display_type"] == "internal_control"
+    assert senior["accepts_document_upload"] is False
+    assert senior["internal_control"]["resolve_label"] == "Open AI Compliance Supervisor"
+
+    monitoring = by_key["ongoing_monitoring_flag"]
+    assert monitoring["requirement_display_type"] == "internal_control"
+    assert monitoring["accepts_document_upload"] is False
+    assert monitoring["internal_control"]["resolve_label"] == "View monitoring status"
+
+    type_counts = body["enhanced_review_summary"]["type_counts"]
+    assert type_counts["evidence"] > 0
+    assert type_counts["portal_disclosure"] >= 3
+    assert type_counts["internal_control"] >= 2
+
+
 def test_applications_list_includes_enhanced_operational_summary_and_filters(enhanced_app_api_server):
     base_url, db_path = enhanced_app_api_server
     _sync_db_path(db_path)

@@ -167,6 +167,7 @@ from enhanced_requirements import (
     build_enhanced_requirement_operational_summaries,
     build_enhanced_requirement_operational_summary,
     build_enhanced_review_memo_summary,
+    decorate_application_requirements_for_backoffice,
     diagnose_enhanced_requirement_config,
     fulfill_application_enhanced_requirement_document,
     generate_application_enhanced_requirements,
@@ -9517,7 +9518,11 @@ class ApplicationEnhancedRequirementsHandler(BaseHandler):
                 """,
                 (app["id"],),
             ).fetchall()
-            requirements = [serialize_application_requirement(row) for row in rows]
+            requirements = decorate_application_requirements_for_backoffice(
+                db,
+                app,
+                [serialize_application_requirement(row) for row in rows],
+            )
             self.success({
                 "application_id": app["id"],
                 "application_ref": app["ref"],

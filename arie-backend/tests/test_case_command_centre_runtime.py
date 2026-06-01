@@ -423,7 +423,7 @@ class TestCaseCommandCentreRuntime:
         html = _read_backoffice()
         assert "<th>Source / Reason</th>" not in html
         assert "<th>Timeline</th>" not in html
-        assert "<th>Linked Evidence</th>" in html
+        assert "<th>Workflow / Evidence</th>" in html
         assert "<th>Actions</th>" in html
         assert "Requirement details" in html
         assert "Triggered by" in html

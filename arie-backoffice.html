@@ -6187,10 +6187,10 @@ function renderDocumentVerificationHistory(app) {
 function buildEnhancedRequirementsPanelSummary(summary, requirements) {
   summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
   var required = Number(summary.total || (Array.isArray(requirements) ? requirements.length : 0) || 0);
-  var missing = Number(summary.unresolved_count || 0);
+  var unresolved = Number(summary.unresolved_count || 0);
   var waived = Number(summary.waived_count || 0);
   var accepted = Number(summary.accepted_count || 0);
-  return required + ' required · ' + missing + ' missing · ' + accepted + ' accepted · ' + waived + ' waived';
+  return required + ' total · ' + unresolved + ' unresolved · ' + accepted + ' accepted · ' + waived + ' waived';
 }
 
 function shouldExpandEnhancedRequirements(summary, requirements) {
@@ -7019,9 +7019,28 @@ function enhancedRequirementDetailBadge(text, tone) {
   return '<span style="display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;border:1px solid var(--border1);font-size:11px;font-weight:700;color:' + color + ';background:var(--surface2);white-space:nowrap;">' + escapeHtml(text) + '</span>';
 }
 
-function enhancedRequirementStatusBadge(status) {
+function enhancedRequirementStatusBadge(status, req) {
   var normalized = String(status || 'generated').toLowerCase();
-  var labels = {
+  var displayType = enhancedRequirementPresentationType(req);
+  var labels = displayType === 'portal_disclosure' ? {
+    generated: 'Not submitted',
+    requested: 'Not submitted',
+    uploaded: 'Captured from portal',
+    under_review: 'Captured from portal',
+    accepted: 'Officer reviewed',
+    waived: 'Waived',
+    rejected: 'Update requested',
+    cancelled: 'Not Required'
+  } : displayType === 'internal_control' ? {
+    generated: 'Pending',
+    requested: 'Pending',
+    uploaded: 'Pending',
+    under_review: 'Pending',
+    accepted: 'Completed',
+    waived: 'Waived',
+    rejected: 'Attention needed',
+    cancelled: 'Not configured'
+  } : {
     generated: 'Missing',
     requested: 'Missing',
     uploaded: 'Under Review',
@@ -7059,7 +7078,31 @@ function enhancedRequirementUploadEligible(req) {
   if (!req || req.active === false || !canUpdateApplicationEnhancedRequirements()) return false;
   var type = String(req.requirement_type || '').toLowerCase();
   var status = String(req.status || 'generated').toLowerCase();
-  return type === 'document' && ['accepted','waived','cancelled'].indexOf(status) < 0;
+  return enhancedRequirementPresentationType(req) === 'evidence' &&
+    type === 'document' &&
+    req.accepts_document_upload !== false &&
+    ['accepted','waived','cancelled'].indexOf(status) < 0;
+}
+
+function enhancedRequirementPresentationType(req) {
+  if (!req) return 'evidence';
+  var displayType = String(req.requirement_display_type || '').toLowerCase();
+  if (['evidence','portal_disclosure','internal_control'].indexOf(displayType) >= 0) return displayType;
+  var type = String(req.requirement_type || '').toLowerCase();
+  var key = String((req.requirement_key || '') + ' ' + (req.requirement_label || '')).toLowerCase();
+  if (type === 'document') return 'evidence';
+  if (type === 'review_task' || type === 'internal_control') return 'internal_control';
+  if (type === 'declaration' || type === 'explanation') return 'portal_disclosure';
+  if (/mandatory_senior_review|senior_review|ongoing_monitoring_flag|monitoring_flag|supervisor|second_line/.test(key)) return 'internal_control';
+  if (/pep_declaration|pep_jurisdiction|pep_role|pep_position|declared_pep|portal_form|questionnaire|declaration/.test(key)) return 'portal_disclosure';
+  return 'evidence';
+}
+
+function enhancedRequirementTypeBadge(req) {
+  var type = enhancedRequirementPresentationType(req);
+  if (type === 'portal_disclosure') return enhancedRequirementDetailBadge('Portal disclosure', 'purple');
+  if (type === 'internal_control') return enhancedRequirementDetailBadge('Internal control', 'amber');
+  return enhancedRequirementDetailBadge('Evidence', '');
 }
 
 function enhancedRequirementTriggerReason(req) {
@@ -7091,7 +7134,7 @@ function enhancedRequirementDocumentLabel(doc) {
 
 function enhancedRequirementLinkedDocumentLabel(req) {
   var docId = req.linked_document_id || '';
-  if (!docId) return 'No document linked';
+  if (!docId) return 'No evidence linked';
   var docs = (currentApp && currentApp._documents) || [];
   var doc = docs.find(function(item) { return String(item.id) === String(docId); });
   return doc ? enhancedRequirementDocumentLabel(doc) : ('Linked document: ' + docId);
@@ -7161,6 +7204,74 @@ function enhancedRequirementDocumentOptions(req) {
   return options;
 }
 
+function enhancedRequirementPortalDisclosureHtml(req) {
+  var disclosure = (req && req.portal_disclosure) || {};
+  var fields = Array.isArray(disclosure.fields) ? disclosure.fields : [];
+  if (!fields.length) {
+    return '<div style="font-size:12px;color:var(--text3);font-weight:600;">' +
+      escapeHtml(disclosure.summary || 'Not submitted in portal') +
+    '</div>';
+  }
+  var rows = fields.slice(0, 8).map(function(field) {
+    return '<div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;font-weight:800;">' +
+      escapeHtml((field.subject ? field.subject + ' · ' : '') + (field.label || 'Portal field')) +
+      '</div><div style="font-size:12px;color:var(--text2);word-break:break-word;">' +
+      escapeHtml(field.value || '—') +
+      '</div></div>';
+  }).join('');
+  return '<div style="padding:9px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<div style="font-size:11px;font-weight:800;color:var(--text1);margin-bottom:7px;">Portal response</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;">' + rows + '</div>' +
+    (disclosure.submitted_at ? '<div style="font-size:10px;color:var(--text3);margin-top:7px;">Submitted: ' + escapeHtml(enhancedRequirementDate(disclosure.submitted_at)) + '</div>' : '') +
+    (disclosure.submitted_by ? '<div style="font-size:10px;color:var(--text3);margin-top:2px;">Submitted by: ' + escapeHtml(disclosure.submitted_by) + '</div>' : '') +
+  '</div>';
+}
+
+function enhancedRequirementInternalControlHtml(req) {
+  var control = (req && req.internal_control) || {};
+  var text = ((req && (req.requirement_key || req.requirement_name || req.title || req.name || '')) || '').toLowerCase();
+  var fallbackResolveLabel = text.indexOf('monitor') !== -1
+    ? 'View monitoring status'
+    : text.indexOf('senior') !== -1 || text.indexOf('supervisor') !== -1
+      ? 'Open AI Compliance Supervisor'
+      : 'Open relevant control';
+  var fallbackTarget = text.indexOf('monitor') !== -1 ? 'lifecycle' : text.indexOf('senior') !== -1 || text.indexOf('supervisor') !== -1 ? 'supervisor' : 'overview';
+  return '<div style="padding:9px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">' +
+      '<div style="font-size:11px;font-weight:800;color:var(--text1);">Internal control</div>' +
+      enhancedRequirementDetailBadge(control.status_label || 'Pending', control.status === 'completed' ? 'green' : 'amber') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);margin-top:7px;line-height:1.45;">' + escapeHtml(control.summary || 'Internal control must be completed where applicable.') + '</div>' +
+    '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'' + escapeHtml(control.target_tab || fallbackTarget) + '\',\'detail-tab-' + escapeHtml(control.target_tab || fallbackTarget) + '\')" style="font-size:11px;margin-top:8px;">' +
+      escapeHtml(control.resolve_label || fallbackResolveLabel) +
+    '</button>' +
+  '</div>';
+}
+
+function enhancedRequirementWorkflowSummaryHtml(req) {
+  var type = enhancedRequirementPresentationType(req);
+  if (type === 'portal_disclosure') {
+    var disclosure = (req && req.portal_disclosure) || {};
+    return '<div style="font-size:12px;color:var(--text2);font-weight:600;">' +
+      escapeHtml(disclosure.summary || disclosure.status_label || 'Not submitted in portal') +
+    '</div>' +
+    (disclosure.submitted_at ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Submitted: ' + escapeHtml(enhancedRequirementDate(disclosure.submitted_at)) + '</div>' : '');
+  }
+  if (type === 'internal_control') {
+    var control = (req && req.internal_control) || {};
+    return '<div style="font-size:12px;color:var(--text2);font-weight:600;">' +
+      escapeHtml(control.summary || control.status_label || 'Internal control pending') +
+    '</div>';
+  }
+  var evidenceBits = [
+    '<div style="font-size:12px;color:var(--text2);font-weight:600;">' + escapeHtml(enhancedRequirementLinkedDocumentLabel(req)) + '</div>'
+  ];
+  if (req.requested_at || req.client_response_at || req.linked_document_id) {
+    evidenceBits.push('<div style="margin-top:6px;">' + enhancedRequirementClientSubmissionSummary(req) + '</div>');
+  }
+  return evidenceBits.join('');
+}
+
 function buildEnhancedOperationalSummaryFallback(requirements) {
   requirements = Array.isArray(requirements) ? requirements : [];
   var summary = {
@@ -7178,7 +7289,8 @@ function buildEnhancedOperationalSummaryFallback(requirements) {
     next_action: requirements.length ? 'Enhanced review resolved' : 'No enhanced review required',
     next_action_code: requirements.length ? 'resolved' : 'none',
     status_label: requirements.length ? 'Resolved' : 'Clear',
-    trigger_labels: []
+    trigger_labels: [],
+    type_counts: { evidence: 0, portal_disclosure: 0, internal_control: 0 }
   };
   var underReview = 0;
   var rejectedClient = 0;
@@ -7202,6 +7314,8 @@ function buildEnhancedOperationalSummaryFallback(requirements) {
     if (status === 'accepted') summary.accepted_count++;
     if (status === 'waived') summary.waived_count++;
     if (status === 'under_review') underReview++;
+    var displayType = enhancedRequirementPresentationType(req);
+    if (summary.type_counts[displayType] != null) summary.type_counts[displayType]++;
     var label = req.trigger_label || req.trigger_key || '';
     if (label && summary.trigger_labels.indexOf(label) < 0) summary.trigger_labels.push(label);
   });
@@ -7234,38 +7348,37 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
   var blockedText = summary.approval_blocked ? 'Yes' : 'No';
   var blockedTone = summary.approval_blocked ? 'red' : 'green';
   var triggerText = (summary.trigger_labels || []).length ? summary.trigger_labels.join(', ') : '—';
-  var cards = [
-    ['Total', summary.total || 0],
-    ['Mandatory unresolved', summary.mandatory_unresolved_count || 0],
-    ['Blocking unresolved', summary.blocking_unresolved_count || 0],
-    ['Pending client', summary.pending_client_count || 0],
-    ['Awaiting review', summary.submitted_awaiting_review_count || 0],
-    ['Accepted / waived', (summary.accepted_count || 0) + ' / ' + (summary.waived_count || 0)]
-  ].map(function(item) {
-    return '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">' +
-      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);letter-spacing:0.4px;">' + escapeHtml(item[0]) + '</div>' +
-      '<div style="font-size:18px;font-weight:800;color:var(--text1);margin-top:2px;">' + escapeHtml(String(item[1])) + '</div>' +
-    '</div>';
-  }).join('');
+  var typeCounts = summary.type_counts || {};
+  var chips = [
+    enhancedRequirementDetailBadge('Evidence: ' + Number(typeCounts.evidence || 0), ''),
+    enhancedRequirementDetailBadge('Portal disclosures: ' + Number(typeCounts.portal_disclosure || 0), 'purple'),
+    enhancedRequirementDetailBadge('Internal controls: ' + Number(typeCounts.internal_control || 0), 'amber'),
+    enhancedRequirementDetailBadge('Approval blocked: ' + blockedText, blockedTone)
+  ].join('');
+  var summaryLine = 'Enhanced Review Requirements · ' +
+    Number(summary.total || 0) + ' total · ' +
+    Number(summary.unresolved_count || 0) + ' unresolved · ' +
+    Number(summary.blocking_unresolved_count || 0) + ' blocking · ' +
+    (summary.approval_blocked ? 'Approval blocked' : 'Approval not blocked');
   container.innerHTML =
     '<div style="border:1px solid var(--border1);border-radius:10px;background:var(--surface2);padding:12px;margin-bottom:12px;">' +
-      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
         '<div>' +
-          '<div style="font-size:12px;font-weight:800;color:var(--text1);">Operational summary</div>' +
+          '<div style="font-size:12px;font-weight:800;color:var(--text1);">' + escapeHtml(summaryLine) + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Next action: ' + escapeHtml(summary.next_action || 'No enhanced review required') + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Triggers: ' + escapeHtml(triggerText) + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
           applicationEnhancedStatusBadge({ enhancedReviewSummary: summary, lane: '' }) +
-          enhancedRequirementDetailBadge('Approval blocked: ' + blockedText, blockedTone) +
+          chips +
         '</div>' +
       '</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">' + cards + '</div>' +
     '</div>';
 }
 
 function renderApplicationEnhancedRequirementActions(req) {
-  var linkedLabel = enhancedRequirementLinkedDocumentLabel(req);
+  var displayType = enhancedRequirementPresentationType(req);
+  var linkedLabel = displayType === 'evidence' ? enhancedRequirementLinkedDocumentLabel(req) : '';
   var linkedDoc = enhancedRequirementLinkedDocument(req);
   var linkedDocWorkflowAccepted = linkedDoc && linkedDoc.workflow_test_acceptance && linkedDoc.workflow_test_acceptance.accepted === true;
   var workflowAcceptHtml = '';
@@ -7278,7 +7391,7 @@ function renderApplicationEnhancedRequirementActions(req) {
     return '<details style="min-width:220px;">' +
       '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--brand);list-style-position:inside;">Expand</summary>' +
       '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Read-only</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(linkedLabel) + '</div>' +
+      '<div style="margin-top:6px;">' + (displayType === 'portal_disclosure' ? enhancedRequirementPortalDisclosureHtml(req) : displayType === 'internal_control' ? enhancedRequirementInternalControlHtml(req) : '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>') + '</div>' +
       workflowAcceptHtml +
       (req.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;max-width:260px;">' + escapeHtml(req.review_notes) + '</div>' : '') +
       renderEnhancedRequirementDetails(req) +
@@ -7304,30 +7417,42 @@ function renderApplicationEnhancedRequirementActions(req) {
       '<input type="file" id="er-upload-' + escapeHtml(controlId) + '" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="handleApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\', this)" />' +
       '<button class="btn btn-outline btn-sm" onclick="selectApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">' + escapeHtml(uploadLabel) + '</button>';
   }
+  var typedContentHtml = displayType === 'portal_disclosure'
+    ? enhancedRequirementPortalDisclosureHtml(req)
+    : displayType === 'internal_control'
+      ? enhancedRequirementInternalControlHtml(req)
+      : '';
+  var documentSelectHtml = displayType === 'evidence'
+    ? '<label style="font-size:11px;color:var(--text2);font-weight:700;">Linked evidence' +
+        '<select id="er-doc-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-top:4px;">' +
+          enhancedRequirementDocumentOptions(req) +
+        '</select>' +
+      '</label>'
+    : '';
+  var primaryStatusOption = displayType === 'portal_disclosure'
+    ? '<option value="under_review">Mark captured from portal</option><option value="accepted">Mark reviewed</option><option value="rejected">Request update</option>'
+    : displayType === 'internal_control'
+      ? '<option value="under_review">Keep pending</option><option value="accepted">Mark completed</option><option value="rejected">Mark attention needed</option>'
+      : '<option value="under_review">Mark under review</option><option value="accepted">Accept</option><option value="rejected">Reject</option>';
 
   return '<details style="min-width:260px;">' +
     '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--brand);list-style-position:inside;">Expand</summary>' +
     '<div style="margin-top:8px;">' +
+      typedContentHtml +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;">' +
         '<label style="font-size:11px;color:var(--text2);font-weight:700;">Status' +
           '<select id="er-status-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-top:4px;">' +
             '<option value="">No status change</option>' +
-            '<option value="under_review">Mark under review</option>' +
-            '<option value="accepted">Accept</option>' +
-            '<option value="rejected">Reject</option>' +
+            primaryStatusOption +
           '</select>' +
         '</label>' +
-        '<label style="font-size:11px;color:var(--text2);font-weight:700;">Linked evidence' +
-          '<select id="er-doc-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-top:4px;">' +
-            enhancedRequirementDocumentOptions(req) +
-          '</select>' +
-        '</label>' +
+        documentSelectHtml +
       '</div>' +
       '<label style="display:block;font-size:11px;color:var(--text2);font-weight:700;margin-top:8px;">Officer notes' +
         '<textarea id="er-notes-' + escapeHtml(controlId) + '" placeholder="Internal review notes" rows="2" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;resize:vertical;margin-top:4px;">' + escapeHtml(req.review_notes || '') + '</textarea>' +
       '</label>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">' +
-        '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>' +
+        '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel || req.requirement_display_type_label || '') + '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
           uploadHtml +
           requestHtml +
@@ -7377,23 +7502,6 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
     return;
   }
 
-  var clientFacing = requirements.filter(function(req) { return ['client','both'].indexOf(String(req.audience || '').toLowerCase()) >= 0; }).length;
-  var internalFacing = requirements.filter(function(req) { return ['backoffice','both'].indexOf(String(req.audience || '').toLowerCase()) >= 0; }).length;
-  var blocking = requirements.filter(function(req) { return !!req.blocking_approval; }).length;
-  var outstanding = requirements.filter(enhancedRequirementOutstanding).length;
-  var requirementSummary = [
-    ['Total', requirements.length],
-    ['Client-facing', clientFacing],
-    ['Back-office/internal', internalFacing],
-    ['Blocking', blocking],
-    ['Outstanding', outstanding]
-  ].map(function(item) {
-    return '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">' +
-      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);letter-spacing:0.4px;">' + escapeHtml(item[0]) + '</div>' +
-      '<div style="font-size:18px;font-weight:800;color:var(--text1);margin-top:2px;">' + escapeHtml(String(item[1])) + '</div>' +
-    '</div>';
-  }).join('');
-
   var groups = {};
   requirements.forEach(function(req) {
     var key = req.trigger_key || 'unknown';
@@ -7412,23 +7520,18 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
   }).map(function(key) {
     var group = groups[key];
     var rows = group.items.map(function(req) {
-      var evidenceBits = [
-        '<div style="font-size:12px;color:var(--text2);font-weight:600;">' + escapeHtml(enhancedRequirementLinkedDocumentLabel(req)) + '</div>'
-      ];
-      if (req.requested_at || req.client_response_at || req.linked_document_id) {
-        evidenceBits.push('<div style="margin-top:6px;">' + enhancedRequirementClientSubmissionSummary(req) + '</div>');
-      }
+      var workflowBits = [enhancedRequirementWorkflowSummaryHtml(req)];
       if (req.review_notes) {
-        evidenceBits.push('<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;">Review notes: ' + escapeHtml(req.review_notes) + '</div>');
+        workflowBits.push('<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;">Review notes: ' + escapeHtml(req.review_notes) + '</div>');
       }
       var blockingBits = '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
         enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') +
         enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') +
       '</div>';
       return '<tr>' +
-        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:normal;">' + escapeHtml(req.requirement_key || '') + '</div></td>' +
-        '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' + enhancedRequirementStatusBadge(req.status) + '</div></td>' +
-        '<td style="min-width:220px;max-width:320px;">' + evidenceBits.join('') + '</td>' +
+        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;">' + enhancedRequirementTypeBadge(req) + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:normal;">' + escapeHtml(req.requirement_key || '') + '</div></td>' +
+        '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' + enhancedRequirementStatusBadge(req.status, req) + '</div></td>' +
+        '<td style="min-width:220px;max-width:360px;">' + workflowBits.join('') + '</td>' +
         '<td>' + blockingBits + '</td>' +
         '<td>' + renderApplicationEnhancedRequirementActions(req) + '</td>' +
       '</tr>';
@@ -7438,11 +7541,11 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
         '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + (group.category ? ' · ' + escapeHtml(group.category) : '') + '</div></div>' +
         enhancedRequirementDetailBadge(group.items.length + ' requirement' + (group.items.length === 1 ? '' : 's'), 'purple') +
       '</div>' +
-      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Status</th><th>Linked Evidence</th><th>Blocking</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Status</th><th>Workflow / Evidence</th><th>Blocking</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '</div>';
   }).join('');
 
-  container.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;">' + requirementSummary + '</div>' + groupHtml;
+  container.innerHTML = groupHtml;
 }
 
 async function loadApplicationEnhancedRequirements(app, generationResult) {
