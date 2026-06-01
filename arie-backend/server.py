@@ -10016,11 +10016,13 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 before_state={"requirement": before, "documents": previous_documents},
                 after_state={"requirement": after, "document_id": document_id},
             )
+            decorated_requirements = decorate_application_requirements_for_backoffice(db, app, [after])
+            decorated_after = decorated_requirements[0] if decorated_requirements else after
             summary = build_enhanced_requirement_operational_summary(db, app["id"], app_row=app)
             db.commit()
             self.success({
                 "status": "uploaded",
-                "requirement": after,
+                "requirement": decorated_after,
                 "document": {
                     "id": document_id,
                     "doc_name": filename,
@@ -10031,6 +10033,8 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     "is_current": True,
                     "version": replacement["version"],
                     "verification_status": STATE_PENDING,
+                    "verification_status_label": "Verification pending",
+                    "verification_status_tone": "pending",
                     "replaced_document_ids": [row["id"] for row in previous_documents],
                 },
                 "enhanced_review_summary": summary,

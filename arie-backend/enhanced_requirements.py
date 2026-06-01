@@ -860,6 +860,7 @@ def _portal_disclosure_summary(requirement, disclosures):
     return {
         "status": "captured",
         "status_label": "Captured from portal",
+        "requirement_status_label": "Pending officer review",
         "summary": summary,
         "fields": fields,
         "responses": disclosures,
@@ -908,10 +909,71 @@ def _internal_control_summary(requirement, app):
     }
 
 
+def _verification_status_label(status):
+    normalized = _clean_text(status or "pending").lower()
+    return {
+        "verified": "Verified",
+        "pending": "Verification pending",
+        "in_progress": "Verification running",
+        "running": "Verification running",
+        "flagged": "Verification failed",
+        "failed": "Verification failed",
+        "rejected": "Verification failed",
+        "not_run": "Verification not available",
+    }.get(normalized, normalized.replace("_", " ").title() or "Verification pending")
+
+
+def _verification_status_tone(status):
+    normalized = _clean_text(status or "pending").lower()
+    if normalized == "verified":
+        return "success"
+    if normalized in ("flagged", "failed", "rejected"):
+        return "error"
+    if normalized in ("in_progress", "running"):
+        return "info"
+    return "pending"
+
+
+def _load_linked_documents_for_requirements(db, app_id, requirements):
+    doc_ids = [
+        _clean_text(item.get("linked_document_id"))
+        for item in requirements or []
+        if _clean_text(item.get("linked_document_id"))
+    ]
+    if not doc_ids or not _table_exists(db, "documents"):
+        return {}
+    placeholders = ",".join("?" for _ in doc_ids)
+    try:
+        rows = db.execute(
+            f"""
+            SELECT id, application_id, doc_type, doc_name, file_size, mime_type,
+                   slot_key, is_current, version, verification_status,
+                   verification_results, verified_at, review_status, reviewed_by,
+                   reviewed_at, uploaded_at
+            FROM documents
+            WHERE application_id = ? AND id IN ({placeholders})
+            """,
+            [app_id] + doc_ids,
+        ).fetchall()
+    except Exception:
+        return {}
+
+    documents = {}
+    for row in rows:
+        doc = _row_dict(row) or {}
+        status = _clean_text(doc.get("verification_status") or "pending").lower() or "pending"
+        doc["verification_status"] = status
+        doc["verification_status_label"] = _verification_status_label(status)
+        doc["verification_status_tone"] = _verification_status_tone(status)
+        documents[str(doc.get("id"))] = doc
+    return documents
+
+
 def decorate_application_requirements_for_backoffice(db, app, requirements):
     """Add read-only workflow taxonomy/enrichment for back-office rendering."""
     app = _row_dict(app) or {}
     disclosures = _load_portal_pep_disclosures(db, app)
+    linked_documents = _load_linked_documents_for_requirements(db, app.get("id"), requirements)
     decorated = []
     for requirement in requirements or []:
         item = serialize_application_requirement(requirement) if not isinstance(requirement, dict) else dict(requirement)
@@ -930,8 +992,20 @@ def decorate_application_requirements_for_backoffice(db, app, requirements):
         )
         if display_type == "portal_disclosure":
             item["portal_disclosure"] = _portal_disclosure_summary(item, disclosures)
+            disclosure = item["portal_disclosure"]
+            status = _clean_text(item.get("status") or "generated").lower()
+            if disclosure.get("status") == "captured" and status in ("generated", "requested", "uploaded", "under_review"):
+                item["status_display_label"] = disclosure.get("requirement_status_label") or "Pending officer review"
+                item["status_display_tone"] = "amber"
+            elif disclosure.get("status") == "not_submitted":
+                item["status_display_label"] = "Not submitted in portal"
+                item["status_display_tone"] = "purple"
         elif display_type == "internal_control":
             item["internal_control"] = _internal_control_summary(item, app)
+        if item.get("linked_document_id"):
+            linked_doc = linked_documents.get(str(item.get("linked_document_id")))
+            if linked_doc:
+                item["linked_document"] = linked_doc
         decorated.append(item)
     return decorated
 

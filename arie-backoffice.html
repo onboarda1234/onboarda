@@ -7022,6 +7022,13 @@ function enhancedRequirementDetailBadge(text, tone) {
 function enhancedRequirementStatusBadge(status, req) {
   var normalized = String(status || 'generated').toLowerCase();
   var displayType = enhancedRequirementPresentationType(req);
+  if (req && req.status_display_label) {
+    var displayTone = req.status_display_tone === 'green' ? 'green'
+      : req.status_display_tone === 'red' ? 'red'
+      : req.status_display_tone === 'purple' ? 'purple'
+      : 'amber';
+    return enhancedRequirementDetailBadge(req.status_display_label, displayTone);
+  }
   var labels = displayType === 'portal_disclosure' ? {
     generated: 'Not submitted',
     requested: 'Not submitted',
@@ -7135,16 +7142,57 @@ function enhancedRequirementDocumentLabel(doc) {
 function enhancedRequirementLinkedDocumentLabel(req) {
   var docId = req.linked_document_id || '';
   if (!docId) return 'No evidence linked';
-  var docs = (currentApp && currentApp._documents) || [];
-  var doc = docs.find(function(item) { return String(item.id) === String(docId); });
+  var doc = enhancedRequirementLinkedDocument(req);
   return doc ? enhancedRequirementDocumentLabel(doc) : ('Linked document: ' + docId);
 }
 
 function enhancedRequirementLinkedDocument(req) {
   var docId = req && req.linked_document_id;
   if (!docId) return null;
+  if (req && req.linked_document && String(req.linked_document.id) === String(docId)) return req.linked_document;
   var docs = (currentApp && currentApp._documents) || [];
   return docs.find(function(item) { return String(item.id) === String(docId); }) || null;
+}
+
+function enhancedRequirementVerificationBadge(req) {
+  if (enhancedRequirementPresentationType(req) !== 'evidence') return '';
+  var doc = enhancedRequirementLinkedDocument(req);
+  if (!doc) return '';
+  var raw = String(doc.verification_status || doc.verification_state || 'pending').toLowerCase();
+  var label = doc.verification_status_label || ({
+    verified: 'Verified',
+    pending: 'Verification pending',
+    in_progress: 'Verification running',
+    running: 'Verification running',
+    flagged: 'Verification failed',
+    failed: 'Verification failed',
+    rejected: 'Verification failed',
+    not_run: 'Verification not available'
+  }[raw] || raw.replace(/_/g, ' ') || 'Verification pending');
+  var tone = raw === 'verified' ? 'green'
+    : ['flagged','failed','rejected'].indexOf(raw) >= 0 ? 'red'
+    : ['in_progress','running'].indexOf(raw) >= 0 ? 'purple'
+    : 'amber';
+  return enhancedRequirementDetailBadge(label, tone);
+}
+
+function enhancedRequirementPortalRequestCopy(req) {
+  var audience = String((req && req.audience) || '').toLowerCase();
+  if (['client','both'].indexOf(audience) < 0) return '';
+  var status = String((req && req.status) || 'generated').toLowerCase();
+  if (status === 'generated') {
+    return 'Client-facing requirement. Not yet sent to client portal; it appears after you request it from the client.';
+  }
+  if (status === 'requested') {
+    return 'Sent to client portal' + (req.requested_at ? ' on ' + enhancedRequirementDate(req.requested_at) : '') + '.';
+  }
+  if (['uploaded','under_review'].indexOf(status) >= 0) {
+    return 'Client-facing requirement is under officer review.';
+  }
+  if (status === 'rejected') {
+    return 'Update requested from client portal.';
+  }
+  return '';
 }
 
 function enhancedRequirementClientSubmissionSummary(req) {
@@ -7252,10 +7300,12 @@ function enhancedRequirementWorkflowSummaryHtml(req) {
   var type = enhancedRequirementPresentationType(req);
   if (type === 'portal_disclosure') {
     var disclosure = (req && req.portal_disclosure) || {};
+    var portalCopy = enhancedRequirementPortalRequestCopy(req);
     return '<div style="font-size:12px;color:var(--text2);font-weight:600;">' +
       escapeHtml(disclosure.summary || disclosure.status_label || 'Not submitted in portal') +
     '</div>' +
-    (disclosure.submitted_at ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Submitted: ' + escapeHtml(enhancedRequirementDate(disclosure.submitted_at)) + '</div>' : '');
+    (disclosure.submitted_at ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Submitted: ' + escapeHtml(enhancedRequirementDate(disclosure.submitted_at)) + '</div>' : '') +
+    (portalCopy ? '<div style="font-size:10px;color:var(--text3);margin-top:5px;">' + escapeHtml(portalCopy) + '</div>' : '');
   }
   if (type === 'internal_control') {
     var control = (req && req.internal_control) || {};
@@ -7266,8 +7316,16 @@ function enhancedRequirementWorkflowSummaryHtml(req) {
   var evidenceBits = [
     '<div style="font-size:12px;color:var(--text2);font-weight:600;">' + escapeHtml(enhancedRequirementLinkedDocumentLabel(req)) + '</div>'
   ];
+  var verificationBadge = enhancedRequirementVerificationBadge(req);
+  if (verificationBadge) {
+    evidenceBits.push('<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:5px;">' + verificationBadge + '<span style="font-size:10px;color:var(--text3);">Verification does not auto-accept this requirement.</span></div>');
+  }
   if (req.requested_at || req.client_response_at || req.linked_document_id) {
     evidenceBits.push('<div style="margin-top:6px;">' + enhancedRequirementClientSubmissionSummary(req) + '</div>');
+  }
+  var requestCopy = enhancedRequirementPortalRequestCopy(req);
+  if (requestCopy) {
+    evidenceBits.push('<div style="font-size:10px;color:var(--text3);margin-top:5px;">' + escapeHtml(requestCopy) + '</div>');
   }
   return evidenceBits.join('');
 }
@@ -7422,6 +7480,16 @@ function renderApplicationEnhancedRequirementActions(req) {
     : displayType === 'internal_control'
       ? enhancedRequirementInternalControlHtml(req)
       : '';
+  var verificationHtml = displayType === 'evidence' && req.linked_document_id
+    ? '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
+        enhancedRequirementVerificationBadge(req) +
+        '<span style="font-size:10px;color:var(--text3);">Document verification is separate from officer acceptance.</span>' +
+      '</div>'
+    : '';
+  var portalRequestCopy = enhancedRequirementPortalRequestCopy(req);
+  var portalRequestHtml = portalRequestCopy
+    ? '<div style="font-size:10px;color:var(--text3);margin-top:6px;">' + escapeHtml(portalRequestCopy) + '</div>'
+    : '';
   var documentSelectHtml = displayType === 'evidence'
     ? '<label style="font-size:11px;color:var(--text2);font-weight:700;">Linked evidence' +
         '<select id="er-doc-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-top:4px;">' +
@@ -7460,6 +7528,8 @@ function renderApplicationEnhancedRequirementActions(req) {
         '</div>' +
       '</div>' +
       (uploadHtml ? '<div style="font-size:10px;color:var(--text3);margin-top:5px;">Uploads use the standard secure document pipeline and move this requirement to Under Review for officer assessment.</div>' : '') +
+      verificationHtml +
+      portalRequestHtml +
       workflowAcceptHtml +
       waiverHtml +
       renderEnhancedRequirementDetails(req) +
@@ -7656,6 +7726,65 @@ function selectApplicationEnhancedRequirementUpload(requirementId) {
   if (input) input.click();
 }
 
+function upsertCurrentAppDocument(doc) {
+  if (!doc || !doc.id || !currentApp) return;
+  if (!Array.isArray(currentApp._documents)) currentApp._documents = [];
+  var idx = currentApp._documents.findIndex(function(item) { return String(item.id) === String(doc.id); });
+  if (idx >= 0) {
+    currentApp._documents[idx] = Object.assign({}, currentApp._documents[idx], doc);
+  } else {
+    currentApp._documents.unshift(doc);
+  }
+}
+
+function mergeEnhancedRequirementResult(requirement, summary) {
+  if (!requirement || !requirement.id) return;
+  var replaced = false;
+  APPLICATION_ENHANCED_REQUIREMENTS = (APPLICATION_ENHANCED_REQUIREMENTS || []).map(function(item) {
+    if (String(item.id) === String(requirement.id)) {
+      replaced = true;
+      return Object.assign({}, item, requirement);
+    }
+    return item;
+  });
+  if (!replaced) APPLICATION_ENHANCED_REQUIREMENTS.push(requirement);
+  if (currentApp && summary) currentApp.enhancedReviewSummary = summary;
+  renderApplicationEnhancedRequirements(
+    APPLICATION_ENHANCED_REQUIREMENTS,
+    null,
+    (currentApp && currentApp.enhancedReviewSummary) || summary || null
+  );
+  if (currentApp) renderCaseCommandCentre(currentApp);
+}
+
+function applyEnhancedRequirementUploadResult(result, requirementId) {
+  if (!result) return;
+  var doc = result.document || null;
+  var requirement = result.requirement || null;
+  if (doc) upsertCurrentAppDocument(doc);
+  if (requirement && doc && requirement.linked_document_id && !requirement.linked_document) {
+    requirement.linked_document = doc;
+  }
+  mergeEnhancedRequirementResult(requirement, result.enhanced_review_summary);
+}
+
+function applyEnhancedRequirementVerificationResult(requirementId, documentId, verifyResult) {
+  if (!documentId || !verifyResult) return;
+  var docPatch = Object.assign({ id: documentId }, verifyResult);
+  upsertCurrentAppDocument(docPatch);
+  APPLICATION_ENHANCED_REQUIREMENTS = (APPLICATION_ENHANCED_REQUIREMENTS || []).map(function(item) {
+    if (String(item.id) !== String(requirementId)) return item;
+    var linkedDoc = Object.assign({}, item.linked_document || {}, docPatch);
+    return Object.assign({}, item, { linked_document: linkedDoc });
+  });
+  renderApplicationEnhancedRequirements(
+    APPLICATION_ENHANCED_REQUIREMENTS,
+    null,
+    currentApp ? currentApp.enhancedReviewSummary : null
+  );
+  if (currentApp) renderCaseCommandCentre(currentApp);
+}
+
 async function handleApplicationEnhancedRequirementUpload(requirementId, input) {
   if (!currentApp || !currentApp.id) {
     showToast('No application selected', 'error');
@@ -7698,18 +7827,23 @@ async function handleApplicationEnhancedRequirementUpload(requirementId, input) 
       formData
     );
     var uploadedDocId = result && result.document && result.document.id;
+    applyEnhancedRequirementUploadResult(result, requirementId);
+    setEnhancedRequirementDetailMessage('Document uploaded and linked. The row was refreshed immediately; verification remains separate from officer acceptance.', '');
     if (uploadedDocId) {
       try {
-        await boApiCall('POST', '/documents/' + encodeURIComponent(uploadedDocId) + '/verify');
+        var verifyResult = await boApiCall('POST', '/documents/' + encodeURIComponent(uploadedDocId) + '/verify');
+        applyEnhancedRequirementVerificationResult(requirementId, uploadedDocId, verifyResult);
       } catch (verifyErr) {
         console.warn('Post-upload verification failed for enhanced requirement document:', verifyErr);
         setEnhancedRequirementDetailMessage('Document uploaded and linked. Verification could not be started automatically; use document verification controls if needed.', 'amber');
       }
     }
-    var appRef = currentApp.ref || currentApp.id;
     showToast('Document uploaded and linked to enhanced requirement');
-    await loadFromAPI();
-    await openAppDetail(appRef, { initialTab: 'kyc-docs' });
+    await loadApplicationEnhancedRequirements(currentApp);
+    if (currentApp) renderCaseCommandCentre(currentApp);
+    loadFromAPI().catch(function(loadErr) {
+      console.warn('Background refresh after enhanced requirement upload failed:', loadErr);
+    });
   } catch (err) {
     console.warn('Enhanced requirement document upload failed:', err);
     setEnhancedRequirementDetailMessage('Unable to upload enhanced requirement document: ' + (err.message || 'Unknown error'), 'red');
@@ -15404,7 +15538,7 @@ function getCaseCommandBlockers(app) {
   var openAlertCount = caseCommandOpenMonitoringAlertCount(app);
   var auditFailureMessage = caseCommandAuditFailureMessage();
 
-  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking) {
+  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking, priority) {
     blockers.push({
       id: id,
       category: category,
@@ -15413,7 +15547,8 @@ function getCaseCommandBlockers(app) {
       ctaLabel: ctaLabel,
       tab: tab,
       anchorId: anchorId,
-      blocking: blocking !== false
+      blocking: blocking !== false,
+      priority: priority == null ? 50 : priority
     });
   };
 
@@ -15426,7 +15561,8 @@ function getCaseCommandBlockers(app) {
       'Review pre-approval',
       'overview',
       'pre-approval-actions-topbar',
-      true
+      true,
+      70
     );
   } else if (['draft', 'prescreening_submitted', 'pricing_review', 'pricing_accepted', 'pre_approved', 'kyc_documents'].indexOf(status) >= 0) {
     addBlocker(
@@ -15437,7 +15573,8 @@ function getCaseCommandBlockers(app) {
       'Review case stage',
       'overview',
       'detail-company-name',
-      true
+      true,
+      80
     );
   }
 
@@ -15452,7 +15589,8 @@ function getCaseCommandBlockers(app) {
       'Resolve screening',
       'screening',
       'detail-screening-review',
-      true
+      true,
+      20
     );
   } else if (!screening.screening_run_recorded) {
     addBlocker(
@@ -15463,7 +15601,8 @@ function getCaseCommandBlockers(app) {
       'Resolve screening',
       'screening',
       'detail-screening-review',
-      true
+      true,
+      20
     );
   } else if (screeningTruth && !screeningTruth.approval_ready) {
     var screeningState = screeningTruth.canonical_state ? String(screeningTruth.canonical_state).replace(/_/g, ' ') : 'pending review';
@@ -15475,7 +15614,8 @@ function getCaseCommandBlockers(app) {
       'Resolve screening',
       'screening',
       'detail-screening-review',
-      true
+      true,
+      20
     );
   } else if (screening.screening_freshness && screening.screening_freshness.status === 'expired') {
     addBlocker(
@@ -15486,7 +15626,8 @@ function getCaseCommandBlockers(app) {
       'Resolve screening',
       'screening',
       'detail-screening-review',
-      true
+      true,
+      20
     );
   }
 
@@ -15503,21 +15644,42 @@ function getCaseCommandBlockers(app) {
       'Review documents',
       'kyc-docs',
       'detail-kyc-documents-panel',
-      true
+      true,
+      30
     );
   }
 
-  if (enhanced.approval_blocked || enhanced.enhanced_review_active || status === 'edd_required' || status === 'edd_in_progress' || status === 'edd_approved' || status === 'pending_senior_review') {
-    var enhancedDetail = enhanced.next_action || enhanced.status_label || 'Enhanced due diligence must be completed before approval.';
+  if (enhanced.approval_blocked || enhanced.enhanced_review_active) {
+    var enhancedDetail = enhanced.next_action || enhanced.status_label || 'Enhanced Review requirements must be completed before approval.';
+    var enhancedCta = enhanced.next_action_code === 'awaiting_client'
+      ? 'Review client requests'
+      : enhanced.next_action_code === 'review_submitted'
+        ? 'Review enhanced evidence'
+        : enhanced.next_action_code === 'complete_review'
+          ? 'Resolve Enhanced Review'
+          : 'Resolve Enhanced Review';
+    addBlocker(
+      'enhanced-review',
+      'KYC / Enhanced Review',
+      'Enhanced Review requirements need attention.',
+      enhancedDetail,
+      enhancedCta,
+      'kyc-docs',
+      'detail-enhanced-requirements-section',
+      true,
+      10
+    );
+  } else if (status === 'edd_required' || status === 'edd_in_progress' || status === 'edd_approved' || status === 'pending_senior_review') {
     addBlocker(
       'edd',
       'EDD',
       'Enhanced due diligence is still in progress.',
-      enhancedDetail,
+      'Review lifecycle EDD state before approval.',
       'Review EDD',
       'lifecycle',
       'detail-tab-lifecycle',
-      true
+      true,
+      40
     );
   }
 
@@ -15530,7 +15692,8 @@ function getCaseCommandBlockers(app) {
       'Generate memo',
       'overview',
       'detail-memo',
-      true
+      true,
+      50
     );
   } else {
     if (app.memoIsStale || app.memoRequiresRegeneration) {
@@ -15542,7 +15705,8 @@ function getCaseCommandBlockers(app) {
         'Open memo',
         'overview',
         'detail-memo',
-        true
+        true,
+        50
       );
     } else if (memoValidation === 'pending') {
       addBlocker(
@@ -15553,7 +15717,8 @@ function getCaseCommandBlockers(app) {
         'Open memo',
         'overview',
         'memo-validation-panel',
-        true
+        true,
+        50
       );
     } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
       addBlocker(
@@ -15564,7 +15729,8 @@ function getCaseCommandBlockers(app) {
         'Open memo',
         'overview',
         'memo-validation-panel',
-        true
+        true,
+        50
       );
     }
 
@@ -15577,7 +15743,8 @@ function getCaseCommandBlockers(app) {
         'Open memo',
         'overview',
         'detail-memo',
-        true
+        true,
+        50
       );
     }
 
@@ -15590,7 +15757,8 @@ function getCaseCommandBlockers(app) {
         'Run supervisor',
         'supervisor',
         'detail-tab-supervisor',
-        true
+        true,
+        55
       );
     } else if (!supervisorVerdict) {
       addBlocker(
@@ -15601,7 +15769,8 @@ function getCaseCommandBlockers(app) {
         'Run supervisor',
         'supervisor',
         'detail-tab-supervisor',
-        true
+        true,
+        55
       );
     } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
       addBlocker(
@@ -15612,7 +15781,8 @@ function getCaseCommandBlockers(app) {
         'Run supervisor',
         'supervisor',
         'detail-tab-supervisor',
-        true
+        true,
+        55
       );
     }
   }
@@ -15626,7 +15796,8 @@ function getCaseCommandBlockers(app) {
       'View alerts',
       'lifecycle',
       'detail-tab-lifecycle',
-      false
+      false,
+      90
     );
   } else if (lifecycleItems.length > 0) {
     addBlocker(
@@ -15637,7 +15808,8 @@ function getCaseCommandBlockers(app) {
       'Open lifecycle',
       'lifecycle',
       'detail-tab-lifecycle',
-      false
+      false,
+      90
     );
   }
 
@@ -15650,11 +15822,15 @@ function getCaseCommandBlockers(app) {
       'View activity log',
       'activity',
       'detail-activity',
-      false
+      false,
+      95
     );
   }
 
-  return blockers;
+  return blockers.sort(function(a, b) {
+    var diff = (a.priority || 50) - (b.priority || 50);
+    return diff || String(a.id || '').localeCompare(String(b.id || ''));
+  });
 }
 
 function renderCaseCommandCentre(app) {

@@ -294,7 +294,7 @@ class TestCaseCommandCentreRuntime:
         assert "memo-missing" in blocker_ids
         assert "Compliance memo has not been generated." in result["html"]
 
-    def test_edd_blocker_is_shown_when_enhanced_review_is_active(self):
+    def test_enhanced_review_blocker_is_primary_and_deep_links_to_kyc(self):
         html = _read_backoffice()
         result = _run_node(
             _runtime_js(
@@ -309,15 +309,19 @@ class TestCaseCommandCentreRuntime:
                     "enhancedSummary": {
                         "approval_blocked": True,
                         "enhanced_review_active": True,
-                        "next_action": "Enhanced due diligence is required before approval.",
+                        "next_action": "Resolve outstanding enhanced review requirements.",
+                        "next_action_code": "resolve_blockers",
                     },
                     "approvalReadiness": {"ready": False, "blockers": ["EDD required"]},
                 },
             )
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
-        assert "edd" in blocker_ids
-        assert "Enhanced due diligence is still in progress." in result["html"]
+        assert "enhanced-review" in blocker_ids
+        assert result["blockers"][0]["id"] == "enhanced-review"
+        assert "Enhanced Review requirements need attention." in result["html"]
+        assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-enhanced-requirements-section")\'' in result["html"]
+        assert "Next: Resolve Enhanced Review." in result["html"]
 
     def test_document_blocker_is_shown_when_document_issues_exist(self):
         html = _read_backoffice()

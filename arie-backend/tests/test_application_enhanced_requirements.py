@@ -1283,6 +1283,8 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     assert declaration["requirement_display_type"] == "portal_disclosure"
     assert declaration["accepts_document_upload"] is False
     assert declaration["portal_disclosure"]["status_label"] == "Captured from portal"
+    assert declaration["status_display_label"] == "Pending officer review"
+    assert declaration["status_display_label"] != "Not submitted in portal"
     rendered = json.dumps(declaration["portal_disclosure"])
     assert "Amina Public" in rendered
     assert "Deputy Minister" in rendered
@@ -1291,10 +1293,12 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     jurisdiction = by_key["pep_jurisdiction"]
     assert jurisdiction["requirement_display_type"] == "portal_disclosure"
     assert jurisdiction["portal_disclosure"]["fields"][0]["value"] == "United Arab Emirates"
+    assert jurisdiction["status_display_label"] == "Pending officer review"
 
     role = by_key["pep_role_position"]
     assert role["requirement_display_type"] == "portal_disclosure"
     assert "Deputy Minister" in json.dumps(role["portal_disclosure"])
+    assert role["status_display_label"] == "Pending officer review"
 
     senior = by_key["mandatory_senior_review"]
     assert senior["requirement_display_type"] == "internal_control"
@@ -1310,6 +1314,53 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     assert type_counts["evidence"] > 0
     assert type_counts["portal_disclosure"] >= 3
     assert type_counts["internal_control"] >= 2
+
+
+def test_portal_disclosure_without_capture_remains_not_submitted(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        """
+        INSERT INTO application_enhanced_requirements
+        (application_id, trigger_key, trigger_label, trigger_category,
+         requirement_key, requirement_label, audience, requirement_type,
+         subject_scope, mandatory, blocking_approval, status, active)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            app_id,
+            "pep",
+            "PEP",
+            "pep",
+            "pep_declaration_details",
+            "PEP declaration details",
+            "client",
+            "declaration",
+            "director",
+            1,
+            1,
+            "generated",
+            1,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    by_key = {item["requirement_key"]: item for item in resp.json()["requirements"]}
+    declaration = by_key["pep_declaration_details"]
+    assert declaration["requirement_display_type"] == "portal_disclosure"
+    assert declaration["portal_disclosure"]["status_label"] == "Not submitted in portal"
+    assert declaration["status_display_label"] == "Not submitted in portal"
 
 
 def test_applications_list_includes_enhanced_operational_summary_and_filters(enhanced_app_api_server):
@@ -1657,8 +1708,12 @@ def test_backoffice_enhanced_requirement_upload_links_document_under_review_and_
     assert body["status"] == "uploaded"
     assert body["requirement"]["status"] == "under_review"
     assert body["requirement"]["linked_document_id"] == body["document"]["id"]
+    assert body["requirement"]["linked_document"]["id"] == body["document"]["id"]
+    assert body["requirement"]["linked_document"]["verification_status"] == "pending"
+    assert body["requirement"]["linked_document"]["verification_status_label"] == "Verification pending"
     assert body["document"]["doc_type"] == "enhanced_requirement"
     assert body["document"]["verification_status"] == "pending"
+    assert body["document"]["verification_status_label"] == "Verification pending"
     assert body["agent1_verification"]["triggered"] is False
 
     conn = get_db()
@@ -1698,6 +1753,50 @@ def test_backoffice_enhanced_requirement_upload_links_document_under_review_and_
     assert detail["auto_accepted"] is False
     assert before["status"] == "generated"
     assert after["status"] == "under_review"
+
+    detail_resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert detail_resp.status_code == 200, detail_resp.text
+    rendered_req = next(item for item in detail_resp.json()["requirements"] if item["id"] == req_id)
+    assert rendered_req["linked_document"]["id"] == body["document"]["id"]
+    assert rendered_req["linked_document"]["verification_status_label"] == "Verification pending"
+
+
+def test_enhanced_requirement_linked_document_verification_status_renders_in_api(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH", status="kyc_documents")
+    _generate(conn, app_id)
+    req_id = _first_requirement_id(conn, app_id)
+    doc_id = _insert_document(conn, app_id, "doc_verified_enhanced", review_status="pending")
+    conn.execute(
+        "UPDATE documents SET doc_type='enhanced_requirement', verification_status='verified', slot_key=? WHERE id=?",
+        (f"enhanced_requirement:{req_id}", doc_id),
+    )
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='under_review', linked_document_id=? WHERE id=?",
+        (doc_id, req_id),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    req = next(item for item in resp.json()["requirements"] if item["id"] == req_id)
+    assert req["status"] == "under_review"
+    assert req["linked_document"]["id"] == doc_id
+    assert req["linked_document"]["verification_status"] == "verified"
+    assert req["linked_document"]["verification_status_label"] == "Verified"
 
 
 def test_backoffice_enhanced_requirement_upload_validation_permissions_and_gates(enhanced_app_api_server):
