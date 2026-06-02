@@ -101,7 +101,8 @@ class TestBackofficeRiskSourceOfTruth:
         assert "return 'Trigger reason unavailable';" in html
         assert '<span class="label">Risk Level</span>' in html
         assert '<span class="label">Risk Score</span>' in html
-        assert '<span class="label">Formal EDD Investigation</span><span class="value" style="font-weight:700;">Yes</span>' in html
+        assert '<span class="label">Case Type</span><span class="value" style="font-weight:700;">Formal Investigation Case</span>' in html
+        assert "Formal narrative investigation. Routine onboarding Enhanced Review Requirements remain in KYC Documents." in html
         assert '<span class="label">Trigger</span>' in html
 
 
