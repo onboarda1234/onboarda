@@ -143,6 +143,28 @@ def test_backoffice_screening_queue_sidebar_alias_and_audit_formatters_exist():
     assert "screeningQueueSignalBadge(row.pep_screening_status || 'not_applicable', row)" in render_screening_region
 
 
+def test_backoffice_pr_b_queue_and_detail_paths_stay_narrow():
+    html = BACKOFFICE_HTML.read_text()
+
+    open_detail_region = _function_region(html, "openAppDetail", "rmiStatusBadge")
+    change_region = _function_region(html, "renderChangeMgmt", "showChangeMgmtTab")
+    show_alert_region = _function_region(html, "showCreateAlertModal", "submitCreateAlert")
+    show_request_region = _function_region(html, "showCreateRequestModal", "submitCreateRequest")
+    screening_region = _function_region(html, "loadScreeningQueue", "screeningQueueStatusBadge")
+    lifecycle_region = _function_region(html, "loadLifecycleQueue", "renderLifecycleRows")
+
+    assert "await loadScreeningQueue()" not in open_detail_region
+    assert "loadCMApplications();" not in change_region
+    assert "ensureCMApplicationsLoaded" in show_alert_region
+    assert "ensureCMApplicationsLoaded" in show_request_region
+    assert "/screening/queue?" in screening_region
+    assert "limit=" in screening_region
+    assert "offset=" in screening_region
+    assert "/lifecycle/queue?include=" in lifecycle_region
+    assert "&limit=" in lifecycle_region
+    assert "&offset=" in lifecycle_region
+
+
 def test_backoffice_screening_evidence_drawer_renders_structured_review_fields():
     html = BACKOFFICE_HTML.read_text()
 

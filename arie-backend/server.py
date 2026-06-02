@@ -12825,6 +12825,37 @@ def _load_screening_reviews_for_truth(db, application_id, app_ref=None):
     ]
 
 
+def _load_screening_reviews_for_truth_batch(db, app_ref_by_id):
+    app_ref_by_id = app_ref_by_id or {}
+    application_ids = [app_id for app_id in app_ref_by_id.keys() if app_id]
+    if not application_ids:
+        return {}
+    placeholders = ",".join("?" for _ in application_ids)
+    rows = db.execute(
+        f"""
+        SELECT * FROM screening_reviews
+        WHERE application_id IN ({placeholders})
+        ORDER BY application_id, updated_at DESC, created_at DESC, id DESC
+        """,
+        tuple(application_ids),
+    ).fetchall()
+    reviews = [dict(row) for row in rows]
+    audit_lookup = _load_screening_review_audit_lookup(db, reviews, app_ref_by_id)
+    reviews_by_app = {app_id: [] for app_id in application_ids}
+    for review in reviews:
+        app_id = review.get("application_id")
+        app_ref = app_ref_by_id.get(app_id) or review.get("application_ref")
+        reviews_by_app.setdefault(app_id, []).append(
+            _annotate_screening_review_for_truth(
+                db,
+                app_ref,
+                review,
+                audit_rows_by_target=audit_lookup,
+            )
+        )
+    return reviews_by_app
+
+
 def _truthy_review_flag(value):
     if isinstance(value, bool):
         return value
@@ -13210,6 +13241,31 @@ def _load_application_monitoring_alerts(db, application_id):
         alert["subject_scope"] = _monitoring_subject_scope(db, application_id, alert)
         alerts.append(alert)
     return alerts
+
+
+def _load_application_monitoring_alerts_batch(db, application_ids):
+    application_ids = [app_id for app_id in dict.fromkeys(application_ids or []) if app_id]
+    if not application_ids:
+        return {}
+    placeholders = ",".join("?" for _ in application_ids)
+    rows = db.execute(
+        f"""
+        SELECT application_id, id, provider, case_identifier, alert_type, severity,
+               summary, source_reference, discovered_via, discovered_at, created_at
+        FROM monitoring_alerts
+        WHERE application_id IN ({placeholders})
+        ORDER BY application_id ASC, id ASC
+        """,
+        tuple(application_ids),
+    ).fetchall()
+    alerts_by_app = {app_id: [] for app_id in application_ids}
+    for row in rows:
+        alert = dict(row)
+        application_id = alert.get("application_id")
+        alert["source_reference_json"] = _decode_monitoring_source_reference(alert.get("source_reference"))
+        alert["subject_scope"] = _monitoring_subject_scope(db, application_id, alert)
+        alerts_by_app.setdefault(application_id, []).append(alert)
+    return alerts_by_app
 
 
 def _monitoring_company_media_facts(alerts):
@@ -13654,7 +13710,7 @@ def upsert_screening_review(
     )
 
 
-def _build_screening_queue_payload(db, user, *, show_fixtures=False):
+def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0):
     query = "SELECT * FROM applications WHERE 1=1"
     params = []
     if user["type"] == "client":
@@ -13669,6 +13725,11 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
     query += " ORDER BY created_at DESC LIMIT 200"
 
     apps = [dict(r) for r in db.execute(query, params).fetchall()]
+    app_ids = [app["id"] for app in apps]
+    app_ref_by_id = {app["id"]: app.get("ref") for app in apps}
+    parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
+    reviews_by_app = _load_screening_reviews_for_truth_batch(db, app_ref_by_id) if app_ids else {}
+    monitoring_alerts_by_app = _load_application_monitoring_alerts_batch(db, app_ids) if app_ids else {}
     rows = []
     metrics = {
         "applications_awaiting_screening": 0,
@@ -13678,14 +13739,13 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
     }
 
     for app in apps:
-        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
-            "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
-        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
-            "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
+        party_bundle = parties_by_app.get(app["id"], ([], [], []))
+        directors = party_bundle[0] if len(party_bundle) > 0 else []
+        ubos = party_bundle[1] if len(party_bundle) > 1 else []
         review_map = {}
-        for review in _load_screening_reviews_for_truth(db, app["id"], app.get("ref")):
+        for review in reviews_by_app.get(app["id"], []):
             review_map[(review.get("subject_type"), review.get("subject_name"))] = review
-        monitoring_alerts = _load_application_monitoring_alerts(db, app["id"])
+        monitoring_alerts = monitoring_alerts_by_app.get(app["id"], [])
         company_media_alerts = _monitoring_company_media_facts(monitoring_alerts)
 
         prescreening = safe_json_loads(app.get("prescreening_data"))
@@ -14071,11 +14131,28 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             metrics["applications_requiring_review"] += 1
 
     metrics["subject_rows"] = len(rows)
+    total_rows = len(rows)
+    if offset < 0:
+        offset = 0
+    if limit is None:
+        paginated_rows = rows
+        page_limit = total_rows
+    else:
+        page_limit = max(1, int(limit))
+        paginated_rows = rows[offset:offset + page_limit]
     return {
         "metrics": metrics,
-        "rows": rows,
+        "rows": paginated_rows,
         "show_fixtures": show_fixtures,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "pagination": {
+            "limit": page_limit,
+            "offset": offset,
+            "returned": len(paginated_rows),
+            "total_rows": total_rows,
+            "has_next": bool(limit is not None and (offset + page_limit) < total_rows),
+            "has_prev": offset > 0,
+        },
     }
 
 
@@ -14093,8 +14170,16 @@ class ScreeningQueueHandler(BaseHandler):
         from fixture_filter import fixture_request_opt_in, should_show_fixtures
 
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        limit = _bounded_int(self.get_argument("limit", 50), 50, min_value=1, max_value=100)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
         db = get_db()
-        payload = _build_screening_queue_payload(db, user, show_fixtures=show_fx)
+        payload = _build_screening_queue_payload(
+            db,
+            user,
+            show_fixtures=show_fx,
+            limit=limit,
+            offset=offset,
+        )
         db.close()
         self.success(payload)
 
@@ -20924,6 +21009,8 @@ class LifecycleQueueHandler(BaseHandler):
 
         application_id = self.get_argument("application_id", None) or None
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        limit = _bounded_int(self.get_argument("limit", 50), 50, min_value=1, max_value=100)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
 
         import lifecycle_queue as lq
         db = get_db()
@@ -20935,6 +21022,8 @@ class LifecycleQueueHandler(BaseHandler):
                     types=types,
                     application_id=application_id,
                     exclude_fixtures=not show_fx,
+                    limit=limit,
+                    offset=offset,
                 )
             except ValueError as exc:
                 return self.error(str(exc), 400)

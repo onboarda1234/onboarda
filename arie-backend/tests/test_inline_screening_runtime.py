@@ -942,7 +942,10 @@ class TestInlineScreeningRuntime:
         assert result["renderedRows"] == 1
         assert result["queueRowLabel"] == "False Positive Cleared"
         assert result["calledPaths"]
-        assert "/screening/queue?refresh=" in result["calledPaths"][0]
+        assert result["calledPaths"][0].startswith("/screening/queue?")
+        assert "refresh=" in result["calledPaths"][0]
+        assert "limit=50" in result["calledPaths"][0]
+        assert "offset=0" in result["calledPaths"][0]
         assert "Pending" not in result["renderedHtml"]
         assert "False Positive Cleared" in result["renderedHtml"]
 
