@@ -1397,8 +1397,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <details id="detail-kyc-documents-details">
         <summary>
           <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">Standard KYC Documents</div>
-            <div class="detail-collapsible-subtitle">Baseline onboarding documents and officer verification results.</div>
+            <div class="detail-collapsible-title">KYC Document Taxonomy</div>
+            <div class="detail-collapsible-subtitle">Corporate documents, identity evidence, enhanced evidence, portal disclosures, and verification results in one onboarding flow.</div>
           </div>
           <div class="detail-collapsible-meta">
             <span class="detail-collapsible-summary-line" id="detail-kyc-documents-summary-copy">Loading KYC document status…</span>
@@ -1448,6 +1448,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         </div>
           </div>
           <div id="detail-docs-with-verification"></div>
+          <div id="detail-enhanced-evidence-documents-group" style="margin-top:14px;"></div>
+          <div id="detail-portal-disclosures-group" style="margin-top:14px;"></div>
+          <div id="detail-internal-controls-group" style="margin-top:14px;"></div>
         </div>
       </details>
     </div>
@@ -1456,8 +1459,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <details id="detail-enhanced-requirements-details">
         <summary>
           <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">Enhanced Review Requirements</div>
-            <div class="detail-collapsible-subtitle">Onboarding evidence, disclosures, and controls required because of risk, PEP, screening, jurisdiction, or sector triggers.</div>
+            <div class="detail-collapsible-title">Enhanced Review Summary</div>
+            <div class="detail-collapsible-subtitle">Compact tracker for triggered onboarding enhanced evidence, portal disclosures, and controls.</div>
           </div>
           <div class="detail-collapsible-meta">
             <span class="detail-collapsible-summary-line" id="detail-enhanced-requirements-summary-copy">Loading enhanced requirements…</span>
@@ -6858,6 +6861,145 @@ function renderDocumentVerificationHistory(app) {
   '</div>';
 }
 
+var KYC_DOCUMENT_SLOT_LABELS = {
+  cert_inc: 'Certificate of Incorporation',
+  memarts: 'Memorandum & Articles',
+  cert_reg: 'Regulatory Certificate',
+  reg_sh: 'Register of Shareholders',
+  reg_dir: 'Register of Directors',
+  fin_stmt: 'Financial Statements / Management Accounts',
+  board_res: 'Board Resolution',
+  structure_chart: 'Company Structure Chart',
+  poa: 'Proof of Address',
+  passport: 'Passport / Government ID',
+  bankref: 'Bank Reference Letter',
+  licence: 'Regulatory Licence(s)',
+  source_wealth: 'Source of Wealth Evidence',
+  source_funds: 'Source of Funds Evidence',
+  bank_statements: 'Bank Statements',
+  contracts: 'Contracts / Invoices',
+  aml_policy: 'AML/CFT Policy',
+  supporting_document: 'Supporting Document',
+  enhanced_requirement: 'Enhanced Evidence Document'
+};
+
+function kycDocumentSlotLabel(doc, linkedRequirement) {
+  if (linkedRequirement && (linkedRequirement.requirement_label || linkedRequirement.requirement_key)) {
+    return linkedRequirement.requirement_label || linkedRequirement.requirement_key;
+  }
+  var type = String((doc && doc.doc_type) || '').toLowerCase();
+  return KYC_DOCUMENT_SLOT_LABELS[type] || normalizeDetailValue(type || 'Document');
+}
+
+function findEnhancedRequirementForDocument(doc, requirements) {
+  if (!doc || !Array.isArray(requirements)) return null;
+  return requirements.find(function(req) {
+    return req && req.linked_document_id && String(req.linked_document_id) === String(doc.id);
+  }) || null;
+}
+
+function findDocumentOwnerLabelForApp(app, doc) {
+  if (!doc || !doc.person_id) return 'Application-level document';
+  var people = (app && app.directors || []).concat(app && app.ubos || []).concat(app && app.intermediaries || []);
+  var person = people.find(function(item) { return item.id === doc.person_id || item.person_key === doc.person_id; });
+  return person ? buildPartyDisplayName(person) : doc.person_id;
+}
+
+function kycDocumentGroupKey(doc, linkedRequirement) {
+  if (linkedRequirement || String((doc && doc.doc_type) || '').toLowerCase() === 'enhanced_requirement') return 'enhanced';
+  var type = String((doc && doc.doc_type) || '').toLowerCase();
+  if (doc && doc.person_id) return 'identity';
+  if (['source_wealth','source_funds','bank_statements','aml_policy'].indexOf(type) >= 0) return 'enhanced';
+  if (['fin_stmt','board_res','bankref','licence','contracts'].indexOf(type) >= 0) return 'business';
+  return 'corporate';
+}
+
+function kycTaxonomyGroupShell(title, subtitle, bodyHtml, tone) {
+  var borderColor = tone === 'purple' ? '#7c3aed' : tone === 'amber' ? 'var(--amber)' : tone === 'green' ? 'var(--green)' : 'var(--border1)';
+  return '<div class="kyc-taxonomy-group" style="border:1px solid var(--border1);border-left:4px solid ' + borderColor + ';border-radius:10px;background:var(--surface);margin-bottom:12px;overflow:hidden;">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid var(--border1);background:var(--surface2);">' +
+      '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(title) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:3px;line-height:1.45;">' + escapeHtml(subtitle || '') + '</div></div>' +
+    '</div>' +
+    '<div style="padding:12px 14px;">' + bodyHtml + '</div>' +
+  '</div>';
+}
+
+function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
+  var officerReview = normalizeDetailValue(doc.review_status || 'pending');
+  var reviewBadgeColor = officerReview === 'accepted' ? '#16a34a' : officerReview === 'rejected' ? '#dc2626' : officerReview === 'info_requested' ? '#d97706' : '#6b7280';
+  var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status);
+  var verLabel = normalizeDetailValue(doc.verification_status_label || verStatus);
+  var verTone = normalizeDetailValue(doc.verification_status_tone || '').toLowerCase();
+  var verStatusColor = doc.verification_success === true || verTone === 'success' ? '#16a34a' : verTone === 'error' || verStatus.toLowerCase() === 'failed' || verStatus.toLowerCase() === 'fail' ? '#dc2626' : verTone === 'warning' || verStatus.toLowerCase() === 'flagged' ? '#d97706' : '#6b7280';
+  var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
+  var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
+    ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Reviewed by: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
+    : '';
+  var reviewComment = doc.review_comment ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
+  var slotLabel = kycDocumentSlotLabel(doc, linkedRequirement);
+  var linkedMeta = linkedRequirement
+    ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Linked enhanced requirement: ' + escapeHtml(linkedRequirement.requirement_key || linkedRequirement.id || '') + '</div>'
+    : '';
+  return '<div style="border:1px solid var(--border1);border-radius:10px;padding:16px;margin-bottom:12px;background:var(--surface);">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px;">' +
+      '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">' +
+        '<span style="font-size:22px;">📄</span>' +
+        '<div>' +
+          '<div style="font-weight:800;font-size:13px;color:var(--text1);">' + escapeHtml(slotLabel) + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Uploaded file: ' + escapeHtml(doc.doc_name || '—') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + ' · Owner: ' + escapeHtml(findDocumentOwnerLabelForApp(app, doc)) + '</div>' +
+          linkedMeta +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0;flex-wrap:wrap;">' +
+        '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + verStatusColor + '18;color:' + verStatusColor + ';border:1px solid ' + verStatusColor + '44;font-weight:500;">Verification: ' + escapeHtml(verLabel) + '</span>' +
+        '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + reviewBadgeColor + '18;color:' + reviewBadgeColor + ';border:1px solid ' + reviewBadgeColor + '44;font-weight:500;">Review: ' + escapeHtml(officerReview) + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<div style="background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px 12px;margin-bottom:10px;">' +
+      '<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px;">Verification Checks</div>' +
+      buildVerificationResultsHtml(doc.verification_results) +
+    '</div>' +
+    reviewMeta +
+    reviewComment +
+    renderEvidenceClassificationPanel(doc) +
+    '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
+      '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁 View</button>' +
+      '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
+      '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
+      '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
+      '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">✗ Reject</button>' +
+      '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">ℹ Request Info</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderStandardKycDocumentTaxonomy(app) {
+  var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
+  var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
+  var groups = {
+    corporate: { title: 'Corporate Entity Documents', subtitle: 'Core corporate identity and ownership records.', items: [], tone: '' },
+    identity: { title: 'Directors & UBO Identity Documents', subtitle: 'Person-level identity and address evidence for directors, UBOs, and intermediaries.', items: [], tone: 'green' },
+    business: { title: 'Business Operating Documents', subtitle: 'Operating, financial, licensing, and commercial support documents.', items: [], tone: 'amber' }
+  };
+  docs.forEach(function(doc) {
+    var linkedRequirement = findEnhancedRequirementForDocument(doc, requirements);
+    var key = kycDocumentGroupKey(doc, linkedRequirement);
+    if (key === 'enhanced') return;
+    if (!groups[key]) key = 'corporate';
+    groups[key].items.push({ doc: doc, linkedRequirement: linkedRequirement });
+  });
+  var html = Object.keys(groups).map(function(key) {
+    var group = groups[key];
+    var body = group.items.length
+      ? group.items.map(function(item) { return renderUnifiedKycDocumentCard(app, item.doc, item.linkedRequirement); }).join('')
+      : '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No uploaded documents in this group yet.</div>';
+    return kycTaxonomyGroupShell(group.title, group.subtitle, body, group.tone);
+  }).join('');
+  return renderPilotEvidenceSummaryBanner(app) + html;
+}
+
 function buildEnhancedRequirementsPanelSummary(summary, requirements) {
   summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
   var required = Number(summary.total || (Array.isArray(requirements) ? requirements.length : 0) || 0);
@@ -6875,7 +7017,7 @@ function shouldExpandEnhancedRequirements(summary, requirements) {
 function updateEnhancedRequirementsPanelState(summary, requirements) {
   var summaryEl = document.getElementById('detail-enhanced-requirements-summary-copy');
   if (summaryEl) summaryEl.textContent = buildEnhancedRequirementsPanelSummary(summary, requirements);
-  setDetailsExpandedState('detail-enhanced-requirements-details', shouldExpandEnhancedRequirements(summary, requirements));
+  setDetailsExpandedState('detail-enhanced-requirements-details', !!(summary && summary.enhanced_review_active));
 }
 
 function evidenceClassDomId(docId, suffix) {
@@ -7516,58 +7658,9 @@ function renderAuthoritativeAppDetail(app, options) {
     memoEl.innerHTML = '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No compliance memo has been generated for this application yet.</div>';
   }
 
-  function findDocumentOwnerLabel(doc) {
-    if (!doc.person_id) return 'Application-level document';
-    var people = app.directors.concat(app.ubos).concat(app.intermediaries);
-    var person = people.find(function(item) { return item.id === doc.person_id || item.person_key === doc.person_id; });
-    return person ? buildPartyDisplayName(person) : doc.person_id;
-  }
-
-  var docsHtml = app._documents.length ? app._documents.map(function(doc) {
-    var officerReview = normalizeDetailValue(doc.review_status || 'pending');
-    var reviewBadgeColor = officerReview === 'accepted' ? '#16a34a' : officerReview === 'rejected' ? '#dc2626' : officerReview === 'info_requested' ? '#d97706' : '#6b7280';
-    var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status);
-    var verLabel = normalizeDetailValue(doc.verification_status_label || verStatus);
-    var verTone = normalizeDetailValue(doc.verification_status_tone || '').toLowerCase();
-    var verStatusColor = doc.verification_success === true || verTone === 'success' ? '#16a34a' : verTone === 'error' || verStatus.toLowerCase() === 'failed' || verStatus.toLowerCase() === 'fail' ? '#dc2626' : verTone === 'warning' || verStatus.toLowerCase() === 'flagged' ? '#d97706' : '#6b7280';
-    var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
-    var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
-      ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Reviewed by: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
-      : '';
-    var reviewComment = doc.review_comment ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
-    return '<div style="border:1px solid var(--border1);border-radius:10px;padding:16px;margin-bottom:12px;background:var(--surface);">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px;">' +
-        '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">' +
-          '<span style="font-size:22px;">📄</span>' +
-          '<div>' +
-            '<div style="font-weight:600;font-size:13px;color:var(--text1);">' + escapeHtml(doc.doc_name || doc.doc_type) + '</div>' +
-            '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + ' · Owner: ' + escapeHtml(findDocumentOwnerLabel(doc)) + '</div>' +
-          '</div>' +
-        '</div>' +
-        '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0;">' +
-          '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + verStatusColor + '18;color:' + verStatusColor + ';border:1px solid ' + verStatusColor + '44;font-weight:500;">' + escapeHtml(verLabel) + '</span>' +
-          '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + reviewBadgeColor + '18;color:' + reviewBadgeColor + ';border:1px solid ' + reviewBadgeColor + '44;font-weight:500;">Review: ' + escapeHtml(officerReview) + '</span>' +
-        '</div>' +
-      '</div>' +
-      '<div style="background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px 12px;margin-bottom:10px;">' +
-        '<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px;">Verification Checks</div>' +
-        buildVerificationResultsHtml(doc.verification_results) +
-      '</div>' +
-      reviewMeta +
-      reviewComment +
-      renderEvidenceClassificationPanel(doc) +
-      '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
-        '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁 View</button>' +
-        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
-        '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
-        '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
-        '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">✗ Reject</button>' +
-        '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">ℹ Request Info</button>' +
-      '</div>' +
-    '</div>';
-  }).join('') : '<div style="padding:32px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📂</div><div style="font-size:13px;color:var(--text2);font-weight:500;">No documents uploaded yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Documents uploaded by the client will appear here with their verification results.</div></div>';
-  document.getElementById('detail-documents').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
-  document.getElementById('detail-docs-with-verification').innerHTML = renderPilotEvidenceSummaryBanner(app) + docsHtml;
+  var docsHtml = renderStandardKycDocumentTaxonomy(app);
+  document.getElementById('detail-documents').innerHTML = docsHtml;
+  document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
   var documentHistoryContainer = document.getElementById('detail-document-history-container');
   if (documentHistoryContainer) documentHistoryContainer.innerHTML = renderDocumentVerificationHistory(app);
   updateKycDocumentsPanelState(app, documentReadiness);
@@ -8098,13 +8191,18 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
           '<div style="font-size:12px;font-weight:800;color:var(--text1);">' + escapeHtml(summaryLine) + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Onboarding enhanced evidence, disclosures, and controls. Next action: ' + escapeHtml(summary.next_action || 'No enhanced review required') + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Triggers: ' + escapeHtml(triggerText) + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
+            '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'kyc-docs\',\'detail-enhanced-evidence-documents-group\')" style="font-size:11px;">View enhanced evidence documents</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'kyc-docs\',\'detail-portal-disclosures-group\')" style="font-size:11px;">View portal disclosures</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'kyc-docs\',\'detail-internal-controls-group\')" style="font-size:11px;">View internal controls</button>' +
+          '</div>' +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
           applicationEnhancedStatusBadge({ enhancedReviewSummary: summary, lane: '' }) +
           chips +
         '</div>' +
       '</div>' +
-    '</div>';
+  '</div>';
 }
 
 function renderApplicationEnhancedRequirementActions(req) {
@@ -8210,6 +8308,133 @@ function renderApplicationEnhancedRequirementActions(req) {
   '</details>';
 }
 
+function renderUnifiedEnhancedEvidenceDocuments(requirements) {
+  var container = document.getElementById('detail-enhanced-evidence-documents-group');
+  if (!container) return;
+  var evidence = (Array.isArray(requirements) ? requirements : []).filter(function(req) {
+    return enhancedRequirementPresentationType(req) === 'evidence';
+  });
+  if (!evidence.length) {
+    container.innerHTML = kycTaxonomyGroupShell(
+      'Enhanced Evidence Documents',
+      'Risk-triggered evidence document slots linked to Enhanced Review Requirements.',
+      '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No enhanced evidence document requirements for this application.</div>',
+      'purple'
+    );
+    return;
+  }
+  var rows = evidence.map(function(req) {
+    var doc = enhancedRequirementLinkedDocument(req);
+    var filename = doc ? (doc.doc_name || doc.id || 'Document') : 'No uploaded file yet';
+    var reviewStatus = doc ? normalizeDetailValue(doc.review_status || 'pending') : 'pending';
+    var verification = doc ? enhancedRequirementVerificationBadge(req) : enhancedRequirementDetailBadge('Verification pending upload', 'amber');
+    return '<div style="border:1px solid var(--border1);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--surface);">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div style="min-width:0;flex:1;">' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Enhanced evidence document') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Uploaded file: ' + escapeHtml(filename) + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Linked enhanced requirement: ' + escapeHtml(req.requirement_key || req.id || '') + (req.linked_document_id ? ' · Document ID: ' + escapeHtml(req.linked_document_id) : '') + '</div>' +
+          '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">' + enhancedRequirementTypeBadge(req) + enhancedRequirementStatusBadge(req.status, req) + enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') + enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">' +
+          verification +
+          enhancedRequirementDetailBadge('Review: ' + reviewStatus, reviewStatus === 'accepted' ? 'green' : reviewStatus === 'rejected' ? 'red' : '') +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:var(--text3);margin-top:8px;">Verification does not auto-accept this requirement. Officer acceptance or valid waiver is still required before blocker clearance.</div>' +
+      '<div style="margin-top:10px;">' + renderApplicationEnhancedRequirementActions(req) + '</div>' +
+    '</div>';
+  }).join('');
+  container.innerHTML = kycTaxonomyGroupShell(
+    'Enhanced Evidence Documents',
+    'Additional required document slots triggered by risk, PEP, screening, jurisdiction, sector, or volume.',
+    rows,
+    'purple'
+  );
+}
+
+function renderUnifiedPortalDisclosures(requirements) {
+  var container = document.getElementById('detail-portal-disclosures-group');
+  if (!container) return;
+  var disclosures = (Array.isArray(requirements) ? requirements : []).filter(function(req) {
+    return enhancedRequirementPresentationType(req) === 'portal_disclosure';
+  });
+  if (!disclosures.length) {
+    container.innerHTML = kycTaxonomyGroupShell(
+      'Portal Disclosures',
+      'Client portal declarations and form responses used during onboarding review.',
+      '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No portal disclosure requirements for this application.</div>',
+      'green'
+    );
+    return;
+  }
+  var rows = disclosures.map(function(req) {
+    var disclosure = req.portal_disclosure || {};
+    return '<div style="border:1px solid var(--border1);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--surface);">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div style="min-width:0;flex:1;">' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Portal disclosure') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Source: client portal / application form</div>' +
+          '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">' + enhancedRequirementTypeBadge(req) + enhancedRequirementStatusBadge(req.status, req) + enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') + '</div>' +
+        '</div>' +
+        enhancedRequirementDetailBadge(disclosure.requirement_status_label || disclosure.status_label || 'Not submitted in portal', disclosure.status === 'captured' ? 'purple' : 'amber') +
+      '</div>' +
+      '<div style="margin-top:10px;">' + enhancedRequirementPortalDisclosureHtml(req) + '</div>' +
+      '<div style="margin-top:10px;">' + renderApplicationEnhancedRequirementActions(req) + '</div>' +
+    '</div>';
+  }).join('');
+  container.innerHTML = kycTaxonomyGroupShell(
+    'Portal Disclosures',
+    'Read-only client-submitted disclosures and officer review controls. These are not document upload rows.',
+    rows,
+    'green'
+  );
+}
+
+function renderUnifiedInternalControls(requirements) {
+  var container = document.getElementById('detail-internal-controls-group');
+  if (!container) return;
+  var controls = (Array.isArray(requirements) ? requirements : []).filter(function(req) {
+    return enhancedRequirementPresentationType(req) === 'internal_control';
+  });
+  if (!controls.length) {
+    container.innerHTML = kycTaxonomyGroupShell(
+      'Internal Controls',
+      'Internal RegMind controls such as senior review or monitoring setup.',
+      '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No internal control requirements for this application.</div>',
+      'amber'
+    );
+    return;
+  }
+  var rows = controls.map(function(req) {
+    return '<div style="border:1px solid var(--border1);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--surface);">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div style="min-width:0;flex:1;">' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Internal control') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Internal control requirement; no document upload is expected.</div>' +
+          '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">' + enhancedRequirementTypeBadge(req) + enhancedRequirementStatusBadge(req.status, req) + enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="margin-top:10px;">' + enhancedRequirementInternalControlHtml(req) + '</div>' +
+      '<div style="margin-top:10px;">' + renderApplicationEnhancedRequirementActions(req) + '</div>' +
+    '</div>';
+  }).join('');
+  container.innerHTML = kycTaxonomyGroupShell(
+    'Internal Controls',
+    'Control tasks are tracked separately from document upload slots.',
+    rows,
+    'amber'
+  );
+}
+
+function renderUnifiedEnhancedRequirementTaxonomy(requirements) {
+  renderUnifiedEnhancedEvidenceDocuments(requirements);
+  renderUnifiedPortalDisclosures(requirements);
+  renderUnifiedInternalControls(requirements);
+  var docsContainer = document.getElementById('detail-docs-with-verification');
+  if (docsContainer && currentApp) docsContainer.innerHTML = renderStandardKycDocumentTaxonomy(currentApp);
+}
+
 function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {
   var section = document.getElementById('detail-enhanced-requirements-section');
   var container = document.getElementById('detail-enhanced-requirements-container');
@@ -8228,6 +8453,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
   operationalSummary = operationalSummary || (currentApp && currentApp.enhancedReviewSummary) || buildEnhancedOperationalSummaryFallback(requirements);
   if (currentApp) currentApp.enhancedReviewSummary = operationalSummary;
   renderEnhancedReviewOperationalSummary(operationalSummary, requirements);
+  renderUnifiedEnhancedRequirementTaxonomy(requirements);
 
   if (generationResult) {
     if (generationResult.config_ok === false) {
@@ -8241,6 +8467,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
   }
 
   if (!requirements.length) {
+    renderUnifiedEnhancedRequirementTaxonomy([]);
     container.innerHTML = '<div style="padding:24px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:13px;color:var(--text2);font-weight:600;">No enhanced requirements generated for this application.</div></div>';
     return;
   }
@@ -8288,7 +8515,14 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
     '</div>';
   }).join('');
 
-  container.innerHTML = groupHtml;
+  container.innerHTML =
+    '<details id="detail-enhanced-requirements-advanced-details" style="border:1px solid var(--border1);border-radius:10px;background:var(--surface);overflow:hidden;">' +
+      '<summary style="cursor:pointer;padding:12px 14px;background:var(--surface2);font-size:12px;font-weight:800;color:var(--brand);list-style-position:inside;">Show advanced requirement details</summary>' +
+      '<div style="padding:0 12px 12px;">' +
+        '<div style="font-size:11px;color:var(--text3);padding:10px 2px 0;">Technical/control tracker. Primary document execution now happens in the KYC document taxonomy above.</div>' +
+        groupHtml +
+      '</div>' +
+    '</details>';
 }
 
 async function loadApplicationEnhancedRequirements(app, generationResult) {

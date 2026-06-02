@@ -3268,8 +3268,8 @@
         <div class="card-header">
           <div class="card-icon" style="background:var(--amber-dim);color:var(--amber);">i</div>
           <div>
-            <div class="card-title">Additional Information Required</div>
-            <div class="card-sub">To complete your review, please provide the additional information below.</div>
+            <div class="card-title">Enhanced Requirements / Enhanced Evidence Documents</div>
+            <div class="card-sub">Risk-triggered evidence documents and portal disclosures requested by compliance.</div>
           </div>
         </div>
         <div id="additional-info-required-container" style="display:flex;flex-direction:column;gap:10px;padding:0 16px 16px;">
@@ -9058,7 +9058,7 @@ function renderPortalEnhancedRequirements(requirements) {
     return;
   }
   card.style.display = '';
-  container.innerHTML = currentEnhancedRequirements.map(function(req) {
+  function renderPortalRequirementCard(req) {
     var tone = portalEnhancedRequirementTone(req.status);
     var requestedAt = req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
     var meta = [];
@@ -9077,7 +9077,25 @@ function renderPortalEnhancedRequirements(requirements) {
         '<span class="review-status ' + tone.cls + '">' + escapeHtml(req.status_label || tone.text) + '</span>' +
       '</div>' +
     '</div>';
-  }).join('');
+  }
+  var documentReqs = currentEnhancedRequirements.filter(function(req) {
+    return String(req.requirement_type || '').toLowerCase() === 'document';
+  });
+  var disclosureReqs = currentEnhancedRequirements.filter(function(req) {
+    return String(req.requirement_type || '').toLowerCase() !== 'document';
+  });
+  var html = '';
+  if (documentReqs.length) {
+    html += '<div style="font-size:12px;font-weight:800;color:var(--text);margin:2px 0 0;">Enhanced Evidence Documents</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-bottom:2px;">Upload requested risk-triggered evidence documents here.</div>' +
+      documentReqs.map(renderPortalRequirementCard).join('');
+  }
+  if (disclosureReqs.length) {
+    html += '<div style="font-size:12px;font-weight:800;color:var(--text);margin:' + (documentReqs.length ? '12px' : '2px') + ' 0 0;">Portal Disclosures</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-bottom:2px;">Provide requested explanations or declarations; these are not document upload rows.</div>' +
+      disclosureReqs.map(renderPortalRequirementCard).join('');
+  }
+  container.innerHTML = html;
 }
 
 async function uploadPortalEnhancedRequirement(requirementId, input, button) {
