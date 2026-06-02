@@ -162,7 +162,7 @@ def _insert_edd_case(
             stage,
             "co001",
             "sco001" if senior_approval else None,
-            "policy_routing",
+            "screening_update",
             "Auto-routed to EDD by policy edd_routing_policy_v1 | triggers: " + ", ".join(triggers),
             notes,
             decision,
@@ -475,10 +475,12 @@ def test_final_approval_allows_completed_crypto_edd_after_kyc_submitted(db):
     assert json.loads(audit["detail"])["edd_completion_satisfied"] is True
 
 
-def test_final_approval_blocks_edd_route_when_edd_case_missing(db):
+def test_final_approval_allows_routine_onboarding_edd_route_when_enhanced_requirements_resolved(db):
     from security_hardening import ApprovalGateValidator
 
     triggers = ["declared_pep_present", "high_or_very_high_risk"]
+    memo_data = _memo_with_edd_route(*triggers)
+    memo_data["metadata"]["edd_routing"]["source"] = "memo_generation"
     app = _insert_application_and_memo(
         db,
         risk_level="HIGH",
@@ -487,7 +489,30 @@ def test_final_approval_blocks_edd_route_when_edd_case_missing(db):
         status="kyc_submitted",
         onboarding_lane="EDD",
         pre_approval_decision="PRE_APPROVE",
-        memo_data=_memo_with_edd_route(*triggers),
+        memo_data=memo_data,
+    )
+    _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
+
+
+def test_final_approval_blocks_explicit_edd_route_when_edd_case_missing(db):
+    from security_hardening import ApprovalGateValidator
+
+    triggers = ["edd_flag:screening_escalated_to_edd"]
+    memo_data = _memo_with_edd_route(*triggers)
+    memo_data["metadata"]["edd_routing"]["source"] = "screening_update"
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=memo_data,
     )
     _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
 

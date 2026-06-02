@@ -625,25 +625,50 @@ class ApprovalGateValidator:
                 _routing = _md_meta.get('edd_routing') or {}
                 if _routing.get('route') == 'edd':
                     _app_status = (app.get('status') or '').lower()
-                    _completion = _approval_edd_completion_status(db, app_id, _routing)
-                    if _approval_edd_completion_satisfied(_completion):
-                        _audit_ok, _audit_error = _audit_approval_edd_completion_satisfied(
-                            db,
-                            app,
-                            _routing,
-                            _completion,
+                    try:
+                        from investigation_scope import (
+                            is_formal_investigation_case,
+                            should_suppress_routine_onboarding_investigation,
                         )
-                        if not _audit_ok:
-                            return (False, _audit_error)
+                        _edd_rows = db.execute(
+                            "SELECT * FROM edd_cases WHERE application_id = ?",
+                            (app_id,),
+                        ).fetchall()
+                        _has_formal_case = any(
+                            is_formal_investigation_case(row) for row in (_edd_rows or [])
+                        )
+                        _routine_onboarding_enhanced_only = (
+                            should_suppress_routine_onboarding_investigation(_routing, _supervisor_block)
+                            and not _has_formal_case
+                        )
+                    except Exception:
+                        _routine_onboarding_enhanced_only = False
+
+                    if _routine_onboarding_enhanced_only:
+                        # PR 5B: routine onboarding enhanced evidence is
+                        # enforced by application_enhanced_requirements below;
+                        # do not require a formal Investigation Case.
+                        pass
                     else:
-                        return (
-                            False,
-                            _format_approval_edd_completion_block_reason(
+                        _completion = _approval_edd_completion_status(db, app_id, _routing)
+                        if _approval_edd_completion_satisfied(_completion):
+                            _audit_ok, _audit_error = _audit_approval_edd_completion_satisfied(
+                                db,
+                                app,
                                 _routing,
-                                _app_status,
                                 _completion,
                             )
-                        )
+                            if not _audit_ok:
+                                return (False, _audit_error)
+                        else:
+                            return (
+                                False,
+                                _format_approval_edd_completion_block_reason(
+                                    _routing,
+                                    _app_status,
+                                    _completion,
+                                )
+                            )
             except Exception as _ge:  # pragma: no cover — defensive
                 logger.error("Failed to evaluate mandatory_escalation/edd_routing gate: %s", _ge)
                 # Fail-closed: refuse approval rather than silently allow.

@@ -170,7 +170,8 @@ def _make_db():
             assigned_officer TEXT,
             trigger_source TEXT,
             trigger_notes TEXT,
-            edd_notes TEXT
+            edd_notes TEXT,
+            origin_context TEXT
         );
         CREATE TABLE audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,7 +236,11 @@ def test_apply_routing_decision_detects_declared_pep_from_party_rows():
     assert conn.execute(
         "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
         (app_id,),
-    ).fetchone()["c"] == 1
+    ).fetchone()["c"] == 0
+    suppression = conn.execute(
+        "SELECT detail FROM audit_log WHERE action='edd_routing.actuated' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert json.loads(suppression["detail"])["formal_case_suppressed"] is True
 
 
 def test_prescreening_submit_terminal_material_match_routes_edd_via_screening_summary():
@@ -562,7 +567,7 @@ def test_g_h_actuator_creates_then_idempotent_edd_case(monkeypatch):
     server_stub._emit_edd_routing_audit = fake_emit
     monkeypatch.setitem(sys.modules, "server", server_stub)
 
-    # First evaluation -> creates a case
+    # First routine onboarding evaluation -> no formal case.
     out1 = ra.apply_routing_decision(
         db=conn, app_row=app_row, source=ra.SOURCE_PRESCREENING_SUBMIT,
         user={"sub": "u", "name": "u", "role": "admin"},
@@ -572,16 +577,17 @@ def test_g_h_actuator_creates_then_idempotent_edd_case(monkeypatch):
     assert out1["lane_persisted"] == "EDD"
 
     n1 = conn.execute("SELECT COUNT(*) c FROM edd_cases").fetchone()["c"]
-    assert n1 == 1
+    assert n1 == 0
+    assert out1["actuation"]["formal_case_suppressed"] is True
 
-    # Second evaluation with identical facts -> NO duplicate
+    # Second evaluation with identical facts -> still no formal queue case.
     out2 = ra.apply_routing_decision(
         db=conn, app_row=app_row, source=ra.SOURCE_RISK_RECOMPUTE,
         user={"sub": "u", "name": "u", "role": "admin"},
     )
     assert out2["route"] == "edd"
     n2 = conn.execute("SELECT COUNT(*) c FROM edd_cases").fetchone()["c"]
-    assert n2 == 1, "actuator must be idempotent"
+    assert n2 == 0, "routine onboarding routing must not create a formal case"
 
     # H subcase: lane is now persisted as EDD
     lane_row = conn.execute(
@@ -623,7 +629,7 @@ def test_g_h_actuator_does_not_import_server_for_runtime_actuation(monkeypatch):
         assert out["route"] == "edd"
         assert not any("Duplicated timeseries" in err for err in out.get("errors") or [])
 
-    assert conn.execute("SELECT COUNT(*) AS c FROM edd_cases").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) AS c FROM edd_cases").fetchone()["c"] == 0
 
 
 def test_risk_recompute_preserves_preapproved_kyc_status():
@@ -662,14 +668,15 @@ def test_risk_recompute_preserves_preapproved_kyc_status():
 
     assert out["route"] == "edd"
     assert out["actuation"]["status_changed"] is False
-    assert out["actuation"]["status_preserved"] is True
+    assert out["actuation"]["status_preserved"] is False
+    assert out["actuation"]["formal_case_suppressed"] is True
     assert conn.execute(
         "SELECT status FROM applications WHERE ref=?",
         ("ARF-T-PREAPPROVED-KYC",),
     ).fetchone()["status"] == "kyc_documents"
     assert conn.execute(
         "SELECT COUNT(*) AS c FROM edd_cases",
-    ).fetchone()["c"] == 1
+    ).fetchone()["c"] == 0
 
 
 def test_new_material_trigger_after_preapproval_can_still_route_review_case():
@@ -707,12 +714,62 @@ def test_new_material_trigger_after_preapproval_can_still_route_review_case():
     conn.commit()
 
     assert out["route"] == "edd"
-    assert out["actuation"]["status_changed"] is True
-    assert out["actuation"]["status_preserved"] is False
+    assert out["actuation"]["status_changed"] is False
+    assert out["actuation"]["formal_case_suppressed"] is True
     assert conn.execute(
         "SELECT status FROM applications WHERE ref=?",
         ("ARF-T-PREAPPROVED-REVIEW",),
-    ).fetchone()["status"] == "edd_required"
+    ).fetchone()["status"] == "compliance_review"
+
+
+def test_explicit_screening_escalation_creates_formal_investigation_case():
+    import routing_actuator as ra
+    import server
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "risk_score, risk_level, final_risk_level, onboarding_lane, status) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-SCREENING-FORMAL",
+            "Formal Screening Escalation Co",
+            "Mauritius",
+            "Consulting",
+            55,
+            "MEDIUM",
+            "MEDIUM",
+            "Standard Review",
+            "in_review",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-SCREENING-FORMAL",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"score": 55, "level": "MEDIUM", "final_risk_level": "MEDIUM"},
+        screening_summary=server._screening_disposition_routing_summary("escalated_to_edd"),
+        edd_trigger_flags=server._screening_disposition_edd_trigger_flags("escalated_to_edd"),
+        source=ra.SOURCE_SCREENING_UPDATE,
+        user={"sub": "co001", "name": "Officer", "role": "co"},
+    )
+    conn.commit()
+
+    assert out["route"] == "edd"
+    assert out["actuation"]["created"] is True
+    row = conn.execute(
+        "SELECT trigger_source, origin_context FROM edd_cases WHERE application_id=?",
+        (app_row["id"],),
+    ).fetchone()
+    assert row["trigger_source"] == "screening_update"
+    # Minimal schemas may lack origin_context; production schema stores it.
+    if "origin_context" in row.keys():
+        assert row["origin_context"] == "onboarding_escalation"
 
 
 # ---------------------------------------------------------------- I

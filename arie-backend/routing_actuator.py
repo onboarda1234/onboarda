@@ -77,6 +77,7 @@ SOURCE_PRESCREENING_SUBMIT = "prescreening_submit"
 SOURCE_RISK_RECOMPUTE = "risk_recompute"
 SOURCE_SCREENING_UPDATE = "screening_update"
 SOURCE_MANUAL_RECONCILIATION = "manual_reconciliation"
+SOURCE_OFFICER_CORRECTION = "officer_correction"
 
 _VALID_SOURCES = frozenset(
     {
@@ -84,6 +85,7 @@ _VALID_SOURCES = frozenset(
         SOURCE_RISK_RECOMPUTE,
         SOURCE_SCREENING_UPDATE,
         SOURCE_MANUAL_RECONCILIATION,
+        SOURCE_OFFICER_CORRECTION,
     }
 )
 

@@ -493,6 +493,30 @@ class TestFindingsPresent(_LifecycleQueueBase):
         r = lq.build_lifecycle_queue(self._conn, types=("edd",))
         self.assertFalse(r["items"][0]["findings_present"])
 
+    def test_default_queue_excludes_routine_onboarding_policy_case(self):
+        import lifecycle_queue as lq
+        self._edd(
+            stage="analysis",
+            trigger_source="policy_routing",
+            origin_context="onboarding",
+            trigger_notes="Auto-routed to EDD by policy edd_routing_policy_v1 | triggers: high_or_very_high_risk",
+        )
+        r = lq.build_lifecycle_queue(self._conn, types=("edd",))
+        self.assertEqual(r["counts"]["edd"], 0)
+        self.assertEqual(r["items"], [])
+
+    def test_default_queue_includes_explicit_onboarding_escalation_case(self):
+        import lifecycle_queue as lq
+        eid = self._edd(
+            stage="analysis",
+            trigger_source="screening_update",
+            origin_context="onboarding_escalation",
+        )
+        r = lq.build_lifecycle_queue(self._conn, types=("edd",))
+        self.assertEqual(r["counts"]["edd"], 1)
+        self.assertEqual(r["items"][0]["id"], eid)
+        self.assertEqual(r["items"][0]["scope"], "formal_investigation")
+
 
 # ───────────────────────────────────────────────────────────────────
 # Fixture payload normalization (seeded read path)

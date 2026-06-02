@@ -460,13 +460,46 @@ def _find_active_edd_for_application(db, application_id):
     if application_id is None:
         return None
     placeholders = ",".join("?" for _ in TERMINAL_EDD_STAGES)
-    row = db.execute(
-        f"SELECT id FROM edd_cases "
+    rows = db.execute(
+        f"SELECT * FROM edd_cases "
         f"WHERE application_id = ? AND stage NOT IN ({placeholders}) "
-        f"ORDER BY id ASC LIMIT 1",
+        f"ORDER BY id ASC",
         (application_id, *TERMINAL_EDD_STAGES),
-    ).fetchone()
-    return row["id"] if row else None
+    ).fetchall()
+    try:
+        from investigation_scope import is_routine_onboarding_policy_case
+    except Exception:
+        is_routine_onboarding_policy_case = None
+    formal_reusable_sources = {
+        "monitoring_alert",
+        "periodic_review",
+        "change_request",
+        "manual",
+        "manual_onboarding_escalation",
+        "onboarding_escalation",
+        "officer_decision",
+        "officer_correction",
+        "screening_update",
+    }
+    for row in rows:
+        if is_routine_onboarding_policy_case and is_routine_onboarding_policy_case(row):
+            continue
+        origin = str(_row_get(row, "origin_context", "") or "").strip().lower()
+        trigger_source = str(_row_get(row, "trigger_source", "") or "").strip().lower()
+        linked_alert = _row_get(row, "linked_monitoring_alert_id")
+        linked_review = _row_get(row, "linked_periodic_review_id")
+        if (
+            origin not in formal_reusable_sources
+            and trigger_source not in formal_reusable_sources
+            and linked_alert in (None, "")
+            and linked_review in (None, "")
+        ):
+            # Legacy active rows without an origin/source are ambiguous. Do
+            # not let a real monitoring alert attach to routine onboarding
+            # policy debris; create a monitoring-origin case instead.
+            continue
+        return row["id"]
+    return None
 
 
 def route_alert_to_periodic_review(db, alert_id, *,

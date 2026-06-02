@@ -448,11 +448,10 @@ def test_client_declared_pep_director_routes_and_generates_fk_safe_requirements(
     rows = _req_actor_rows(db, app_id)
     assert all(row["created_by"] is None for row in rows)
     assert all(row["updated_by"] is None for row in rows)
-    case = db.execute(
-        "SELECT assigned_officer FROM edd_cases WHERE application_id=?",
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
         (app_id,),
-    ).fetchone()
-    assert case["assigned_officer"] is None
+    ).fetchone()["c"] == 0
     summary = build_enhanced_requirement_operational_summary(db, app_id)
     assert summary["enhanced_review_active"] is True
     assert summary["status_label"] != "Clear"
@@ -513,7 +512,7 @@ def test_client_crypto_opaque_route_generates_requirements_and_reuses_edd_case(e
     assert db.execute(
         "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
         (app_id,),
-    ).fetchone()["c"] == 1
+    ).fetchone()["c"] == 0
 
 
 def test_client_high_risk_route_generates_high_risk_requirements(enhanced_app_db):

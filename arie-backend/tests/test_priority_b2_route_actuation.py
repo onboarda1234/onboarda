@@ -388,7 +388,7 @@ class TestEDDRouteActuation:
     """Policy decision must become workflow reality."""
 
     def _routing(self):
-        return evaluate_edd_routing({
+        routing = evaluate_edd_routing({
             "final_risk_level": "VERY_HIGH",
             "declared_pep_present": True,
             "sector_risk_tier": "HIGH",
@@ -399,6 +399,8 @@ class TestEDDRouteActuation:
             "edd_trigger_flags": [],
             "supervisor_mandatory_escalation": True,
         })
+        routing["source"] = "screening_update"
+        return routing
 
     def test_route_edd_creates_active_edd_case(self, sqlite_db_with_app):
         db, app_id, app_ref, server = sqlite_db_with_app
@@ -422,7 +424,7 @@ class TestEDDRouteActuation:
         ).fetchone()
         assert case is not None
         assert case["stage"] == "triggered"
-        assert case["trigger_source"] == "policy_routing"
+        assert case["trigger_source"] == "screening_update"
 
     def test_route_edd_flips_application_status(self, sqlite_db_with_app):
         db, app_id, app_ref, server = sqlite_db_with_app
@@ -489,7 +491,7 @@ class TestEDDRouteActuation:
         # edd_notes JSON includes the routing context blob
         notes = json.loads(case["edd_notes"])
         first = notes[0]
-        assert first["source"] == "policy_routing"
+        assert first["source"] == "screening_update"
         assert first["policy_version"] == routing["policy_version"]
         assert first["triggers"] == routing["triggers"]
         assert "final_risk_level=VERY_HIGH" in first["mandatory_escalation_reasons"]
