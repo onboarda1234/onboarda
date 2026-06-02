@@ -325,6 +325,26 @@ class TestLifecycleQueueEndpoint(_LifecycleQueueHandlerBase):
             body["items"][0]["application_id"], self._app_id,
         )
 
+    def test_pagination_surfaces_counts_without_full_item_payload(self):
+        self._alert(status="open", created_at="2026-06-01T08:00:00Z")
+        self._alert(status="open", created_at="2026-06-01T09:00:00Z")
+        self._alert(status="open", created_at="2026-06-01T10:00:00Z")
+        resp = self._get(
+            "/api/lifecycle/queue?type=alerts&limit=1&offset=1",
+            token=self.admin_token,
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["counts"]["alert"], 3)
+        self.assertEqual(body["counts"]["total"], 3)
+        self.assertEqual(len(body["items"]), 1)
+        self.assertEqual(body["pagination"]["limit"], 1)
+        self.assertEqual(body["pagination"]["offset"], 1)
+        self.assertEqual(body["pagination"]["returned"], 1)
+        self.assertEqual(body["pagination"]["total_items"], 3)
+        self.assertTrue(body["pagination"]["has_next"])
+        self.assertTrue(body["pagination"]["has_prev"])
+
     def test_required_items_count_surfaces_via_http(self):
         items_payload = json.dumps([
             {"code": "kyc_refresh", "label": "x", "rationale": "y"}

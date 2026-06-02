@@ -841,6 +841,8 @@ def build_lifecycle_queue(
     application_id: Optional[str] = None,
     now: Optional[datetime] = None,
     exclude_fixtures: bool = True,
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> Dict[str, Any]:
     """Aggregate monitoring alerts, periodic reviews and EDD cases.
 
@@ -966,10 +968,19 @@ def build_lifecycle_queue(
         return (active_flag, age if age is not None else 10**12)
 
     items.sort(key=_sort_key)
-    agent_signals = _collect_agent_signals(items)
+    total_items = len(items)
+    if offset < 0:
+        offset = 0
+    if limit is None:
+        visible_items = items
+        page_limit = total_items
+    else:
+        page_limit = max(1, int(limit))
+        visible_items = items[offset:offset + page_limit]
+    agent_signals = _collect_agent_signals(visible_items)
 
     return {
-        "items": items,
+        "items": visible_items,
         "counts": {
             "alert": counts["alert"],
             "review": counts["review"],
@@ -980,6 +991,14 @@ def build_lifecycle_queue(
             "include": include,
             "types": list(selected_types),
             "application_id": application_id,
+        },
+        "pagination": {
+            "limit": page_limit,
+            "offset": offset,
+            "returned": len(visible_items),
+            "total_items": total_items,
+            "has_next": bool(limit is not None and (offset + page_limit) < total_items),
+            "has_prev": offset > 0,
         },
         "agent_signals": agent_signals,
     }
@@ -1008,10 +1027,10 @@ def build_application_lifecycle_summary(
     ref_now = now or datetime.now(timezone.utc)
 
     active = build_lifecycle_queue(
-        db, include="active", application_id=application_id, now=ref_now,
+        db, include="active", application_id=application_id, now=ref_now, limit=None,
     )
     historical = build_lifecycle_queue(
-        db, include="historical", application_id=application_id, now=ref_now,
+        db, include="historical", application_id=application_id, now=ref_now, limit=None,
     )
     review_setup = None
     for projection in list_review_projections(db, application_id=application_id):

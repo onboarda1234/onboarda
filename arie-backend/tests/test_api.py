@@ -1166,6 +1166,73 @@ class TestAuthenticatedAccess:
         assert fixture_ref not in co_refs
         assert co_include.json()["show_fixtures"] is False
 
+    def test_screening_queue_paginates_rows_without_changing_metrics(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_defs = [
+            ("app_prb_screen_page_1", "ARF-PRB-SCREEN-001", "2026-06-02T09:00:00Z"),
+            ("app_prb_screen_page_2", "ARF-PRB-SCREEN-002", "2026-06-02T09:01:00Z"),
+        ]
+        report = {
+            "screening_report": {
+                "screened_at": "2026-06-02T09:05:00Z",
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {"matched": False, "results": [], "api_status": "live", "source": "sumsub"},
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "ip_geolocation": {"risk_level": "LOW"},
+                "kyc_applicants": [],
+                "overall_flags": [],
+                "total_hits": 0,
+            }
+        }
+
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", (app_defs[0][0], app_defs[1][0]))
+        for app_id, app_ref, created_at in app_defs:
+            conn.execute(
+                """
+                INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data, is_fixture, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_id,
+                    app_ref,
+                    "testclient001",
+                    f"{app_ref} Ltd",
+                    "Mauritius",
+                    "Technology",
+                    "SME",
+                    "in_review",
+                    json.dumps(report),
+                    0,
+                    created_at,
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/screening/queue?limit=1&offset=1",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["rows"]) == 1
+        assert body["pagination"]["limit"] == 1
+        assert body["pagination"]["offset"] == 1
+        assert body["pagination"]["returned"] == 1
+        assert body["pagination"]["total_rows"] >= 2
+        assert body["pagination"]["has_prev"] is True
+        assert body["metrics"]["applications_screened"] >= 2
+
     def test_edd_findings_sla_dual_control_and_audit_ref_target(self, api_server):
         """EDD can advance through legitimate gates and its audit is case-reconstructable."""
         from auth import create_token

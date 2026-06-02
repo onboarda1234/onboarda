@@ -1679,6 +1679,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="stat-card"><div class="stat-card-label">Applications Screened</div><div class="stat-card-value" style="color:var(--green);" id="screening-stat-screened">0</div></div>
     <div class="stat-card"><div class="stat-card-label">Review Required</div><div class="stat-card-value" style="color:var(--red);" id="screening-stat-hits">0</div></div>
   </div>
+  <div id="screening-queue-meta" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin:12px 0;">
+    <span id="screening-queue-status" style="font-size:12px;color:var(--text3);">Loading screening queue…</span>
+    <div id="screening-queue-pagination"></div>
+  </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
       <thead><tr><th>Subject</th><th>Type</th><th>Company</th><th>Watchlist</th><th>PEP (Declared / Screening)</th><th>Entity / Context</th><th>Status</th><th>Actions</th></tr></thead>
@@ -1887,6 +1891,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm lifecycle-tab active" data-include="active" onclick="switchLifecycleTab('active')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Active <span id="lifecycle-count-active" class="badge pending" style="margin-left:6px;">0</span></button>
     <button class="btn btn-outline btn-sm lifecycle-tab" data-include="historical" onclick="switchLifecycleTab('historical')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Historical <span id="lifecycle-count-historical" class="badge draft" style="margin-left:6px;">—</span></button>
     <button class="btn btn-outline btn-sm lifecycle-tab" data-include="legacy_unmapped" onclick="switchLifecycleTab('legacy_unmapped')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Legacy (unmapped) <span id="lifecycle-count-legacy_unmapped" class="badge draft" style="margin-left:6px;">—</span></button>
+  </div>
+  <div id="lifecycle-queue-meta" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+    <span id="lifecycle-queue-status" style="font-size:12px;color:var(--text3);">Loading lifecycle queue…</span>
+    <div id="lifecycle-queue-pagination"></div>
   </div>
 
   <div class="card" style="padding:0;overflow:hidden;">
@@ -3714,9 +3722,19 @@ function resetBackofficeSessionData() {
   APPLICATIONS_LOAD_STATE = 'idle';
   APPLICATIONS_LOAD_PROMISE = null;
   APPLICATIONS_LOAD_ERROR = '';
-  SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+  SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
   SCREENING_QUEUE_DIRTY = false;
   SCREENING_QUEUE_LOAD_PROMISE = null;
+  LIFECYCLE_QUEUE_STATE = {
+    active: { offset: 0, pagination: null, load_error: null, is_loading: false },
+    historical: { offset: 0, pagination: null, load_error: null, is_loading: false },
+    legacy_unmapped: { offset: 0, pagination: null, load_error: null, is_loading: false }
+  };
+  LIFECYCLE_SUMMARY_CACHE = {};
+  CHANGE_MGMT_ACTIVE_TAB = 'alerts';
+  CHANGE_MGMT_APPLICATIONS = [];
+  CHANGE_MGMT_APPLICATIONS_PROMISE = null;
+  CHANGE_MGMT_APPLICATIONS_ERROR = '';
   MONITORING_ALERTS = [];
   PERIODIC_REVIEWS = [];
   MONITORING_AGENTS = [];
@@ -4802,13 +4820,25 @@ var applicationsApiTotal = 0;
 var applicationsCurrentPage = 1;
 var applicationsPageSize = 20;
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
-var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+var SCREENING_QUEUE_PAGE_SIZE = 50;
+var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
 var SCREENING_QUEUE_DIRTY = false;
 var SCREENING_REVIEW_ROWS = {};
 var SCREENING_EVIDENCE_DETAILS = {};
 var pendingScreeningDisposition = null;
 var INLINE_SCREENING_DISPOSITION_STATE = {};
 var INLINE_SCREENING_DISPOSITION_SUBMITTING = {};
+var LIFECYCLE_QUEUE_PAGE_SIZE = 50;
+var LIFECYCLE_QUEUE_STATE = {
+  active: { offset: 0, pagination: null, load_error: null, is_loading: false },
+  historical: { offset: 0, pagination: null, load_error: null, is_loading: false },
+  legacy_unmapped: { offset: 0, pagination: null, load_error: null, is_loading: false }
+};
+var LIFECYCLE_SUMMARY_CACHE = {};
+var CHANGE_MGMT_ACTIVE_TAB = 'alerts';
+var CHANGE_MGMT_APPLICATIONS = [];
+var CHANGE_MGMT_APPLICATIONS_PROMISE = null;
+var CHANGE_MGMT_APPLICATIONS_ERROR = '';
 
 // ═══════════════════════════════════════════════════════════
 // EX-13: Auto-refresh, ETag caching, and staleness indicator
@@ -5133,14 +5163,6 @@ function showView(name, navItem) {
   }
   if (name === 'screening') {
     renderScreening({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length });
-    var screeningLoader = typeof ensureScreeningQueueLoaded === 'function'
-      ? ensureScreeningQueueLoaded
-      : (typeof loadScreeningQueue === 'function'
-          ? function(options) { return Promise.resolve(loadScreeningQueue(options)); }
-          : function() { return Promise.resolve(false); });
-    screeningLoader({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length }).then(function(loaded) {
-      if (loaded) renderScreening();
-    });
   }
   if (name === 'monitoring') {
     renderMonitoring();
@@ -5150,9 +5172,6 @@ function showView(name, navItem) {
   }
   if (name === 'lifecycle') {
     renderLifecycle();
-    ensureMonitoringDataLoaded().then(function(loaded) {
-      if (loaded) renderLifecycle();
-    });
   }
   if (name === 'edd') {
     renderEDD();
@@ -5162,9 +5181,6 @@ function showView(name, navItem) {
   }
   if (name === 'change-mgmt') {
     renderChangeMgmt();
-    ensureMonitoringDataLoaded().then(function(loaded) {
-      if (loaded) renderChangeMgmt();
-    });
   }
   if (name === 'cases') renderCases();
   if (name === 'kpis') renderKPIDashboard();
@@ -7503,7 +7519,6 @@ async function openAppDetail(ref, options) {
   options = options || {};
   try {
     var detailApp = await fetchApplicationDetail(ref);
-    await loadScreeningQueue();
     return renderAuthoritativeAppDetail(detailApp, options);
   } catch (err) {
     console.error('Failed to load application detail:', err);
@@ -8882,29 +8897,96 @@ function markScreeningQueueDirty() {
   SCREENING_QUEUE_DIRTY = true;
 }
 
+function screeningQueueOffset() {
+  return SCREENING_QUEUE && SCREENING_QUEUE.pagination && typeof SCREENING_QUEUE.pagination.offset === 'number'
+    ? SCREENING_QUEUE.pagination.offset
+    : 0;
+}
+
+function screeningQueuePageSize() {
+  return typeof SCREENING_QUEUE_PAGE_SIZE === 'number' && SCREENING_QUEUE_PAGE_SIZE > 0
+    ? SCREENING_QUEUE_PAGE_SIZE
+    : 50;
+}
+
+function renderScreeningQueueMeta() {
+  var statusEl = document.getElementById('screening-queue-status');
+  var pagerEl = document.getElementById('screening-queue-pagination');
+  var pagination = SCREENING_QUEUE.pagination || {};
+  var totalRows = typeof pagination.total_rows === 'number' ? pagination.total_rows : SCREENING_QUEUE.rows.length;
+  var returned = typeof pagination.returned === 'number' ? pagination.returned : SCREENING_QUEUE.rows.length;
+  var offset = typeof pagination.offset === 'number' ? pagination.offset : 0;
+  if (statusEl) {
+    if (SCREENING_QUEUE.is_loading) {
+      statusEl.textContent = 'Loading screening queue…';
+    } else if (SCREENING_QUEUE.load_error) {
+      statusEl.textContent = SCREENING_QUEUE.load_error;
+    } else if (!totalRows) {
+      statusEl.textContent = 'No screening queue items available.';
+    } else {
+      statusEl.textContent = 'Showing ' + (offset + 1) + '–' + (offset + returned) + ' of ' + totalRows + ' queue rows';
+    }
+  }
+  if (!pagerEl) return;
+  if (!totalRows || SCREENING_QUEUE.is_loading) {
+    pagerEl.innerHTML = '';
+    return;
+  }
+  pagerEl.innerHTML =
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline btn-sm" onclick="changeScreeningQueuePage(-1)"' + (pagination.has_prev ? '' : ' disabled') + '>Previous</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="changeScreeningQueuePage(1)"' + (pagination.has_next ? '' : ' disabled') + '>Next</button>' +
+    '</div>';
+}
+
 async function loadScreeningQueue(options) {
   options = options || {};
   if (!BO_AUTH_TOKEN) {
-    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:'Authentication required' };
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:'Authentication required', pagination:null, is_loading:false };
+    renderScreeningQueueMeta();
     return false;
   }
+  var force = !!options.force || SCREENING_QUEUE_DIRTY;
+  var offset = typeof options.offset === 'number' ? Math.max(0, options.offset) : screeningQueueOffset();
+  SCREENING_QUEUE.is_loading = true;
+  if (!SCREENING_QUEUE.pagination) {
+    SCREENING_QUEUE.pagination = { limit: screeningQueuePageSize(), offset: offset, returned: 0, total_rows: 0, has_next: false, has_prev: false };
+  } else {
+    SCREENING_QUEUE.pagination.offset = offset;
+  }
+  renderScreeningQueueMeta();
   try {
-    var force = !!options.force || SCREENING_QUEUE_DIRTY;
-    var path = '/screening/queue' + (force ? ('?refresh=' + Date.now()) : '');
+    var params = [
+      'limit=' + encodeURIComponent(screeningQueuePageSize()),
+      'offset=' + encodeURIComponent(offset)
+    ];
+    if (force) params.push('refresh=' + Date.now());
+    var path = '/screening/queue?' + params.join('&');
     var payload = await boApiCall('GET', path, null, options);
     SCREENING_QUEUE = {
       metrics: payload.metrics || null,
       rows: payload.rows || [],
       generated_at: payload.generated_at || null,
-      load_error: null
+      load_error: null,
+      pagination: payload.pagination || { limit: screeningQueuePageSize(), offset: offset, returned: (payload.rows || []).length, total_rows: (payload.rows || []).length, has_next: false, has_prev: offset > 0 },
+      is_loading: false
     };
     SCREENING_QUEUE_DIRTY = false;
+    renderScreeningQueueMeta();
     return true;
   } catch(e) {
     console.warn('Failed to load screening queue:', e);
-    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable' };
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable', pagination: SCREENING_QUEUE.pagination, is_loading:false };
+    renderScreeningQueueMeta();
     return false;
   }
+}
+
+function changeScreeningQueuePage(direction) {
+  var pagination = SCREENING_QUEUE.pagination || {};
+  var limit = typeof pagination.limit === 'number' && pagination.limit > 0 ? pagination.limit : screeningQueuePageSize();
+  var nextOffset = Math.max(0, (typeof pagination.offset === 'number' ? pagination.offset : 0) + (direction * limit));
+  renderScreening({ force: false, offset: nextOffset });
 }
 
 function screeningQueueStatusBadge(statusKey, statusLabel) {
@@ -11082,9 +11164,10 @@ async function renderScreening(options) {
     tbody = document.getElementById('screening-body');
     if (!tbody) return;
   }
-  tbody.innerHTML = '';
+  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">Loading screening queue…</td></tr>';
+  renderScreeningQueueMeta();
 
-  await loadScreeningQueue({ force: !!options.force || SCREENING_QUEUE_DIRTY });
+  await loadScreeningQueue({ force: !!options.force || SCREENING_QUEUE_DIRTY, offset: options.offset });
   SCREENING_REVIEW_ROWS = {};
 
   if (!SCREENING_QUEUE.rows.length) {
@@ -11508,11 +11591,11 @@ function apiFetch(url, opts) {
 }
 
 function renderChangeMgmt() {
-  loadChangeAlerts();
-  loadCMApplications();
+  showChangeMgmtTab(CHANGE_MGMT_ACTIVE_TAB || 'alerts');
 }
 
 function showChangeMgmtTab(tab) {
+  CHANGE_MGMT_ACTIVE_TAB = tab || 'alerts';
   document.getElementById('cm-alerts-tab').style.display = (tab === 'alerts') ? '' : 'none';
   document.getElementById('cm-requests-tab').style.display = (tab === 'requests') ? '' : 'none';
   document.getElementById('cm-stats-tab').style.display = (tab === 'stats') ? '' : 'none';
@@ -11525,18 +11608,60 @@ function showChangeMgmtTab(tab) {
   if (tab === 'stats') loadCMStats();
 }
 
-function loadCMApplications() {
-  apiFetch('/api/applications').then(function(r) {
-    var apps = r.applications || [];
-    var opts = apps.map(function(a) {
-      return '<option value="' + a.id + '">' + (a.company_name || a.ref || a.id) + '</option>';
-    }).join('');
-    var selects = ['cm-alert-app-id', 'cm-req-app-id'];
-    selects.forEach(function(sid) {
-      var el = document.getElementById(sid);
-      if (el) el.innerHTML = '<option value="">Select application…</option>' + opts;
+function populateCMApplicationSelects(selectedAppId) {
+  var apps = Array.isArray(CHANGE_MGMT_APPLICATIONS) ? CHANGE_MGMT_APPLICATIONS.slice() : [];
+  if (selectedAppId && currentApp && currentApp.id === selectedAppId && !apps.some(function(app) { return app.id === selectedAppId; })) {
+    apps.unshift({
+      id: currentApp.id,
+      company_name: currentApp.company || currentApp.ref || currentApp.id,
+      ref: currentApp.ref || currentApp.id
     });
-  }).catch(function() {});
+  }
+  var opts = apps.map(function(a) {
+    return '<option value="' + a.id + '">' + escapeHtml(a.company_name || a.ref || a.id) + '</option>';
+  }).join('');
+  ['cm-alert-app-id', 'cm-req-app-id'].forEach(function(sid) {
+    var el = document.getElementById(sid);
+    if (!el) return;
+    el.innerHTML = '<option value="">Select application…</option>' + opts;
+    if (selectedAppId) el.value = selectedAppId;
+  });
+}
+
+function setCMApplicationSelectLoading(message) {
+  ['cm-alert-app-id', 'cm-req-app-id'].forEach(function(sid) {
+    var el = document.getElementById(sid);
+    if (!el) return;
+    el.innerHTML = '<option value="">' + escapeHtml(message || 'Loading applications…') + '</option>';
+  });
+}
+
+function ensureCMApplicationsLoaded(selectedAppId) {
+  if (CHANGE_MGMT_APPLICATIONS_PROMISE) {
+    return CHANGE_MGMT_APPLICATIONS_PROMISE.then(function() {
+      populateCMApplicationSelects(selectedAppId);
+      return CHANGE_MGMT_APPLICATIONS;
+    });
+  }
+  if (CHANGE_MGMT_APPLICATIONS.length) {
+    populateCMApplicationSelects(selectedAppId);
+    return Promise.resolve(CHANGE_MGMT_APPLICATIONS);
+  }
+  CHANGE_MGMT_APPLICATIONS_ERROR = '';
+  setCMApplicationSelectLoading('Loading recent applications…');
+  CHANGE_MGMT_APPLICATIONS_PROMISE = apiFetch('/api/applications?limit=100&offset=0').then(function(r) {
+    var apps = r.applications || [];
+    CHANGE_MGMT_APPLICATIONS = apps;
+    populateCMApplicationSelects(selectedAppId);
+    return apps;
+  }).catch(function(err) {
+    CHANGE_MGMT_APPLICATIONS_ERROR = err && err.message ? err.message : 'Applications unavailable';
+    setCMApplicationSelectLoading(CHANGE_MGMT_APPLICATIONS_ERROR);
+    return [];
+  }).finally(function() {
+    CHANGE_MGMT_APPLICATIONS_PROMISE = null;
+  });
+  return CHANGE_MGMT_APPLICATIONS_PROMISE;
 }
 
 function cmMaterialityMeta(m) {
@@ -12193,8 +12318,9 @@ function implementRequest(reqId) {
   }).catch(function(e) { showToast('Implementation failed: ' + e.message, 'error'); });
 }
 
-function showCreateAlertModal() {
+async function showCreateAlertModal() {
   document.getElementById('cm-create-alert-modal').style.display = '';
+  await ensureCMApplicationsLoaded(currentApp && currentApp.id ? currentApp.id : '');
 }
 
 function submitCreateAlert() {
@@ -12214,8 +12340,9 @@ function submitCreateAlert() {
   }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
 }
 
-function showCreateRequestModal() {
+async function showCreateRequestModal() {
   document.getElementById('cm-create-request-modal').style.display = '';
+  await ensureCMApplicationsLoaded(currentApp && currentApp.id ? currentApp.id : '');
 }
 
 function submitCreateRequest() {
@@ -12526,6 +12653,52 @@ function lifecycleQuarantineChips(reasons) {
   }).join(' ');
 }
 
+function lifecycleQueueState(include) {
+  var key = include || window._lifecycleInclude || 'active';
+  if (!LIFECYCLE_QUEUE_STATE[key]) {
+    LIFECYCLE_QUEUE_STATE[key] = { offset: 0, pagination: null, load_error: null, is_loading: false };
+  }
+  return LIFECYCLE_QUEUE_STATE[key];
+}
+
+function lifecycleQueuePageSize() {
+  return typeof LIFECYCLE_QUEUE_PAGE_SIZE === 'number' && LIFECYCLE_QUEUE_PAGE_SIZE > 0
+    ? LIFECYCLE_QUEUE_PAGE_SIZE
+    : 50;
+}
+
+function renderLifecycleQueueMeta(include) {
+  include = include || window._lifecycleInclude || 'active';
+  var state = lifecycleQueueState(include);
+  var statusEl = document.getElementById('lifecycle-queue-status');
+  var pagerEl = document.getElementById('lifecycle-queue-pagination');
+  var pagination = state.pagination || {};
+  var totalItems = typeof pagination.total_items === 'number' ? pagination.total_items : 0;
+  var returned = typeof pagination.returned === 'number' ? pagination.returned : 0;
+  var offset = typeof pagination.offset === 'number' ? pagination.offset : state.offset || 0;
+  if (statusEl) {
+    if (state.is_loading) {
+      statusEl.textContent = 'Loading lifecycle queue…';
+    } else if (state.load_error) {
+      statusEl.textContent = state.load_error;
+    } else if (!totalItems) {
+      statusEl.textContent = 'No lifecycle items available for this view.';
+    } else {
+      statusEl.textContent = 'Showing ' + (offset + 1) + '–' + (offset + returned) + ' of ' + totalItems + ' lifecycle items';
+    }
+  }
+  if (!pagerEl) return;
+  if (!totalItems || state.is_loading) {
+    pagerEl.innerHTML = '';
+    return;
+  }
+  pagerEl.innerHTML =
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline btn-sm" onclick="changeLifecycleQueuePage(-1)"' + (pagination.has_prev ? '' : ' disabled') + '>Previous</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="changeLifecycleQueuePage(1)"' + (pagination.has_next ? '' : ' disabled') + '>Next</button>' +
+    '</div>';
+}
+
 function renderLifecycle() {
   // Default initial load = active only. Per AC4, legacy rows must
   // never appear in the default Active view.
@@ -12547,19 +12720,42 @@ function switchLifecycleTab(include) {
   // Swap the rightmost column header to give legacy a clearer label.
   var th = document.getElementById('lifecycle-th-context');
   if (th) th.textContent = (include === 'legacy_unmapped') ? 'Quarantine reasons' : 'Next action';
+  lifecycleQueueState(include).offset = 0;
+  renderLifecycleQueueMeta(include);
   loadLifecycleQueue(include);
 }
 
 async function loadLifecycleQueue(include) {
+  include = include || window._lifecycleInclude || 'active';
+  var queueState = lifecycleQueueState(include);
   var body = document.getElementById('lifecycle-body');
   if (body) body.innerHTML = '<tr><td colspan="7" style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">Loading lifecycle queue…</td></tr>';
+  queueState.is_loading = true;
+  queueState.load_error = null;
+  renderLifecycleQueueMeta(include);
   var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   try {
     // AC1: explicit include= param so the rendered count matches counts.total exactly.
     // AC4: default tab fetches include=active only — no client-side bucket merging.
-    var resp = await boApiCall('GET', '/lifecycle/queue?include=' + encodeURIComponent(include));
+    var offset = typeof queueState.offset === 'number' ? Math.max(0, queueState.offset) : 0;
+    var resp = await boApiCall(
+      'GET',
+      '/lifecycle/queue?include=' + encodeURIComponent(include) +
+      '&limit=' + encodeURIComponent(lifecycleQueuePageSize()) +
+      '&offset=' + encodeURIComponent(offset)
+    );
     var items = (resp && resp.items) || [];
     var counts = (resp && resp.counts) || {};
+    queueState.pagination = (resp && resp.pagination) || {
+      limit: lifecycleQueuePageSize(),
+      offset: offset,
+      returned: items.length,
+      total_items: items.length,
+      has_next: false,
+      has_prev: offset > 0
+    };
+    queueState.offset = queueState.pagination.offset || 0;
+    queueState.is_loading = false;
     renderLifecycleRows(items, include);
     var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     var ms = Math.round(t1 - t0);
@@ -12567,10 +12763,23 @@ async function loadLifecycleQueue(include) {
     if (timeEl) timeEl.textContent = 'Loaded ' + items.length + ' rows in ' + ms + 'ms';
     var countEl = document.getElementById('lifecycle-count-' + include);
     if (countEl) countEl.textContent = String(typeof counts.total === 'number' ? counts.total : items.length);
+    renderLifecycleQueueMeta(include);
   } catch (err) {
     console.error('Lifecycle queue load failed:', err);
+    queueState.is_loading = false;
+    queueState.load_error = 'Failed to load lifecycle queue: ' + (err.message || 'unknown error');
     if (body) body.innerHTML = '<tr><td colspan="7" style="padding:32px;text-align:center;color:var(--red);font-size:12px;">Failed to load lifecycle queue: ' + escapeHtml(err.message || 'unknown error') + '</td></tr>';
+    renderLifecycleQueueMeta(include);
   }
+}
+
+function changeLifecycleQueuePage(direction) {
+  var include = window._lifecycleInclude || 'active';
+  var queueState = lifecycleQueueState(include);
+  var pagination = queueState.pagination || {};
+  var limit = typeof pagination.limit === 'number' && pagination.limit > 0 ? pagination.limit : lifecycleQueuePageSize();
+  queueState.offset = Math.max(0, (typeof pagination.offset === 'number' ? pagination.offset : queueState.offset || 0) + (direction * limit));
+  loadLifecycleQueue(include);
 }
 
 function renderLifecycleRows(items, include) {
@@ -12626,7 +12835,7 @@ async function loadLifecycleApplicationSummary(applicationId) {
   if (!container || !applicationId) return;
   container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Loading lifecycle summary…</div>';
   try {
-    var resp = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(applicationId) + '/summary');
+    var resp = await fetchLifecycleApplicationSummary(applicationId);
     detailLifecycleSummaryOverview = {
       applicationId: applicationId,
       summary: resp
@@ -12639,6 +12848,20 @@ async function loadLifecycleApplicationSummary(applicationId) {
     detailLifecycleSummaryOverview = null;
     container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
   }
+}
+
+function fetchLifecycleApplicationSummary(applicationId, force) {
+  if (!applicationId) return Promise.reject(new Error('applicationId is required'));
+  var cacheKey = String(applicationId);
+  if (!force && LIFECYCLE_SUMMARY_CACHE[cacheKey]) {
+    return LIFECYCLE_SUMMARY_CACHE[cacheKey];
+  }
+  LIFECYCLE_SUMMARY_CACHE[cacheKey] = boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(applicationId) + '/summary')
+    .catch(function(err) {
+      delete LIFECYCLE_SUMMARY_CACHE[cacheKey];
+      throw err;
+    });
+  return LIFECYCLE_SUMMARY_CACHE[cacheKey];
 }
 
 function renderLifecycleApplicationSummary(resp) {
@@ -14144,7 +14367,7 @@ async function loadLifecycleDetailTab(force) {
   }
   container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading lifecycle workspace…</div>';
   try {
-    var summary = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(app.id) + '/summary');
+    var summary = await fetchLifecycleApplicationSummary(app.id, !!force);
     var activeItems = ((summary && summary.active) || {}).items || [];
     var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;
     var reviewSetup = (summary && summary.review_setup) || null;
@@ -14925,8 +15148,8 @@ function updateMonitoringReviewSignalStats() {
 }
 
 function openMonitoringLifecycleQueue() {
+  window._lifecycleInclude = 'active';
   showView('lifecycle');
-  try { switchLifecycleTab('active'); } catch(e) { try { renderLifecycle(); } catch(inner) {} }
 }
 
 function openMonitoringReviewLifecycle(ref) {
