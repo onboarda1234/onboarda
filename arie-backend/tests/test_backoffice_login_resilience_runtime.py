@@ -90,6 +90,8 @@ def _login_runtime_js(html, scenario):
                 var BO_API_BASE = '/api';
                 var BO_AUTH_TOKEN = '';
                 var BO_AUTH_USER = null;
+                var BO_AUTH_SESSION_SEQ = 0;
+                var BO_ACTIVE_SESSION_ID = 0;
                 var USERS = [];
                 var APPLICATIONS = [];
                 var AUDIT_LOG = [];
@@ -128,18 +130,33 @@ def _login_runtime_js(html, scenario):
                 function normalizeAIAgentConfig(agent) { return agent; }
                 function normalizeMonitoringAlert(alert) { return alert; }
                 function normalizePeriodicReview(review) { return review; }
+                function setDashboardStatusContract() {}
                 function setDashboardData(data) { routeMatches.push({ type: 'dashboard-data', data }); }
                 function renderDashboardRecent() { routeMatches.push({ type: 'renderDashboardRecent', count: APPLICATIONS.length }); }
                 function populateOfficerDropdowns() { routeMatches.push({ type: 'populateOfficerDropdowns', count: USERS.length }); }
                 function applyBackofficeHashRoute() { return false; }
                 function showView(name) { showViewCalls.push(name); }
                 function loadAuditTrail() { return Promise.resolve(true); }
+                async function refreshDashboardData() {
+                  var dashboardResp = await boApiCall('GET', '/dashboard');
+                  setDashboardStatusContract(dashboardResp);
+                  setDashboardData(dashboardResp);
+                  return true;
+                }
+                function clearBoAuthState() {
+                  BO_AUTH_TOKEN = '';
+                  BO_AUTH_USER = null;
+                  BO_ACTIVE_SESSION_ID = 0;
+                }
+                function getCurrentBoSessionId() { return BO_ACTIVE_SESSION_ID; }
                 function _updateFreshnessIndicator() {}
                 function _startApplicationsAutoRefresh() { _applicationsRefreshInterval = 1; }
                 function _stopApplicationsAutoRefresh() { _applicationsRefreshInterval = null; }
                 function setBoAuth(token, user) {
                   BO_AUTH_TOKEN = token;
                   BO_AUTH_USER = user;
+                  BO_AUTH_SESSION_SEQ += 1;
+                  BO_ACTIVE_SESSION_ID = BO_AUTH_SESSION_SEQ;
                   if (user) {
                     currentUser = {
                       id: user.id || user.sub || '',
@@ -151,6 +168,39 @@ def _login_runtime_js(html, scenario):
                       status: user.status || 'active'
                     };
                   }
+                }
+                function syncCurrentUserUI() {}
+                function resetBackofficeSessionData() {
+                  DASHBOARD_DATA = null;
+                  DASHBOARD_BOOTSTRAP_STATE = 'idle';
+                  SUPPORT_DATA_STATE = 'idle';
+                  SUPPORT_DATA_PROMISE = null;
+                  APPLICATIONS = [];
+                  applicationsApiTotal = 0;
+                  APPLICATIONS_LOAD_STATE = 'idle';
+                  APPLICATIONS_LOAD_PROMISE = null;
+                  APPLICATIONS_LOAD_ERROR = '';
+                  SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+                  SCREENING_QUEUE_DIRTY = false;
+                  SCREENING_QUEUE_LOAD_PROMISE = null;
+                  MONITORING_ALERTS = [];
+                  PERIODIC_REVIEWS = [];
+                  MONITORING_AGENTS = [];
+                  MONITORING_DASHBOARD = null;
+                  MONITORING_DATA_STATE = 'idle';
+                  MONITORING_DATA_PROMISE = null;
+                  EDD_CASES = [];
+                  EDD_DATA_PROMISE = null;
+                  AUDIT_LOG = [];
+                  AUDIT_DATA_PROMISE = null;
+                  RESOURCES = [];
+                  RESOURCES_DATA_PROMISE = null;
+                  REG_DOCUMENTS = [];
+                  REG_CURRENT_DOC_ID = null;
+                  REG_INTEL_DATA_PROMISE = null;
+                  ROLE_PERMISSIONS = null;
+                  ROLE_PERMISSIONS_PROMISE = null;
+                  BACKOFFICE_LAST_LOAD_FAILURES = [];
                 }
 
                 async function loadEDDCases(options) {
@@ -285,7 +335,7 @@ def _base_api_behavior(extra_cases=""):
 
 
 class TestBackofficeLoginResilienceRuntime:
-    def test_successful_auth_and_full_preload_closes_overlay_without_false_error(self):
+    def test_successful_auth_bootstraps_dashboard_without_blocking_deferred_loaders(self):
         html = _read_backoffice()
         fetch_behavior = textwrap.dedent(
             """
@@ -310,12 +360,13 @@ class TestBackofficeLoginResilienceRuntime:
         assert result["loginErrorVisible"] is False
         assert result["warningVisible"] is False
         assert result["token"] == "token-123"
-        assert result["applicationsCount"] == 1
-        assert result["usersCount"] == 1
-        assert result["showViewCalls"] == ["dashboard"]
+        assert result["applicationsCount"] == 0
+        assert result["usersCount"] == 0
+        assert result["showViewCalls"] == ["dashboard", "dashboard"]
         assert result["failures"] == []
+        assert [call["path"] for call in result["apiCalls"]] == ["/dashboard"]
 
-    def test_successful_auth_with_users_failure_keeps_shell_and_shows_warning(self):
+    def test_successful_auth_does_not_block_on_deferred_users_loader_failure(self):
         html = _read_backoffice()
         fetch_behavior = textwrap.dedent(
             """
@@ -338,14 +389,15 @@ class TestBackofficeLoginResilienceRuntime:
         assert result["overlayAriaHidden"] == "true"
         assert result["overlayHiddenAttr"] is True
         assert result["loginErrorVisible"] is False
-        assert result["warningVisible"] is True
-        assert "Users" in result["warningText"]
-        assert result["applicationsCount"] == 1
+        assert result["warningVisible"] is False
+        assert result["warningText"] == "Signed in. Some dashboard data failed to load. You can continue working, or retry loading background data."
+        assert result["applicationsCount"] == 0
         assert result["usersCount"] == 0
         assert result["token"] == "token-users-fail"
-        assert result["failures"] == ["Users"]
+        assert result["failures"] == []
+        assert [call["path"] for call in result["apiCalls"]] == ["/dashboard"]
 
-    def test_successful_auth_with_edd_failure_shows_contained_warning(self):
+    def test_successful_auth_does_not_block_on_deferred_edd_loader_failure(self):
         html = _read_backoffice()
         fetch_behavior = textwrap.dedent(
             """
@@ -368,10 +420,12 @@ class TestBackofficeLoginResilienceRuntime:
         assert result["overlayAriaHidden"] == "true"
         assert result["overlayHiddenAttr"] is True
         assert result["loginErrorVisible"] is False
-        assert result["warningVisible"] is True
-        assert "EDD cases" in result["warningText"]
-        assert result["applicationsCount"] == 1
-        assert result["failures"] == ["EDD cases"]
+        assert result["warningVisible"] is False
+        assert result["warningText"] == "Signed in. Some dashboard data failed to load. You can continue working, or retry loading background data."
+        assert result["applicationsCount"] == 0
+        assert result["eddCount"] == 0
+        assert result["failures"] == []
+        assert [call["path"] for call in result["apiCalls"]] == ["/dashboard"]
 
     def test_invalid_credentials_keep_overlay_visible_and_show_auth_error(self):
         html = _read_backoffice()
