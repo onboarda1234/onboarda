@@ -10607,6 +10607,19 @@ function eddTextToList(id) {
   return el.value.split(/\n/).map(function(v) { return v.trim(); }).filter(Boolean);
 }
 
+function eddOutcomeOptionsHtml(selected) {
+  selected = selected || '';
+  var options = [
+    { value: 'approve', label: 'Maintain relationship' },
+    { value: 'approve_with_conditions', label: 'Maintain with conditions / enhanced monitoring' },
+    { value: 'reject', label: 'Restrict, pause, offboard, or reject continued relationship' },
+    { value: 'escalate', label: 'Escalate externally / SAR consideration' }
+  ];
+  return '<option value="">Select recommended outcome…</option>' + options.map(function(option) {
+    return '<option value="' + escapeHtml(option.value) + '"' + (selected === option.value ? ' selected' : '') + '>' + escapeHtml(option.label) + '</option>';
+  }).join('');
+}
+
 function eddSeniorReviewerOptions(selected) {
   selected = selected || '';
   var eligible = USERS.filter(function(u) { return u.role === 'admin' || u.role === 'sco'; });
@@ -10615,6 +10628,33 @@ function eddSeniorReviewerOptions(selected) {
     html += '<option value="' + escapeHtml(u.id) + '"' + (u.id === selected ? ' selected' : '') + '>' + escapeHtml(u.name || u.id) + ' (' + escapeHtml(ROLE_LABELS[u.role] || u.role) + ')</option>';
   });
   return html;
+}
+
+function eddLinkedSourceHtml(c) {
+  var source = (c && c.linked_source) || {};
+  var label = source.label || 'Investigation source';
+  var type = String(source.type || c.origin_context || c.trigger_source || '').replace(/_/g, ' ');
+  var summary = source.summary || c.trigger_notes || 'No source summary recorded.';
+  var status = source.status || c.stage || '—';
+  var action = '';
+  if (source.type === 'monitoring_alert' && source.id != null) {
+    action = "<button class=\"btn btn-outline btn-sm\" onclick=\"event.stopPropagation();closeModal('modal-edd-detail');showView('monitoring');\">Open monitoring alerts</button>";
+  } else if (source.type === 'periodic_review' && c.application_id) {
+    action = "<button class=\"btn btn-outline btn-sm\" onclick=\"event.stopPropagation();closeModal('modal-edd-detail');openAppDetail(" + JSON.stringify(c.application_id) + ", { initialTab: 'lifecycle' });\">Open lifecycle history</button>";
+  } else if (c.application_id) {
+    action = "<button class=\"btn btn-outline btn-sm\" onclick=\"event.stopPropagation();closeModal('modal-edd-detail');openAppDetail(" + JSON.stringify(c.application_id) + ", { initialTab: 'lifecycle' });\">Open linked application</button>";
+  }
+  return '<div style="padding:12px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;margin-top:12px;">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
+      '<div>' +
+        '<div style="font-size:12px;font-weight:800;color:#1e3a8a;">Linked source object</div>' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);margin-top:3px;">' + escapeHtml(label) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Type: ' + escapeHtml(type || 'formal investigation') + ' · Status: ' + escapeHtml(status) + '</div>' +
+      '</div>' +
+      (action || '') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);margin-top:10px;line-height:1.45;">' + escapeHtml(summary) + '</div>' +
+  '</div>';
 }
 
 function renderEDD() {
@@ -10688,30 +10728,39 @@ function openEDDDetail(caseId) {
   var findingsSummary = findings.findings_summary || '';
   var keyConcerns = eddListToText(findings.key_concerns || []);
   var mitigatingEvidence = eddListToText(findings.mitigating_evidence || []);
+  var rationale = findings.rationale || '';
   var recommendedOutcome = findings.recommended_outcome || '';
   var slaDate = c.sla_due_at ? String(c.sla_due_at).slice(0, 10) : '';
   var seniorReviewer = c.senior_reviewer || '';
+  var seniorReviewLabel = c.stage === 'pending_senior_review' ? 'Pending senior review' : (c.stage === 'edd_approved' || c.stage === 'edd_rejected' ? 'Completed' : 'Not submitted');
+  var originContext = (c.origin_context || c.trigger_source || 'formal_investigation').replace(/_/g, ' ');
 
   var html = '<div class="detail-section">' +
-    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Investigation Case Summary</div>' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Investigation Case Workspace</div>' +
+    '<div style="font-size:12px;color:var(--text3);margin-bottom:10px;">Formal narrative investigation. Routine onboarding Enhanced Review Requirements remain in KYC Documents.</div>' +
+    '<div class="detail-row"><span class="label">Case Reference</span><span class="value" style="font-family:monospace;">INV-' + escapeHtml(c.id) + '</span></div>' +
     '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + escapeHtml(c.client_name) + '</span></div>' +
     '<div class="detail-row"><span class="label">Application</span><span class="value" style="font-family:monospace;">' + escapeHtml(c.application_id) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadgeForRecord(c) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(c)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Formal EDD Investigation</span><span class="value" style="font-weight:700;">Yes</span></div>' +
+    '<div class="detail-row"><span class="label">Case Type</span><span class="value" style="font-weight:700;">Formal Investigation Case</span></div>' +
+    '<div class="detail-row"><span class="label">Origin Context</span><span class="value">' + escapeHtml(originContext) + '</span></div>' +
     '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Priority / Severity</span><span class="value">' + escapeHtml(c.priority || c.linked_source && c.linked_source.severity || 'Not set') + '</span></div>' +
     '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(eddTriggerText(c)) + '</span></div>' +
     '<div class="detail-row"><span class="label">Investigation Opened</span><span class="value">' + (c.triggered_at || '').split('T')[0] + '</span></div>' +
     '<div class="detail-row"><span class="label">Days in Investigation</span><span class="value" style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + ' days</span></div>' +
     '<div class="detail-row"><span class="label">SLA Due</span><span class="value">' + escapeHtml(slaDate || '—') + '</span></div>' +
     '<div class="detail-row"><span class="label">Senior Reviewer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === seniorReviewer; }); return u ? u.name : (seniorReviewer || '—'); })()) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Senior Review State</span><span class="value">' + escapeHtml(seniorReviewLabel) + '</span></div>' +
     '</div>';
+  html += eddLinkedSourceHtml(c);
   html += renderRiskIntegrityWarning(c);
 
   if (policy.policy_version || (policy.triggers || []).length) {
     html += '<div class="detail-section" style="margin-top:16px;">' +
-      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Routing Policy</div>' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Source / Routing Context</div>' +
       '<div class="detail-row"><span class="label">Policy</span><span class="value">' + escapeHtml(policy.policy_version || '—') + '</span></div>' +
       '<div class="detail-row"><span class="label">Triggers</span><span class="value">' + escapeHtml((policy.triggers || []).join(', ') || '—') + '</span></div>' +
       '<div class="detail-row"><span class="label">Mandatory Escalation</span><span class="value">' + escapeHtml((policy.mandatory_escalation_reasons || []).join(', ') || '—') + '</span></div>' +
@@ -10756,11 +10805,7 @@ function openEDDDetail(caseId) {
         '<label style="font-size:12px;font-weight:600;">SLA Due Date<input id="edd-sla-due-at" type="date" value="' + escapeHtml(slaDate) + '" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);" /></label>' +
         '<label style="font-size:12px;font-weight:600;">Senior Reviewer<select id="edd-senior-reviewer" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);">' + eddSeniorReviewerOptions(seniorReviewer) + '</select></label>' +
         '<label style="font-size:12px;font-weight:600;">Recommended Outcome<select id="edd-recommended-outcome" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);">' +
-          '<option value="">Select outcome…</option>' +
-          '<option value="approve"' + (recommendedOutcome === 'approve' ? ' selected' : '') + '>Approve</option>' +
-          '<option value="approve_with_conditions"' + (recommendedOutcome === 'approve_with_conditions' ? ' selected' : '') + '>Approve with conditions</option>' +
-          '<option value="reject"' + (recommendedOutcome === 'reject' ? ' selected' : '') + '>Reject</option>' +
-          '<option value="escalate"' + (recommendedOutcome === 'escalate' ? ' selected' : '') + '>Escalate</option>' +
+          eddOutcomeOptionsHtml(recommendedOutcome) +
         '</select></label>' +
       '</div>' +
       '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:8px;">Findings Summary<textarea id="edd-findings-summary" rows="3" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);resize:vertical;">' + escapeHtml(findingsSummary) + '</textarea></label>' +
@@ -10768,6 +10813,7 @@ function openEDDDetail(caseId) {
         '<label style="font-size:12px;font-weight:600;">Key Concerns<textarea id="edd-key-concerns" rows="3" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);resize:vertical;">' + escapeHtml(keyConcerns) + '</textarea></label>' +
         '<label style="font-size:12px;font-weight:600;">Mitigating Evidence<textarea id="edd-mitigating-evidence" rows="3" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);resize:vertical;">' + escapeHtml(mitigatingEvidence) + '</textarea></label>' +
       '</div>' +
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:12px;">Officer Notes / Rationale<textarea id="edd-rationale" rows="3" style="display:block;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg1);resize:vertical;">' + escapeHtml(rationale) + '</textarea></label>' +
       '<button class="btn btn-primary btn-sm" onclick="saveEDDFindings(' + c.id + ')">Save SLA &amp; Findings</button>' +
     '</div>' +
     '<div class="detail-section" style="margin-top:16px;">' +
@@ -10811,18 +10857,20 @@ async function saveEDDFindings(caseId) {
   var senior = document.getElementById('edd-senior-reviewer') ? document.getElementById('edd-senior-reviewer').value : '';
   var outcome = document.getElementById('edd-recommended-outcome') ? document.getElementById('edd-recommended-outcome').value : '';
   var summary = document.getElementById('edd-findings-summary') ? document.getElementById('edd-findings-summary').value.trim() : '';
+  var rationale = document.getElementById('edd-rationale') ? document.getElementById('edd-rationale').value.trim() : '';
   var findings = {
     recommended_outcome: outcome || null,
     findings_summary: summary,
     key_concerns: eddTextToList('edd-key-concerns'),
-    mitigating_evidence: eddTextToList('edd-mitigating-evidence')
+    mitigating_evidence: eddTextToList('edd-mitigating-evidence'),
+    rationale: rationale
   };
   try {
-    await boApiCall('PATCH', '/edd/cases/' + caseId + '/findings', { findings: findings });
-    var patch = {};
+    await boApiCall('PATCH', '/edd/cases/' + caseId + '/findings', { findings: findings, source_surface: 'investigation_case_workspace' });
+    var patch = { source_surface: 'investigation_case_workspace' };
     if (sla) patch.sla_due_at = sla;
     if (senior) patch.senior_reviewer = senior;
-    if (Object.keys(patch).length) {
+    if (Object.keys(patch).length > 1) {
       await boApiCall('PATCH', '/edd/cases/' + caseId, patch);
     }
     showToast('Investigation SLA and findings saved');
@@ -10848,7 +10896,7 @@ async function advanceEDDStage(caseId, newStage) {
     return;
   }
 
-  var body = { stage: newStage };
+  var body = { stage: newStage, source_surface: 'investigation_case_workspace' };
   if (note) body.note = note;
   var sla = document.getElementById('edd-sla-due-at') ? document.getElementById('edd-sla-due-at').value : '';
   var senior = document.getElementById('edd-senior-reviewer') ? document.getElementById('edd-senior-reviewer').value : '';
