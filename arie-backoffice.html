@@ -4387,7 +4387,16 @@ function loadSupportReferenceData(sessionId) {
 }
 
 function startDeferredSupportLoad(sessionId) {
-  window.setTimeout(function() {
+  var defer = (typeof window !== 'undefined' && typeof window.setTimeout === 'function')
+    ? window.setTimeout.bind(window)
+    : (typeof setTimeout === 'function' ? setTimeout : null);
+  if (!defer) {
+    loadSupportReferenceData(sessionId).catch(function(e) {
+      console.warn('Deferred support data load failed:', e);
+    });
+    return;
+  }
+  defer(function() {
     loadSupportReferenceData(sessionId).catch(function(e) {
       console.warn('Deferred support data load failed:', e);
     });
@@ -5124,7 +5133,12 @@ function showView(name, navItem) {
   }
   if (name === 'screening') {
     renderScreening({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length });
-    ensureScreeningQueueLoaded({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length }).then(function(loaded) {
+    var screeningLoader = typeof ensureScreeningQueueLoaded === 'function'
+      ? ensureScreeningQueueLoaded
+      : (typeof loadScreeningQueue === 'function'
+          ? function(options) { return Promise.resolve(loadScreeningQueue(options)); }
+          : function() { return Promise.resolve(false); });
+    screeningLoader({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length }).then(function(loaded) {
       if (loaded) renderScreening();
     });
   }
@@ -19397,6 +19411,9 @@ async function signOut() {
     console.warn('Server logout failed; clearing local session state:', e);
   }
   // httpOnly session cookie is cleared by server logout; local state is cleared below.
+  BO_AUTH_TOKEN = '';
+  BO_AUTH_USER = null;
+  BO_ACTIVE_SESSION_ID = 0;
   clearBoAuthState();
   resetBackofficeSessionData();
 
