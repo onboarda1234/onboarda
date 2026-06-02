@@ -1394,7 +1394,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     conn.close()
 
     list_resp = requests.get(
-        f"{base_url}/api/applications?limit=50",
+        f"{base_url}/api/applications?view=list&limit=50",
         headers=_headers("admin"),
         timeout=5,
     )
@@ -1406,7 +1406,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert apps[standard_app]["enhanced_review_summary"]["enhanced_review_active"] is False
 
     pending_resp = requests.get(
-        f"{base_url}/api/applications?limit=50&enhanced_review=pending_client",
+        f"{base_url}/api/applications?view=list&limit=50&enhanced_review=pending_client",
         headers=_headers("admin"),
         timeout=5,
     )
@@ -1416,7 +1416,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert resolved_app not in pending_ids
 
     active_resp = requests.get(
-        f"{base_url}/api/applications?limit=50&enhanced_review=active",
+        f"{base_url}/api/applications?view=list&limit=50&enhanced_review=active",
         headers=_headers("admin"),
         timeout=5,
     )
@@ -1427,7 +1427,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert standard_app not in active_ids
 
     awaiting_resp = requests.get(
-        f"{base_url}/api/applications?limit=50&enhanced_review=awaiting_review",
+        f"{base_url}/api/applications?view=list&limit=50&enhanced_review=awaiting_review",
         headers=_headers("admin"),
         timeout=5,
     )
@@ -1437,7 +1437,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert resolved_app not in awaiting_ids
 
     blocked_resp = requests.get(
-        f"{base_url}/api/applications?limit=50&enhanced_review=approval_blocked",
+        f"{base_url}/api/applications?view=list&limit=50&enhanced_review=approval_blocked",
         headers=_headers("admin"),
         timeout=5,
     )
@@ -1447,7 +1447,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert resolved_app not in blocked_ids
 
     resolved_resp = requests.get(
-        f"{base_url}/api/applications?limit=50&enhanced_review=resolved",
+        f"{base_url}/api/applications?view=list&limit=50&enhanced_review=resolved",
         headers=_headers("admin"),
         timeout=5,
     )

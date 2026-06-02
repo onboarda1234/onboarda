@@ -3106,12 +3106,36 @@ class ApplicationsHandler(BaseHandler):
         status = self.get_argument("status", None)
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
+        query_text = (self.get_argument("q", "") or "").strip()
+        view = (self.get_argument("view", "full") or "full").strip().lower()
+        list_view = view == "list"
         enhanced_review = (self.get_argument("enhanced_review", None) or "").strip().lower()
-        limit = _bounded_int(self.get_argument("limit", 5000), 5000, min_value=1, max_value=5000)
+        default_limit = 20 if list_view else 5000
+        max_limit = 100 if list_view else 5000
+        limit = _bounded_int(self.get_argument("limit", default_limit), default_limit, min_value=1, max_value=max_limit)
         offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
 
-        query = """
-            SELECT a.*, u.full_name AS assigned_name
+        select_fields = "a.*, u.full_name AS assigned_name"
+        if list_view:
+            select_fields = """
+                a.id,
+                a.ref,
+                a.company_name,
+                a.country,
+                a.sector,
+                a.entity_type,
+                a.status,
+                a.risk_level,
+                a.final_risk_level,
+                a.risk_score,
+                a.onboarding_lane,
+                a.assigned_to,
+                a.created_at,
+                a.brn,
+                u.full_name AS assigned_name
+            """
+        query = f"""
+            SELECT {select_fields}
             FROM applications a
             LEFT JOIN users u ON a.assigned_to = u.id
             WHERE 1=1
@@ -3133,11 +3157,35 @@ class ApplicationsHandler(BaseHandler):
             query += " AND a.status = ?"
             params.append(status)
         if risk:
-            query += " AND a.risk_level = ?"
-            params.append(risk)
+            normalized_risk = str(risk).strip().upper()
+            if normalized_risk == "UNKNOWN":
+                query += (
+                    " AND UPPER(COALESCE(a.final_risk_level, a.risk_level, '')) "
+                    "NOT IN ('LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH')"
+                )
+            else:
+                query += " AND UPPER(COALESCE(a.final_risk_level, a.risk_level, '')) = ?"
+                params.append(normalized_risk)
         if assigned:
-            query += " AND a.assigned_to = ?"
-            params.append(assigned)
+            if str(assigned).strip().lower() == "unassigned":
+                query += " AND (a.assigned_to IS NULL OR TRIM(a.assigned_to) = '')"
+            else:
+                query += " AND a.assigned_to = ?"
+                params.append(assigned)
+        if query_text:
+            like_term = f"%{query_text.lower()}%"
+            query += """
+                AND (
+                    LOWER(COALESCE(a.ref, '')) LIKE ?
+                    OR LOWER(COALESCE(a.company_name, '')) LIKE ?
+                    OR LOWER(COALESCE(a.brn, '')) LIKE ?
+                    OR LOWER(COALESCE(a.sector, '')) LIKE ?
+                    OR LOWER(COALESCE(a.country, '')) LIKE ?
+                    OR LOWER(COALESCE(a.status, '')) LIKE ?
+                    OR LOWER(COALESCE(u.full_name, '')) LIKE ?
+                )
+            """
+            params.extend([like_term] * 7)
         if enhanced_review and user["type"] != "client":
             risk_expr = "UPPER(COALESCE(a.final_risk_level, a.risk_level, ''))"
             status_expr = "LOWER(COALESCE(a.status, ''))"
@@ -3198,6 +3246,42 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         apps = [dict(r) for r in rows]
+
+        if list_view:
+            if user["type"] != "client" and apps:
+                db = get_db()
+                enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
+                db.close()
+                for app in apps:
+                    app["enhanced_review_summary"] = enhanced_summaries.get(app["id"])
+                    _decorate_application_risk_integrity(app)
+            payload = {
+                "applications": apps,
+                "total": total,
+                "returned": len(apps),
+                "limit": limit,
+                "offset": offset,
+                "view": "list",
+                "pagination": {
+                    "limit": limit,
+                    "offset": offset,
+                    "returned": len(apps),
+                    "total": total,
+                    "has_next": (offset + len(apps)) < total,
+                    "has_prev": offset > 0,
+                },
+            }
+            payload_json = json.dumps(payload, sort_keys=True, default=str)
+            etag = '"' + hashlib.md5(payload_json.encode("utf-8")).hexdigest() + '"'
+            client_etag = self.request.headers.get("If-None-Match", "")
+            if client_etag == etag:
+                self.set_status(304)
+                self.set_header("ETag", etag)
+                self.finish()
+                return
+            self.set_header("ETag", etag)
+            self.success(payload)
+            return
 
         # EX-13: Batch-fetch related records to eliminate N+1 query pattern.
         # Instead of 4N+1 queries, we use 5 total queries regardless of app count.

@@ -314,7 +314,7 @@ def _base_api_behavior(extra_cases=""):
         f"""
         async function(method, path) {{
           {extra_cases}
-          if (path === '/applications?limit=5000') return {{ total: 1, applications: [{{ ref: 'ARF-1', company: 'Acme Ltd' }}] }};
+          if (path.indexOf('/applications?view=list') === 0) return {{ total: 1, returned: 1, limit: 20, offset: 0, applications: [{{ ref: 'ARF-1', company_name: 'Acme Ltd' }}] }};
           if (path === '/dashboard') return {{ metrics: [] }};
           if (path === '/users') return {{ users: [{{ id: 'u1', full_name: 'Officer Example', email: 'officer@example.com', role: 'co', status: 'active' }}] }};
           if (path === '/config/risk-model') return {{ dimensions: [], thresholds: [] }};
