@@ -1397,7 +1397,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <details id="detail-kyc-documents-details">
         <summary>
           <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">KYC Document Taxonomy</div>
+            <div class="detail-collapsible-title">KYC Documents</div>
             <div class="detail-collapsible-subtitle">Corporate documents, identity evidence, enhanced evidence, portal disclosures, and verification results in one onboarding flow.</div>
           </div>
           <div class="detail-collapsible-meta">
@@ -1407,7 +1407,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         </summary>
         <div class="detail-collapsible-body">
           <div class="detail-collapsible-inline-header">
-            <span class="ai-advisory-badge">🤖 AI Verification — Advisory Only</span>
             <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
           </div>
           <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI Verification Results — Advisory Only</div><div class="ai-adv-sub">Document verification checks below are AI-generated and advisory. Officer review is required before relying on these results for compliance decisions.</div></div></div>
@@ -1459,7 +1458,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <details id="detail-enhanced-requirements-details">
         <summary>
           <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">Enhanced Review Summary</div>
+            <div class="detail-collapsible-title">Enhanced Review Advanced Tracker</div>
             <div class="detail-collapsible-subtitle">Compact tracker for triggered onboarding enhanced evidence, portal disclosures, and controls.</div>
           </div>
           <div class="detail-collapsible-meta">
@@ -1485,8 +1484,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <details id="detail-document-history-details">
         <summary>
           <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">Document Verification History</div>
-            <div class="detail-collapsible-subtitle">Read-only upload and verification timeline from the KYC repository.</div>
+            <div class="detail-collapsible-title">G — Verification History</div>
+            <div class="detail-collapsible-subtitle">Document Verification History: read-only upload and verification timeline from the KYC repository.</div>
           </div>
           <div class="detail-collapsible-meta">
             <span class="detail-collapsible-summary-line" id="detail-document-history-summary-copy">Loading document history…</span>
@@ -6493,10 +6492,15 @@ function buildVerificationResultsHtml(results) {
   }
 
   var items = [];
-  function pushItem(label, value) {
+  function pushItem(label, value, tone) {
     var normalized = normalizeDetailValue(value);
     if (normalized === '—') return;
-    items.push('<div class="doc-meta"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
+    var toneStyle = tone === 'red'
+      ? 'border-color:#dc262644;background:#dc262610;color:#7f1d1d;'
+      : tone === 'amber'
+        ? 'border-color:#d9770644;background:#d9770610;color:#78350f;'
+        : 'border-color:var(--border1);background:var(--surface);color:var(--text2);';
+    items.push('<div class="doc-verification-summary-block" style="border:1px solid var(--border1);' + toneStyle + 'border-radius:8px;padding:8px 10px;margin-top:7px;font-size:12px;line-height:1.45;"><strong style="color:inherit;">' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
   }
 
   if (Array.isArray(results)) {
@@ -6516,9 +6520,6 @@ function buildVerificationResultsHtml(results) {
   }
 
   if (typeof results === 'object') {
-    // EX-11: AI advisory label for verification checks
-    items.push('<div class="ai-advisory-banner" style="margin-bottom:8px;padding:6px 10px;"><span class="ai-adv-icon" style="font-size:13px;">🤖</span><div><div class="ai-adv-text" style="font-size:10px;">AI Verification — Advisory Only</div></div></div>');
-
     // Finding 9: Show ai_source banner when not live
     var aiSrc = results.ai_source || '';
     if (aiSrc && aiSrc !== 'live') {
@@ -6537,15 +6538,17 @@ function buildVerificationResultsHtml(results) {
                   : '⚠ System Issue: ' + sysWarn;
       items.push('<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#92400e;font-weight:600;">' + escapeHtml(warnMsg) + '</div>');
     }
-    pushItem('Overall Result', firstMeaningfulDetailValue(results.overall, results.overall_result, results.result, results.status));
+    var overallValue = firstMeaningfulDetailValue(results.overall, results.overall_result, results.result, results.status);
+    var overallTone = String(overallValue || '').toLowerCase().indexOf('fail') >= 0 || String(overallValue || '').toLowerCase().indexOf('flag') >= 0 ? 'red'
+      : String(overallValue || '').toLowerCase().indexOf('warn') >= 0 ? 'amber' : '';
+    pushItem('Overall Result', overallValue, overallTone);
     pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
     pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
     pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
     pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
     pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
-    pushItem('Warnings', Array.isArray(results.warnings) ? results.warnings.join(', ') : '');
-    pushItem('Red Flags', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '');
-    pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
+    pushItem('Warnings', Array.isArray(results.warnings) ? results.warnings.join(', ') : '', 'amber');
+    pushItem('Red Flags', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '', 'red');
     if (Array.isArray(results.checks)) {
       var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
       // EX-11: Check type legend for visual distinction
@@ -6553,7 +6556,9 @@ function buildVerificationResultsHtml(results) {
       if (hasClassifiedChecks) {
         items.push('<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>');
       }
-      results.checks.forEach(function(check, idx) {
+      var visibleCheckItems = [];
+      var technicalCheckItems = [];
+      function buildCheckHtml(check, idx) {
         if (!check || typeof check !== 'object') return;
         var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
         var result = (firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
@@ -6582,8 +6587,26 @@ function buildVerificationResultsHtml(results) {
         if (msg) meta += '<div style="font-size:11px;color:#374151;margin-top:2px;">' + escapeHtml(msg) + '</div>';
         if (check.confidence != null) meta += '<div style="font-size:11px;color:#6b7280;">Confidence: ' + Math.round(Number(check.confidence) * 100) + '%</div>';
 
-        items.push('<div style="display:flex;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--border2,#e5e7eb);">' + icon + '<div style="flex:1;"><strong>' + label + '</strong>' + resultBadge + classTag + meta + '</div></div>');
+        return '<div style="display:flex;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border2,#e5e7eb);">' + icon + '<div style="flex:1;"><strong style="color:var(--text1);">' + label + '</strong>' + resultBadge + classTag + meta + '</div></div>';
+      }
+      results.checks.forEach(function(check, idx) {
+        var checkHtml = buildCheckHtml(check, idx);
+        if (!checkHtml) return;
+        var result = String(firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
+        if (result === 'pass') technicalCheckItems.push(checkHtml);
+        else visibleCheckItems.push(checkHtml);
       });
+      if (visibleCheckItems.length) {
+        items.push('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;color:var(--text1);text-transform:uppercase;letter-spacing:.03em;">Failed or warning checks</div>' + visibleCheckItems.join('') + '</div>');
+      }
+      if (technicalCheckItems.length) {
+        items.push('<details style="margin-top:8px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);overflow:hidden;">' +
+          '<summary style="cursor:pointer;padding:8px 10px;font-size:11px;font-weight:800;color:var(--brand);list-style-position:inside;">Show technical verification checks</summary>' +
+          '<div style="padding:0 10px 8px;">' + technicalCheckItems.join('') + '</div>' +
+        '</details>');
+      }
+    } else {
+      pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
     }
     if (!items.length) {
       Object.keys(results).forEach(function(key) {
@@ -6914,15 +6937,43 @@ function kycDocumentGroupKey(doc, linkedRequirement) {
   return 'corporate';
 }
 
-function kycTaxonomyGroupShell(title, subtitle, bodyHtml, tone) {
+function kycDocumentNeedsAttention(doc) {
+  if (!doc) return false;
+  var reviewStatus = String(doc.review_status || '').toLowerCase();
+  var verificationStatus = String(doc.verification_state || doc.verification_status || '').toLowerCase();
+  var results = doc.verification_results || {};
+  var overall = String(results.overall || results.overall_result || results.status || '').toLowerCase();
+  var warnings = Array.isArray(results.warnings) ? results.warnings : [];
+  var redFlags = Array.isArray(results.red_flags) ? results.red_flags : [];
+  var issues = Array.isArray(results.issues) ? results.issues : [];
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  var failedOrWarningCheck = checks.some(function(check) {
+    var result = String((check && (check.result || check.status)) || '').toLowerCase();
+    return result === 'fail' || result === 'warn' || result === 'failed' || result === 'warning';
+  });
+  if (['accepted', 'approved'].indexOf(reviewStatus) < 0) return true;
+  if (['verified', 'passed'].indexOf(verificationStatus) < 0) return true;
+  return ['failed', 'flagged', 'warning', 'warn'].indexOf(overall) >= 0 || warnings.length > 0 || redFlags.length > 0 || issues.length > 0 || failedOrWarningCheck;
+}
+
+function enhancedRequirementNeedsAttention(req) {
+  if (!req) return false;
+  var status = String(req.status || '').toLowerCase();
+  if (['accepted', 'waived', 'completed'].indexOf(status) < 0) return true;
+  var doc = enhancedRequirementLinkedDocument(req);
+  return doc ? kycDocumentNeedsAttention(doc) : false;
+}
+
+function kycTaxonomyGroupShell(title, subtitle, bodyHtml, tone, expanded) {
   var borderColor = tone === 'purple' ? '#7c3aed' : tone === 'amber' ? 'var(--amber)' : tone === 'green' ? 'var(--green)' : 'var(--border1)';
-  return '<div class="kyc-taxonomy-group" style="border:1px solid var(--border1);border-left:4px solid ' + borderColor + ';border-radius:10px;background:var(--surface);margin-bottom:12px;overflow:hidden;">' +
-    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid var(--border1);background:var(--surface2);">' +
+  return '<details class="kyc-taxonomy-group" ' + (expanded ? 'open' : '') + ' style="border:1px solid var(--border1);border-left:4px solid ' + borderColor + ';border-radius:10px;background:var(--surface);margin-bottom:12px;overflow:hidden;">' +
+    '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid var(--border1);background:var(--surface2);list-style-position:inside;">' +
       '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(title) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:3px;line-height:1.45;">' + escapeHtml(subtitle || '') + '</div></div>' +
-    '</div>' +
+      '<span style="font-size:11px;color:var(--brand);font-weight:800;white-space:nowrap;">Expand / collapse</span>' +
+    '</summary>' +
     '<div style="padding:12px 14px;">' + bodyHtml + '</div>' +
-  '</div>';
+  '</details>';
 }
 
 function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
@@ -6979,9 +7030,9 @@ function renderStandardKycDocumentTaxonomy(app) {
   var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
   var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
   var groups = {
-    corporate: { title: 'Corporate Entity Documents', subtitle: 'Core corporate identity and ownership records.', items: [], tone: '' },
-    identity: { title: 'Directors & UBO Identity Documents', subtitle: 'Person-level identity and address evidence for directors, UBOs, and intermediaries.', items: [], tone: 'green' },
-    business: { title: 'Business Operating Documents', subtitle: 'Operating, financial, licensing, and commercial support documents.', items: [], tone: 'amber' }
+    corporate: { title: 'A — Corporate Entity Documents', subtitle: 'Core corporate identity and ownership records.', items: [], tone: '' },
+    identity: { title: 'B — Directors & UBO Identity Documents', subtitle: 'Person-level identity and address evidence for directors, UBOs, and intermediaries.', items: [], tone: 'green' },
+    business: { title: 'D — Business Operating Documents', subtitle: 'Operating, financial, licensing, and commercial support documents.', items: [], tone: 'amber' }
   };
   docs.forEach(function(doc) {
     var linkedRequirement = findEnhancedRequirementForDocument(doc, requirements);
@@ -6995,7 +7046,8 @@ function renderStandardKycDocumentTaxonomy(app) {
     var body = group.items.length
       ? group.items.map(function(item) { return renderUnifiedKycDocumentCard(app, item.doc, item.linkedRequirement); }).join('')
       : '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No uploaded documents in this group yet.</div>';
-    return kycTaxonomyGroupShell(group.title, group.subtitle, body, group.tone);
+    var expanded = group.items.some(function(item) { return kycDocumentNeedsAttention(item.doc); });
+    return kycTaxonomyGroupShell(group.title, group.subtitle, body, group.tone, expanded);
   }).join('');
   return renderPilotEvidenceSummaryBanner(app) + html;
 }
@@ -7017,7 +7069,7 @@ function shouldExpandEnhancedRequirements(summary, requirements) {
 function updateEnhancedRequirementsPanelState(summary, requirements) {
   var summaryEl = document.getElementById('detail-enhanced-requirements-summary-copy');
   if (summaryEl) summaryEl.textContent = buildEnhancedRequirementsPanelSummary(summary, requirements);
-  setDetailsExpandedState('detail-enhanced-requirements-details', !!(summary && summary.enhanced_review_active));
+  setDetailsExpandedState('detail-enhanced-requirements-details', false);
 }
 
 function evidenceClassDomId(docId, suffix) {
@@ -8316,10 +8368,11 @@ function renderUnifiedEnhancedEvidenceDocuments(requirements) {
   });
   if (!evidence.length) {
     container.innerHTML = kycTaxonomyGroupShell(
-      'Enhanced Evidence Documents',
+      'C — Enhanced Evidence Documents',
       'Risk-triggered evidence document slots linked to Enhanced Review Requirements.',
       '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No enhanced evidence document requirements for this application.</div>',
-      'purple'
+      'purple',
+      false
     );
     return;
   }
@@ -8346,10 +8399,11 @@ function renderUnifiedEnhancedEvidenceDocuments(requirements) {
     '</div>';
   }).join('');
   container.innerHTML = kycTaxonomyGroupShell(
-    'Enhanced Evidence Documents',
+    'C — Enhanced Evidence Documents',
     'Additional required document slots triggered by risk, PEP, screening, jurisdiction, sector, or volume.',
     rows,
-    'purple'
+    'purple',
+    evidence.some(enhancedRequirementNeedsAttention)
   );
 }
 
@@ -8361,10 +8415,11 @@ function renderUnifiedPortalDisclosures(requirements) {
   });
   if (!disclosures.length) {
     container.innerHTML = kycTaxonomyGroupShell(
-      'Portal Disclosures',
+      'E — Portal Disclosures',
       'Client portal declarations and form responses used during onboarding review.',
       '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No portal disclosure requirements for this application.</div>',
-      'green'
+      'green',
+      false
     );
     return;
   }
@@ -8384,10 +8439,11 @@ function renderUnifiedPortalDisclosures(requirements) {
     '</div>';
   }).join('');
   container.innerHTML = kycTaxonomyGroupShell(
-    'Portal Disclosures',
+    'E — Portal Disclosures',
     'Read-only client-submitted disclosures and officer review controls. These are not document upload rows.',
     rows,
-    'green'
+    'green',
+    disclosures.some(enhancedRequirementNeedsAttention)
   );
 }
 
@@ -8399,10 +8455,11 @@ function renderUnifiedInternalControls(requirements) {
   });
   if (!controls.length) {
     container.innerHTML = kycTaxonomyGroupShell(
-      'Internal Controls',
+      'F — Internal Controls',
       'Internal RegMind controls such as senior review or monitoring setup.',
       '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No internal control requirements for this application.</div>',
-      'amber'
+      'amber',
+      false
     );
     return;
   }
@@ -8420,10 +8477,11 @@ function renderUnifiedInternalControls(requirements) {
     '</div>';
   }).join('');
   container.innerHTML = kycTaxonomyGroupShell(
-    'Internal Controls',
+    'F — Internal Controls',
     'Control tasks are tracked separately from document upload slots.',
     rows,
-    'amber'
+    'amber',
+    controls.some(enhancedRequirementNeedsAttention)
   );
 }
 
@@ -8519,7 +8577,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
     '<details id="detail-enhanced-requirements-advanced-details" style="border:1px solid var(--border1);border-radius:10px;background:var(--surface);overflow:hidden;">' +
       '<summary style="cursor:pointer;padding:12px 14px;background:var(--surface2);font-size:12px;font-weight:800;color:var(--brand);list-style-position:inside;">Show advanced requirement details</summary>' +
       '<div style="padding:0 12px 12px;">' +
-        '<div style="font-size:11px;color:var(--text3);padding:10px 2px 0;">Technical/control tracker. Primary document execution now happens in the KYC document taxonomy above.</div>' +
+        '<div style="font-size:11px;color:var(--text3);padding:10px 2px 0;">Technical/control tracker. Primary document execution now happens in the KYC Documents groups above.</div>' +
         groupHtml +
       '</div>' +
     '</details>';

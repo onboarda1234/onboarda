@@ -438,7 +438,8 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "boApiCall('PATCH'" in html
     assert "boApiCall('POST'" in html
     assert "generation_source: 'manual_backoffice_refresh'" in html
-    assert "KYC Document Taxonomy" in html
+    assert "KYC Documents" in html
+    assert "KYC Document Taxonomy" not in html
     assert "Corporate Entity Documents" in html
     assert "Directors & UBO Identity Documents" in html
     assert "Enhanced Evidence Documents" in html
@@ -484,7 +485,7 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/supervisor" not in block
 
     assert "/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements" in portal_html
-    assert "Enhanced Requirements / Enhanced Evidence Documents" in portal_html
+    assert "Requested Documents & Information" in portal_html
     assert "Risk-triggered evidence documents and portal disclosures requested by compliance." in portal_html
     assert "renderPortalEnhancedRequirements" in portal_html
     assert "renderPortalRequirementCard" in portal_html
@@ -557,7 +558,7 @@ def test_backoffice_application_enhanced_requirements_loader_guards_summary_and_
     assert "req.requirement_label || req.requirement_key || ''" in render_block
     assert 'id="detail-enhanced-requirements-advanced-details"' in render_block
     assert "Show advanced requirement details" in render_block
-    assert "Technical/control tracker. Primary document execution now happens in the KYC document taxonomy above." in render_block
+    assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." in render_block
 
 
 def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
@@ -569,7 +570,8 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     history_panel_pos = html.index('id="detail-document-history-panel"')
     assert kyc_panel_pos < enhanced_panel_pos < history_panel_pos
 
-    assert "KYC Document Taxonomy" in html
+    assert "KYC Documents" in html
+    assert "KYC Document Taxonomy" not in html
     assert "Enhanced Review Requirements" in html
     assert "Document Verification History" in html
     assert 'details id="detail-document-history-details"' in html
@@ -601,23 +603,26 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     assert "Upload to Record" not in actions_block
 
 
-def test_pr6e_unified_kyc_document_taxonomy_and_enhanced_summary_are_wired():
+def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     repo_root = Path(__file__).resolve().parents[2]
     html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
     portal_html = (repo_root / "arie-portal.html").read_text(encoding="utf-8")
 
-    assert "KYC Document Taxonomy" in html
+    assert "KYC Documents" in html
+    assert "KYC Document Taxonomy" not in html
     assert "Corporate documents, identity evidence, enhanced evidence, portal disclosures, and verification results in one onboarding flow." in html
     assert "function renderStandardKycDocumentTaxonomy(app)" in html
     assert "function renderUnifiedKycDocumentCard(app, doc, linkedRequirement)" in html
     assert "function findEnhancedRequirementForDocument(doc, requirements)" in html
     assert "function kycDocumentGroupKey(doc, linkedRequirement)" in html
-    assert "Corporate Entity Documents" in html
-    assert "Directors & UBO Identity Documents" in html
-    assert "Enhanced Evidence Documents" in html
-    assert "Business Operating Documents" in html
-    assert "Document Verification History" in html
-    assert "Enhanced Review Summary" in html
+    assert "A — Corporate Entity Documents" in html
+    assert "B — Directors & UBO Identity Documents" in html
+    assert "C — Enhanced Evidence Documents" in html
+    assert "D — Business Operating Documents" in html
+    assert "E — Portal Disclosures" in html
+    assert "F — Internal Controls" in html
+    assert "G — Verification History" in html
+    assert "Enhanced Review Advanced Tracker" in html
     assert "Compact tracker for triggered onboarding enhanced evidence, portal disclosures, and controls." in html
     assert "function renderUnifiedEnhancedEvidenceDocuments(requirements)" in html
     assert "function renderUnifiedPortalDisclosures(requirements)" in html
@@ -633,9 +638,15 @@ def test_pr6e_unified_kyc_document_taxonomy_and_enhanced_summary_are_wired():
     assert 'detail-internal-controls-group' in html
     assert 'id="detail-enhanced-requirements-advanced-details"' in html
     assert "Show advanced requirement details" in html
-    assert "Technical/control tracker. Primary document execution now happens in the KYC document taxonomy above." in html
+    assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." in html
+    assert "function kycDocumentNeedsAttention(doc)" in html
+    assert "function enhancedRequirementNeedsAttention(req)" in html
+    assert "Show technical verification checks" in html
+    assert "Failed or warning checks" in html
+    assert "if (result === 'pass') technicalCheckItems.push(checkHtml);" in html
+    assert "else visibleCheckItems.push(checkHtml);" in html
 
-    assert "Enhanced Requirements / Enhanced Evidence Documents" in portal_html
+    assert "Requested Documents & Information" in portal_html
     assert "Enhanced Evidence Documents" in portal_html
     assert "Portal Disclosures" in portal_html
     assert "Upload requested risk-triggered evidence documents here." in portal_html

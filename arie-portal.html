@@ -3268,7 +3268,7 @@
         <div class="card-header">
           <div class="card-icon" style="background:var(--amber-dim);color:var(--amber);">i</div>
           <div>
-            <div class="card-title">Enhanced Requirements / Enhanced Evidence Documents</div>
+            <div class="card-title">Requested Documents & Information</div>
             <div class="card-sub">Risk-triggered evidence documents and portal disclosures requested by compliance.</div>
           </div>
         </div>
@@ -9086,14 +9086,18 @@ function renderPortalEnhancedRequirements(requirements) {
   });
   var html = '';
   if (documentReqs.length) {
-    html += '<div style="font-size:12px;font-weight:800;color:var(--text);margin:2px 0 0;">Enhanced Evidence Documents</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-bottom:2px;">Upload requested risk-triggered evidence documents here.</div>' +
-      documentReqs.map(renderPortalRequirementCard).join('');
+    html += '<details open style="border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;">' +
+      '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text);list-style-position:inside;">Enhanced Evidence Documents</summary>' +
+      '<div style="font-size:11px;color:var(--text3);margin:6px 0 8px;">Upload requested risk-triggered evidence documents here.</div>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;">' + documentReqs.map(renderPortalRequirementCard).join('') + '</div>' +
+    '</details>';
   }
   if (disclosureReqs.length) {
-    html += '<div style="font-size:12px;font-weight:800;color:var(--text);margin:' + (documentReqs.length ? '12px' : '2px') + ' 0 0;">Portal Disclosures</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-bottom:2px;">Provide requested explanations or declarations; these are not document upload rows.</div>' +
-      disclosureReqs.map(renderPortalRequirementCard).join('');
+    html += '<details ' + (documentReqs.length ? '' : 'open ') + 'style="border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;">' +
+      '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text);list-style-position:inside;">Portal Disclosures</summary>' +
+      '<div style="font-size:11px;color:var(--text3);margin:6px 0 8px;">Provide requested explanations or declarations; these are not document upload rows.</div>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;">' + disclosureReqs.map(renderPortalRequirementCard).join('') + '</div>' +
+    '</details>';
   }
   container.innerHTML = html;
 }
