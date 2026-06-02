@@ -20169,6 +20169,88 @@ def _edd_case_status_block(case_dict, findings=None):
     }
 
 
+def _edd_linked_source_block(db, case_dict):
+    """Return regulator-facing source metadata for the investigation workspace.
+
+    This is read-only and intentionally does not change PR 5B queue scope.
+    It gives the UI enough context to distinguish monitoring, periodic
+    review, manual escalation, and legacy cases without a second source query.
+    """
+    origin = str(case_dict.get("origin_context") or "").strip() or None
+    trigger_source = str(case_dict.get("trigger_source") or "").strip() or None
+    linked_alert_id = case_dict.get("linked_monitoring_alert_id")
+    linked_review_id = case_dict.get("linked_periodic_review_id")
+
+    if linked_alert_id is not None:
+        alert = db.execute(
+            "SELECT * FROM monitoring_alerts WHERE id = ?",
+            (linked_alert_id,),
+        ).fetchone()
+        alert_dict = dict(alert) if alert else {}
+        return {
+            "type": "monitoring_alert",
+            "id": linked_alert_id,
+            "label": f"Monitoring Alert #{linked_alert_id}",
+            "status": alert_dict.get("status"),
+            "severity": alert_dict.get("severity"),
+            "summary": alert_dict.get("summary") or case_dict.get("trigger_notes"),
+            "origin_context": origin or "monitoring_alert",
+            "trigger_source": trigger_source,
+            "application_id": case_dict.get("application_id"),
+            "available": bool(alert),
+        }
+
+    if linked_review_id is not None:
+        review = db.execute(
+            "SELECT * FROM periodic_reviews WHERE id = ?",
+            (linked_review_id,),
+        ).fetchone()
+        review_dict = dict(review) if review else {}
+        return {
+            "type": "periodic_review",
+            "id": linked_review_id,
+            "label": f"Periodic Review #{linked_review_id}",
+            "status": review_dict.get("status"),
+            "severity": review_dict.get("priority"),
+            "summary": review_dict.get("review_reason") or case_dict.get("trigger_notes"),
+            "origin_context": origin or "periodic_review",
+            "trigger_source": trigger_source,
+            "application_id": case_dict.get("application_id"),
+            "available": bool(review),
+        }
+
+    if origin in {"manual", "manual_onboarding_escalation"} or trigger_source in {
+        "officer_decision",
+        "officer_escalate_edd",
+        "manual",
+    }:
+        return {
+            "type": "manual_escalation",
+            "id": None,
+            "label": "Manual Investigation Escalation",
+            "status": case_dict.get("stage"),
+            "severity": case_dict.get("priority"),
+            "summary": case_dict.get("trigger_notes"),
+            "origin_context": origin,
+            "trigger_source": trigger_source,
+            "application_id": case_dict.get("application_id"),
+            "available": True,
+        }
+
+    return {
+        "type": origin or trigger_source or "investigation_case",
+        "id": None,
+        "label": "Investigation Source",
+        "status": case_dict.get("stage"),
+        "severity": case_dict.get("priority"),
+        "summary": case_dict.get("trigger_notes"),
+        "origin_context": origin,
+        "trigger_source": trigger_source,
+        "application_id": case_dict.get("application_id"),
+        "available": True,
+    }
+
+
 def _materialise_edd_case(db, case_row, include_findings=True):
     case_dict = dict(case_row)
     app_row = db.execute(
@@ -20203,6 +20285,7 @@ def _materialise_edd_case(db, case_row, include_findings=True):
         case_dict["findings"] = findings
     case_dict["case_status"] = _edd_case_status_block(case_dict, findings)
     case_dict["policy"] = _edd_policy_block(case_dict)
+    case_dict["linked_source"] = _edd_linked_source_block(db, case_dict)
     return case_dict
 
 
@@ -20386,6 +20469,7 @@ class EDDDetailHandler(BaseHandler):
             (
                 "stage", "priority", "assigned_officer", "senior_reviewer",
                 "sla_due_at", "sla_breach_reason", "decision_reason", "note",
+                "source_surface",
             ),
         )
         attempt_target = f"EDD-{case_id}"
@@ -20546,13 +20630,26 @@ class EDDDetailHandler(BaseHandler):
                 db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
 
             # Audit trail
+            updated_case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
             detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
             if note_text:
                 detail += f" | Note: {note_text[:100]}"
             if sla_breach_reason:
                 detail += f" | SLA breach acknowledged: {sla_breach_reason[:100]}"
+            source_surface = str(data.get("source_surface") or "").strip()
+            if source_surface:
+                detail += f" | Source surface: {source_surface[:80]}"
             detail += f" | EDD Case: EDD-{case_id}"
-            self.log_audit(user, "EDD Update", app_ref, detail, db=db, commit=False)
+            self.log_audit(
+                user,
+                "EDD Update",
+                app_ref,
+                detail,
+                db=db,
+                before_state=case_dict,
+                after_state=dict(updated_case) if updated_case else None,
+                commit=False,
+            )
             if new_stage in ("edd_approved", "edd_rejected"):
                 self.log_audit(
                     user,
@@ -20572,7 +20669,6 @@ class EDDDetailHandler(BaseHandler):
             self.log_governance_attempt(
                 user, "edd.case_update", attempt_target, "accepted", 200,
                 "", attempt_summary, db=db, commit=False)
-            updated_case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
             _mark_latest_memo_stale(
                 db,
                 case_dict.get("application_id"),
@@ -20634,13 +20730,25 @@ class EDDFindingsHandler(BaseHandler):
             return self.error("EDD case not found", 404)
         case_dict = dict(case)
         app_ref = _edd_application_ref(db, case_dict)
+        source_surface = str(
+            data.get("source_surface") or "investigation_case_workspace"
+        ).strip() or "investigation_case_workspace"
 
         def _audit_writer(audit_user, action, _target, detail, db=None, before_state=None, after_state=None):
+            try:
+                detail_payload = json.loads(detail) if isinstance(detail, str) else dict(detail or {})
+            except Exception:
+                detail_payload = {"detail": str(detail)}
+            detail_payload.update({
+                "source_surface": source_surface,
+                "application_ref": app_ref,
+                "application_id": case_dict.get("application_id"),
+            })
             self.log_audit(
                 audit_user,
                 action,
                 app_ref,
-                detail,
+                json.dumps(detail_payload, default=str, sort_keys=True),
                 db=db,
                 before_state=before_state,
                 after_state=after_state,

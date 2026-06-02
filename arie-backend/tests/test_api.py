@@ -1298,6 +1298,168 @@ class TestAuthenticatedAccess:
         assert any(e["action"] == "EDD Closure (dual-control)" and e["target"] == app_ref for e in entries)
         assert not any(str(e["target"]).startswith("EDD-") for e in entries)
 
+    def test_investigation_workspace_linked_source_persistence_and_audit(self, api_server):
+        """Formal investigation workspace exposes source metadata and audit-attributed saves."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "p5cworkspace0001"
+        app_ref = "ARF-P5C-WORKSPACE"
+        alert_id = 950501
+        conn = get_db()
+        conn.execute("DELETE FROM edd_findings WHERE edd_case_id IN (SELECT id FROM edd_cases WHERE application_id = ?)", (app_id,))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM monitoring_alerts WHERE id = ? OR application_id = ?", (alert_id, app_id))
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                app_ref,
+                "clientp5cworkspace",
+                "Workspace Monitoring Holdings Ltd",
+                "Mauritius",
+                "Investment Services",
+                "Company",
+                "approved",
+                "HIGH",
+                82,
+                0,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO monitoring_alerts
+            (id, application_id, provider, case_identifier, discovered_via, client_name,
+             alert_type, severity, detected_by, summary, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                alert_id,
+                app_id,
+                "qa_monitor",
+                "ALERT-P5C-WORKSPACE",
+                "manual",
+                "Workspace Monitoring Holdings Ltd",
+                "adverse_media",
+                "high",
+                "QA",
+                "Monitoring alert requires a formal narrative investigation.",
+                "open",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, stage, assigned_officer,
+             senior_reviewer, priority, sla_due_at, trigger_source, trigger_notes,
+             origin_context, linked_monitoring_alert_id, edd_notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                "Workspace Monitoring Holdings Ltd",
+                "HIGH",
+                82,
+                "analysis",
+                "co001",
+                "sco001",
+                "high",
+                "2026-12-31",
+                "monitoring_alert",
+                "Formal monitoring-linked investigation workspace test.",
+                "monitoring_alert",
+                alert_id,
+                "[]",
+            ),
+        )
+        case_id = conn.execute(
+            "SELECT id FROM edd_cases WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()["id"]
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        listed = http_requests.get(
+            f"{api_server}/api/edd/cases",
+            headers=headers,
+            timeout=3,
+        )
+        assert listed.status_code == 200, listed.text
+        assert any(row["id"] == case_id for row in listed.json()["cases"])
+
+        detail = http_requests.get(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=headers,
+            timeout=3,
+        )
+        assert detail.status_code == 200, detail.text
+        body = detail.json()
+        assert body["linked_source"]["type"] == "monitoring_alert"
+        assert body["linked_source"]["id"] == alert_id
+        assert body["linked_source"]["label"] == f"Monitoring Alert #{alert_id}"
+        assert body["linked_source"]["severity"] == "high"
+        assert body["linked_source"]["summary"] == "Monitoring alert requires a formal narrative investigation."
+
+        findings = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}/findings",
+            headers=headers,
+            json={
+                "source_surface": "investigation_case_workspace",
+                "findings": {
+                    "recommended_outcome": "approve_with_conditions",
+                    "findings_summary": "Formal investigation findings recorded in the workspace.",
+                    "key_concerns": ["Post-onboarding alert requires review"],
+                    "mitigating_evidence": ["Monitoring context reviewed"],
+                    "rationale": "Relationship can continue with enhanced monitoring conditions.",
+                },
+            },
+            timeout=3,
+        )
+        assert findings.status_code == 200, findings.text
+        assert findings.json()["findings"]["rationale"] == "Relationship can continue with enhanced monitoring conditions."
+        assert findings.json()["case_status"]["findings_complete"] is True
+
+        patch = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=headers,
+            json={
+                "priority": "urgent",
+                "sla_due_at": "2026-12-31",
+                "senior_reviewer": "sco001",
+                "source_surface": "investigation_case_workspace",
+            },
+            timeout=3,
+        )
+        assert patch.status_code == 200, patch.text
+
+        audit = http_requests.get(
+            f"{api_server}/api/audit?ref={app_ref}&limit=50",
+            headers=headers,
+            timeout=3,
+        )
+        assert audit.status_code == 200, audit.text
+        entries = audit.json()["entries"]
+        findings_entries = [e for e in entries if e["action"] == "edd.findings.created"]
+        assert findings_entries
+        findings_detail = json.loads(findings_entries[0]["detail"])
+        assert findings_detail["source_surface"] == "investigation_case_workspace"
+        assert findings_detail["application_ref"] == app_ref
+        assert findings_detail["application_id"] == app_id
+        assert any(
+            e["action"] == "EDD Update"
+            and "Source surface: investigation_case_workspace" in (e.get("detail") or "")
+            for e in entries
+        )
+
     def test_evidence_pack_includes_notes_and_edd_findings(self, api_server):
         """Single-call evidence pack must include officer notes and structured EDD findings."""
         from auth import create_token

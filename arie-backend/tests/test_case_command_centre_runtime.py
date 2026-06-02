@@ -462,6 +462,12 @@ class TestCaseCommandCentreRuntime:
         assert "Formal investigation cases are managed in Lifecycle" in edd_view
         assert "Use KYC Documents for onboarding Enhanced Review Requirements." in edd_view
         assert "Investigation Case Detail" in edd_view
+        assert "Investigation Case Workspace" in html
+        assert "Formal narrative investigation. Routine onboarding Enhanced Review Requirements remain in KYC Documents." in html
+        assert "Linked source object" in html
+        assert "Maintain relationship" in html
+        assert "Officer Notes / Rationale" in html
+        assert "source_surface: 'investigation_case_workspace'" in html
         assert "Investigation Cases Active" in edd_view
         assert "Enhanced Review cases are now managed from Applications" not in edd_view
         assert "EDD Cases Active" not in edd_view
