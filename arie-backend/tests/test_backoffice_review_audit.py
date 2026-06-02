@@ -677,8 +677,10 @@ class TestPrePhaseSixBackofficeUX:
         assert 'id="applications-page-size"' in html
         assert 'function setApplicationsPageSize(value)' in html
         assert 'function changeApplicationsPage(delta)' in html
+        assert 'function queueApplicationsSearch()' in html
+        assert "function buildApplicationsApiPath()" in html
         assert 'id="applications-pagination-summary"' in html
-        assert "'/applications?limit=5000'" in html
+        assert "params.set('view', 'list')" in html
 
     def test_global_search_filters_application_list_instead_of_opening_detail(self):
         html = self._read_backoffice()

@@ -261,6 +261,56 @@ class TestAuthenticatedAccess:
         assert len(body["applications"]) == 1
         assert body["total"] >= 2
 
+    def test_applications_list_view_returns_bounded_lightweight_rows(self, api_server):
+        """Applications list view should return paginated summary rows without detail-grade enrichment."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", ("app_list_a", "app_list_b"))
+        conn.execute(
+            """
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, final_risk_level, risk_score, onboarding_lane,
+                created_at, is_fixture
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_list_a", "ARF-LIST-001", "client_list", "Pilot Search One Ltd", "Mauritius", "Technology", "company", "submitted", "LOW", "LOW", 22, "Standard Review", "2026-05-03T10:00:00Z", 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, final_risk_level, risk_score, onboarding_lane,
+                created_at, is_fixture
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_list_b", "ARF-LIST-002", "client_list", "Pilot Search Two Ltd", "Mauritius", "Fintech", "company", "approved", "MEDIUM", "MEDIUM", 44, "Enhanced Due Diligence", "2026-05-03T10:01:00Z", 0),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications?view=list&limit=1&offset=0&q=pilot+search",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["view"] == "list"
+        assert body["limit"] == 1
+        assert body["offset"] == 0
+        assert body["returned"] == 1
+        assert body["total"] >= 2
+        assert body["pagination"]["has_next"] is True
+        row = body["applications"][0]
+        assert row["company_name"] in {"Pilot Search One Ltd", "Pilot Search Two Ltd"}
+        assert "documents" not in row
+        assert "directors" not in row
+        assert "ubos" not in row
+
     def test_dashboard_returns_200_for_officer_with_fixture_filter(self, api_server):
         """Officer dashboard must not use ambiguous columns in joined recent query."""
         from auth import create_token

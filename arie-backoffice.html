@@ -1178,7 +1178,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <option value="awaiting_review">Submitted Awaiting Review</option>
       <option value="resolved">Resolved Enhanced Review</option>
     </select>
-    <input type="text" class="form-input" style="width:260px;" id="applications-search" placeholder="Search applications..." oninput="filterApplications()" />
+    <input type="text" class="form-input" style="width:260px;" id="applications-search" placeholder="Search applications..." oninput="queueApplicationsSearch()" />
     <select class="form-select" style="width:auto;" id="applications-page-size" onchange="setApplicationsPageSize(this.value)" aria-label="Applications per page">
       <option value="10">10 per page</option>
       <option value="20" selected>20 per page</option>
@@ -3717,11 +3717,18 @@ function resetBackofficeSessionData() {
   SUPPORT_DATA_STATE = 'idle';
   SUPPORT_DATA_PROMISE = null;
   APPLICATIONS = [];
+  APPLICATIONS_LIST_ROWS = [];
   applicationsApiTotal = 0;
   applicationsCurrentPage = 1;
+  applicationsPageOffset = 0;
   APPLICATIONS_LOAD_STATE = 'idle';
   APPLICATIONS_LOAD_PROMISE = null;
   APPLICATIONS_LOAD_ERROR = '';
+  APPLICATIONS_LAST_QUERY_KEY = '';
+  APPLICATIONS_REQUEST_QUERY_KEY = '';
+  APPLICATIONS_ACTIVE_REQUEST_ID = 0;
+  if (APPLICATIONS_SEARCH_DEBOUNCE) clearTimeout(APPLICATIONS_SEARCH_DEBOUNCE);
+  APPLICATIONS_SEARCH_DEBOUNCE = null;
   SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
   SCREENING_QUEUE_DIRTY = false;
   SCREENING_QUEUE_LOAD_PROMISE = null;
@@ -4052,9 +4059,9 @@ async function loadFromAPI() {
   var failures = [];
 
   await safeLoadModule('Applications', async function() {
-    var appResp = await boApiCall('GET', '/applications?limit=5000');
+    var appResp = await boApiCall('GET', buildApplicationsApiPath());
     if (Array.isArray(appResp.applications)) {
-      setApplicationsFromApiPayload(appResp);
+      setApplicationsFromApiPayload(appResp, { queryKey: applicationsQueryKey() });
     }
     _startApplicationsAutoRefresh();
   }, failures);
@@ -4278,12 +4285,64 @@ function setDashboardBootstrapState(state) {
   renderDashboardRecent();
 }
 
-function setApplicationsFromApiPayload(appResp) {
+function applicationsCurrentFilters() {
+  return {
+    risk: (document.getElementById('filter-risk') || {}).value || '',
+    status: (document.getElementById('filter-status') || {}).value || '',
+    assigned: (document.getElementById('filter-assigned') || {}).value || '',
+    enhanced_review: (document.getElementById('filter-enhanced') || {}).value || '',
+    q: getApplicationsSearchText()
+  };
+}
+
+function applicationsQueryKey() {
+  var filters = applicationsCurrentFilters();
+  return JSON.stringify({
+    limit: applicationsPageSize,
+    offset: applicationsPageOffset,
+    filters: filters
+  });
+}
+
+function buildApplicationsApiPath() {
+  var filters = applicationsCurrentFilters();
+  var params = new URLSearchParams();
+  params.set('view', 'list');
+  params.set('limit', String(applicationsPageSize));
+  params.set('offset', String(applicationsPageOffset));
+  Object.keys(filters).forEach(function(key) {
+    if (filters[key]) params.set(key, filters[key]);
+  });
+  return '/applications?' + params.toString();
+}
+
+function mergeApplicationsIntoCache(items) {
+  (items || []).forEach(function(item) {
+    var replaced = false;
+    for (var i = 0; i < APPLICATIONS.length; i += 1) {
+      var existing = APPLICATIONS[i];
+      if ((existing.id && item.id && existing.id === item.id) || (existing.ref && item.ref && existing.ref === item.ref)) {
+        APPLICATIONS[i] = Object.assign({}, existing, item);
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) APPLICATIONS.push(item);
+  });
+}
+
+function setApplicationsFromApiPayload(appResp, options) {
+  options = options || {};
   var items = Array.isArray(appResp && appResp.applications) ? appResp.applications : [];
   applicationsApiTotal = Number((appResp && appResp.total) || items.length || 0);
-  APPLICATIONS = items.map(mapApplicationFromApi);
+  applicationsPageOffset = Number((appResp && appResp.offset) || 0);
+  if (appResp && appResp.limit) applicationsPageSize = Number(appResp.limit) || applicationsPageSize;
+  applicationsCurrentPage = Math.floor(applicationsPageOffset / Math.max(applicationsPageSize, 1)) + 1;
+  APPLICATIONS_LIST_ROWS = items.map(mapApplicationFromApi);
+  mergeApplicationsIntoCache(APPLICATIONS_LIST_ROWS);
   APPLICATIONS_LOAD_ERROR = '';
   APPLICATIONS_LOAD_STATE = 'ready';
+  APPLICATIONS_LAST_QUERY_KEY = options.queryKey || applicationsQueryKey();
   _applicationsLastRefreshed = Date.now();
   _updateFreshnessIndicator();
 }
@@ -4424,25 +4483,36 @@ function startDeferredSupportLoad(sessionId) {
 function ensureApplicationsLoaded(options) {
   options = options || {};
   if (!BO_AUTH_TOKEN) return Promise.resolve(false);
-  if (APPLICATIONS_LOAD_STATE === 'ready' && !options.force) return Promise.resolve(true);
-  if (APPLICATIONS_LOAD_PROMISE) return APPLICATIONS_LOAD_PROMISE;
+  var queryKey = applicationsQueryKey();
+  if (APPLICATIONS_LOAD_STATE === 'ready' && !options.force && APPLICATIONS_LAST_QUERY_KEY === queryKey) return Promise.resolve(true);
+  if (APPLICATIONS_LOAD_PROMISE && APPLICATIONS_REQUEST_QUERY_KEY === queryKey && !options.force) return APPLICATIONS_LOAD_PROMISE;
   APPLICATIONS_LOAD_STATE = 'loading';
   APPLICATIONS_LOAD_ERROR = '';
+  applicationsApiTotal = 0;
+  APPLICATIONS_LIST_ROWS = [];
   renderApplications();
+  APPLICATIONS_ACTIVE_REQUEST_ID += 1;
+  var requestId = APPLICATIONS_ACTIVE_REQUEST_ID;
+  APPLICATIONS_REQUEST_QUERY_KEY = queryKey;
   var requestOptions = { suppressAuthReset: true, sessionId: options.sessionId || getCurrentBoSessionId() };
-  APPLICATIONS_LOAD_PROMISE = boApiCall('GET', '/applications?limit=5000', null, requestOptions).then(function(appResp) {
-    setApplicationsFromApiPayload(appResp);
+  APPLICATIONS_LOAD_PROMISE = boApiCall('GET', buildApplicationsApiPath(), null, requestOptions).then(function(appResp) {
+    if (requestId !== APPLICATIONS_ACTIVE_REQUEST_ID) return false;
+    setApplicationsFromApiPayload(appResp, { queryKey: queryKey });
     _startApplicationsAutoRefresh();
     renderApplications();
     return true;
   }).catch(function(e) {
+    if (requestId !== APPLICATIONS_ACTIVE_REQUEST_ID) return false;
     APPLICATIONS_LOAD_STATE = 'failed';
     APPLICATIONS_LOAD_ERROR = (e && e.message) || 'Could not load applications.';
     renderApplications();
     console.warn('Could not load applications:', e);
     return false;
   }).finally(function() {
-    APPLICATIONS_LOAD_PROMISE = null;
+    if (requestId === APPLICATIONS_ACTIVE_REQUEST_ID) {
+      APPLICATIONS_LOAD_PROMISE = null;
+      APPLICATIONS_REQUEST_QUERY_KEY = '';
+    }
   });
   return APPLICATIONS_LOAD_PROMISE;
 }
@@ -4816,9 +4886,15 @@ function switchUser(role) {
 }
 
 var APPLICATIONS = [];
+var APPLICATIONS_LIST_ROWS = [];
 var applicationsApiTotal = 0;
 var applicationsCurrentPage = 1;
+var applicationsPageOffset = 0;
 var applicationsPageSize = 20;
+var APPLICATIONS_LAST_QUERY_KEY = '';
+var APPLICATIONS_REQUEST_QUERY_KEY = '';
+var APPLICATIONS_ACTIVE_REQUEST_ID = 0;
+var APPLICATIONS_SEARCH_DEBOUNCE = null;
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
 var SCREENING_QUEUE_PAGE_SIZE = 50;
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
@@ -4880,11 +4956,13 @@ function _updateFreshnessIndicator() {
 
 async function _autoRefreshApplications() {
   if (!BO_AUTH_TOKEN) return;
+  if (APPLICATIONS_LOAD_STATE !== 'ready') return;
   try {
     var opts = { method: 'GET', headers: {} };
     if (BO_AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
     if (_applicationsEtag) opts.headers['If-None-Match'] = _applicationsEtag;
-    var res = await fetch(BO_API_BASE + '/applications?limit=5000', opts);
+    var path = buildApplicationsApiPath();
+    var res = await fetch(BO_API_BASE + path, opts);
     // ETag match — data unchanged, just update timestamp
     if (res.status === 304) {
       await refreshDashboardData();
@@ -4902,7 +4980,7 @@ async function _autoRefreshApplications() {
       // Preserve current filter/selection state
       var listView = document.getElementById('view-applications');
       var isOnList = listView && listView.classList.contains('active');
-      setApplicationsFromApiPayload(data);
+      setApplicationsFromApiPayload(data, { queryKey: applicationsQueryKey() });
       // Re-render list if currently visible (preserves filter state)
       if (isOnList) renderApplications();
     }
@@ -6134,8 +6212,8 @@ function setApplicationsEnhancedFilter(value) {
 
 function openApplicationsEnhancedReview(filterValue) {
   var normalized = filterValue || 'active';
-  showView('applications');
   setApplicationsEnhancedFilter(normalized);
+  showView('applications');
   if (window.history && window.history.replaceState) {
     window.history.replaceState(null, '', '#applications?enhanced_review=' + encodeURIComponent(normalized));
   } else {
@@ -6145,40 +6223,42 @@ function openApplicationsEnhancedReview(filterValue) {
 
 function renderApplications() {
   var tbody = document.getElementById('applications-body');
+  var summary = document.getElementById('applications-pagination-summary');
+  var indicator = document.getElementById('applications-page-indicator');
+  var prev = document.getElementById('applications-prev-page');
+  var next = document.getElementById('applications-next-page');
   if (APPLICATIONS_LOAD_STATE === 'loading') {
     tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">Loading applications...</td></tr>';
-    updateApplicationsPagination(0, 1);
+    if (summary) summary.textContent = 'Loading applications...';
+    if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of ' + Math.max(1, Math.ceil((applicationsApiTotal || 0) / applicationsPageSize));
+    if (prev) prev.disabled = true;
+    if (next) next.disabled = true;
     return;
   }
-  if (APPLICATIONS_LOAD_STATE === 'failed' && APPLICATIONS.length === 0) {
+  if (APPLICATIONS_LOAD_STATE === 'failed' && APPLICATIONS_LIST_ROWS.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--red);padding:24px;">Could not load applications. ' + escapeHtml(APPLICATIONS_LOAD_ERROR || 'Please try again.') + '</td></tr>';
-    updateApplicationsPagination(0, 1);
+    if (summary) summary.textContent = 'Could not load applications.';
+    if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of 1';
+    if (prev) prev.disabled = true;
+    if (next) next.disabled = true;
     return;
   }
-  var riskFilter = document.getElementById('filter-risk').value;
-  var statusFilter = document.getElementById('filter-status').value;
-  var assignedFilter = document.getElementById('filter-assigned').value;
-  var enhancedFilterEl = document.getElementById('filter-enhanced');
-  var enhancedFilter = enhancedFilterEl ? enhancedFilterEl.value : '';
-  var filtered = getFilteredApplications(riskFilter, statusFilter, assignedFilter, enhancedFilter);
-  var totalPages = Math.max(1, Math.ceil(filtered.length / applicationsPageSize));
+  var totalPages = Math.max(1, Math.ceil((applicationsApiTotal || 0) / applicationsPageSize));
   if (applicationsCurrentPage > totalPages) applicationsCurrentPage = totalPages;
   if (applicationsCurrentPage < 1) applicationsCurrentPage = 1;
-  var start = (applicationsCurrentPage - 1) * applicationsPageSize;
-  var pageApps = filtered.slice(start, start + applicationsPageSize);
   tbody.innerHTML = '';
-  if (!pageApps.length) {
+  if (!APPLICATIONS_LIST_ROWS.length) {
     var empty = document.createElement('tr');
     empty.innerHTML = '<td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">No applications match the current filters.</td>';
     tbody.appendChild(empty);
   }
-  pageApps.forEach(function(app) {
+  APPLICATIONS_LIST_ROWS.forEach(function(app) {
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
     tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(app)) + '</td><td style="font-size:12px;">' + escapeHtml(applicationReviewRouteLabel(app)) + '</td><td>' + applicationEnhancedStatusBadge(app) + '</td><td style="font-size:12px;max-width:210px;white-space:normal;">' + escapeHtml(applicationEnhancedNextAction(app)) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
-  updateApplicationsPagination(filtered.length, totalPages);
+  updateApplicationsPagination(totalPages);
 }
 
 function getApplicationsSearchText() {
@@ -6193,35 +6273,19 @@ function applicationMatchesSearch(app, q) {
   return fields.some(function(value) { return String(value || '').toLowerCase().indexOf(q) >= 0; });
 }
 
-function getFilteredApplications(riskFilter, statusFilter, assignedFilter, enhancedFilter) {
-  var q = getApplicationsSearchText();
-  return APPLICATIONS.filter(function(app) {
-    if (riskFilter && app.risk !== riskFilter) return false;
-    if (statusFilter && (app.statusRaw || '') !== statusFilter) return false;
-    if (!applicationMatchesEnhancedFilter(app, enhancedFilter)) return false;
-    if (assignedFilter) {
-      var normalizedAssigned = app.assignedId || 'Unassigned';
-      if (normalizedAssigned !== assignedFilter) return false;
-    }
-    return applicationMatchesSearch(app, q);
-  });
-}
-
-function updateApplicationsPagination(filteredCount, totalPages) {
+function updateApplicationsPagination(totalPages) {
   var summary = document.getElementById('applications-pagination-summary');
   var indicator = document.getElementById('applications-page-indicator');
   var prev = document.getElementById('applications-prev-page');
   var next = document.getElementById('applications-next-page');
-  var totalLoaded = APPLICATIONS.length;
-  var totalSource = applicationsApiTotal || totalLoaded;
-  var start = filteredCount ? ((applicationsCurrentPage - 1) * applicationsPageSize + 1) : 0;
-  var end = filteredCount ? Math.min(start + applicationsPageSize - 1, filteredCount) : 0;
+  var returned = APPLICATIONS_LIST_ROWS.length;
+  var totalSource = applicationsApiTotal || returned;
+  var start = returned ? (applicationsPageOffset + 1) : 0;
+  var end = returned ? (applicationsPageOffset + returned) : 0;
   if (summary) {
-    var text = filteredCount === totalLoaded
-      ? 'Showing ' + start + '-' + end + ' of ' + filteredCount + ' applications'
-      : 'Showing ' + start + '-' + end + ' of ' + filteredCount + ' matching applications';
-    if (totalSource > totalLoaded) text += ' (' + totalLoaded + ' loaded of ' + totalSource + ')';
-    summary.textContent = text;
+    summary.textContent = returned
+      ? ('Showing ' + start + '-' + end + ' of ' + totalSource + ' applications')
+      : 'No applications match the current filters.';
   }
   if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of ' + totalPages;
   if (prev) prev.disabled = applicationsCurrentPage <= 1;
@@ -6232,17 +6296,37 @@ function setApplicationsPageSize(value) {
   var parsed = parseInt(value, 10);
   applicationsPageSize = [10, 20, 50].indexOf(parsed) >= 0 ? parsed : 20;
   applicationsCurrentPage = 1;
-  renderApplications();
+  applicationsPageOffset = 0;
+  ensureApplicationsLoaded({ force: true }).then(function(loaded) {
+    if (loaded) renderApplications();
+  });
 }
 
 function changeApplicationsPage(delta) {
+  var nextPage = applicationsCurrentPage + delta;
+  var totalPages = Math.max(1, Math.ceil((applicationsApiTotal || 0) / applicationsPageSize));
+  if (nextPage < 1 || nextPage > totalPages) return;
   applicationsCurrentPage += delta;
-  renderApplications();
+  applicationsPageOffset = (applicationsCurrentPage - 1) * applicationsPageSize;
+  ensureApplicationsLoaded({ force: true }).then(function(loaded) {
+    if (loaded) renderApplications();
+  });
 }
 
 function filterApplications() {
   applicationsCurrentPage = 1;
-  renderApplications();
+  applicationsPageOffset = 0;
+  ensureApplicationsLoaded({ force: true }).then(function(loaded) {
+    if (loaded) renderApplications();
+  });
+}
+
+function queueApplicationsSearch() {
+  if (APPLICATIONS_SEARCH_DEBOUNCE) clearTimeout(APPLICATIONS_SEARCH_DEBOUNCE);
+  APPLICATIONS_SEARCH_DEBOUNCE = setTimeout(function() {
+    APPLICATIONS_SEARCH_DEBOUNCE = null;
+    filterApplications();
+  }, 250);
 }
 
 function formatDetailDate(value) {
@@ -11649,7 +11733,7 @@ function ensureCMApplicationsLoaded(selectedAppId) {
   }
   CHANGE_MGMT_APPLICATIONS_ERROR = '';
   setCMApplicationSelectLoading('Loading recent applications…');
-  CHANGE_MGMT_APPLICATIONS_PROMISE = apiFetch('/api/applications?limit=100&offset=0').then(function(r) {
+  CHANGE_MGMT_APPLICATIONS_PROMISE = apiFetch('/api/applications?view=list&limit=100&offset=0').then(function(r) {
     var apps = r.applications || [];
     CHANGE_MGMT_APPLICATIONS = apps;
     populateCMApplicationSelects(selectedAppId);
@@ -16908,13 +16992,11 @@ function collectRMIItems() {
 }
 
 async function refreshCurrentAppDetail() {
-  await loadFromAPI();
-  populateOfficerDropdowns();
+  var currentRef = currentApp && currentApp.ref;
+  await refreshDashboardData();
   renderDashboardRecent();
-  var refreshed = APPLICATIONS.find(function(a) { return currentApp && a.ref === currentApp.ref; });
-  if (refreshed) {
-    currentApp = refreshed;
-    openAppDetail(refreshed.ref);
+  if (currentRef) {
+    await openAppDetail(currentRef);
   }
 }
 
