@@ -681,6 +681,17 @@ def serialize_application_requirement(row):
         item[key] = _bool(item.get(key))
     item["waiver_roles"] = _loads_json(item.get("waiver_roles"), [])
     item["trigger_context"] = _loads_json(item.get("trigger_context"), {})
+    subject = item["trigger_context"].get("subject") if isinstance(item.get("trigger_context"), dict) else None
+    if isinstance(subject, dict):
+        item["subject"] = {
+            "type": _clean_text(subject.get("type") or subject.get("subject_type")),
+            "id": _clean_text(subject.get("id") or subject.get("subject_id")),
+            "person_key": _clean_text(subject.get("person_key")),
+            "name": _clean_text(subject.get("name") or subject.get("subject_name")),
+        }
+        item["subject_name"] = item["subject"].get("name")
+        item["subject_id"] = item["subject"].get("id")
+        item["subject_person_key"] = item["subject"].get("person_key")
     return item
 
 
@@ -805,6 +816,41 @@ def _load_portal_pep_disclosures(db, app):
     return disclosures
 
 
+def _pep_subjects_for_person_specific_requirements(db, app):
+    """Return portal-declared PEP subjects for person-specific evidence rows."""
+    disclosures = _load_portal_pep_disclosures(db, app)
+    subjects = []
+    seen = set()
+    for disclosure in disclosures:
+        if not disclosure.get("declared_pep"):
+            continue
+        subject_type = _clean_text(disclosure.get("subject_type")) or "screening_subject"
+        subject_id = _clean_text(disclosure.get("subject_id"))
+        person_key = _clean_text(disclosure.get("person_key"))
+        subject_name = _clean_text(disclosure.get("subject_name")) or "PEP subject"
+        identity = (subject_type, subject_id or person_key or subject_name.lower())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        subjects.append({
+            "type": subject_type,
+            "id": subject_id,
+            "person_key": person_key,
+            "name": subject_name,
+        })
+    return subjects
+
+
+def _subject_requirement_suffix(subject, index=0):
+    base = _clean_text(
+        (subject or {}).get("person_key")
+        or (subject or {}).get("id")
+        or (subject or {}).get("name")
+    )
+    base = re.sub(r"[^a-zA-Z0-9_]+", "_", base).strip("_").lower()
+    return base or f"subject_{index + 1}"
+
+
 def _portal_disclosure_summary(requirement, disclosures):
     key = _clean_text((requirement or {}).get("requirement_key")).lower()
     label = "Portal response"
@@ -866,6 +912,50 @@ def _portal_disclosure_summary(requirement, disclosures):
         "responses": disclosures,
         "submitted_at": max([d.get("submitted_at") for d in disclosures if d.get("submitted_at")] or [None]),
         "submitted_by": next((d.get("submitted_by") for d in disclosures if d.get("submitted_by")), None),
+    }
+
+
+def _jurisdiction_exposure_disclosure_summary(app):
+    app = _row_dict(app) or {}
+    prescreening = _loads_json(app.get("prescreening_data"), {}) or {}
+    rationale = _clean_text(prescreening.get("jurisdiction_exposure_rationale"))
+    country = _clean_text(prescreening.get("country_of_incorporation") or app.get("country"))
+    if not rationale:
+        return {
+            "status": "not_submitted",
+            "status_label": "Not submitted in portal",
+            "summary": "Not submitted in portal",
+            "fields": [],
+            "responses": [],
+        }
+    fields = []
+    subject = app.get("company") or app.get("company_name") or "Application"
+    if country:
+        fields.append({
+            "label": "Country of incorporation",
+            "value": country,
+            "subject": subject,
+        })
+    fields.append({
+        "label": "Jurisdiction exposure rationale",
+        "value": rationale,
+        "subject": subject,
+    })
+    return {
+        "status": "captured",
+        "status_label": "Captured from portal",
+        "requirement_status_label": "Pending officer review",
+        "summary": f"Jurisdiction exposure rationale captured for {country or 'selected jurisdiction'}",
+        "fields": fields,
+        "responses": [{
+            "subject_type": "application",
+            "subject_name": subject,
+            "country_of_incorporation": country,
+            "jurisdiction_exposure_rationale": rationale,
+            "source": "client_portal_application_form",
+        }],
+        "submitted_at": app.get("created_at"),
+        "submitted_by": app.get("client_id"),
     }
 
 
@@ -991,7 +1081,10 @@ def decorate_application_requirements_for_backoffice(db, app, requirements):
             and _clean_text(item.get("requirement_type")).lower() == "document"
         )
         if display_type == "portal_disclosure":
-            item["portal_disclosure"] = _portal_disclosure_summary(item, disclosures)
+            if _clean_text(item.get("requirement_key")).lower() == "jurisdiction_exposure_rationale":
+                item["portal_disclosure"] = _jurisdiction_exposure_disclosure_summary(app)
+            else:
+                item["portal_disclosure"] = _portal_disclosure_summary(item, disclosures)
             disclosure = item["portal_disclosure"]
             status = _clean_text(item.get("status") or "generated").lower()
             if disclosure.get("status") == "captured" and status in ("generated", "requested", "uploaded", "under_review"):
@@ -2923,8 +3016,35 @@ def serialize_portal_application_requirement(db, row):
     }
     if subject_scope:
         result["subject_scope"] = subject_scope
+    if requirement.get("subject"):
+        subject = requirement.get("subject") or {}
+        if subject.get("name"):
+            result["subject_name"] = subject.get("name")
+            result["owner_label"] = subject.get("name")
+        if subject.get("type"):
+            result["subject_type"] = subject.get("type")
     if requirement.get("linked_document_id"):
         result["linked_document_id"] = requirement.get("linked_document_id")
+        try:
+            doc_row = db.execute(
+                """
+                SELECT id, doc_name, uploaded_at, verification_status, review_status
+                FROM documents
+                WHERE id = ? AND application_id = ?
+                """,
+                (requirement.get("linked_document_id"), requirement.get("application_id")),
+            ).fetchone()
+            doc = _row_dict(doc_row) or {}
+            if doc:
+                result["linked_document"] = {
+                    "id": doc.get("id"),
+                    "doc_name": doc.get("doc_name"),
+                    "uploaded_at": doc.get("uploaded_at"),
+                    "verification_status": doc.get("verification_status"),
+                    "review_status": doc.get("review_status"),
+                }
+        except Exception:
+            pass
     return result
 
 
@@ -3588,6 +3708,28 @@ def generate_application_enhanced_requirements(
     rules = _load_active_rules(db, triggers)
     if not rules:
         result["warnings"].append("No active enhanced requirement rules matched detected trigger(s)")
+    expanded_rules = []
+    pep_subjects = _pep_subjects_for_person_specific_requirements(db, app) if "pep" in triggers else []
+    for rule in rules:
+        if rule.get("trigger_key") == "pep" and rule.get("requirement_key") == "pep_sow_evidence" and pep_subjects:
+            for idx, subject in enumerate(pep_subjects):
+                subject_rule = dict(rule)
+                suffix = _subject_requirement_suffix(subject, idx)
+                subject_rule["requirement_key"] = f"pep_sow_evidence_{subject.get('type') or 'subject'}_{suffix}"
+                subject_rule["requirement_label"] = f"Source of Wealth Evidence — {subject.get('name') or 'PEP subject'}"
+                subject_rule["requirement_description"] = (
+                    "Evidence supporting the source of wealth for the named PEP subject."
+                )
+                subject_rule["subject_scope"] = (
+                    subject.get("type")
+                    if subject.get("type") in ALLOWED_SUBJECT_SCOPES
+                    else "screening_subject"
+                )
+                subject_rule["_subject"] = subject
+                expanded_rules.append(subject_rule)
+            continue
+        expanded_rules.append(rule)
+    rules = expanded_rules
 
     generated_keys = []
     existing_keys = []
@@ -3611,6 +3753,8 @@ def generate_application_enhanced_requirements(
             "mapped_from_triggers": trigger_sources.get(rule["trigger_key"], []),
             "generation_source": generation_source,
         }
+        if rule.get("_subject"):
+            trigger_context["subject"] = rule["_subject"]
         params = (
             app["id"],
             rule.get("id"),

@@ -3636,7 +3636,7 @@ function getCookieValue(name) {
 async function boApiCall(method, path, body) {
   var options = arguments.length > 3 ? (arguments[3] || {}) : {};
   var callSessionId = options.sessionId != null ? options.sessionId : BO_ACTIVE_SESSION_ID;
-  var opts = { method: method, headers: {} };
+  var opts = { method: method, headers: {}, credentials: 'include' };
   if (BO_AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
   if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(String(method || '').toUpperCase()) >= 0) {
     var csrf = getCookieValue('csrf_token');
@@ -3660,10 +3660,16 @@ async function boApiCall(method, path, body) {
       throw new Error('Session expired');
     }
     if (res.status === 401) throw new Error(data.error || 'Authentication required');
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      var apiErr = new Error(data.error || 'Request failed');
+      apiErr.status = res.status;
+      apiErr.payload = data;
+      throw apiErr;
+    }
     return data;
   } catch (err) {
-    console.error('BO API Error:', method, path, err);
+    var level = err && err.status === 403 ? 'warn' : 'error';
+    console[level]('BO API Error:', method, path, err);
     throw err;
   }
 }
@@ -8614,8 +8620,13 @@ async function loadApplicationEnhancedRequirements(app, generationResult) {
   } catch (err) {
     console.warn('Unable to load application enhanced requirements:', err);
     if (summaryEl) summaryEl.innerHTML = '';
-    setEnhancedRequirementDetailMessage('Unable to load enhanced requirements. Existing application review data remains available.', 'amber');
-    container.innerHTML = '<div style="padding:20px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);">Enhanced requirements could not be loaded.</div>';
+    if (err && err.status === 403) {
+      setEnhancedRequirementDetailMessage('Your role is not permitted to view enhanced requirement details for this application.', 'amber');
+      container.innerHTML = '<div style="padding:20px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);">Enhanced requirement details are restricted for this role. Case blockers and approval gates remain enforced by the backend.</div>';
+    } else {
+      setEnhancedRequirementDetailMessage('Unable to load enhanced requirements. Existing application review data remains available.', 'amber');
+      container.innerHTML = '<div style="padding:20px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);">Enhanced requirements could not be loaded.</div>';
+    }
   }
 }
 
@@ -13222,7 +13233,9 @@ async function loadLifecycleApplicationSummary(applicationId) {
     // endpoint is unavailable. Keep this section out of the way.
     console.warn('Lifecycle summary load failed:', err);
     detailLifecycleSummaryOverview = null;
-    container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
+    container.innerHTML = err && err.status === 403
+      ? '<div style="font-size:11px;color:var(--text3);">Lifecycle summary is restricted for this role.</div>'
+      : '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
   }
 }
 
@@ -16509,7 +16522,11 @@ async function loadDecisionRecords() {
     container.innerHTML = html;
     decisionRecordsLoadedFor = currentApp.id;
   } catch (err) {
-    container.innerHTML = '<span style="color:var(--red);">Failed to load decision records: ' + escapeHtml(err.message || 'Unknown error') + '</span>';
+    if (err && err.status === 403) {
+      container.innerHTML = '<span style="color:var(--text3);">Decision records are restricted for this role.</span>';
+    } else {
+      container.innerHTML = '<span style="color:var(--red);">Failed to load decision records: ' + escapeHtml(err.message || 'Unknown error') + '</span>';
+    }
   }
 }
 
