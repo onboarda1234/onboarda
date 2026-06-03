@@ -457,7 +457,7 @@ class TestCaseCommandCentreRuntime:
         edd_view = _extract_between(
             html,
             '<div class="view" id="view-edd">',
-            '<!-- ═══════════════ ONGOING MONITORING ═══════════════ -->',
+            '<div class="view" id="view-periodic-review-signals">',
         )
         assert "Formal investigation cases are managed in Lifecycle" in edd_view
         assert "Use KYC Documents for onboarding Enhanced Review Requirements." in edd_view
