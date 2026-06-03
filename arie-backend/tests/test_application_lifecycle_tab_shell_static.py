@@ -251,10 +251,11 @@ def test_lifecycle_memo_gate_adds_officer_rationale_outcome_and_completion_actio
 
 def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     html = _read_backoffice()
-    start = html.index("<!-- Review Signals Tab: signal-only launchpad.")
-    end = html.index("<!-- Agents Tab -->", start)
+    start = html.index('<div class="view" id="view-periodic-review-signals">')
+    end = html.index('<div class="view" id="view-monitoring">', start)
     section = html[start:end]
     assert "Periodic Review Signals" in section
+    assert "Signals that may indicate a client requires review, reassessment, or monitoring follow-up." in section
     assert "Signal-only portfolio view" in section
     assert "Open Lifecycle Queue" in section
     assert "monitoring-review-due-count" in section
@@ -284,7 +285,7 @@ def test_ongoing_monitoring_keeps_alerts_and_agents_tabs():
     end = html.index("<!-- Unified operator queue", start)
     section = html[start:end]
     assert "Monitoring Alerts" in section
-    assert "Review Signals" in section
+    assert "Review Signals" not in section
     assert "Monitoring Agents" in section
     assert 'id="monitoring-alerts-body"' in section
     assert 'id="agents-status-list"' in section
