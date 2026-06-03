@@ -2585,13 +2585,18 @@
             </div>
             <div class="form-group">
               <label>Expected Monthly Transaction Volume <span class="req">*</span></label>
-              <select id="f-monthly-volume" required>
+              <select id="f-monthly-volume" required onchange="syncVolumeRationaleState()">
                 <option value="">Select range…</option>
                 <option value="Under USD 50,000 per month">Under USD 50,000</option>
                 <option value="USD 50,000 to USD 500,000 per month">USD 50,000 – USD 500,000</option>
                 <option value="USD 500,000 to USD 5,000,000 per month">USD 500,000 – USD 5,000,000</option>
                 <option value="Over USD 5,000,000 per month">Over USD 5,000,000</option>
               </select>
+            </div>
+            <div class="form-group span-3" id="volume-rationale-group" style="display:none;border:1px solid rgba(217,119,6,0.25);background:rgba(217,119,6,0.05);border-radius:12px;padding:12px;">
+              <label>Volume rationale vs business size <span class="req">*</span></label>
+              <textarea id="f-volume-rationale" placeholder="Please explain why the expected transaction volume is proportionate to the company’s business size, age, sector, operating model, and expected client activity."></textarea>
+              <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required when expected monthly transaction volume is USD 500,000 or higher.</div>
             </div>
             <div class="form-group">
               <label>Transaction Type <span class="req">*</span></label>
@@ -4809,6 +4814,7 @@ var PRESCREENING_FIELD_BINDINGS = {
   'f-entity-type': 'entity_type',
   'f-ownership-structure': 'ownership_structure',
   'f-monthly-volume': 'monthly_volume',
+  'f-volume-rationale': 'volume_rationale_vs_business_size',
   'f-txn-complexity': 'transaction_complexity',
   'f-biz-overview': 'business_overview',
   'f-has-bank': 'existing_bank_account',
@@ -6080,6 +6086,14 @@ async function submitPrescreening(e) {
     if (rationaleEl) rationaleEl.focus();
     return;
   }
+  if (isHighVolumeSelection(getFieldValue('f-monthly-volume')) && !getFieldValue('f-volume-rationale')) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    syncVolumeRationaleState();
+    showToast('error', 'Volume Rationale Required', 'Please explain why the expected transaction volume is proportionate to the business before submitting.');
+    var volumeRationaleEl = document.getElementById('f-volume-rationale');
+    if (volumeRationaleEl) volumeRationaleEl.focus();
+    return;
+  }
   // Check ALL country fields — multi-selects, nationality dropdowns
   var sanctionedFound = false;
   var sanctionedField = '';
@@ -6345,6 +6359,7 @@ async function submitPrescreening(e) {
       services_required: getCheckboxValues('service-grid'),
       monthly_volume: getFieldValue('f-monthly-volume'),
       expected_volume: getFieldValue('f-monthly-volume'),
+      volume_rationale_vs_business_size: getFieldValue('f-volume-rationale'),
       transaction_complexity: getFieldValue('f-txn-complexity'),
       countries_of_operation: msState['ms-op-countries'] ? Array.from(msState['ms-op-countries']) : [],
       business_overview: getFieldValue('f-biz-overview'),
@@ -8025,6 +8040,7 @@ function restoreDraftFromData(data, options) {
     restorePepDeclarationFieldsFromPrescreening(prescreeningData);
     syncConditionalFormState();
     syncJurisdictionRationaleState();
+    syncVolumeRationaleState();
 
     // Recalculate auto-computed profit from restored revenue/cost values
     if (typeof updateProfitRow === 'function') updateProfitRow();
@@ -9711,6 +9727,58 @@ function syncJurisdictionRationaleState() {
   var textarea = document.getElementById('f-jurisdiction-rationale');
   if (!countryEl || !group || !textarea) return;
   var required = isEnhancedRiskJurisdiction(countryEl.value);
+  group.style.display = required ? '' : 'none';
+  textarea.required = required;
+  if (!required) {
+    textarea.value = '';
+  }
+}
+
+var HIGH_VOLUME_RATIONALE_THRESHOLD = 500000;
+
+function parsePortalVolumeAmount(token) {
+  var text = String(token || '').trim().toLowerCase().replace(/,/g, '');
+  if (!text) return null;
+  var suffix = '';
+  if (/[km]$/.test(text)) {
+    suffix = text.slice(-1);
+    text = text.slice(0, -1);
+  }
+  var amount = Number(text);
+  if (!Number.isFinite(amount)) return null;
+  if (suffix === 'k') amount *= 1000;
+  if (suffix === 'm') amount *= 1000000;
+  return amount;
+}
+
+function isHighVolumeSelection(value) {
+  var raw = String(value || '').trim();
+  if (!raw) return false;
+  var text = raw.toLowerCase()
+    .replace(/\u2013|\u2014|\u2212/g, '-')
+    .replace(/per month/g, '')
+    .replace(/monthly/g, '');
+  var compact = text.replace(/\s+/g, '');
+  var amounts = [];
+  var re = /(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(\s*[km])?/g;
+  var match;
+  while ((match = re.exec(text)) !== null) {
+    var parsed = parsePortalVolumeAmount((match[1] || '') + String(match[2] || '').trim());
+    if (parsed !== null) amounts.push(parsed);
+  }
+  if (!amounts.length) return false;
+  var isUpperBound = /\b(under|below|less\s+than|up\s+to|upto|not\s+more\s+than)\b/.test(text) || text.indexOf('<') !== -1;
+  if (isUpperBound) return false;
+  var normalized = (/\d\s*-\s*\d/.test(compact) || /\bto\b/.test(text)) ? Math.max.apply(null, amounts) : amounts[0];
+  return normalized >= HIGH_VOLUME_RATIONALE_THRESHOLD;
+}
+
+function syncVolumeRationaleState() {
+  var volumeEl = document.getElementById('f-monthly-volume');
+  var group = document.getElementById('volume-rationale-group');
+  var textarea = document.getElementById('f-volume-rationale');
+  if (!volumeEl || !group || !textarea) return;
+  var required = isHighVolumeSelection(volumeEl.value);
   group.style.display = required ? '' : 'none';
   textarea.required = required;
   if (!required) {
