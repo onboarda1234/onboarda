@@ -923,7 +923,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="cases" onclick="showView('cases',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Case Management</div>
     <div class="snav-section">Compliance</div>
     <div class="snav-item" data-view="screening-queue" onclick="showView('screening-queue',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
-    <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Ongoing Monitoring</div>
+    <div class="snav-item" data-view="periodic-review-signals" onclick="showView('periodic-review-signals',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 13h10"/><path d="M9 18h6"/></svg></span> Periodic Review Signals</div>
+    <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Monitoring Alerts</div>
     <div class="snav-item" data-view="lifecycle" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
     <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
     <div class="snav-item" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
@@ -1100,7 +1101,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="stat-card-change" id="dash-mon-alerts-note">Live monitoring alerts</div>
     </div>
     <div class="stat-card">
-      <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring')">View Ongoing Monitoring →</button>
+      <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring')">View Monitoring Alerts →</button>
     </div>
   </div>
 </div>
@@ -1748,19 +1749,64 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
 </div>
 
-<!-- ═══════════════ ONGOING MONITORING ═══════════════ -->
+<!-- ═══════════════ PERIODIC REVIEW SIGNALS ═══════════════ -->
+<div class="view" id="view-periodic-review-signals">
+  <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Periodic Review Signals</h3>
+      <p style="font-size:13px;color:var(--text3);line-height:1.6;max-width:760px;">Signals that may indicate a client requires review, reassessment, or monitoring follow-up.</p>
+      <p style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:6px;max-width:760px;">Signal-only portfolio view. Periodic review setup, attestations, evidence, memo, and completion are handled in the Application Lifecycle workspace.</p>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="openMonitoringLifecycleQueue()">Open Lifecycle Queue</button>
+  </div>
+
+  <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px;">
+    <div class="stat-card"><div class="stat-card-label">Due / Due Soon</div><div class="stat-card-value" style="color:var(--amber);" id="monitoring-review-due-count">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Overdue</div><div class="stat-card-value" style="color:var(--red);" id="monitoring-review-overdue-count">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Blocked</div><div class="stat-card-value" style="color:#7c3aed;" id="monitoring-review-blocked-count">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Active Review Signals</div><div class="stat-card-value" style="color:var(--blue);" id="monitoring-review-active-count">0</div></div>
+  </div>
+
+  <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
+    <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
+      <option value="">All Signals</option>
+      <option value="due">Due / Due Soon</option>
+      <option value="overdue">Overdue</option>
+      <option value="blocked">Blocked</option>
+      <option value="upcoming">Upcoming</option>
+      <option value="completed">Completed</option>
+    </select>
+    <select class="form-select" style="width:auto;" id="review-risk-filter" onchange="renderPeriodicReviews()">
+      <option value="">All Risk Levels</option>
+      <option value="Low">Low</option>
+      <option value="Medium">Medium</option>
+      <option value="High">High</option>
+      <option value="Very High">Very High</option>
+    </select>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data-table">
+      <thead>
+        <tr><th>Client</th><th>Risk Level</th><th>Next Review Due</th><th>Signal</th><th>Owner</th><th>Linked Workflow</th><th>Launchpad</th></tr>
+      </thead>
+      <tbody id="periodic-reviews-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ MONITORING ALERTS ═══════════════ -->
 <div class="view" id="view-monitoring">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Ongoing Client Monitoring</h3>
-      <p style="font-size:13px;color:var(--text3);">Track monitoring alerts, review due signals, document expiry, risk drift, and regulatory impact.</p>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Monitoring Alerts</h3>
+      <p style="font-size:13px;color:var(--text3);">Track monitoring alerts, document expiry, risk drift, and regulatory impact.</p>
     </div>
   </div>
 
   <!-- Tabs for monitoring sections -->
   <div class="tab-bar" style="margin-bottom:20px;">
     <div class="tab active" onclick="switchMonitoringTab('alerts',this)">Monitoring Alerts</div>
-    <div class="tab" onclick="switchMonitoringTab('reviews',this)">Review Signals</div>
     <div class="tab" onclick="switchMonitoringTab('agents',this)">Monitoring Agents</div>
   </div>
 
@@ -1813,53 +1859,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <tr><th>Date</th><th>Client</th><th>Alert Type</th><th>Severity</th><th>Detected By</th><th>Status</th><th>Actions</th></tr>
         </thead>
         <tbody id="monitoring-alerts-body"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Review Signals Tab: signal-only launchpad. Lifecycle owns review work. -->
-  <div id="monitoring-reviews-tab" style="display:none;">
-    <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;">
-      <div>
-        <div style="font-size:14px;font-weight:700;color:var(--text1);">Periodic Review Signals</div>
-        <div style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:4px;max-width:760px;">
-          Signal-only portfolio view. Periodic review setup, attestations, evidence, memo, and completion are handled in the Application Lifecycle workspace.
-        </div>
-      </div>
-      <button class="btn btn-primary btn-sm" onclick="openMonitoringLifecycleQueue()">Open Lifecycle Queue</button>
-    </div>
-
-    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px;">
-      <div class="stat-card"><div class="stat-card-label">Due / Due Soon</div><div class="stat-card-value" style="color:var(--amber);" id="monitoring-review-due-count">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Overdue</div><div class="stat-card-value" style="color:var(--red);" id="monitoring-review-overdue-count">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Blocked</div><div class="stat-card-value" style="color:#7c3aed;" id="monitoring-review-blocked-count">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Active Review Signals</div><div class="stat-card-value" style="color:var(--blue);" id="monitoring-review-active-count">0</div></div>
-    </div>
-
-    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
-      <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
-        <option value="">All Signals</option>
-        <option value="due">Due / Due Soon</option>
-        <option value="overdue">Overdue</option>
-        <option value="blocked">Blocked</option>
-        <option value="upcoming">Upcoming</option>
-        <option value="completed">Completed</option>
-      </select>
-      <select class="form-select" style="width:auto;" id="review-risk-filter" onchange="renderPeriodicReviews()">
-        <option value="">All Risk Levels</option>
-        <option value="Low">Low</option>
-        <option value="Medium">Medium</option>
-        <option value="High">High</option>
-        <option value="Very High">Very High</option>
-      </select>
-    </div>
-
-    <div class="card" style="padding:0;overflow:hidden;">
-      <table class="data-table">
-        <thead>
-          <tr><th>Client</th><th>Risk Level</th><th>Next Review Due</th><th>Signal</th><th>Owner</th><th>Linked Workflow</th><th>Launchpad</th></tr>
-        </thead>
-        <tbody id="periodic-reviews-body"></tbody>
       </table>
     </div>
   </div>
@@ -5221,7 +5220,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Signals', monitoring:'Monitoring Alerts', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   // Close mobile menu on navigation
@@ -5250,7 +5249,14 @@ function showView(name, navItem) {
   if (name === 'screening') {
     renderScreening({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length });
   }
+  if (name === 'periodic-review-signals') {
+    renderMonitoring();
+    ensureMonitoringDataLoaded().then(function(loaded) {
+      if (loaded) renderMonitoring();
+    });
+  }
   if (name === 'monitoring') {
+    switchMonitoringTab('alerts');
     renderMonitoring();
     ensureMonitoringDataLoaded().then(function(loaded) {
       if (loaded) renderMonitoring();
@@ -13525,7 +13531,7 @@ function lifecycleRiskReasonLabel(value) {
 
 function lifecycleSourceModuleLabel(item) {
   var type = String((item && item.type) || '').toLowerCase();
-  if (type === 'alert') return 'Ongoing Monitoring';
+  if (type === 'alert') return 'Monitoring Alerts';
   if (type === 'edd') return 'EDD';
   if (type === 'review') return 'Lifecycle';
   return 'Owner workflow';
@@ -15550,13 +15556,15 @@ function openMonitoringReviewLifecycle(ref) {
 }
 
 function switchMonitoringTab(tab, btn) {
+  var targetBtn = btn;
+  if (!targetBtn) {
+    targetBtn = document.querySelector("#view-monitoring .tab[onclick*=\"'" + tab + "'\"]");
+  }
   document.querySelectorAll('#view-monitoring .tab').forEach(function(t) { t.classList.remove('active'); });
-  btn.classList.add('active');
+  if (targetBtn) targetBtn.classList.add('active');
   document.getElementById('monitoring-alerts-tab').style.display = 'none';
-  document.getElementById('monitoring-reviews-tab').style.display = 'none';
   document.getElementById('monitoring-agents-tab').style.display = 'none';
   if (tab === 'alerts') document.getElementById('monitoring-alerts-tab').style.display = 'block';
-  if (tab === 'reviews') document.getElementById('monitoring-reviews-tab').style.display = 'block';
   if (tab === 'agents') document.getElementById('monitoring-agents-tab').style.display = 'block';
 }
 
