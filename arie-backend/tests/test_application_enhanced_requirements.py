@@ -1458,7 +1458,7 @@ def test_pr6g_jurisdiction_rationale_is_backoffice_portal_disclosure(enhanced_ap
 
 
 def test_pr6g_portal_and_backoffice_static_copy_is_safe():
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     portal_html = open(os.path.join(repo_root, "arie-portal.html"), encoding="utf-8").read()
     backoffice_html = open(os.path.join(repo_root, "arie-backoffice.html"), encoding="utf-8").read()
 
