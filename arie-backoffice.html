@@ -3636,7 +3636,7 @@ function getCookieValue(name) {
 async function boApiCall(method, path, body) {
   var options = arguments.length > 3 ? (arguments[3] || {}) : {};
   var callSessionId = options.sessionId != null ? options.sessionId : BO_ACTIVE_SESSION_ID;
-  var opts = { method: method, headers: {} };
+  var opts = { method: method, headers: {}, credentials: 'include' };
   if (BO_AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
   if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(String(method || '').toUpperCase()) >= 0) {
     var csrf = getCookieValue('csrf_token');
