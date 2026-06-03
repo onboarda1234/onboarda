@@ -1465,7 +1465,11 @@ def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     assert "Enhanced Evidence Documents" in portal_html
     assert "f-jurisdiction-rationale" in portal_html
     assert "jurisdiction_exposure_rationale" in portal_html
+    assert "syncJurisdictionRationaleState" in portal_html
+    assert "textarea.required = required" in portal_html
+    assert "Upload enhanced evidence" in portal_html
     assert "Upload Supporting Documents" not in portal_html
+    assert "Upload supporting document" not in portal_html
     assert "handlePEPUpload" not in portal_html
     assert "supporting_document_names" not in portal_html
     assert "apiErr.status = res.status" in backoffice_html

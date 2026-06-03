@@ -2367,9 +2367,14 @@
             </div>
             <div class="form-group">
               <label>Country of Incorporation <span class="req">*</span></label>
-              <select id="f-inc-country" required onchange="checkSanctionedCountry(this)">
+              <select id="f-inc-country" required onchange="checkSanctionedCountry(this); syncJurisdictionRationaleState();">
                 <option value="">Select country…</option>
               </select>
+            </div>
+            <div class="form-group span-3" id="jurisdiction-rationale-group" style="display:none;border:1px solid var(--border1);border-radius:10px;padding:12px;background:var(--surface2);">
+              <label>Jurisdiction exposure rationale <span class="req">*</span></label>
+              <textarea id="f-jurisdiction-rationale" placeholder="Please explain why the entity is incorporated in, operates from, or has exposure to this jurisdiction."></textarea>
+              <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required when the country of incorporation is high-risk, FATF-monitored, FATF-blacklisted, sanctioned, or otherwise enhanced-risk.</div>
             </div>
             <div class="form-group">
               <label>Registration / BRN Number <span class="req">*</span></label>
@@ -3268,8 +3273,8 @@
         <div class="card-header">
           <div class="card-icon" style="background:var(--amber-dim);color:var(--amber);">i</div>
           <div>
-            <div class="card-title">Requested Documents & Information</div>
-            <div class="card-sub">Risk-triggered evidence documents and portal disclosures requested by compliance.</div>
+            <div class="card-title">Enhanced Evidence Documents</div>
+            <div class="card-sub">Additional enhanced evidence requested by Compliance for this application.</div>
           </div>
         </div>
         <div id="additional-info-required-container" style="display:flex;flex-direction:column;gap:10px;padding:0 16px 16px;">
@@ -3539,12 +3544,8 @@
                       <label>Additional details on origin of funds/wealth</label>
                       <textarea id="pep-sow-detail-dir1" placeholder="Please provide explanation and any supporting documentary evidence..."></textarea>
                     </div>
-                    <div>
-                      <label>📎 Upload Supporting Documents (pay slips, bank statements, tax returns, etc.)</label>
-                      <div class="doc-upload-area" onclick="document.getElementById('pep-docs-dir1').click()" style="margin-top:4px;">
-                        <span>📎</span> <span id="pep-docs-lbl-dir1">Click to upload supporting documents</span>
-                      </div>
-                      <input type="file" id="pep-docs-dir1" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handlePEPUpload('dir1',this)" />
+                    <div style="font-size:11px;color:var(--text3);line-height:1.5;">
+                      Supporting evidence is requested as a separate Enhanced Evidence Document when Compliance requires it. Complete the structured PEP declaration fields here.
                     </div>
                   </div>
                 </div>
@@ -3650,12 +3651,8 @@
                       <label>Additional details on origin of funds/wealth</label>
                       <textarea id="pep-sow-detail-ubo1" placeholder="Please provide explanation and any supporting documentary evidence..."></textarea>
                     </div>
-                    <div>
-                      <label>📎 Upload Supporting Documents (pay slips, bank statements, tax returns, etc.)</label>
-                      <div class="doc-upload-area" onclick="document.getElementById('pep-docs-ubo1').click()" style="margin-top:4px;">
-                        <span>📎</span> <span id="pep-docs-lbl-ubo1">Click to upload supporting documents</span>
-                      </div>
-                      <input type="file" id="pep-docs-ubo1" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handlePEPUpload('ubo1',this)" />
+                    <div style="font-size:11px;color:var(--text3);line-height:1.5;">
+                      Supporting evidence is requested as a separate Enhanced Evidence Document when Compliance requires it. Complete the structured PEP declaration fields here.
                     </div>
                   </div>
                 </div>
@@ -4805,6 +4802,7 @@ var PRESCREENING_FIELD_BINDINGS = {
   'f-licence-authority': 'licence_authority',
   'f-licence-type': 'licence_type',
   'f-inc-country': 'country_of_incorporation',
+  'f-jurisdiction-rationale': 'jurisdiction_exposure_rationale',
   'f-inc-date': 'incorporation_date',
   'f-brn': 'brn',
   'f-sector': 'sector',
@@ -5696,7 +5694,7 @@ function buildPepDeclarationPanelHTML(personId, visible) {
       '<div><label>Source of funds detail</label><textarea id="pep-source-funds-detail-' + personId + '" placeholder="Explain the expected source of funds for this relationship, if different from source of wealth."></textarea></div>' +
       '<div><label>Supporting note / evidence reference <span class="req">*</span></label><textarea id="pep-evidence-reference-' + personId + '" placeholder="Reference documents, links, public register entries, or officer notes supporting the declaration."></textarea></div>' +
       '<div><label>Additional PEP notes</label><textarea id="pep-notes-' + personId + '" placeholder="Any additional context relevant to this PEP declaration."></textarea></div>' +
-      '<div><label>&#128206; Upload Supporting Documents</label><div class="doc-upload-area" onclick="document.getElementById(\'pep-docs-' + personId + '\').click()" style="margin-top:4px;"><span>&#128206;</span> <span id="pep-docs-lbl-' + personId + '">Click to upload supporting documents</span></div><input type="file" id="pep-docs-' + personId + '" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handlePEPUpload(\'' + personId + '\',this)" /></div>' +
+      '<div style="font-size:11px;color:var(--text3);line-height:1.5;">Supporting evidence is requested as a separate Enhanced Evidence Document when Compliance requires it. Complete the structured PEP declaration fields here.</div>' +
     '</div>' +
   '</div>';
 }
@@ -5905,7 +5903,6 @@ function collectPepDeclarationPayload(personId, isPEP, personType) {
       pep_schema_version: 'portal_pep_v2'
     };
   }
-  var pepDocs = document.getElementById('pep-docs-' + personId);
   var roleType = getPepFieldValue('pep-role-type-' + personId);
   var positionTitle = getPepFieldValue('pep-position-title-' + personId);
   var publicFunction = getPepFieldValue('pep-function-' + personId);
@@ -5939,8 +5936,7 @@ function collectPepDeclarationPayload(personId, isPEP, personType) {
     source_of_funds_detail: getPepFieldValue('pep-source-funds-detail-' + personId),
     supporting_note_evidence: evidenceReference,
     evidence_reference: evidenceReference,
-    notes: getPepFieldValue('pep-notes-' + personId),
-    supporting_document_names: pepDocs && pepDocs.files ? Array.from(pepDocs.files).map(function(file) { return file.name; }) : []
+    notes: getPepFieldValue('pep-notes-' + personId)
   };
 }
 
@@ -6019,10 +6015,6 @@ function restorePepDeclaration(personId, declaration) {
       cb.checked = selectedSow.indexOf(cb.value) !== -1 || selectedSow.indexOf(text) !== -1;
     });
   }
-  var docsLabel = document.getElementById('pep-docs-lbl-' + personId);
-  if (docsLabel && Array.isArray(declaration.supporting_document_names) && declaration.supporting_document_names.length) {
-    docsLabel.textContent = declaration.supporting_document_names.length + ' supporting document(s) referenced';
-  }
 }
 
 function restorePepDeclarationList(parties) {
@@ -6078,6 +6070,14 @@ async function submitPrescreening(e) {
   if (incCountry && !checkSanctionedCountry(incCountry)) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
     showToast('error', 'Restricted Jurisdiction', 'Onboarda cannot onboard clients from sanctioned jurisdictions.');
+    return;
+  }
+  if (incCountry && isEnhancedRiskJurisdiction(incCountry.value) && !getFieldValue('f-jurisdiction-rationale')) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    syncJurisdictionRationaleState();
+    showToast('error', 'Jurisdiction rationale required', 'Please explain the business rationale for the enhanced-risk jurisdiction exposure.');
+    var rationaleEl = document.getElementById('f-jurisdiction-rationale');
+    if (rationaleEl) rationaleEl.focus();
     return;
   }
   // Check ALL country fields — multi-selects, nationality dropdowns
@@ -6326,6 +6326,7 @@ async function submitPrescreening(e) {
       trading_name: getFieldValue('f-trade-name'),
       incorporation_date: getFieldValue('f-inc-date'),
       country_of_incorporation: getFieldValue('f-inc-country'),
+      jurisdiction_exposure_rationale: getFieldValue('f-jurisdiction-rationale'),
       registered_address: getFieldValue('f-reg-address'),
       headquarters_address: getFieldValue('f-hq-address'),
       entity_contact_first: getFieldValue('f-contact-first'),
@@ -6895,13 +6896,6 @@ function checkPEPAndShowDeclaration() {
     if (pepPanel) { if (isPEP) { pepPanel.classList.add('visible'); } else { pepPanel.classList.remove('visible'); } }
     if (bankRefRow) { bankRefRow.style.display = isPEP ? '' : 'none'; }
   });
-}
-
-function handlePEPUpload(personId, input) {
-  if (!input.files.length) return;
-  var lbl = document.getElementById('pep-docs-lbl-' + personId);
-  if (lbl) lbl.textContent = input.files.length === 1 ? input.files[0].name : input.files.length + ' files selected';
-  showToast('success', 'PEP Documents', 'Supporting documents uploaded for PEP declaration.');
 }
 
 // ─── AI Document Verification Engine ──────────────────────
@@ -8030,6 +8024,7 @@ function restoreDraftFromData(data, options) {
     restorePepDeclarationList(data.ubos);
     restorePepDeclarationFieldsFromPrescreening(prescreeningData);
     syncConditionalFormState();
+    syncJurisdictionRationaleState();
 
     // Recalculate auto-computed profit from restored revenue/cost values
     if (typeof updateProfitRow === 'function') updateProfitRow();
@@ -9006,7 +9001,7 @@ function portalEnhancedRequirementActionText(req) {
     return 'No further action is needed right now.';
   }
   if (type === 'document') {
-    return 'Upload a supporting document for this item.';
+    return 'Upload evidence for this specific enhanced requirement.';
   }
   if (type === 'declaration' || type === 'explanation') {
     return 'Provide a response for this item.';
@@ -9032,7 +9027,7 @@ function portalEnhancedRequirementControlHtml(req) {
     var inputId = portalEnhancedRequirementControlId(reqId, 'file');
     return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
       '<input id="' + escapeHtml(inputId) + '" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="font-size:12px;max-width:280px;" />' +
-      '<button class="btn btn-primary btn-sm" onclick="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', document.getElementById(\'' + escapeHtml(inputId) + '\'), this)">Upload supporting document</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', document.getElementById(\'' + escapeHtml(inputId) + '\'), this)">Upload enhanced evidence</button>' +
     '</div>';
   }
   if (type === 'declaration' || type === 'explanation') {
@@ -9061,16 +9056,24 @@ function renderPortalEnhancedRequirements(requirements) {
   function renderPortalRequirementCard(req) {
     var tone = portalEnhancedRequirementTone(req.status);
     var requestedAt = req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
+    var uploadedAt = req.uploaded_at ? new Date(req.uploaded_at).toLocaleDateString() : '';
+    var linkedDoc = req.linked_document || {};
     var meta = [];
+    meta.push('Requested by Compliance');
     if (req.requirement_type) meta.push(String(req.requirement_type).replace(/_/g, ' '));
     if (req.subject_scope) meta.push(String(req.subject_scope).replace(/_/g, ' '));
+    if (req.owner_label || req.subject_name) meta.push('Owner: ' + (req.owner_label || req.subject_name));
     if (requestedAt) meta.push('Requested ' + requestedAt);
+    if (uploadedAt) meta.push('Uploaded ' + uploadedAt);
+    var docName = linkedDoc.doc_name || req.uploaded_file_name || '';
     return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface);">' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
         '<div style="min-width:0;flex:1;">' +
           '<div style="font-size:14px;font-weight:800;color:var(--text);">' + escapeHtml(req.label || 'Additional information') + '</div>' +
+          '<div style="font-size:11px;color:#d97706;font-weight:700;margin-top:3px;">Required due to enhanced review</div>' +
           (req.description ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5;">' + escapeHtml(req.description) + '</div>' : '') +
           (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:7px;">' + escapeHtml(meta.join(' | ')) + '</div>' : '') +
+          (docName ? '<div style="font-size:12px;color:var(--text2);margin-top:7px;"><strong>Uploaded file:</strong> ' + escapeHtml(docName) + '</div>' : '') +
           '<div style="font-size:11px;color:var(--text2);margin-top:8px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
           portalEnhancedRequirementControlHtml(req) +
         '</div>' +
@@ -9138,7 +9141,7 @@ async function uploadPortalEnhancedRequirement(requirementId, input, button) {
     delete portalEnhancedRequirementBusy[busyKey];
     if (button) {
       button.disabled = false;
-      button.textContent = button.dataset.originalText || 'Upload supporting document';
+      button.textContent = button.dataset.originalText || 'Upload enhanced evidence';
     }
   }
 }
@@ -9546,6 +9549,7 @@ document.addEventListener('DOMContentLoaded', () => {
   populateLookupCountry();
   populateIncCountry();
   syncConditionalFormState();
+  syncJurisdictionRationaleState();
   // Set incorporation date max to today
   var incDateEl = document.getElementById('f-inc-date');
   if (incDateEl) incDateEl.max = new Date().toISOString().split('T')[0];
@@ -9685,6 +9689,34 @@ function switchBOTab(btn, tabId) {
 
 // ─── Sanctioned Countries & Validation ───────────────────────
 const SANCTIONED_COUNTRIES_LIST = ['Iran','North Korea','Syria','Cuba','Crimea','Myanmar','Russia','Belarus','Venezuela','Afghanistan','Somalia','Yemen','Libya','Iraq','South Sudan','Central African Republic','Democratic Republic of Congo','Mali','Guinea-Bissau','Lebanon'];
+const ENHANCED_RISK_JURISDICTIONS_LIST = [
+  'Algeria','Burkina Faso','Cameroon','Democratic Republic of Congo','Congo (DRC)',
+  'Haiti','Kenya','Laos','Monaco','Mozambique','Namibia','Nepal','Nigeria',
+  'South Africa','South Sudan','Syria','Venezuela','Vietnam','Yemen',
+  'British Virgin Islands','Cayman Islands','Belize (Offshore)','Gibraltar',
+  'Guernsey','Isle of Man','Jersey','Turks and Caicos Islands'
+].concat(SANCTIONED_COUNTRIES_LIST);
+
+function isEnhancedRiskJurisdiction(val) {
+  var normalized = String(val || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return ENHANCED_RISK_JURISDICTIONS_LIST.some(function(c) {
+    return normalized === String(c || '').trim().toLowerCase();
+  });
+}
+
+function syncJurisdictionRationaleState() {
+  var countryEl = document.getElementById('f-inc-country');
+  var group = document.getElementById('jurisdiction-rationale-group');
+  var textarea = document.getElementById('f-jurisdiction-rationale');
+  if (!countryEl || !group || !textarea) return;
+  var required = isEnhancedRiskJurisdiction(countryEl.value);
+  group.style.display = required ? '' : 'none';
+  textarea.required = required;
+  if (!required) {
+    textarea.value = '';
+  }
+}
 
 function checkSanctionedCountry(selectEl) {
   var val = (selectEl.value || '').trim();

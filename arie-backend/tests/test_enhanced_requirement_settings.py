@@ -485,19 +485,20 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/supervisor" not in block
 
     assert "/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements" in portal_html
-    assert "Requested Documents & Information" in portal_html
-    assert "Risk-triggered evidence documents and portal disclosures requested by compliance." in portal_html
+    assert "Enhanced Evidence Documents" in portal_html
+    assert "Additional enhanced evidence requested by Compliance for this application." in portal_html
     assert "renderPortalEnhancedRequirements" in portal_html
-    assert "renderPortalRequirementCard" in portal_html
     assert "loadPortalEnhancedRequirements" in portal_html
     assert "uploadPortalEnhancedRequirement" in portal_html
     assert "submitPortalEnhancedRequirementResponse" in portal_html
-    assert "Upload supporting document" in portal_html
+    assert "Upload enhanced evidence" in portal_html
+    assert "Uploaded file:" in portal_html
+    assert "Requested by Compliance" in portal_html
     assert "Provide response" in portal_html
 
     portal_section = portal_html.split('id="additional-info-required-card"', 1)[1]
     portal_section = portal_section.split("<!-- Section A: Corporate Documents -->", 1)[0]
-    assert "Risk-triggered evidence documents and portal disclosures requested by compliance." in portal_section
+    assert "Additional enhanced evidence requested by Compliance for this application." in portal_section
     for forbidden in (
         "EDD",
         "Enhanced Due Diligence",
@@ -646,7 +647,6 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "if (result === 'pass') technicalCheckItems.push(checkHtml);" in html
     assert "else visibleCheckItems.push(checkHtml);" in html
 
-    assert "Requested Documents & Information" in portal_html
     assert "Enhanced Evidence Documents" in portal_html
     assert "Portal Disclosures" in portal_html
     assert "Upload requested risk-triggered evidence documents here." in portal_html
