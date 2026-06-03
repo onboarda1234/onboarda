@@ -159,20 +159,23 @@ class TestPartB_AdvisoryLabeling:
 
     def test_kyc_documents_tab_has_advisory(self, backoffice_html):
         kyc_match = re.search(
-            r'KYC Documents.*?ai-advisory-badge.*?Advisory Only',
+            r'KYC Documents.*?ai-advisory-banner.*?AI Verification Results.*?Advisory Only',
             backoffice_html,
             re.DOTALL
         )
         assert kyc_match is not None, \
-            "KYC Documents tab should have advisory badge"
+            "KYC Documents tab should have one top-level advisory banner"
 
-    def test_verification_checks_have_advisory_banner(self, backoffice_html):
+    def test_verification_checks_have_single_top_level_advisory_banner(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
         fn_end = backoffice_html.index('function buildStoredRiskComputation', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
-        assert 'ai-advisory-banner' in fn_region, \
-            "buildVerificationResultsHtml must include advisory banner"
-        assert 'AI Verification — Advisory Only' in fn_region
+        kyc_start = backoffice_html.index('id="detail-tab-kyc-docs"')
+        kyc_end = backoffice_html.index('id="detail-tab-screening"', kyc_start)
+        kyc_region = backoffice_html[kyc_start:kyc_end]
+        assert 'AI Verification Results — Advisory Only' in kyc_region
+        assert 'ai-advisory-banner' not in fn_region, \
+            "per-document verification results must not repeat the AI advisory banner"
 
     def test_supervisor_verdict_panel_has_advisory(self, backoffice_html):
         # The SUPERVISOR VERDICT label and ai-advisory-badge should co-occur

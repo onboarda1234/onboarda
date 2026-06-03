@@ -450,7 +450,7 @@ class TestCaseCommandCentreRuntime:
         assert 'details id="detail-enhanced-requirements-details"' in html
         assert 'id="detail-enhanced-requirements-summary-copy"' in html
         assert 'Enhanced Review Requirements are onboarding evidence requirements. Formal investigation cases are managed in Lifecycle.' in html
-        assert 'Onboarding evidence, disclosures, and controls required because of risk, PEP, screening, jurisdiction, or sector triggers.' in html
+        assert 'Corporate documents, identity evidence, enhanced evidence, portal disclosures, and verification results in one onboarding flow.' in html
 
     def test_pr5a_investigation_queue_copy_is_distinct_from_onboarding_evidence(self):
         html = _read_backoffice()
