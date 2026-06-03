@@ -214,6 +214,20 @@ def _requirement_id_by_key(db, app_id, requirement_key):
     return row["id"]
 
 
+def _requirement_id_by_key_prefix(db, app_id, requirement_key_prefix):
+    row = db.execute(
+        """
+        SELECT id FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key LIKE ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (app_id, requirement_key_prefix + "%"),
+    ).fetchone()
+    assert row is not None
+    return row["id"]
+
+
 def _insert_document(db, app_id, doc_id=None, *, review_status="pending"):
     doc_id = doc_id or ("doc_" + uuid.uuid4().hex[:10])
     db.execute(
@@ -1315,6 +1329,149 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     assert type_counts["internal_control"] >= 2
 
 
+def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="LOW")
+    conn.execute(
+        """
+        INSERT INTO directors
+        (id, application_id, person_key, full_name, is_pep, pep_declaration)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (
+            "dir_pep_subject",
+            app_id,
+            "director-1",
+            "Amina Public",
+            "Yes",
+            json.dumps({
+                "declared_pep": True,
+                "pep_role_type": "Domestic PEP",
+                "position_title": "Deputy Minister",
+                "pep_country_jurisdiction": "United Arab Emirates",
+            }),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO ubos
+        (id, application_id, person_key, full_name, ownership_pct, is_pep, pep_declaration)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            "ubo_pep_subject",
+            app_id,
+            "ubo-1",
+            "Uma Public",
+            55,
+            "Yes",
+            json.dumps({
+                "declared_pep": True,
+                "pep_role_type": "Foreign PEP",
+                "position_title": "Ambassador",
+                "pep_country_jurisdiction": "France",
+            }),
+        ),
+    )
+    conn.commit()
+    result = _generate(conn, app_id)
+    assert "pep" in result["triggers"]
+
+    rows = conn.execute(
+        """
+        SELECT requirement_key, requirement_label, subject_scope, trigger_context
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key LIKE 'pep_sow_evidence_%'
+        ORDER BY requirement_key
+        """,
+        (app_id,),
+    ).fetchall()
+    assert len(rows) == 2
+    labels = {row["requirement_label"] for row in rows}
+    assert "Source of Wealth Evidence — Amina Public" in labels
+    assert "Source of Wealth Evidence — Uma Public" in labels
+    assert all(row["subject_scope"] in {"director", "ubo"} for row in rows)
+    assert conn.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key='pep_sow_evidence'
+        """,
+        (app_id,),
+    ).fetchone()["c"] == 0
+    subjects = [json.loads(row["trigger_context"])["subject"] for row in rows]
+    assert {subject["name"] for subject in subjects} == {"Amina Public", "Uma Public"}
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    sow_rows = [
+        item for item in resp.json()["requirements"]
+        if item["requirement_key"].startswith("pep_sow_evidence_")
+    ]
+    assert len(sow_rows) == 2
+    assert {row["subject_name"] for row in sow_rows} == {"Amina Public", "Uma Public"}
+    assert all(row["requirement_display_type"] == "evidence" for row in sow_rows)
+
+
+def test_pr6g_jurisdiction_rationale_is_backoffice_portal_disclosure(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(
+        conn,
+        risk_level="LOW",
+        country="Iran",
+        prescreening={
+            "country_of_incorporation": "Iran",
+            "jurisdiction_exposure_rationale": "Manufacturing partner exposure requiring enhanced controls.",
+        },
+    )
+    _generate(conn, app_id)
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    by_key = {item["requirement_key"]: item for item in resp.json()["requirements"]}
+    rationale = by_key["jurisdiction_exposure_rationale"]
+    assert rationale["requirement_display_type"] == "portal_disclosure"
+    assert rationale["accepts_document_upload"] is False
+    assert rationale["portal_disclosure"]["status_label"] == "Captured from portal"
+    assert rationale["status_display_label"] == "Pending officer review"
+    rendered = json.dumps(rationale["portal_disclosure"])
+    assert "Iran" in rendered
+    assert "Manufacturing partner exposure requiring enhanced controls." in rendered
+
+
+def test_pr6g_portal_and_backoffice_static_copy_is_safe():
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    portal_html = open(os.path.join(repo_root, "arie-portal.html"), encoding="utf-8").read()
+    backoffice_html = open(os.path.join(repo_root, "arie-backoffice.html"), encoding="utf-8").read()
+
+    assert "Enhanced Evidence Documents" in portal_html
+    assert "f-jurisdiction-rationale" in portal_html
+    assert "jurisdiction_exposure_rationale" in portal_html
+    assert "Upload Supporting Documents" not in portal_html
+    assert "handlePEPUpload" not in portal_html
+    assert "supporting_document_names" not in portal_html
+    assert "apiErr.status = res.status" in backoffice_html
+    assert "Enhanced requirement details are restricted for this role" in backoffice_html
+
+
 def test_portal_disclosure_without_capture_remains_not_submitted(enhanced_app_api_server):
     base_url, db_path = enhanced_app_api_server
     _sync_db_path(db_path)
@@ -2258,7 +2415,7 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     uploaded_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
     under_review_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
     rejected_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    accepted_req = _requirement_id_by_key(conn, app_id, "pep_sow_evidence")
+    accepted_req = _requirement_id_by_key_prefix(conn, app_id, "pep_sow_evidence_")
     waived_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
     pep_requested_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
     backoffice_req = _requirement_id_by_key(conn, app_id, "mandatory_senior_review")
