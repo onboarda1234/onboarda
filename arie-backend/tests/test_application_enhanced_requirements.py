@@ -1457,6 +1457,82 @@ def test_pr6g_jurisdiction_rationale_is_backoffice_portal_disclosure(enhanced_ap
     assert "Manufacturing partner exposure requiring enhanced controls." in rendered
 
 
+def test_pr6h_volume_rationale_is_backoffice_portal_disclosure_without_pep_leakage(
+    enhanced_app_api_server,
+):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(
+        conn,
+        risk_level="LOW",
+        prescreening={
+            "monthly_volume": "USD 500,000 to USD 5,000,000 per month",
+            "expected_volume": "USD 500,000 to USD 5,000,000 per month",
+            "volume_rationale_vs_business_size": (
+                "Expected throughput is proportionate to signed enterprise "
+                "merchant contracts and projected payment cycles."
+            ),
+        },
+    )
+    conn.execute(
+        """
+        INSERT INTO directors
+        (application_id, person_key, full_name, nationality, is_pep, pep_declaration, date_of_birth)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            app_id,
+            "director-1",
+            "Amina Public",
+            "AE",
+            "Yes",
+            json.dumps({
+                "declared_pep": True,
+                "client_declared_pep": True,
+                "position_title": "Deputy Minister",
+                "pep_country_jurisdiction": "United Arab Emirates",
+            }),
+            "1975-01-01",
+        ),
+    )
+    result = _generate(conn, app_id)
+    assert "high_volume" in result["triggers"]
+    assert "pep" in result["triggers"]
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    by_key = {item["requirement_key"]: item for item in resp.json()["requirements"]}
+
+    rationale = by_key["volume_rationale_vs_business_size"]
+    assert rationale["requirement_display_type"] == "portal_disclosure"
+    assert rationale["accepts_document_upload"] is False
+    assert rationale["portal_disclosure"]["status_label"] == "Captured from portal"
+    assert rationale["status_display_label"] == "Pending officer review"
+    assert rationale["status"] in {"generated", "requested", "uploaded"}
+    assert rationale["status"] != "accepted"
+    rendered = json.dumps(rationale["portal_disclosure"])
+    assert "Expected monthly volume" in rendered
+    assert "USD 500,000 to USD 5,000,000 per month" in rendered
+    assert "Expected throughput is proportionate" in rendered
+    assert "Deputy Minister" not in rendered
+    assert "United Arab Emirates" not in rendered
+
+    counterparties = by_key["major_counterparties_explanation"]
+    assert counterparties["requirement_display_type"] == "portal_disclosure"
+    assert counterparties["portal_disclosure"]["status_label"] == "Not submitted in portal"
+    leaked = json.dumps(counterparties["portal_disclosure"])
+    assert "Deputy Minister" not in leaked
+    assert "United Arab Emirates" not in leaked
+
+
 def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     portal_html = open(os.path.join(repo_root, "arie-portal.html"), encoding="utf-8").read()
@@ -1466,6 +1542,13 @@ def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     assert "f-jurisdiction-rationale" in portal_html
     assert "jurisdiction_exposure_rationale" in portal_html
     assert "syncJurisdictionRationaleState" in portal_html
+    assert "f-volume-rationale" in portal_html
+    assert "volume_rationale_vs_business_size" in portal_html
+    assert "Volume rationale vs business size" in portal_html
+    assert "HIGH_VOLUME_RATIONALE_THRESHOLD = 500000" in portal_html
+    assert "isHighVolumeSelection" in portal_html
+    assert "syncVolumeRationaleState" in portal_html
+    assert "Volume Rationale Required" in portal_html
     assert "textarea.required = required" in portal_html
     assert "Upload enhanced evidence" in portal_html
     assert "Upload Supporting Documents" not in portal_html

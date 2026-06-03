@@ -915,6 +915,98 @@ def _portal_disclosure_summary(requirement, disclosures):
     }
 
 
+def _application_text_disclosure_config(requirement_key):
+    key = _clean_text(requirement_key).lower()
+    configs = {
+        "volume_rationale_vs_business_size": {
+            "field_key": "volume_rationale_vs_business_size",
+            "label": "Volume rationale vs business size",
+            "summary": "Volume rationale captured from portal",
+            "extra_fields": (
+                ("Expected monthly volume", ("monthly_volume", "expected_volume", "expected_volumes")),
+            ),
+        },
+        "major_counterparties_explanation": {
+            "field_key": "major_counterparties_explanation",
+            "label": "Major counterparties explanation",
+            "summary": "Major counterparties explanation captured from portal",
+        },
+        "operating_country_target_market_explanation": {
+            "field_key": "operating_country_target_market_explanation",
+            "label": "Operating-country / target-market explanation",
+            "summary": "Operating-country / target-market explanation captured from portal",
+        },
+        "control_rationale": {
+            "field_key": "control_rationale",
+            "label": "Control rationale",
+            "summary": "Control rationale captured from portal",
+        },
+    }
+    return configs.get(key)
+
+
+def _application_text_disclosure_summary(requirement, app):
+    requirement = requirement or {}
+    app = _row_dict(app) or {}
+    config = _application_text_disclosure_config(requirement.get("requirement_key"))
+    if not config:
+        return None
+
+    prescreening = _loads_json(app.get("prescreening_data"), {}) or {}
+    subject = app.get("company") or app.get("company_name") or "Application"
+    response_text = _clean_text(requirement.get("client_response_text"))
+    response_source = "client_portal_enhanced_requirement_response" if response_text else ""
+    if not response_text:
+        response_text = _clean_text(prescreening.get(config["field_key"]))
+        response_source = "client_portal_application_form" if response_text else ""
+
+    if not response_text:
+        return {
+            "status": "not_submitted",
+            "status_label": "Not submitted in portal",
+            "summary": "Not submitted in portal",
+            "fields": [],
+            "responses": [],
+        }
+
+    fields = []
+    for label, keys in config.get("extra_fields", ()):
+        extra_value = _first_value(prescreening, keys)
+        if extra_value:
+            fields.append({
+                "label": label,
+                "value": extra_value,
+                "subject": subject,
+            })
+    fields.append({
+        "label": config["label"],
+        "value": response_text,
+        "subject": subject,
+    })
+    submitted_at = (
+        requirement.get("client_response_at")
+        or app.get("submitted_at")
+        or app.get("created_at")
+    )
+    submitted_by = requirement.get("client_response_by") or app.get("client_id")
+    return {
+        "status": "captured",
+        "status_label": "Captured from portal",
+        "requirement_status_label": "Pending officer review",
+        "summary": config["summary"],
+        "fields": fields,
+        "responses": [{
+            "subject_type": "application",
+            "subject_name": subject,
+            "requirement_key": requirement.get("requirement_key"),
+            "response_text": response_text,
+            "source": response_source,
+        }],
+        "submitted_at": submitted_at,
+        "submitted_by": submitted_by,
+    }
+
+
 def _jurisdiction_exposure_disclosure_summary(app):
     app = _row_dict(app) or {}
     prescreening = _loads_json(app.get("prescreening_data"), {}) or {}
@@ -1081,8 +1173,12 @@ def decorate_application_requirements_for_backoffice(db, app, requirements):
             and _clean_text(item.get("requirement_type")).lower() == "document"
         )
         if display_type == "portal_disclosure":
-            if _clean_text(item.get("requirement_key")).lower() == "jurisdiction_exposure_rationale":
+            key = _clean_text(item.get("requirement_key")).lower()
+            app_text_disclosure = _application_text_disclosure_summary(item, app)
+            if key == "jurisdiction_exposure_rationale":
                 item["portal_disclosure"] = _jurisdiction_exposure_disclosure_summary(app)
+            elif app_text_disclosure is not None:
+                item["portal_disclosure"] = app_text_disclosure
             else:
                 item["portal_disclosure"] = _portal_disclosure_summary(item, disclosures)
             disclosure = item["portal_disclosure"]
