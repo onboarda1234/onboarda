@@ -476,8 +476,9 @@ class TestCaseCommandCentreRuntime:
         html = _read_backoffice()
         assert "<th>Source / Reason</th>" not in html
         assert "<th>Timeline</th>" not in html
-        assert "<th>Workflow / Evidence</th>" in html
-        assert "<th>Actions</th>" in html
+        assert "<th>Workflow / Evidence</th>" not in html
+        assert "Enhanced Review Advanced Tracker" not in html
+        assert 'id="detail-enhanced-evidence-documents-group"' in html
         assert "Show advanced requirement details" in html
         assert "Triggered by" in html
         assert "No upload controls were added to Enhanced Review Requirements." not in html

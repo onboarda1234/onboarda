@@ -569,6 +569,11 @@ def test_operational_summary_counts_and_next_actions(enhanced_app_db):
     assert missing_summary["next_action_code"] == "generate_requirements"
 
     app_id = _insert_application(db, risk_level="HIGH")
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "PEP Director", "Yes"),
+    )
+    db.commit()
     _generate(db, app_id)
     requested_req = _first_requirement_id(db, app_id, offset=0)
     uploaded_req = _first_requirement_id(db, app_id, offset=1)
@@ -625,7 +630,7 @@ def test_operational_summary_counts_and_next_actions(enhanced_app_db):
     db.commit()
     resolved = build_enhanced_requirement_operational_summary(db, app_id)
     assert resolved["approval_blocked"] is False
-    assert resolved["next_action_code"] == "resolved"
+    assert resolved["next_action_code"] == "awaiting_client"
     assert resolved["unresolved_count"] >= 1
 
 
@@ -1385,15 +1390,17 @@ def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhance
         """
         SELECT requirement_key, requirement_label, subject_scope, trigger_context
         FROM application_enhanced_requirements
-        WHERE application_id=? AND requirement_key LIKE 'pep_sow_evidence_%'
+        WHERE application_id=? AND (requirement_key LIKE 'pep_sow_evidence_%' OR requirement_key LIKE 'pep_bank_reference_%')
         ORDER BY requirement_key
         """,
         (app_id,),
     ).fetchall()
-    assert len(rows) == 2
+    assert len(rows) == 4
     labels = {row["requirement_label"] for row in rows}
     assert "Source of Wealth Evidence — Amina Public" in labels
     assert "Source of Wealth Evidence — Uma Public" in labels
+    assert "Bank Reference Letter — Amina Public" in labels
+    assert "Bank Reference Letter — Uma Public" in labels
     assert all(row["subject_scope"] in {"director", "ubo"} for row in rows)
     assert conn.execute(
         """
@@ -1417,9 +1424,16 @@ def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhance
         item for item in resp.json()["requirements"]
         if item["requirement_key"].startswith("pep_sow_evidence_")
     ]
+    bank_reference_rows = [
+        item for item in resp.json()["requirements"]
+        if item["requirement_key"].startswith("pep_bank_reference_")
+    ]
     assert len(sow_rows) == 2
+    assert len(bank_reference_rows) == 2
     assert {row["subject_name"] for row in sow_rows} == {"Amina Public", "Uma Public"}
     assert all(row["requirement_display_type"] == "evidence" for row in sow_rows)
+    assert {row["subject_name"] for row in bank_reference_rows} == {"Amina Public", "Uma Public"}
+    assert all(row["requirement_display_type"] == "evidence" for row in bank_reference_rows)
 
 
 def test_pr6g_jurisdiction_rationale_is_backoffice_portal_disclosure(enhanced_app_api_server):
@@ -2268,10 +2282,10 @@ def test_request_from_client_permissions_status_and_audit(enhanced_app_api_serve
     app_id = _insert_application(conn, risk_level="HIGH")
     _generate(conn, app_id)
     admin_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
-    sco_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
-    co_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    denied_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    linked_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    sco_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    co_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    denied_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    linked_req = denied_req
     doc_id = _insert_document(conn, app_id, "doc_request_preserved", review_status="pending")
     conn.execute(
         """
@@ -2403,12 +2417,17 @@ def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_se
 
     conn = get_db()
     app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "PEP Director", "Yes"),
+    )
+    conn.commit()
     _generate(conn, app_id)
     accepted_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
-    waived_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
-    cancelled_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    uploaded_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    unsafe_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    waived_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    cancelled_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    uploaded_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    unsafe_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -2503,10 +2522,10 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     _generate(conn, app_id)
 
     requested_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
-    uploaded_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
-    under_review_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    rejected_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    accepted_req = _requirement_id_by_key_prefix(conn, app_id, "pep_sow_evidence_")
+    uploaded_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    under_review_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    rejected_req = _requirement_id_by_key_prefix(conn, app_id, "pep_sow_evidence_")
+    accepted_req = _requirement_id_by_key_prefix(conn, app_id, "pep_bank_reference_")
     waived_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
     pep_requested_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
     backoffice_req = _requirement_id_by_key(conn, app_id, "mandatory_senior_review")
@@ -2675,7 +2694,7 @@ def test_portal_hides_requested_requirements_from_disabled_source_rules(enhanced
     conn.commit()
     _generate(conn, app_id)
     requested_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
-    uploaded_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    uploaded_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -2717,7 +2736,7 @@ def test_portal_hides_requested_requirements_from_disabled_source_rules(enhanced
     assert uploaded_req in returned_ids
 
 
-def test_generation_skips_bank_requirements_without_existing_bank_account(enhanced_app_db):
+def test_generation_disables_enhanced_bank_statement_rule_without_suppressing_bank_reference(enhanced_app_db):
     conn = enhanced_app_db
     app_id = _insert_application(
         conn,
@@ -2732,10 +2751,10 @@ def test_generation_skips_bank_requirements_without_existing_bank_account(enhanc
     ).fetchall()
     keys = {row["requirement_key"] for row in rows}
 
-    assert "company_bank_reference" not in keys
+    assert "company_bank_reference" in keys
     assert "company_bank_statements_6m" not in keys
     assert "company_sof_evidence" in keys
-    assert result["skipped_count"] >= 2
+    assert result["skipped_count"] == 0
 
 
 def test_generation_prefills_jurisdiction_rationale_from_prescreening(enhanced_app_db):
@@ -2991,10 +3010,10 @@ def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanc
     conn.commit()
     _generate(conn, app_id)
     generated_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
-    document_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    document_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
     explanation_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
-    accepted_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    waived_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    accepted_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    waived_req = _requirement_id_by_key_prefix(conn, app_id, "pep_sow_evidence_")
     cancelled_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
     conn.execute(
         """
