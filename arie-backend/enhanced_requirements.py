@@ -144,8 +144,6 @@ EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
 }
 
 BANK_ACCOUNT_DEPENDENT_REQUIREMENT_KEYS = {
-    "company_bank_reference",
-    "company_bank_statements_6m",
     "high_volume_bank_statements",
 }
 
@@ -156,11 +154,14 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "trigger_label": "HIGH / VERY_HIGH risk",
         "trigger_category": "risk",
         "requirement_key": "company_bank_reference",
-        "requirement_label": "Company bank reference where available",
-        "requirement_description": "Request a current company bank reference where the applicant can reasonably provide one.",
+        "requirement_label": "Company bank reference letter",
+        "requirement_description": "Request a current company bank reference letter to support enhanced review.",
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
+        "blocking_approval": False,
+        "mandatory": False,
+        "client_safe_label": "Company bank reference",
         "sort_order": 10,
     },
     {
@@ -173,6 +174,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
+        "active": False,
         "sort_order": 20,
     },
     {
@@ -197,6 +199,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "ubo",
+        "client_safe_label": "UBO Source of Wealth evidence",
         "sort_order": 40,
     },
     {
@@ -263,6 +266,19 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "trigger_key": "pep",
         "trigger_label": "PEP",
         "trigger_category": "screening",
+        "requirement_key": "pep_bank_reference",
+        "requirement_label": "Bank reference letter",
+        "requirement_description": "Bank reference letter required for the identified PEP subject.",
+        "audience": "client",
+        "requirement_type": "document",
+        "subject_scope": "screening_subject",
+        "client_safe_label": "Bank reference letter",
+        "sort_order": 45,
+    },
+    {
+        "trigger_key": "pep",
+        "trigger_label": "PEP",
+        "trigger_category": "screening",
         "requirement_key": "pep_linked_sof_evidence",
         "requirement_label": "Source of Funds evidence where funds are linked to PEP",
         "requirement_description": "Source of funds evidence where the proposed relationship funds are linked to the PEP.",
@@ -311,6 +327,8 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
+        "blocking_approval": False,
+        "mandatory": False,
         "sort_order": 10,
     },
     {
@@ -383,6 +401,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
+        "active": False,
         "sort_order": 10,
     },
     {
@@ -467,6 +486,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "application",
+        "active": False,
         "sort_order": 30,
     },
     {
@@ -515,6 +535,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "application",
+        "active": False,
         "sort_order": 20,
     },
     {
@@ -527,6 +548,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
+        "active": False,
         "sort_order": 30,
     },
     {
@@ -1452,7 +1474,93 @@ def seed_default_enhanced_requirement_rules(db, actor="system"):
             "VALUES (?,?,?,?,?,?,?)",
             (actor, actor, "system", "enhanced_requirement_rules.seeded", "Enhanced Requirement Rules", detail, ""),
         )
+    _apply_approved_enhanced_requirement_taxonomy_updates(db, actor=actor, actor_fk=actor_fk)
     return inserted
+
+
+def _apply_approved_enhanced_requirement_taxonomy_updates(db, actor="system", actor_fk=None):
+    """Reconcile named enhanced-rule settings approved in the KYC taxonomy matrix.
+
+    Normal default seeding is intentionally non-destructive. These specific
+    rows are product-approved configuration corrections that must apply to
+    persisted staging/production settings without deleting historical
+    generated application requirements.
+    """
+    updates = [
+        (
+            "high_or_very_high_risk",
+            "company_bank_reference",
+            {
+                "requirement_label": "Company bank reference letter",
+                "requirement_description": "Request a current company bank reference letter to support enhanced review.",
+                "blocking_approval": 0,
+                "mandatory": 0,
+                "active": 1,
+                "client_safe_label": "Company bank reference",
+                "subject_scope": "company",
+                "audience": "client",
+                "requirement_type": "document",
+            },
+        ),
+        ("high_or_very_high_risk", "company_bank_statements_6m", {"active": 0}),
+        ("high_or_very_high_risk", "company_sof_evidence", {"active": 1, "subject_scope": "company"}),
+        (
+            "high_or_very_high_risk",
+            "material_ubo_sow_evidence",
+            {
+                "active": 1,
+                "subject_scope": "ubo",
+                "client_safe_label": "UBO Source of Wealth evidence",
+            },
+        ),
+        ("crypto_vasp", "aml_cft_policy", {"active": 1, "blocking_approval": 0, "mandatory": 0}),
+        ("crypto_vasp", "licence_or_registration_evidence", {"active": 1, "subject_scope": "company"}),
+        ("opaque_ownership", "ownership_structure_chart", {"active": 0}),
+        ("high_risk_jurisdiction", "jurisdiction_sof_evidence", {"active": 0}),
+        ("high_volume", "contracts_invoices", {"active": 1}),
+        ("high_volume", "expected_transaction_flow_evidence", {"active": 0}),
+        ("high_volume", "high_volume_bank_statements", {"active": 0}),
+        ("pep", "pep_sow_evidence", {"active": 1, "subject_scope": "screening_subject"}),
+        ("pep", "pep_bank_reference", {"active": 1, "mandatory": 1, "blocking_approval": 1}),
+    ]
+    changed = []
+    for trigger_key, requirement_key, fields in updates:
+        row = db.execute(
+            "SELECT * FROM enhanced_requirement_rules WHERE trigger_key=? AND requirement_key=?",
+            (trigger_key, requirement_key),
+        ).fetchone()
+        if not row:
+            continue
+        row_dict = dict(row)
+        needs_update = False
+        for field, value in fields.items():
+            current = row_dict.get(field)
+            if field in ("blocking_approval", "mandatory", "active"):
+                current = 1 if _bool(current, False) else 0
+            if current != value:
+                needs_update = True
+                break
+        if not needs_update:
+            continue
+        assignments = ", ".join([f"{field}=?" for field in fields] + ["updated_by=?", "updated_at=CURRENT_TIMESTAMP"])
+        db.execute(
+            f"UPDATE enhanced_requirement_rules SET {assignments} WHERE id=?",
+            tuple(fields.values()) + (actor_fk, row_dict["id"]),
+        )
+        changed.append(f"{trigger_key}:{requirement_key}")
+
+    if changed:
+        detail = json.dumps({
+            "event": "enhanced_requirement_rules.taxonomy_reconciled",
+            "rule_keys": changed,
+            "actor": actor,
+            "timestamp": _now_iso(),
+        }, sort_keys=True)
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (actor, actor, "system", "enhanced_requirement_rules.taxonomy_reconciled", "Enhanced Requirement Rules", detail, ""),
+        )
 
 
 def _row_dict(row):
@@ -3876,15 +3984,27 @@ def generate_application_enhanced_requirements(
     expanded_rules = []
     pep_subjects = _pep_subjects_for_person_specific_requirements(db, app) if "pep" in triggers else []
     for rule in rules:
-        if rule.get("trigger_key") == "pep" and rule.get("requirement_key") == "pep_sow_evidence" and pep_subjects:
+        if (
+            rule.get("trigger_key") == "pep"
+            and rule.get("requirement_key") in {"pep_sow_evidence", "pep_bank_reference"}
+            and pep_subjects
+        ):
             for idx, subject in enumerate(pep_subjects):
                 subject_rule = dict(rule)
                 suffix = _subject_requirement_suffix(subject, idx)
-                subject_rule["requirement_key"] = f"pep_sow_evidence_{subject.get('type') or 'subject'}_{suffix}"
-                subject_rule["requirement_label"] = f"Source of Wealth Evidence — {subject.get('name') or 'PEP subject'}"
-                subject_rule["requirement_description"] = (
-                    "Evidence supporting the source of wealth for the named PEP subject."
-                )
+                base_key = rule.get("requirement_key")
+                subject_name = subject.get("name") or "PEP subject"
+                subject_rule["requirement_key"] = f"{base_key}_{subject.get('type') or 'subject'}_{suffix}"
+                if base_key == "pep_bank_reference":
+                    subject_rule["requirement_label"] = f"Bank Reference Letter — {subject_name}"
+                    subject_rule["requirement_description"] = (
+                        "Bank reference letter required for the named PEP subject."
+                    )
+                else:
+                    subject_rule["requirement_label"] = f"Source of Wealth Evidence — {subject_name}"
+                    subject_rule["requirement_description"] = (
+                        "Evidence supporting the source of wealth for the named PEP subject."
+                    )
                 subject_rule["subject_scope"] = (
                     subject.get("type")
                     if subject.get("type") in ALLOWED_SUBJECT_SCOPES

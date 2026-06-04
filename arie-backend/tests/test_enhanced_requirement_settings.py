@@ -178,6 +178,48 @@ def test_default_rules_seed_fk_safe_for_system_actor(enhanced_req_api_server):
     assert diagnostics["config_ok"] is True
 
 
+def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
+    from db import get_db
+
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT trigger_key, requirement_key, requirement_label, client_safe_label,
+               blocking_approval, mandatory, active, subject_scope
+        FROM enhanced_requirement_rules
+        WHERE requirement_key IN (
+            'company_bank_reference',
+            'company_bank_statements_6m',
+            'company_sof_evidence',
+            'material_ubo_sow_evidence',
+            'aml_cft_policy',
+            'ownership_structure_chart',
+            'jurisdiction_sof_evidence',
+            'expected_transaction_flow_evidence',
+            'pep_bank_reference'
+        )
+        """
+    ).fetchall()
+    by_key = {row["requirement_key"]: row for row in rows}
+    conn.close()
+
+    assert by_key["company_bank_reference"]["requirement_label"] == "Company bank reference letter"
+    assert by_key["company_bank_reference"]["client_safe_label"] == "Company bank reference"
+    assert by_key["company_bank_reference"]["blocking_approval"] == 0
+    assert by_key["company_bank_reference"]["mandatory"] == 0
+    assert by_key["company_bank_statements_6m"]["active"] == 0
+    assert by_key["company_sof_evidence"]["active"] == 1
+    assert by_key["material_ubo_sow_evidence"]["client_safe_label"] == "UBO Source of Wealth evidence"
+    assert by_key["material_ubo_sow_evidence"]["subject_scope"] == "ubo"
+    assert by_key["aml_cft_policy"]["blocking_approval"] == 0
+    assert by_key["aml_cft_policy"]["mandatory"] == 0
+    assert by_key["ownership_structure_chart"]["active"] == 0
+    assert by_key["jurisdiction_sof_evidence"]["active"] == 0
+    assert by_key["expected_transaction_flow_evidence"]["active"] == 0
+    assert by_key["pep_bank_reference"]["mandatory"] == 1
+    assert by_key["pep_bank_reference"]["subject_scope"] == "screening_subject"
+
+
 def test_list_endpoint_returns_seeded_rules_and_read_roles(enhanced_req_api_server):
     admin_resp = requests.get(
         f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
@@ -461,7 +503,7 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "['client','both'].indexOf(audience) >= 0" in html
     assert "['generated','under_review','rejected'].indexOf(status) >= 0" in html
     assert "Only admins and senior compliance officers can waive enhanced requirements" in html
-    assert "No enhanced requirements generated for this application." in html
+    assert "No enhanced requirements generated for this application." not in html
     assert "Enhanced requirement configuration is incomplete. Requirements may not be fully generated." in html
     assert 'id="filter-enhanced"' in html
     assert "Enhanced Status" in html
@@ -564,11 +606,10 @@ def test_backoffice_application_enhanced_requirements_loader_guards_summary_and_
 
     assert "if (!container) return;" in html
     assert "renderEnhancedReviewOperationalSummary(operationalSummary, requirements);" in render_block
-    assert "No enhanced requirements generated for this application." in render_block
-    assert "req.requirement_label || req.requirement_key || ''" in render_block
-    assert 'id="detail-enhanced-requirements-advanced-details"' in render_block
-    assert "Show advanced requirement details" in render_block
-    assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." in render_block
+    assert "No enhanced requirements generated for this application." not in render_block
+    assert "renderUnifiedEnhancedRequirementTaxonomy(requirements);" in render_block
+    assert 'id="detail-enhanced-requirements-advanced-details"' not in render_block
+    assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." not in render_block
 
 
 def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
@@ -593,9 +634,10 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]
     assert "<th>Source / Reason</th>" not in render_block
     assert "<th>Timeline</th>" not in render_block
-    assert "<th>Workflow / Evidence</th>" in render_block
-    assert "<th>Blocking</th>" in render_block
-    assert "<th>Actions</th>" in render_block
+    assert "<th>Workflow / Evidence</th>" not in render_block
+    assert "<th>Blocking</th>" not in render_block
+    assert "<th>Actions</th>" not in render_block
+    assert "renderUnifiedEnhancedRequirementTaxonomy(requirements);" in render_block
 
     actions_block = html.split("function renderApplicationEnhancedRequirementActions(req) {", 1)[1]
     actions_block = actions_block.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[0]
@@ -632,9 +674,10 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "E — Portal Disclosures" in html
     assert "F — Internal Controls" in html
     assert "G — Verification History" in html
-    assert "Enhanced Review Advanced Tracker" in html
-    assert "Compact tracker for triggered onboarding enhanced evidence, portal disclosures, and controls." in html
+    assert "Enhanced Review Advanced Tracker" not in html
+    assert "Compact tracker for triggered onboarding enhanced evidence, portal disclosures, and controls." not in html
     assert "function renderUnifiedEnhancedEvidenceDocuments(requirements)" in html
+    assert "function renderEnhancedEvidenceDocumentsGroupHtml(requirements)" in html
     assert "function renderUnifiedPortalDisclosures(requirements)" in html
     assert "function renderUnifiedInternalControls(requirements)" in html
     assert "function renderUnifiedEnhancedRequirementTaxonomy(requirements)" in html
@@ -646,9 +689,8 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert 'detail-enhanced-evidence-documents-group' in html
     assert 'detail-portal-disclosures-group' in html
     assert 'detail-internal-controls-group' in html
-    assert 'id="detail-enhanced-requirements-advanced-details"' in html
-    assert "Show advanced requirement details" in html
-    assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." in html
+    assert 'id="detail-enhanced-requirements-advanced-details"' not in html
+    assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." not in html
     assert "function kycDocumentNeedsAttention(doc)" in html
     assert "function enhancedRequirementNeedsAttention(req)" in html
     assert "Show technical verification checks" in html
@@ -658,6 +700,11 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
 
     assert "C — Additional Required Documents" in portal_html
     assert "Upload requested risk-triggered evidence documents here." not in portal_html
+    assert "{ id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: true, conditional: 'has-bank' }" in portal_html
+    assert "{ id: 'doc-bank-ref', name: 'Bank Reference Letter', required: true, conditional: 'high-risk' }" not in portal_html
+    assert "var SECTION_C_DOCS = [\n  { id: 'doc-contracts', name: 'Sample Contracts / Agreements', required: false, conditional: false }\n];" in portal_html
+    assert "function isPortalDocumentApplicable(doc)" in portal_html
+    assert "'f-jurisdiction-rationale': 'jurisdiction_exposure_rationale'" in portal_html
     assert "Provide requested explanations or declarations; these are not document upload rows." not in portal_html
 
 
@@ -701,9 +748,9 @@ def test_pr6c_backoffice_renders_typed_enhanced_requirement_workflows():
 
     render_block = html.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[1]
     render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]
-    assert "<th>Workflow / Evidence</th>" in render_block
-    assert "enhancedRequirementWorkflowSummaryHtml(req)" in render_block
-    assert "enhancedRequirementTypeBadge(req)" in render_block
+    assert "<th>Workflow / Evidence</th>" not in render_block
+    assert "renderUnifiedEnhancedRequirementTaxonomy(requirements);" in render_block
+    assert "enhancedRequirementTypeBadge(req)" in html
     assert "Document uploaded and linked to enhanced requirement" in html
     assert "Unable to upload enhanced requirement document" in html
 

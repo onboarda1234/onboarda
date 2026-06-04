@@ -2688,7 +2688,7 @@
             </div>
             <div class="form-group">
               <label>Existing Bank Account? <span class="req">*</span></label>
-              <select id="f-has-bank" required>
+              <select id="f-has-bank" required onchange="syncConditionalFormState()">
                 <option value="">Select…</option>
                 <option>Yes</option>
                 <option>No</option>
@@ -3403,19 +3403,19 @@
             <input type="file" class="file-input" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleUpload('doc-structure-chart', this)" />
           </div>
 
-          <div class="doc-item high-risk-doc" id="doc-bank-ref" style="display:none;">
+          <div class="doc-item bank-account-doc" id="doc-bank-statements" style="display:none;">
             <div class="doc-item-top">
               <span class="doc-item-icon">🏦</span>
               <div>
-                <div class="doc-item-name">Bank Reference Letter</div>
-                <div class="doc-item-desc">From a reputable bank, on official letterhead</div>
+                <div class="doc-item-name">Bank Statements (Last 6 Months)</div>
+                <div class="doc-item-desc">Required when the entity has an existing bank account</div>
               </div>
             </div>
-            <span class="doc-required">Required if requested</span>
-            <div class="doc-upload-area" onclick="triggerUpload('doc-bank-ref')">
-              <span>📎</span> <span id="doc-bank-ref-label">Click to upload</span>
+            <span class="doc-required">Required if bank account exists</span>
+            <div class="doc-upload-area" onclick="triggerUpload('doc-bank-statements')">
+              <span>📎</span> <span id="doc-bank-statements-label">Click to upload</span>
             </div>
-            <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-bank-ref', this)" />
+            <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-bank-statements', this)" multiple />
           </div>
 
           <div class="doc-item" id="doc-license-cert" style="display:none">
@@ -3486,12 +3486,8 @@
                 </div>
                 <div>
                   <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">📄 CV / LinkedIn Profile</label>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-cv-dir1')" id="kyc-cv-area-dir1" style="flex:1;"><span>📎</span><span id="kyc-cv-lbl-dir1">Upload CV</span></div>
-                    <span style="font-size:11px;color:var(--text3);">or</span>
-                    <input type="url" id="kyc-linkedin-dir1" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
-                  </div>
-                  <input type="file" id="kyc-cv-dir1" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleKYCUpload('dir1','cv',this)" />
+                  <input type="url" id="kyc-linkedin-dir1" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
+                  <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
                 </div>
                 <div class="pep-bank-ref-doc" id="pep-bankref-row-dir1" style="display:none;">
                   <label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏦 Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>
@@ -3593,12 +3589,8 @@
                 </div>
                 <div>
                   <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">📄 CV / LinkedIn Profile</label>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-cv-ubo1')" id="kyc-cv-area-ubo1" style="flex:1;"><span>📎</span><span id="kyc-cv-lbl-ubo1">Upload CV</span></div>
-                    <span style="font-size:11px;color:var(--text3);">or</span>
-                    <input type="url" id="kyc-linkedin-ubo1" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
-                  </div>
-                  <input type="file" id="kyc-cv-ubo1" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleKYCUpload('ubo1','cv',this)" />
+                  <input type="url" id="kyc-linkedin-ubo1" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
+                  <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
                 </div>
                 <div class="pep-bank-ref-doc" id="pep-bankref-row-ubo1" style="display:none;">
                   <label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏦 Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>
@@ -3704,7 +3696,7 @@
             <input type="file" class="file-input" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleUpload('doc-contracts', this)" />
           </div>
 
-          <div class="doc-item high-risk-doc" id="doc-source-wealth-proof" style="display:none;">
+          <div class="doc-item" id="doc-source-wealth-proof" style="display:none;">
             <div class="doc-item-top">
               <span class="doc-item-icon">💎</span>
               <div>
@@ -3719,7 +3711,7 @@
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-source-wealth-proof', this)" />
           </div>
 
-          <div class="doc-item high-risk-doc" id="doc-source-funds-proof" style="display:none;">
+          <div class="doc-item" id="doc-source-funds-proof" style="display:none;">
             <div class="doc-item-top">
               <span class="doc-item-icon">💵</span>
               <div>
@@ -3734,22 +3726,7 @@
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-source-funds-proof', this)" />
           </div>
 
-          <div class="doc-item high-risk-doc" id="doc-bank-statements" style="display:none;">
-            <div class="doc-item-top">
-              <span class="doc-item-icon">🏦</span>
-              <div>
-                <div class="doc-item-name">Bank Statements (Last 6 Months)</div>
-                <div class="doc-item-desc">Statements from primary operating bank account</div>
-              </div>
-            </div>
-            <span class="doc-optional">Optional</span>
-            <div class="doc-upload-area" onclick="triggerUpload('doc-bank-statements')">
-              <span>📎</span> <span id="doc-bank-statements-label">Click to upload</span>
-            </div>
-            <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-bank-statements', this)" multiple />
-          </div>
-
-          <div class="doc-item" id="doc-aml-policy">
+          <div class="doc-item" id="doc-aml-policy" style="display:none;">
             <div class="doc-item-top">
               <span class="doc-item-icon">🛡️</span>
               <div>
@@ -4830,6 +4807,10 @@ function _licenceApplicable() {
   return isCompanyLicensed();
 }
 
+function _bankAccountApplicable() {
+  return ((document.getElementById('f-has-bank') || {}).value || '') === 'Yes';
+}
+
 function syncPurposeOptionState(containerId) {
   var container = document.getElementById(containerId);
   if (!container) return;
@@ -5166,15 +5147,17 @@ function applyApplicationViewState(target) {
 }
 
 function updateTotalRequiredDocs() {
-  var isHighRisk = requiresEnhancedRiskDocs();
-  var hasLicence = _licenceApplicable();
-  TOTAL_REQUIRED_DOCS = (isHighRisk ? 15 : 11) + (hasLicence ? 1 : 0);
+  var hasBankAccount = _bankAccountApplicable();
+  TOTAL_REQUIRED_DOCS = 11 + (hasBankAccount ? 1 : 0);
 }
 
 function showLicenceDocs() {
   var hasLicence = _licenceApplicable();
   var licenceEl = document.getElementById('doc-license-cert');
   if (licenceEl) licenceEl.style.display = hasLicence ? '' : 'none';
+  var hasBankAccount = _bankAccountApplicable();
+  var bankStatementsEl = document.getElementById('doc-bank-statements');
+  if (bankStatementsEl) bankStatementsEl.style.display = hasBankAccount ? '' : 'none';
   updateTotalRequiredDocs();
 }
 
@@ -5656,12 +5639,8 @@ function buildUploadPanelHTML(p) {
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128196; CV / LinkedIn Profile</label>' +
-        '<div style="display:flex;gap:8px;align-items:center;">' +
-          '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cv-' + p.id + '\')" id="kyc-cv-area-' + p.id + '" style="flex:1;"><span>&#128206;</span><span id="kyc-cv-lbl-' + p.id + '">Upload CV</span></div>' +
-          '<span style="font-size:11px;color:var(--text3);">or</span>' +
-          '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
-        '</div>' +
-        '<input type="file" id="kyc-cv-' + p.id + '" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleKYCUpload(\'' + p.id + '\',\'cv\',this,\'' + p.type + '\')" />' +
+        '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>' +
       '</div>' +
       '<div class="pep-bank-ref-doc" id="pep-bankref-row-' + p.id + '" style="display:' + (p.isPEP ? 'block' : 'none') + ';">' +
         '<label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127974; Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>' +
@@ -8224,21 +8203,33 @@ var SECTION_A_DOCS = [
   { id: 'doc-proof-address', name: 'Proof of Registered Address', required: true, conditional: false },
   { id: 'doc-board-res', name: 'Board Resolution', required: true, conditional: false },
   { id: 'doc-structure-chart', name: 'Company Structure Chart', required: true, conditional: false },
-  { id: 'doc-bank-ref', name: 'Bank Reference Letter', required: true, conditional: 'high-risk' },
+  { id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: true, conditional: 'has-bank' },
   { id: 'doc-license-cert', name: 'Regulatory Licence(s)', required: false, conditional: 'has-licence' }
 ];
 
 var SECTION_C_DOCS = [
-  { id: 'doc-contracts', name: 'Sample Contracts / Agreements', required: false, conditional: false },
-  { id: 'doc-source-wealth-proof', name: 'Source of Wealth Evidence', required: false, conditional: 'high-risk' },
-  { id: 'doc-source-funds-proof', name: 'Source of Funds Evidence', required: false, conditional: 'high-risk' },
-  { id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: false, conditional: 'high-risk' },
-  { id: 'doc-aml-policy', name: 'AML/CFT Policy', required: false, conditional: false }
+  { id: 'doc-contracts', name: 'Sample Contracts / Agreements', required: false, conditional: false }
 ];
 
 var SECTION_D_DOCS = [];
 var sectionDCounter = 0;
 var lastReviewSummaryState = null;
+
+function isPortalDocumentApplicable(doc) {
+  if (!doc || !doc.conditional) return true;
+  if (doc.conditional === 'high-risk') return requiresEnhancedRiskDocs();
+  if (doc.conditional === 'has-licence') return _licenceApplicable();
+  if (doc.conditional === 'has-bank') return _bankAccountApplicable();
+  return true;
+}
+
+function portalDocumentConditionalNote(doc) {
+  if (!doc || !doc.conditional) return '';
+  if (doc.conditional === 'has-bank') return ' <em style="font-size:11px;color:var(--text3);">(Required if bank account exists)</em>';
+  if (doc.conditional === 'has-licence') return ' <em style="font-size:11px;color:var(--text3);">(If applicable)</em>';
+  if (doc.conditional === 'high-risk') return ' <em style="font-size:11px;color:var(--text3);">(If requested)</em>';
+  return '';
+}
 
 function _gfv(id) {
   var el = document.getElementById(id);
@@ -8421,7 +8412,6 @@ function updateDocsReviewMessaging(summary) {
 
 function buildReviewScreen() {
   buildPrescreeningSummary();
-  var isHighRisk = requiresEnhancedRiskDocs();
   var uploadedCount = 0;
   var missingCount = 0;
   var warningCount = 0;
@@ -8430,9 +8420,7 @@ function buildReviewScreen() {
   var sectionA = document.getElementById('review-section-a');
   sectionA.innerHTML = '';
   SECTION_A_DOCS.forEach(function(doc) {
-    var isConditional = doc.conditional === 'high-risk';
-    var isApplicable = !isConditional || isHighRisk;
-    if (!isApplicable) return;
+    if (!isPortalDocumentApplicable(doc)) return;
 
     var isUploaded = uploadedDocs.has(doc.id);
     var hasWarning = false;
@@ -8449,7 +8437,7 @@ function buildReviewScreen() {
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : (doc.required ? 'missing' : 'optional');
     var statusText = isUploaded ? (hasWarning ? '⚠️ Stored — Not verified' : 'Stored') : (doc.required ? '❌ Missing' : '➖ Optional');
 
-    sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(If requested)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+    sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + portalDocumentConditionalNote(doc) + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
 
   // Section B — persons
@@ -8520,9 +8508,7 @@ function buildReviewScreen() {
   var sectionC = document.getElementById('review-section-c');
   sectionC.innerHTML = '';
   SECTION_C_DOCS.forEach(function(doc) {
-    var isConditional = doc.conditional === 'high-risk';
-    var isApplicable = !isConditional || isHighRisk;
-    if (!isApplicable) return;
+    if (!isPortalDocumentApplicable(doc)) return;
 
     var isUploaded = uploadedDocs.has(doc.id);
     var hasWarning = false;
@@ -8538,7 +8524,7 @@ function buildReviewScreen() {
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : 'optional';
     var statusText = isUploaded ? (hasWarning ? '⚠️ Stored — Not verified' : 'Stored') : '➖ Optional';
 
-    sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(Optional)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+    sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + portalDocumentConditionalNote(doc) + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
 
   // Section D (dynamic other documents)
@@ -10568,12 +10554,8 @@ function addKYCPerson() {
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">📄 CV / LinkedIn Profile</label>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-cv-${id}')" id="kyc-cv-area-${id}" style="flex:1;"><span>📎</span><span id="kyc-cv-lbl-${id}">Upload CV</span></div>
-            <span style="font-size:11px;color:var(--text3);">or</span>
-            <input type="url" id="kyc-linkedin-${id}" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
-          </div>
-          <input type="file" id="kyc-cv-${id}" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleKYCUpload('${id}','cv',this)" />
+          <input type="url" id="kyc-linkedin-${id}" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
+          <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
         </div>
         <div class="pep-bank-ref-doc" id="pep-bankref-row-${id}" style="display:none;">
           <label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏦 Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>

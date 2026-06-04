@@ -5829,13 +5829,6 @@ def _kyc_required_document_expectations(db, app):
     if not isinstance(ps_data, dict):
         ps_data = {}
     risk_level = str(app_dict.get("final_risk_level") or app_dict.get("risk_level") or "").upper()
-    is_high_risk = risk_level in ("HIGH", "VERY_HIGH")
-    has_licence = (
-        _truthy_prescreening_value(ps_data.get("is_licensed"))
-        or _truthy_prescreening_value(ps_data.get("has_licence"))
-        or _truthy_prescreening_value(app_dict.get("is_licensed"))
-    )
-
     expectations = [
         {"doc_type": "cert_inc", "label": "Certificate of Incorporation", "person_id": None},
         {"doc_type": "memarts", "label": "Memorandum of Association", "person_id": None},
@@ -5846,11 +5839,6 @@ def _kyc_required_document_expectations(db, app):
         {"doc_type": "board_res", "label": "Board Resolution", "person_id": None},
         {"doc_type": "structure_chart", "label": "Company Structure Chart", "person_id": None},
     ]
-    if is_high_risk:
-        expectations.append({"doc_type": "bankref", "label": "Bank Reference Letter", "person_id": None})
-    if has_licence:
-        expectations.append({"doc_type": "licence", "label": "Regulatory Licence(s)", "person_id": None})
-
     directors, ubos, intermediaries = get_application_parties(db, app_dict.get("id"))
     for party_type, people in (("director", directors or []), ("ubo", ubos or [])):
         for person in people:
