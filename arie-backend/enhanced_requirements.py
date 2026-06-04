@@ -143,6 +143,12 @@ EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
     "material_screening_concern": "screening_concern",
 }
 
+BANK_ACCOUNT_DEPENDENT_REQUIREMENT_KEYS = {
+    "company_bank_reference",
+    "company_bank_statements_6m",
+    "high_volume_bank_statements",
+}
+
 
 DEFAULT_ENHANCED_REQUIREMENT_RULES = [
     {
@@ -651,6 +657,58 @@ def _clean_text(value, default=""):
     return str(value).strip()
 
 
+def _application_prescreening(app):
+    app = _row_dict(app) or {}
+    return _loads_json(app.get("prescreening_data"), {}) or {}
+
+
+def _application_existing_bank_account(app):
+    app = _row_dict(app) or {}
+    prescreening = _application_prescreening(app)
+    candidates = (
+        prescreening.get("existing_bank_account"),
+        prescreening.get("has_existing_bank_account"),
+        prescreening.get("has_bank"),
+        prescreening.get("hasBank"),
+        app.get("existing_bank_account"),
+        app.get("has_existing_bank_account"),
+    )
+    for value in candidates:
+        if value in (None, ""):
+            continue
+        text = str(value).strip().lower()
+        if text in ("yes", "y", "true", "1", "on"):
+            return True
+        if text in ("no", "n", "false", "0", "off"):
+            return False
+    return False
+
+
+def _rule_applicable_to_application(rule, app):
+    key = _clean_text((rule or {}).get("requirement_key")).lower()
+    if key in BANK_ACCOUNT_DEPENDENT_REQUIREMENT_KEYS and not _application_existing_bank_account(app):
+        return False, "existing_bank_account_not_declared_yes"
+    return True, ""
+
+
+def _prefill_fields_for_generated_requirement(rule, app):
+    key = _clean_text((rule or {}).get("requirement_key")).lower()
+    if key != "jurisdiction_exposure_rationale":
+        return {}
+    app = _row_dict(app) or {}
+    prescreening = _application_prescreening(app)
+    rationale = _clean_text(prescreening.get("jurisdiction_exposure_rationale"))
+    if not rationale:
+        return {}
+    return {
+        "status": "uploaded",
+        "client_response_text": rationale,
+        "client_response_at": app.get("created_at") or _now_iso(),
+        "client_response_by": app.get("client_id"),
+        "uploaded_at": _now_iso(),
+    }
+
+
 def _require_key(value, field_name):
     text = _clean_text(value)
     if not text:
@@ -679,6 +737,8 @@ def serialize_application_requirement(row):
     item = _row_dict(row)
     for key in ("blocking_approval", "waivable", "mandatory", "active"):
         item[key] = _bool(item.get(key))
+    if "source_rule_active" in item:
+        item["source_rule_active"] = _bool(item.get("source_rule_active"))
     item["waiver_roles"] = _loads_json(item.get("waiver_roles"), [])
     item["trigger_context"] = _loads_json(item.get("trigger_context"), {})
     subject = item["trigger_context"].get("subject") if isinstance(item.get("trigger_context"), dict) else None
@@ -3149,19 +3209,28 @@ def list_portal_application_enhanced_requirements(db, application_id):
     placeholders = ",".join(["?"] * len(APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES))
     rows = db.execute(
         f"""
-        SELECT *
-        FROM application_enhanced_requirements
-        WHERE application_id = ?
-          AND active = 1
-          AND audience IN ('client', 'both')
-          AND status IN ({placeholders})
-        ORDER BY requested_at DESC, updated_at DESC, requirement_label, id
+        SELECT aer.*, err.active AS source_rule_active
+        FROM application_enhanced_requirements aer
+        LEFT JOIN enhanced_requirement_rules err ON err.id = aer.source_rule_id
+        WHERE aer.application_id = ?
+          AND aer.active = 1
+          AND aer.audience IN ('client', 'both')
+          AND aer.status IN ({placeholders})
+        ORDER BY aer.requested_at DESC, aer.updated_at DESC, aer.requirement_label, aer.id
         """,
         (application_id, *APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES),
     ).fetchall()
 
     requirements = []
     for row in rows:
+        item = serialize_application_requirement(row)
+        if (
+            item
+            and item.get("source_rule_id")
+            and item.get("source_rule_active") is False
+            and str(item.get("status") or "").lower() in ("requested", "rejected")
+        ):
+            continue
         safe = serialize_portal_application_requirement(db, row)
         if safe:
             requirements.append(safe)
@@ -3844,6 +3913,14 @@ def generate_application_enhanced_requirements(
             existing_keys.append(rule["requirement_key"])
             continue
 
+        applicable, skip_reason = _rule_applicable_to_application(rule, app)
+        if not applicable:
+            result["skipped_count"] += 1
+            result["warnings"].append(
+                f"Skipped {rule['requirement_key']}: {skip_reason}"
+            )
+            continue
+
         trigger_context = {
             "routing": routing_decision,
             "mapped_from_triggers": trigger_sources.get(rule["trigger_key"], []),
@@ -3851,6 +3928,8 @@ def generate_application_enhanced_requirements(
         }
         if rule.get("_subject"):
             trigger_context["subject"] = rule["_subject"]
+        prefill = _prefill_fields_for_generated_requirement(rule, app)
+        generated_status = prefill.get("status") or "generated"
         params = (
             app["id"],
             rule.get("id"),
@@ -3867,7 +3946,7 @@ def generate_application_enhanced_requirements(
             1 if rule.get("waivable") else 0,
             json.dumps(rule.get("waiver_roles") or []),
             1 if rule.get("mandatory") else 0,
-            "generated",
+            generated_status,
             generation_source,
             "; ".join(trigger_sources.get(rule["trigger_key"], [])),
             json.dumps(trigger_context, default=str, sort_keys=True),
@@ -3906,6 +3985,27 @@ def generate_application_enhanced_requirements(
                 params,
             )
             req_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+        if prefill:
+            db.execute(
+                """
+                UPDATE application_enhanced_requirements
+                SET client_response_text=?,
+                    client_response_at=?,
+                    client_response_by=?,
+                    uploaded_at=?,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (
+                    prefill.get("client_response_text"),
+                    prefill.get("client_response_at"),
+                    prefill.get("client_response_by"),
+                    prefill.get("uploaded_at"),
+                    _now_iso(),
+                    req_id,
+                ),
+            )
 
         created = _load_application_requirement(db, req_id)
         result["generated_count"] += 1

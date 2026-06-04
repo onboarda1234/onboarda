@@ -451,7 +451,7 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Enhanced Review Requirements are onboarding evidence requirements. Formal investigation cases are managed in Lifecycle." in html
     assert "Actions" in html
     assert "Officer notes" in html
-    assert "Requirement details" in html
+    assert "Show advanced requirement details" in html
     assert "Triggered by" in html
     assert "Timeline" in html
     assert "Waiver reason" in html
@@ -485,23 +485,32 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/supervisor" not in block
 
     assert "/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements" in portal_html
-    assert "Enhanced Evidence Documents" in portal_html
-    assert "Additional enhanced evidence requested by Compliance for this application." in portal_html
+    assert "A — Corporate Entity Documents" in portal_html
+    assert "B — Directors & UBO Identity Documents" in portal_html
+    assert "C — Additional Required Documents" in portal_html
+    assert "D — Other Documents" in portal_html
+    assert portal_html.index("A — Corporate Entity Documents") < portal_html.index("B — Directors & UBO Identity Documents")
+    assert portal_html.index("B — Directors & UBO Identity Documents") < portal_html.index("C — Additional Required Documents")
+    assert portal_html.index("C — Additional Required Documents") < portal_html.index("D — Other Documents")
+    assert "Additional enhanced evidence requested by Compliance for this application." not in portal_html
     assert "renderPortalEnhancedRequirements" in portal_html
     assert "loadPortalEnhancedRequirements" in portal_html
     assert "uploadPortalEnhancedRequirement" in portal_html
     assert "submitPortalEnhancedRequirementResponse" in portal_html
-    assert "Upload enhanced evidence" in portal_html
+    assert "Upload enhanced evidence" not in portal_html
     assert "Uploaded file:" in portal_html
     assert "Requested by Compliance" in portal_html
     assert "Provide response" in portal_html
+    assert "portalEnhancedRequirementPersonPanel" in portal_html
+    assert "portal-enhanced-requirements" in portal_html
 
-    portal_section = portal_html.split('id="additional-info-required-card"', 1)[1]
-    portal_section = portal_section.split("<!-- Section A: Corporate Documents -->", 1)[0]
-    assert "Additional enhanced evidence requested by Compliance for this application." in portal_section
+    portal_section = portal_html.split("C — Additional Required Documents", 1)[1]
+    portal_section = portal_section.split("<!-- Section D: Other Documents", 1)[0]
+    assert "Additional documents requested by Compliance for this application" in portal_section
     for forbidden in (
         "EDD",
         "Enhanced Due Diligence",
+        "risk-triggered",
         "high risk",
         "screening concern",
         "sanctions concern",
@@ -647,10 +656,9 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "if (result === 'pass') technicalCheckItems.push(checkHtml);" in html
     assert "else visibleCheckItems.push(checkHtml);" in html
 
-    assert "Enhanced Evidence Documents" in portal_html
-    assert "Portal Disclosures" in portal_html
-    assert "Upload requested risk-triggered evidence documents here." in portal_html
-    assert "Provide requested explanations or declarations; these are not document upload rows." in portal_html
+    assert "C — Additional Required Documents" in portal_html
+    assert "Upload requested risk-triggered evidence documents here." not in portal_html
+    assert "Provide requested explanations or declarations; these are not document upload rows." not in portal_html
 
 
 def test_pr6b_enhanced_requirement_inline_upload_uses_real_pipeline_hooks():

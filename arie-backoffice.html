@@ -8056,16 +8056,20 @@ function renderEnhancedRequirementDetails(req) {
     ['Audience', req.audience || '—'],
     ['Requirement type', String(req.requirement_type || '—').replace(/_/g, ' ')],
     ['Subject scope', String(req.subject_scope || '—').replace(/_/g, ' ')]
-  ].map(function(item) {
+  ];
+  if (req && req.source_rule_active === false) {
+    rows.push(['Admin setting', 'Disabled source rule; historical requirement retained for audit']);
+  }
+  rows = rows.map(function(item) {
     return '<div><span style="color:var(--text3);font-size:10px;text-transform:uppercase;font-weight:700;">' + escapeHtml(item[0]) + '</span><div style="font-size:12px;color:var(--text2);margin-top:2px;">' + escapeHtml(item[1]) + '</div></div>';
   }).join('');
   var clientSummary = enhancedRequirementClientSubmissionSummary(req);
-  return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-    '<div style="font-size:11px;font-weight:800;color:var(--text1);margin-bottom:8px;">Requirement details</div>' +
+  return '<details style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<summary style="cursor:pointer;font-size:11px;font-weight:800;color:var(--text1);">Show advanced requirement details</summary>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">' + rows + '</div>' +
     (req.linked_rmi_item_id ? '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>' : '') +
     (clientSummary ? '<div style="margin-top:8px;">' + clientSummary + '</div>' : '') +
-  '</div>';
+  '</details>';
 }
 
 function enhancedRequirementDocumentOptions(req) {
@@ -8305,7 +8309,7 @@ function renderApplicationEnhancedRequirementActions(req) {
   }
   var uploadHtml = '';
   if (enhancedRequirementUploadEligible(req)) {
-    var uploadLabel = req.linked_document_id ? 'Replace document' : 'Upload document';
+    var uploadLabel = req.linked_document_id ? 'Replace / Upload' : 'Upload document';
     uploadHtml =
       '<input type="file" id="er-upload-' + escapeHtml(controlId) + '" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="handleApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\', this)" />' +
       '<button class="btn btn-outline btn-sm" onclick="selectApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">' + escapeHtml(uploadLabel) + '</button>';
@@ -8569,7 +8573,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
         enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') +
       '</div>';
       return '<tr>' +
-        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;">' + enhancedRequirementTypeBadge(req) + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:normal;">' + escapeHtml(req.requirement_key || '') + '</div></td>' +
+        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;">' + enhancedRequirementTypeBadge(req) + (req.source_rule_active === false ? enhancedRequirementDetailBadge('Disabled source setting', 'amber') : '') + '</div></td>' +
         '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' + enhancedRequirementStatusBadge(req.status, req) + '</div></td>' +
         '<td style="min-width:220px;max-width:360px;">' + workflowBits.join('') + '</td>' +
         '<td>' + blockingBits + '</td>' +
@@ -8578,7 +8582,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
     }).join('');
     return '<div style="border:1px solid var(--border1);border-radius:10px;background:var(--surface);margin-top:12px;overflow:hidden;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border1);background:var(--surface2);">' +
-        '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + (group.category ? ' · ' + escapeHtml(group.category) : '') + '</div></div>' +
+        '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Onboarding requirement group</div></div>' +
         enhancedRequirementDetailBadge(group.items.length + ' requirement' + (group.items.length === 1 ? '' : 's'), 'purple') +
       '</div>' +
       '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Status</th><th>Workflow / Evidence</th><th>Blocking</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +

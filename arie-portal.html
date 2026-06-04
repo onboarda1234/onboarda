@@ -2371,7 +2371,7 @@
                 <option value="">Select country…</option>
               </select>
             </div>
-            <div class="form-group span-3" id="jurisdiction-rationale-group" style="display:none;border:1px solid var(--border1);border-radius:10px;padding:12px;background:var(--surface2);">
+            <div class="form-group span-3" id="jurisdiction-rationale-group" style="display:none;border:1px solid rgba(217,119,6,0.25);background:rgba(217,119,6,0.05);border-radius:12px;padding:12px;">
               <label>Jurisdiction exposure rationale <span class="req">*</span></label>
               <textarea id="f-jurisdiction-rationale" placeholder="Please explain why the entity is incorporated in, operates from, or has exposure to this jurisdiction."></textarea>
               <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required when the country of incorporation is high-risk, FATF-monitored, FATF-blacklisted, sanctioned, or otherwise enhanced-risk.</div>
@@ -3273,19 +3273,6 @@
         <p class="text-sm mt-2" style="color:var(--text3);">Upload all required documents. AI will verify authenticity and validity automatically.</p>
       </div>
 
-      <!-- Additional requested information -->
-      <div class="card" id="additional-info-required-card" style="display:none;border-left:4px solid var(--amber);">
-        <div class="card-header">
-          <div class="card-icon" style="background:var(--amber-dim);color:var(--amber);">i</div>
-          <div>
-            <div class="card-title">Enhanced Evidence Documents</div>
-            <div class="card-sub">Additional enhanced evidence requested by Compliance for this application.</div>
-          </div>
-        </div>
-        <div id="additional-info-required-container" style="display:flex;flex-direction:column;gap:10px;padding:0 16px 16px;">
-        </div>
-      </div>
-
       <!-- Section A: Corporate Documents -->
       <div class="card">
         <div class="card-header">
@@ -3424,7 +3411,7 @@
                 <div class="doc-item-desc">From a reputable bank, on official letterhead</div>
               </div>
             </div>
-            <span class="doc-required">Required — High / Very High Risk</span>
+            <span class="doc-required">Required if requested</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-bank-ref')">
               <span>📎</span> <span id="doc-bank-ref-label">Click to upload</span>
             </div>
@@ -3549,8 +3536,8 @@
                       <label>Additional details on origin of funds/wealth</label>
                       <textarea id="pep-sow-detail-dir1" placeholder="Please provide explanation and any supporting documentary evidence..."></textarea>
                     </div>
-                    <div style="font-size:11px;color:var(--text3);line-height:1.5;">
-                      Supporting evidence is requested as a separate Enhanced Evidence Document when Compliance requires it. Complete the structured PEP declaration fields here.
+                    <div style="font-size:12px;color:var(--text3);line-height:1.5;">
+                      Additional documents, if required, will appear with the relevant person or under Section C after Compliance review.
                     </div>
                   </div>
                 </div>
@@ -3656,8 +3643,8 @@
                       <label>Additional details on origin of funds/wealth</label>
                       <textarea id="pep-sow-detail-ubo1" placeholder="Please provide explanation and any supporting documentary evidence..."></textarea>
                     </div>
-                    <div style="font-size:11px;color:var(--text3);line-height:1.5;">
-                      Supporting evidence is requested as a separate Enhanced Evidence Document when Compliance requires it. Complete the structured PEP declaration fields here.
+                    <div style="font-size:12px;color:var(--text3);line-height:1.5;">
+                      Additional documents, if required, will appear with the relevant person or under Section C after Compliance review.
                     </div>
                   </div>
                 </div>
@@ -3685,18 +3672,22 @@
         <!-- AI checks handled in back office only -->
       </div>
 
-      <!-- Section C: Business Documents (ALL OPTIONAL) -->
+      <!-- Section C: Additional Required Documents -->
       <div class="card">
         <div class="card-header">
           <div class="card-icon green">📄</div>
           <div>
-            <div class="card-title">C — Business Operating Documents</div>
-            <div class="card-sub">Optional supporting evidence of business activity and operations</div>
+            <div class="card-title">C — Additional Required Documents</div>
+            <div class="card-sub">Additional documents requested by Compliance for this application</div>
           </div>
         </div>
-        <div style="padding:6px 16px 12px;background:#f0fdf4;border-radius:8px;margin:0 16px 12px;font-size:12px;color:#166534;border-left:3px solid #22c55e;">
-          All documents in this section are <strong>optional</strong>. You can proceed to submission without uploading any of these. However, providing them may speed up your compliance review.
+        <div id="additional-info-required-card" style="display:none;padding:0 16px 12px;">
+          <div class="doc-grid" id="additional-info-required-container"></div>
         </div>
+        <div style="padding:6px 16px 12px;background:#f0fdf4;border-radius:8px;margin:0 16px 12px;font-size:12px;color:#166534;border-left:3px solid #22c55e;">
+          If Compliance has requested additional documents, they will appear here. The optional documents below can also support your application.
+        </div>
+        <div style="padding:0 16px 8px;font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">Optional supporting documents</div>
         <div class="doc-grid">
           <div class="doc-item" id="doc-contracts">
             <div class="doc-item-top">
@@ -3721,7 +3712,7 @@
                 <div class="doc-item-desc">Documentation supporting origin of entity's accumulated capital</div>
               </div>
             </div>
-            <span class="doc-optional">Optional — Recommended for High Risk</span>
+            <span class="doc-optional">Optional</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-source-wealth-proof')">
               <span>📎</span> <span id="doc-source-wealth-proof-label">Click to upload</span>
             </div>
@@ -3736,7 +3727,7 @@
                 <div class="doc-item-desc">Bank statements, investment records, or equivalent</div>
               </div>
             </div>
-            <span class="doc-optional">Optional — Recommended for High Risk</span>
+            <span class="doc-optional">Optional</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-source-funds-proof')">
               <span>📎</span> <span id="doc-source-funds-proof-label">Click to upload</span>
             </div>
@@ -3751,7 +3742,7 @@
                 <div class="doc-item-desc">Statements from primary operating bank account</div>
               </div>
             </div>
-            <span class="doc-optional">Optional — Recommended for High Risk</span>
+            <span class="doc-optional">Optional</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-bank-statements')">
               <span>📎</span> <span id="doc-bank-statements-label">Click to upload</span>
             </div>
@@ -3857,7 +3848,7 @@
 
       <!-- Section C Review -->
       <div class="review-section">
-        <div class="review-section-header">🏢 Section C — Business Operating Documents <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:8px;">(Optional)</span></div>
+        <div class="review-section-header">🏢 Section C — Additional Required Documents <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:8px;">(Includes optional supporting documents)</span></div>
         <div class="review-items" id="review-section-c"></div>
       </div>
 
@@ -5700,7 +5691,7 @@ function buildPepDeclarationPanelHTML(personId, visible) {
       '<div><label>Source of funds detail</label><textarea id="pep-source-funds-detail-' + personId + '" placeholder="Explain the expected source of funds for this relationship, if different from source of wealth."></textarea></div>' +
       '<div><label>Supporting note / evidence reference <span class="req">*</span></label><textarea id="pep-evidence-reference-' + personId + '" placeholder="Reference documents, links, public register entries, or officer notes supporting the declaration."></textarea></div>' +
       '<div><label>Additional PEP notes</label><textarea id="pep-notes-' + personId + '" placeholder="Any additional context relevant to this PEP declaration."></textarea></div>' +
-      '<div style="font-size:11px;color:var(--text3);line-height:1.5;">Supporting evidence is requested as a separate Enhanced Evidence Document when Compliance requires it. Complete the structured PEP declaration fields here.</div>' +
+      '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Additional documents, if required, will appear with the relevant person or under Section C after Compliance review.</div>' +
     '</div>' +
   '</div>';
 }
@@ -5860,6 +5851,10 @@ function syncDirectorsUBOsToKYC() {
 
     container.appendChild(card);
   });
+
+  if (Array.isArray(currentEnhancedRequirements) && currentEnhancedRequirements.length) {
+    renderPortalEnhancedRequirements(currentEnhancedRequirements);
+  }
 }
 
 // ─── Checkbox helper (top-level for use by collectFormData / buildPrescreeningSummary) ──
@@ -6081,7 +6076,7 @@ async function submitPrescreening(e) {
   if (incCountry && isEnhancedRiskJurisdiction(incCountry.value) && !getFieldValue('f-jurisdiction-rationale')) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
     syncJurisdictionRationaleState();
-    showToast('error', 'Jurisdiction rationale required', 'Please explain the business rationale for the enhanced-risk jurisdiction exposure.');
+    showToast('error', 'Jurisdiction Rationale Required', 'Please explain the jurisdiction exposure before submitting.');
     var rationaleEl = document.getElementById('f-jurisdiction-rationale');
     if (rationaleEl) rationaleEl.focus();
     return;
@@ -8454,7 +8449,7 @@ function buildReviewScreen() {
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : (doc.required ? 'missing' : 'optional');
     var statusText = isUploaded ? (hasWarning ? '⚠️ Stored — Not verified' : 'Stored') : (doc.required ? '❌ Missing' : '➖ Optional');
 
-    sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+    sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(If requested)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
 
   // Section B — persons
@@ -8543,7 +8538,7 @@ function buildReviewScreen() {
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : 'optional';
     var statusText = isUploaded ? (hasWarning ? '⚠️ Stored — Not verified' : 'Stored') : '➖ Optional';
 
-    sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(Recommended for High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+    sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(Optional)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
 
   // Section D (dynamic other documents)
@@ -9014,13 +9009,13 @@ function portalEnhancedRequirementActionText(req) {
   if (status === 'requested') status = 'required';
   if (status === 'rejected') status = 'additional_information_needed';
   if (status === 'submitted' || status === 'under_review') {
-    return 'No further action is needed right now.';
+    return 'Submitted to Compliance.';
   }
   if (type === 'document') {
-    return 'Upload evidence for this specific enhanced requirement.';
+    return 'Upload the requested document.';
   }
   if (type === 'declaration' || type === 'explanation') {
-    return 'Provide a response for this item.';
+    return 'Provide the requested response.';
   }
   return 'Provide the requested information in the relevant section.';
 }
@@ -9041,9 +9036,11 @@ function portalEnhancedRequirementControlHtml(req) {
   var safeReqId = escapeHtml(reqId);
   if (type === 'document') {
     var inputId = portalEnhancedRequirementControlId(reqId, 'file');
-    return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-      '<input id="' + escapeHtml(inputId) + '" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="font-size:12px;max-width:280px;" />' +
-      '<button class="btn btn-primary btn-sm" onclick="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', document.getElementById(\'' + escapeHtml(inputId) + '\'), this)">Upload enhanced evidence</button>' +
+    return '<div style="margin-top:10px;">' +
+      '<div class="doc-upload-area" onclick="document.getElementById(\'' + escapeHtml(inputId) + '\').click()">' +
+        '<span>📎</span> <span>Click to upload</span>' +
+      '</div>' +
+      '<input id="' + escapeHtml(inputId) + '" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', this, null)" />' +
     '</div>';
   }
   if (type === 'declaration' || type === 'explanation') {
@@ -9058,67 +9055,122 @@ function portalEnhancedRequirementControlHtml(req) {
   return '';
 }
 
+function portalEnhancedRequirementDocName(req) {
+  var linkedDoc = (req && req.linked_document) || {};
+  return linkedDoc.doc_name || (req && req.uploaded_file_name) || '';
+}
+
+function portalEnhancedRequirementIsPersonScoped(req) {
+  var scope = String(req && req.subject_scope || '').toLowerCase();
+  return ['director','beneficial_owner','ubo','controller','person','screening_subject'].indexOf(scope) >= 0;
+}
+
+function portalEnhancedRequirementScopeMatchesCard(req, card) {
+  if (!card) return false;
+  var scope = String(req && req.subject_scope || '').toLowerCase();
+  var cardText = String(card.textContent || '').toLowerCase();
+  if (scope === 'director' && cardText.indexOf('director') >= 0) return true;
+  if ((scope === 'beneficial_owner' || scope === 'ubo') && (cardText.indexOf('ubo') >= 0 || cardText.indexOf('beneficial owner') >= 0)) return true;
+  if (scope === 'controller' && cardText.indexOf('controller') >= 0) return true;
+  return false;
+}
+
+function portalEnhancedRequirementPersonPanel(req) {
+  if (!portalEnhancedRequirementIsPersonScoped(req)) return null;
+  var owner = String((req && (req.owner_label || req.subject_name)) || '').trim().toLowerCase();
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.kyc-person-card'));
+  if (owner) {
+    for (var i = 0; i < cards.length; i++) {
+      var nameEl = cards[i].querySelector('.kyc-person-name');
+      var nameText = String(nameEl && nameEl.textContent || '').trim().toLowerCase();
+      if (nameText && (nameText === owner || nameText.indexOf(owner) >= 0 || owner.indexOf(nameText) >= 0)) {
+        return cards[i].querySelector('.kyc-upload-panel');
+      }
+    }
+  }
+  for (var j = 0; j < cards.length; j++) {
+    if (portalEnhancedRequirementScopeMatchesCard(req, cards[j])) {
+      return cards[j].querySelector('.kyc-upload-panel');
+    }
+  }
+  return null;
+}
+
+function portalEnhancedRequirementHolder(panel) {
+  if (!panel) return null;
+  var holder = panel.querySelector('.portal-enhanced-requirements');
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.className = 'portal-enhanced-requirements';
+    holder.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-top:10px;';
+    panel.appendChild(holder);
+  }
+  return holder;
+}
+
+function portalEnhancedRequirementCardHtml(req) {
+  var tone = portalEnhancedRequirementTone(req.status);
+  var requestedAt = req && req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
+  var docName = portalEnhancedRequirementDocName(req);
+  var statusLabel = req.status_label || tone.text;
+  var subject = req.owner_label || req.subject_name || '';
+  var meta = ['Requested by Compliance'];
+  if (subject) meta.push(subject);
+  if (requestedAt) meta.push('Requested ' + requestedAt);
+  return '<div class="doc-item portal-enhanced-requirement-item" data-enhanced-requirement-id="' + escapeHtml(String(req.id || '')) + '">' +
+    '<div class="doc-item-top">' +
+      '<span class="doc-item-icon">📄</span>' +
+      '<div>' +
+        '<div class="doc-item-name">' + escapeHtml(req.label || 'Additional required document') + '</div>' +
+        '<div class="doc-item-desc">' + escapeHtml(meta.join(' · ')) + '</div>' +
+      '</div>' +
+    '</div>' +
+    '<span class="' + (tone.cls === 'uploaded' ? 'doc-optional' : 'doc-required') + '">' + escapeHtml(statusLabel) + '</span>' +
+    (docName ? '<div style="font-size:12px;color:var(--text2);margin:8px 0 0;"><strong>Uploaded file:</strong> ' + escapeHtml(docName) + '</div>' : '') +
+    '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
+    portalEnhancedRequirementControlHtml(req) +
+  '</div>';
+}
+
+function clearPortalEnhancedRequirementHolders() {
+  document.querySelectorAll('.portal-enhanced-requirements').forEach(function(holder) {
+    holder.innerHTML = '';
+    holder.style.display = 'none';
+  });
+}
+
 function renderPortalEnhancedRequirements(requirements) {
   currentEnhancedRequirements = Array.isArray(requirements) ? requirements : [];
   var card = document.getElementById('additional-info-required-card');
   var container = document.getElementById('additional-info-required-container');
   if (!card || !container) return;
+  clearPortalEnhancedRequirementHolders();
   if (!currentEnhancedRequirements.length) {
     card.style.display = 'none';
     container.innerHTML = '';
     return;
   }
-  card.style.display = '';
-  function renderPortalRequirementCard(req) {
-    var tone = portalEnhancedRequirementTone(req.status);
-    var requestedAt = req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
-    var uploadedAt = req.uploaded_at ? new Date(req.uploaded_at).toLocaleDateString() : '';
-    var linkedDoc = req.linked_document || {};
-    var meta = [];
-    meta.push('Requested by Compliance');
-    if (req.requirement_type) meta.push(String(req.requirement_type).replace(/_/g, ' '));
-    if (req.subject_scope) meta.push(String(req.subject_scope).replace(/_/g, ' '));
-    if (req.owner_label || req.subject_name) meta.push('Owner: ' + (req.owner_label || req.subject_name));
-    if (requestedAt) meta.push('Requested ' + requestedAt);
-    if (uploadedAt) meta.push('Uploaded ' + uploadedAt);
-    var docName = linkedDoc.doc_name || req.uploaded_file_name || '';
-    return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface);">' +
-      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
-        '<div style="min-width:0;flex:1;">' +
-          '<div style="font-size:14px;font-weight:800;color:var(--text);">' + escapeHtml(req.label || 'Additional information') + '</div>' +
-          '<div style="font-size:11px;color:#d97706;font-weight:700;margin-top:3px;">Required due to enhanced review</div>' +
-          (req.description ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5;">' + escapeHtml(req.description) + '</div>' : '') +
-          (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:7px;">' + escapeHtml(meta.join(' | ')) + '</div>' : '') +
-          (docName ? '<div style="font-size:12px;color:var(--text2);margin-top:7px;"><strong>Uploaded file:</strong> ' + escapeHtml(docName) + '</div>' : '') +
-          '<div style="font-size:11px;color:var(--text2);margin-top:8px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
-          portalEnhancedRequirementControlHtml(req) +
-        '</div>' +
-        '<span class="review-status ' + tone.cls + '">' + escapeHtml(req.status_label || tone.text) + '</span>' +
-      '</div>' +
-    '</div>';
-  }
-  var documentReqs = currentEnhancedRequirements.filter(function(req) {
-    return String(req.requirement_type || '').toLowerCase() === 'document';
+  var applicationLevel = [];
+  currentEnhancedRequirements.forEach(function(req) {
+    var panel = portalEnhancedRequirementPersonPanel(req);
+    var html = portalEnhancedRequirementCardHtml(req);
+    if (panel) {
+      var holder = portalEnhancedRequirementHolder(panel);
+      if (holder) {
+        holder.style.display = '';
+        holder.innerHTML += html;
+        return;
+      }
+    }
+    applicationLevel.push(html);
   });
-  var disclosureReqs = currentEnhancedRequirements.filter(function(req) {
-    return String(req.requirement_type || '').toLowerCase() !== 'document';
-  });
-  var html = '';
-  if (documentReqs.length) {
-    html += '<details open style="border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;">' +
-      '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text);list-style-position:inside;">Enhanced Evidence Documents</summary>' +
-      '<div style="font-size:11px;color:var(--text3);margin:6px 0 8px;">Upload requested risk-triggered evidence documents here.</div>' +
-      '<div style="display:flex;flex-direction:column;gap:10px;">' + documentReqs.map(renderPortalRequirementCard).join('') + '</div>' +
-    '</details>';
+  if (applicationLevel.length) {
+    card.style.display = '';
+    container.innerHTML = applicationLevel.join('');
+  } else {
+    card.style.display = 'none';
+    container.innerHTML = '';
   }
-  if (disclosureReqs.length) {
-    html += '<details ' + (documentReqs.length ? '' : 'open ') + 'style="border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;">' +
-      '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text);list-style-position:inside;">Portal Disclosures</summary>' +
-      '<div style="font-size:11px;color:var(--text3);margin:6px 0 8px;">Provide requested explanations or declarations; these are not document upload rows.</div>' +
-      '<div style="display:flex;flex-direction:column;gap:10px;">' + disclosureReqs.map(renderPortalRequirementCard).join('') + '</div>' +
-    '</details>';
-  }
-  container.innerHTML = html;
 }
 
 async function uploadPortalEnhancedRequirement(requirementId, input, button) {
@@ -9157,7 +9209,7 @@ async function uploadPortalEnhancedRequirement(requirementId, input, button) {
     delete portalEnhancedRequirementBusy[busyKey];
     if (button) {
       button.disabled = false;
-      button.textContent = button.dataset.originalText || 'Upload enhanced evidence';
+      button.textContent = button.dataset.originalText || 'Upload';
     }
   }
 }
