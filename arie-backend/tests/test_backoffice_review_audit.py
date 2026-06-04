@@ -478,21 +478,20 @@ class TestReassignSecurity:
     """Test reassignment role enforcement and error handling."""
 
     def test_backend_enforces_officer_roles(self):
-        """Only admin/sco/co roles should be able to reassign."""
+        """Only admin/sco roles should be able to reassign."""
         import inspect
         from server import ApplicationDetailHandler
         src = inspect.getsource(ApplicationDetailHandler.patch)
         assert "admin" in src
         assert "sco" in src
-        assert "co" in src
 
     def test_backend_rejects_analyst_reassign(self):
         """Analyst role must be blocked from reassignment."""
         import inspect
         from server import ApplicationDetailHandler
         src = inspect.getsource(ApplicationDetailHandler.patch)
-        # The code only allows admin, sco, co — analyst is excluded
-        assert 'not in ("admin", "sco", "co")' in src or "Only Admin" in src
+        # The code only allows admin and sco — analyst is excluded.
+        assert 'not in ("admin", "sco")' in src or "Assignment blocked" in src
 
     def test_reassignment_audit_includes_before_after(self):
         """Reassignment audit log must include old and new assignee."""
