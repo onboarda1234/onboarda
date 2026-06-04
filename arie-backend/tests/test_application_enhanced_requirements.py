@@ -151,7 +151,7 @@ def _insert_application(
             sector,
             "SME",
             ownership_structure,
-            json.dumps(prescreening or {}),
+            json.dumps(prescreening if prescreening is not None else {"existing_bank_account": "Yes"}),
             20 if risk_level == "LOW" else 65,
             risk_level,
             risk_level,
@@ -795,7 +795,7 @@ def test_one_million_plus_expected_volume_generates_high_volume_with_audit_reaso
     app_id = _insert_application(
         db,
         risk_level="LOW",
-        prescreening={"expected_volume": "1m+"},
+        prescreening={"expected_volume": "1m+", "existing_bank_account": "Yes"},
     )
 
     result = _generate(db, app_id)
@@ -828,7 +828,7 @@ def test_high_volume_alone_generates_documents_but_not_edd(enhanced_app_db):
         risk_level="LOW",
         status="pricing_review",
         onboarding_lane="Standard Review",
-        prescreening={"expected_volume": "1m+"},
+        prescreening={"expected_volume": "1m+", "existing_bank_account": "Yes"},
     )
 
     result = _apply_auto_generation(
@@ -853,7 +853,7 @@ def test_high_volume_plus_pep_routes_edd_due_to_pep_not_volume(enhanced_app_db):
         risk_level="LOW",
         status="pricing_review",
         onboarding_lane="Standard Review",
-        prescreening={"expected_volume": "1m+"},
+        prescreening={"expected_volume": "1m+", "existing_bank_account": "Yes"},
     )
     db.execute(
         "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
@@ -889,7 +889,7 @@ def test_high_volume_plus_pep_routes_edd_due_to_pep_not_volume(enhanced_app_db):
             "screening_concern",
         ),
         (
-            {"risk_level": "LOW", "prescreening": {"monthly_volume": "Over USD 5,000,000 per month"}},
+            {"risk_level": "LOW", "prescreening": {"monthly_volume": "Over USD 5,000,000 per month", "existing_bank_account": "Yes"}},
             None,
             "high_volume",
         ),
@@ -1538,7 +1538,9 @@ def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     portal_html = open(os.path.join(repo_root, "arie-portal.html"), encoding="utf-8").read()
     backoffice_html = open(os.path.join(repo_root, "arie-backoffice.html"), encoding="utf-8").read()
 
-    assert "Enhanced Evidence Documents" in portal_html
+    assert "C — Additional Required Documents" in portal_html
+    assert "portalEnhancedRequirementPersonPanel" in portal_html
+    assert "portal-enhanced-requirements" in portal_html
     assert "f-jurisdiction-rationale" in portal_html
     assert "jurisdiction_exposure_rationale" in portal_html
     assert "syncJurisdictionRationaleState" in portal_html
@@ -1550,7 +1552,9 @@ def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     assert "syncVolumeRationaleState" in portal_html
     assert "Volume Rationale Required" in portal_html
     assert "textarea.required = required" in portal_html
-    assert "Upload enhanced evidence" in portal_html
+    assert "Upload enhanced evidence" not in portal_html
+    assert "Required due to enhanced review" not in portal_html
+    assert "risk-triggered" not in portal_html
     assert "Upload Supporting Documents" not in portal_html
     assert "Upload supporting document" not in portal_html
     assert "handlePEPUpload" not in portal_html
@@ -2653,6 +2657,114 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     assert rmi_count == 0
     assert notification_count == 0
     assert memo_count == 0
+
+
+def test_portal_hides_requested_requirements_from_disabled_source_rules(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    client_id = "client001"
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+        (client_id, "client001@example.com", "hash", "Client One"),
+    )
+    app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
+    conn.commit()
+    _generate(conn, app_id)
+    requested_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+    uploaded_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='requested', requested_at=datetime('now'), requested_by='co001'
+        WHERE id=?
+        """,
+        (requested_req,),
+    )
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='uploaded', uploaded_at=datetime('now'), requested_at=datetime('now'), requested_by='co001'
+        WHERE id=?
+        """,
+        (uploaded_req,),
+    )
+    conn.execute(
+        """
+        UPDATE enhanced_requirement_rules
+        SET active=0
+        WHERE id IN (
+            SELECT source_rule_id FROM application_enhanced_requirements
+            WHERE id IN (?,?)
+        )
+        """,
+        (requested_req, uploaded_req),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements",
+        headers=_client_headers(client_id),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    returned_ids = {item["id"] for item in resp.json()["requirements"]}
+    assert requested_req not in returned_ids
+    assert uploaded_req in returned_ids
+
+
+def test_generation_skips_bank_requirements_without_existing_bank_account(enhanced_app_db):
+    conn = enhanced_app_db
+    app_id = _insert_application(
+        conn,
+        risk_level="HIGH",
+        prescreening={"existing_bank_account": "No"},
+    )
+
+    result = _generate(conn, app_id)
+    rows = conn.execute(
+        "SELECT requirement_key FROM application_enhanced_requirements WHERE application_id=?",
+        (app_id,),
+    ).fetchall()
+    keys = {row["requirement_key"] for row in rows}
+
+    assert "company_bank_reference" not in keys
+    assert "company_bank_statements_6m" not in keys
+    assert "company_sof_evidence" in keys
+    assert result["skipped_count"] >= 2
+
+
+def test_generation_prefills_jurisdiction_rationale_from_prescreening(enhanced_app_db):
+    conn = enhanced_app_db
+    app_id = _insert_application(
+        conn,
+        risk_level="HIGH",
+        country="Iran",
+        prescreening={
+            "country_of_incorporation": "Iran",
+            "jurisdiction_exposure_rationale": "Legacy shareholders remain in jurisdiction while operations are outside Iran.",
+            "existing_bank_account": "Yes",
+        },
+    )
+
+    _generate(conn, app_id)
+    req = conn.execute(
+        """
+        SELECT * FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key='jurisdiction_exposure_rationale'
+        """,
+        (app_id,),
+    ).fetchone()
+
+    assert req is not None
+    assert req["status"] == "uploaded"
+    assert req["client_response_text"] == "Legacy shareholders remain in jurisdiction while operations are outside Iran."
+    assert req["client_response_at"]
+    assert req["uploaded_at"]
 
 
 def test_portal_document_upload_fulfils_requested_enhanced_requirement(enhanced_app_api_server):

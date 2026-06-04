@@ -9667,9 +9667,11 @@ class ApplicationEnhancedRequirementsHandler(BaseHandler):
                 return self.error("Application not found", 404)
             rows = db.execute(
                 """
-                SELECT * FROM application_enhanced_requirements
-                WHERE application_id = ?
-                ORDER BY trigger_category, trigger_label, requirement_label, id
+                SELECT aer.*, err.active AS source_rule_active
+                FROM application_enhanced_requirements aer
+                LEFT JOIN enhanced_requirement_rules err ON err.id = aer.source_rule_id
+                WHERE aer.application_id = ?
+                ORDER BY aer.trigger_category, aer.trigger_label, aer.requirement_label, aer.id
                 """,
                 (app["id"],),
             ).fetchall()

@@ -478,7 +478,7 @@ class TestCaseCommandCentreRuntime:
         assert "<th>Timeline</th>" not in html
         assert "<th>Workflow / Evidence</th>" in html
         assert "<th>Actions</th>" in html
-        assert "Requirement details" in html
+        assert "Show advanced requirement details" in html
         assert "Triggered by" in html
         assert "No upload controls were added to Enhanced Review Requirements." not in html
         enhanced_section = _extract_between(
