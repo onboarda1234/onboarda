@@ -72,9 +72,11 @@ class TestPartA_RolePermissionHelpers:
         ("rejectApplication", "reject_applications"),
         ("escalateCase", "escalate_to_sco"),
         ("confirmOverride", "override_ai_risk_score"),
-        ("preApproveApplication", "approve_low_medium"),
-        ("preApprovalReject", "reject_applications"),
-        ("preApprovalRequestInfo", "request_more_information"),
+        ("reassignCase", "assign_reassign_cases"),
+        ("confirmReassign", "assign_reassign_cases"),
+        ("preApproveApplication", "approve_high_very_high"),
+        ("preApprovalReject", "approve_high_very_high"),
+        ("preApprovalRequestInfo", "approve_high_very_high"),
         ("requestMoreInfo", "request_more_information"),
         ("generateComplianceMemo", "view_compliance_memo"),
         ("approveMemo", "approve_low_medium"),
@@ -114,7 +116,7 @@ class TestPartA_RolePermissionHelpers:
 
     def test_guard_returns_before_modal_open(self):
         """For approve/reject/escalate, guard must appear before modal open."""
-        for fn_name in ["approveApplication", "rejectApplication", "escalateCase", "requestMoreInfo"]:
+        for fn_name in ["approveApplication", "rejectApplication", "escalateCase", "requestMoreInfo", "reassignCase"]:
             fn = self._extract_function(fn_name)
             guard_pos = fn.find("assertPermission")
             modal_pos = fn.find("classList.add('open')")
@@ -204,6 +206,15 @@ class TestPartA_RolePermissionHelpers:
                 if depth == 0:
                     break
         return self.html[start : i + 1]
+
+    def test_preapproval_header_includes_shared_reassign_button(self):
+        assert 'id="case-management-actions-topbar"' in self.html
+        assert 'id="btn-reassign"' in self.html
+
+    def test_detail_action_sync_uses_backend_permission_ids(self):
+        fn = self._extract_function("syncApplicationActionPermissions")
+        assert "approve_high_very_high" in fn
+        assert "assign_reassign_cases" in fn
 
 
 # ═══════════════════════════════════════════════════════════

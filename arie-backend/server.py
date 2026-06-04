@@ -4464,11 +4464,25 @@ class ApplicationDetailHandler(BaseHandler):
                 )
             self.log_audit(user, "Status Change", app["ref"], audit_detail, db=db)
 
-        # Handle assignment — only admin, sco, co can reassign
+        # Handle assignment — keep API enforcement aligned with ROLE_PERMISSION_MATRIX.
         if "assigned_to" in data:
-            if user.get("role") not in ("admin", "sco", "co"):
+            if user.get("role") not in ("admin", "sco"):
+                reason = (
+                    f"Assignment blocked: {_role_label(user.get('role'))} role cannot assign or reassign cases. "
+                    "Allowed roles: Administrator, Senior CO."
+                )
+                self.log_governance_attempt(
+                    user,
+                    "application.assignment",
+                    app["ref"],
+                    "rejected",
+                    403,
+                    reason,
+                    _governance_summary(data, ("assigned_to",)),
+                    db=db,
+                )
                 db.close()
-                return self.error("Only Admin, Senior Compliance Officer, or Compliance Officer can reassign applications", 403)
+                return self.error(reason, 403)
             old_assigned = app.get("assigned_to") or "Unassigned"
             new_assigned = data["assigned_to"] or "Unassigned"
             db.execute("UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
@@ -6376,8 +6390,8 @@ class KYCSubmitHandler(BaseHandler):
 class PreApprovalDecisionHandler(BaseHandler):
     """POST /api/applications/:id/pre-approval-decision
 
-    Allows compliance officers to pre-approve, reject, or request info
-    on HIGH/VERY_HIGH risk applications BEFORE KYC stage.
+    Allows admins and senior compliance officers to pre-approve, reject,
+    or request info on HIGH/VERY_HIGH risk applications BEFORE KYC stage.
 
     Decisions:
       PRE_APPROVE   → status = pre_approved → pricing shown → KYC unlocked
@@ -6385,7 +6399,7 @@ class PreApprovalDecisionHandler(BaseHandler):
       REQUEST_INFO  → status = draft (client re-edits pre-screening)
     """
     def post(self, app_id):
-        user = self.require_auth(roles=["admin", "sco", "co"])
+        user = self.require_auth()
         if not user:
             return
 
@@ -6407,6 +6421,17 @@ class PreApprovalDecisionHandler(BaseHandler):
 
         real_id = app["id"]
         attempt_target = app["ref"]
+
+        if user.get("role") not in ("admin", "sco"):
+            reason = (
+                f"Pre-approval blocked: {_role_label(user.get('role'))} role cannot submit pre-approval decisions "
+                "for HIGH/VERY_HIGH-risk applications. Allowed roles: Administrator, Senior CO."
+            )
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 403,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 403)
 
         # EX-05: Capture before-state for audit trail
         _before = snapshot_app_state(app)
@@ -10296,6 +10321,18 @@ ROLE_PERMISSION_MATRIX = [
     {"id": "manage_enhanced_requirements", "label": "Manage Enhanced Review requirements", "roles": ["admin", "sco"]},
     {"id": "view_enhanced_requirements", "label": "View Enhanced Review requirements", "roles": ["admin", "sco", "co"]},
 ]
+
+ROLE_LABELS = {
+    "admin": "Administrator",
+    "sco": "Senior CO",
+    "co": "Compliance Officer",
+    "analyst": "Analyst",
+}
+
+
+def _role_label(role):
+    normalized = str(role or "").strip().lower()
+    return ROLE_LABELS.get(normalized, normalized or "Unknown role")
 
 
 class RolesPermissionsHandler(BaseHandler):

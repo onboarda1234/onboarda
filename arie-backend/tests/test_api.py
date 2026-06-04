@@ -3814,6 +3814,123 @@ class TestGovernanceAttemptAudit:
         assert detail["outcome"] == "accepted"
         assert detail["response_code"] == 201
 
+    def test_co_pre_approval_decision_is_role_blocked_with_specific_403(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_preapproval_co_blocked"
+        app_ref = "ARF-2026-PHASE1B-PRE-CO"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Pre Blocked Ltd",
+            "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
+            self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("co001", "co", "Test CO", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/pre-approval-decision",
+            json={"decision": "PRE_APPROVE", "notes": "CO should not be allowed to pre-approve."},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 403
+        assert "Pre-approval blocked" in resp.text
+        assert "Compliance Officer" in resp.text
+
+    def test_admin_can_assign_preapproval_review_application_and_audit_it(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_assign_preapproval_admin"
+        app_ref = "ARF-2026-PHASE1B-ASG-ADMIN"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, assigned_to, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Assign Admin Ltd",
+            "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
+            None, self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.patch(
+            f"{api_server}/api/applications/{app_id}",
+            json={"assigned_to": "co001"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+
+        conn = get_db()
+        app_row = conn.execute(
+            "SELECT assigned_to FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        audit_row = conn.execute(
+            """
+            SELECT action, detail FROM audit_log
+            WHERE target = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert app_row["assigned_to"] == "co001"
+        assert audit_row is not None
+        assert audit_row["action"] == "Reassign"
+        assert "co001" in audit_row["detail"]
+
+    def test_co_assignment_is_role_blocked_with_specific_403(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_assign_preapproval_co"
+        app_ref = "ARF-2026-PHASE1B-ASG-CO"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, assigned_to, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Assign CO Ltd",
+            "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
+            None, self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("co001", "co", "Test CO", "officer")
+        resp = http_requests.patch(
+            f"{api_server}/api/applications/{app_id}",
+            json={"assigned_to": "admin001"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 403
+        assert "Assignment blocked" in resp.text
+        assert "Compliance Officer" in resp.text
+
     def test_accepted_screening_review_attempt_is_audited(self, api_server):
         """Accepted screening dispositions must write a Governance Attempt row."""
         from auth import create_token

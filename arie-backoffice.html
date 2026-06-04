@@ -1218,9 +1218,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <!-- Pre-Approval Actions (shown only for pre_approval_review) -->
     <div id="pre-approval-actions-topbar" style="display:none;align-items:center;gap:6px;">
       <span style="font-size:11px;font-weight:600;color:#d97706;margin-right:4px;">PRE-APPROVAL:</span>
-      <button class="btn btn-success btn-sm" onclick="preApproveApplication()" style="font-size:11px;">✅ Pre-Approve</button>
-      <button class="btn btn-danger btn-sm" onclick="preApprovalReject()" style="font-size:11px;">❌ Reject</button>
-      <button class="btn btn-warning btn-sm" onclick="preApprovalRequestInfo()" style="font-size:11px;">📋 Request Info</button>
+      <button class="btn btn-success btn-sm" id="btn-preapprove" onclick="preApproveApplication()" style="font-size:11px;">✅ Pre-Approve</button>
+      <button class="btn btn-danger btn-sm" id="btn-preapproval-reject" onclick="preApprovalReject()" style="font-size:11px;">❌ Reject</button>
+      <button class="btn btn-warning btn-sm" id="btn-preapproval-rmi" onclick="preApprovalRequestInfo()" style="font-size:11px;">📋 Request Info</button>
       <input type="text" id="pre-approval-notes" placeholder="Pre-approval notes (required)..." style="flex:1;min-width:180px;font-size:11px;padding:6px 10px;border:1px solid var(--border1);border-radius:var(--radius-sm);" />
     </div>
 
@@ -1231,8 +1231,11 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <button class="btn btn-warning btn-sm" onclick="requestMoreInfo()" id="btn-rmi" style="font-size:11px;">📋 More Info</button>
       <button class="btn btn-outline btn-sm" onclick="openOfficerCorrectionModal()" id="btn-open-officer-correction" style="font-size:11px;">✏️ Officer Correction</button>
       <button class="btn btn-outline btn-sm" onclick="openOverrideModal()" id="btn-override" style="font-size:11px;background:rgba(124,58,237,0.1);border-color:rgba(124,58,237,0.3);color:#7c3aed;">🔄 Override</button>
-      <button class="btn btn-outline btn-sm" onclick="reassignCase()" style="font-size:11px;">👤 Reassign</button>
       <button class="btn btn-outline btn-sm" onclick="escalateCase()" style="font-size:11px;">⬆️ Escalate</button>
+    </div>
+
+    <div id="case-management-actions-topbar" style="display:none;align-items:center;gap:6px;">
+      <button class="btn btn-outline btn-sm" id="btn-reassign" onclick="reassignCase()" style="font-size:11px;">👤 Reassign</button>
     </div>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
@@ -5104,8 +5107,12 @@ var ROLE_PERMISSIONS = null;
 // Populated from backend authorization policy for the Roles & Permissions view.
 
 // ── EX-12: Client-side permission helpers (defence-in-depth, NOT a replacement for backend auth) ──
+function currentUserRole() {
+  return (currentUser && currentUser.role) || (BO_AUTH_USER && BO_AUTH_USER.role) || '';
+}
+
 function hasPermission(permissionId) {
-  var role = currentUser ? currentUser.role : '';
+  var role = currentUserRole();
   if (!role) return false;
   if (!ROLE_PERMISSIONS || !Array.isArray(ROLE_PERMISSIONS.permissions)) return false;
   var perm = ROLE_PERMISSIONS.permissions.find(function(p) { return p.id === permissionId; });
@@ -5119,6 +5126,34 @@ function assertPermission(permissionId) {
     return false;
   }
   return true;
+}
+
+function setDetailActionVisibility(id, visible) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = visible ? '' : 'none';
+}
+
+function syncApplicationActionPermissions(app) {
+  app = app || currentApp;
+  if (!app) return;
+  var isPreApproval = (app.statusRaw === 'pre_approval_review' || app.status === 'Pre-Approval Review');
+  var canSubmitPreApproval = hasPermission('approve_high_very_high');
+  var canReassignCases = hasPermission('assign_reassign_cases');
+  var preApprovalCard = document.getElementById('pre-approval-actions-topbar');
+  var standardCard = document.getElementById('standard-actions-topbar');
+  var caseManagementCard = document.getElementById('case-management-actions-topbar');
+  var preApprovalNotes = document.getElementById('pre-approval-notes');
+
+  setDetailActionVisibility('btn-preapprove', canSubmitPreApproval);
+  setDetailActionVisibility('btn-preapproval-reject', canSubmitPreApproval);
+  setDetailActionVisibility('btn-preapproval-rmi', canSubmitPreApproval);
+  setDetailActionVisibility('btn-reassign', canReassignCases);
+
+  if (preApprovalNotes) preApprovalNotes.style.display = canSubmitPreApproval ? '' : 'none';
+  if (preApprovalCard) preApprovalCard.style.display = isPreApproval && canSubmitPreApproval ? 'flex' : 'none';
+  if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
+  if (caseManagementCard) caseManagementCard.style.display = canReassignCases ? 'flex' : 'none';
 }
 
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
@@ -7738,11 +7773,10 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('detail-activity').innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading audit trail…</div>';
   loadActivityLog(app);
 
-  var isPreApproval = (app.statusRaw === 'pre_approval_review' || app.status === 'Pre-Approval Review');
-  var preApprovalCard = document.getElementById('pre-approval-actions-topbar');
-  var standardCard = document.getElementById('standard-actions-topbar');
-  if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? 'flex' : 'none';
-  if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
+  syncApplicationActionPermissions(app);
+  ensureRolePermissionsLoaded().then(function() {
+    if (currentApp && currentApp.id === app.id) syncApplicationActionPermissions(currentApp);
+  });
   detailLifecycleSummaryOverview = null;
   renderCaseCommandCentre(app);
   renderApprovalBlockersPanel(app);
@@ -18154,9 +18188,15 @@ async function confirmRMIRequest() {
   }
 }
 
-function reassignCase() { document.getElementById('modal-reassign').classList.add('open'); }
+async function reassignCase() {
+  await ensureRolePermissionsLoaded();
+  if (!assertPermission('assign_reassign_cases')) return;
+  document.getElementById('modal-reassign').classList.add('open');
+}
 async function confirmReassign() {
   if (!currentApp) return;
+  await ensureRolePermissionsLoaded();
+  if (!assertPermission('assign_reassign_cases')) return;
   var to = document.getElementById('reassign-to').value;
   var assignUser = USERS.find(function(u) { return u.id === to; });
   var assigneeLabel = assignUser ? assignUser.name : 'Unassigned';
@@ -18228,7 +18268,8 @@ function addNote() {
 // ═══════════════════════════════════════════════════════════
 async function preApproveApplication() {
   if (!currentApp) return;
-  if (!assertPermission('approve_low_medium')) return;
+  await ensureRolePermissionsLoaded();
+  if (!assertPermission('approve_high_very_high')) return;
   var notes = document.getElementById('pre-approval-notes').value.trim();
   if (!notes) { showToast('Please provide pre-approval notes before making a decision'); return; }
 
@@ -18247,7 +18288,8 @@ async function preApproveApplication() {
 
 async function preApprovalReject() {
   if (!currentApp) return;
-  if (!assertPermission('reject_applications')) return;
+  await ensureRolePermissionsLoaded();
+  if (!assertPermission('approve_high_very_high')) return;
   var notes = document.getElementById('pre-approval-notes').value.trim();
   if (!notes) { showToast('Please provide rejection notes'); return; }
 
@@ -18266,7 +18308,8 @@ async function preApprovalReject() {
 
 async function preApprovalRequestInfo() {
   if (!currentApp) return;
-  if (!assertPermission('request_more_information')) return;
+  await ensureRolePermissionsLoaded();
+  if (!assertPermission('approve_high_very_high')) return;
   var notes = document.getElementById('pre-approval-notes').value.trim();
   if (!notes) { showToast('Please specify what information is required'); return; }
 
