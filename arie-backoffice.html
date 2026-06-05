@@ -14622,6 +14622,44 @@ async function saveLifecycleRiskChange(reviewId) {
   }
 }
 
+function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection) {
+  var attestation = reviewDetail && reviewDetail.client_attestation ? reviewDetail.client_attestation : {};
+  var questions = Array.isArray(attestation.questions) ? attestation.questions : [];
+  var statusLabel = reviewDetail.client_attestation_status_label || (reviewProjection && reviewProjection.attestation_status_label) || 'Not started';
+  var submittedAt = reviewDetail.client_attestation_submitted_at || (reviewProjection && reviewProjection.attestation_submitted_at) || '';
+  var savedAt = reviewDetail.client_attestation_saved_at || (reviewProjection && reviewProjection.attestation_saved_at) || '';
+  var materialKeys = Array.isArray(reviewDetail.client_attestation_material_change_question_keys)
+    ? reviewDetail.client_attestation_material_change_question_keys
+    : [];
+  var badges = [
+    lifecycleDetailBadge(statusLabel, statusLabel === 'Submitted' ? 'green' : (statusLabel === 'Draft saved' ? 'amber' : 'blue')),
+    lifecycleDetailBadge('Risk level: ' + String(reviewDetail.risk_level || (reviewProjection && reviewProjection.risk_level) || '—'), 'slate'),
+  ];
+  if (submittedAt) {
+    badges.push(lifecycleDetailBadge('Submitted ' + String(submittedAt).slice(0, 10), 'green'));
+  } else if (savedAt) {
+    badges.push(lifecycleDetailBadge('Draft saved ' + String(savedAt).slice(0, 10), 'amber'));
+  }
+  var rows = questions.length
+    ? questions.map(function(question) {
+        var highlight = !!question.material_change;
+        var answerLabel = question.answer === 'yes' ? 'Yes' : (question.answer === 'no' ? 'No' : 'Unanswered');
+        return '<div style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+            '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(question.label || question.key || 'Question') + '</div>' +
+            '<span style="display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;font-size:11px;font-weight:700;background:' + (highlight ? 'var(--amber-dim)' : 'var(--surface2)') + ';color:' + (highlight ? 'var(--amber)' : 'var(--text2)') + ';">' + escapeHtml(answerLabel) + (highlight ? ' • Flagged' : '') + '</span>' +
+          '</div>' +
+          (question.comment ? '<div style="margin-top:8px;font-size:12px;color:var(--text2);line-height:1.6;"><strong>Client comment:</strong> ' + escapeHtml(question.comment) + '</div>' : '') +
+        '</div>';
+      }).join('')
+    : '<div style="font-size:12px;color:var(--text2);">No client attestation answers have been saved yet.</div>';
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' + badges.join('') + '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Client-facing periodic review attestations are read-only in back office. Material changes will be routed to document requests and Change Management in the next workflow step.</div>' +
+    '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Declared material-change keys: ' + (materialKeys.length ? materialKeys.map(escapeHtml).join(', ') : 'none') + '</div>' +
+    '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Declaration accepted: <strong style="color:' + (attestation.declaration_accepted ? 'var(--green)' : 'var(--amber)') + ';">' + (attestation.declaration_accepted ? 'Yes' : 'No') + '</strong></div>' +
+    rows;
+}
+
 function renderLifecycleDetailTab(context) {
   var container = document.getElementById('detail-tab-lifecycle');
   if (!container) return;
@@ -14775,6 +14813,9 @@ function renderLifecycleDetailTab(context) {
   var requiredEvidenceBody = activeReview
     ? renderLifecycleRequiredEvidenceCard(activeReview.id, requiredItems, evidenceLinks, applicationDocuments)
     : '<div style="font-size:12px;color:var(--text2);">No required evidence is currently open.</div>';
+  var clientAttestationBody = activeReview
+    ? renderLifecycleClientAttestationPanel(activeReview, activeReviewProjection)
+    : '<div style="font-size:12px;color:var(--text2);">No active periodic review attestation is available.</div>';
 
   var crossLinksBody = linkageEdges.length
     ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + linkageEdges.map(lifecycleDetailEdgeChip).join('') + '</div>' +
@@ -14812,6 +14853,7 @@ function renderLifecycleDetailTab(context) {
     metricsRow +
     '<div class="lifecycle-section-stack">' +
       currentReviewCardHtml +
+      lifecycleDetailCard('Client Attestation', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
       lifecycleDetailCard('Required Evidence', 'Canonical evidence requirements linked to the existing KYC document repository.', requiredEvidenceBody, '#0f766e') +
       lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
       lifecycleDetailCard('Agent Signals', 'Agent 6/7/8/10 decision-support signals projected into Lifecycle without mutating officer-owned review state.', lifecycleAgentSignalsPanel(summary), '#2557d6') +

@@ -8,6 +8,12 @@ from periodic_review_blockers import (
     evaluate_review_readiness,
     load_evidence_links,
 )
+from periodic_review_attestation import (
+    ATTESTATION_STATUS_NOT_STARTED,
+    attestation_snapshot_from_review,
+    task_primary_action_label,
+    task_status_label,
+)
 
 ACTIVE_REVIEW_STATES = (
     "pending",
@@ -262,6 +268,8 @@ def _prefetch_rows_by_id(db, table: str, *, id_column: str, ids: Sequence[Any], 
 def _last_activity_timestamp(review) -> Optional[str]:
     candidates = []
     for field in (
+        "client_attestation_submitted_at",
+        "client_attestation_saved_at",
         "state_changed_at",
         "required_items_generated_at",
         "risk_rerated_at",
@@ -339,6 +347,8 @@ def build_review_projection(
     updated_at = _last_activity_timestamp(review)
     is_terminal = queue_status in TERMINAL_QUEUE_STATUSES
     trigger_source = _row_get(review, "trigger_source") or _row_get(review, "trigger_type")
+    attestation = attestation_snapshot_from_review(review)
+    attestation_status = str(attestation.get("status") or ATTESTATION_STATUS_NOT_STARTED)
 
     return {
         "review_id": review_id,
@@ -378,6 +388,19 @@ def build_review_projection(
         "completion_readiness_applicable": completion_readiness_applicable,
         "outcome": _row_get(review, "outcome"),
         "memo_status": _load_memo_status(db, review_id, review),
+        "attestation_status": attestation_status,
+        "attestation_status_label": {
+            "not_started": "Not started",
+            "draft": "Draft saved",
+            "submitted": "Submitted",
+        }.get(attestation_status, "Not started"),
+        "attestation_task_status_label": task_status_label(attestation, is_overdue=due_meta["is_overdue"]),
+        "attestation_primary_action_label": task_primary_action_label(attestation),
+        "attestation_saved_at": attestation.get("saved_at"),
+        "attestation_submitted_at": attestation.get("submitted_at"),
+        "attestation_submitted_by": attestation.get("submitted_by"),
+        "attestation_has_material_changes": bool(attestation.get("has_material_changes")),
+        "attestation_material_change_question_keys": attestation.get("material_change_question_keys", []),
         "created_at": _row_get(review, "created_at"),
         "updated_at": updated_at,
         "last_activity_at": updated_at,
