@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -100,6 +100,28 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _serialize_temporal(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        normalized = text.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized).isoformat()
+        except ValueError:
+            try:
+                return date.fromisoformat(text[:10]).isoformat()
+            except ValueError:
+                return text
+    return str(value)
+
+
 def _normalize_answer(value: Any) -> str:
     answer = str(value or "").strip().lower()
     if answer in {"", "null", "none"}:
@@ -134,8 +156,8 @@ def build_attestation_snapshot(
     payload: Optional[Dict[str, Any]],
     *,
     status: str,
-    saved_at: Optional[str],
-    submitted_at: Optional[str],
+    saved_at: Optional[Any],
+    submitted_at: Optional[Any],
     submitted_by: Optional[str],
 ) -> Dict[str, Any]:
     raw_payload = dict(payload or {})
@@ -155,8 +177,8 @@ def build_attestation_snapshot(
     return {
         "questionnaire_version": str(raw_payload.get("questionnaire_version") or QUESTIONNAIRE_VERSION),
         "status": status or ATTESTATION_STATUS_NOT_STARTED,
-        "saved_at": saved_at,
-        "submitted_at": submitted_at,
+        "saved_at": _serialize_temporal(saved_at),
+        "submitted_at": _serialize_temporal(submitted_at),
         "submitted_by": submitted_by,
         "declaration_accepted": declaration_accepted,
         "questions": questions,
@@ -261,14 +283,14 @@ def prepare_attestation_draft_update(review_row, raw_payload: Dict[str, Any]) ->
     return {
         "status": ATTESTATION_STATUS_DRAFT,
         "saved_at": now,
-        "submitted_at": _row_get(review_row, "client_attestation_submitted_at"),
+        "submitted_at": _serialize_temporal(_row_get(review_row, "client_attestation_submitted_at")),
         "submitted_by": _row_get(review_row, "client_attestation_submitted_by"),
         "payload_json": json.dumps(payload, sort_keys=True),
         "snapshot": build_attestation_snapshot(
             payload,
             status=ATTESTATION_STATUS_DRAFT,
             saved_at=now,
-            submitted_at=_row_get(review_row, "client_attestation_submitted_at"),
+            submitted_at=_serialize_temporal(_row_get(review_row, "client_attestation_submitted_at")),
             submitted_by=_row_get(review_row, "client_attestation_submitted_by"),
         ),
     }
@@ -283,23 +305,24 @@ def prepare_attestation_submission_update(review_row, raw_payload: Dict[str, Any
     if not declaration_accepted:
         raise PeriodicReviewAttestationError("Declaration must be accepted before submission")
     now = _now_iso()
+    saved_at = _serialize_temporal(existing.get("saved_at")) or now
     payload = {
         "questionnaire_version": QUESTIONNAIRE_VERSION,
         "answers": answers,
         "declaration_accepted": True,
-        "saved_at": existing.get("saved_at") or now,
+        "saved_at": saved_at,
         "submitted_at": now,
     }
     return {
         "status": ATTESTATION_STATUS_SUBMITTED,
-        "saved_at": existing.get("saved_at") or now,
+        "saved_at": saved_at,
         "submitted_at": now,
         "submitted_by": submitted_by,
         "payload_json": json.dumps(payload, sort_keys=True),
         "snapshot": build_attestation_snapshot(
             payload,
             status=ATTESTATION_STATUS_SUBMITTED,
-            saved_at=existing.get("saved_at") or now,
+            saved_at=saved_at,
             submitted_at=now,
             submitted_by=submitted_by,
         ),

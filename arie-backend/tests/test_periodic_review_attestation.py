@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timezone
 
 from tornado.testing import AsyncHTTPTestCase
 
@@ -10,6 +11,8 @@ from tornado.testing import AsyncHTTPTestCase
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("ENVIRONMENT", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
+
+from periodic_review_attestation import prepare_attestation_submission_update
 
 
 class _PeriodicReviewAttestationBase(AsyncHTTPTestCase):
@@ -275,6 +278,8 @@ class TestPeriodicReviewAttestationHandlers(_PeriodicReviewAttestationBase):
         assert detail["periodic_review_id"] == self._owned_review_id
         assert detail["declaration_accepted"] is True
         assert "directors_changed" in detail["material_change_question_keys"]
+        assert isinstance(body["attestation"]["saved_at"], str)
+        assert isinstance(body["attestation"]["submitted_at"], str)
 
     def test_backoffice_review_detail_includes_read_only_attestation_summary_and_risk(self):
         submit_payload = {
@@ -305,3 +310,117 @@ class TestPeriodicReviewAttestationHandlers(_PeriodicReviewAttestationBase):
         flagged = [q for q in detail["client_attestation"]["questions"] if q["material_change"]]
         assert [q["key"] for q in flagged] == ["company_contact_details_correct"]
 
+    def test_submit_after_draft_with_datetime_saved_at_serializes_timestamps_and_writes_audit(self):
+        draft_payload = {
+            "answers": {
+                "directors_changed": {"answer": "yes", "comment": "One director resigned."},
+                "shareholders_changed": {"answer": "no", "comment": ""},
+            },
+            "declaration_accepted": False,
+        }
+        save_resp = self._post(
+            "/api/portal/applications/app-owned/periodic-review/save-draft",
+            draft_payload,
+            self.client_token,
+        )
+        assert save_resp.code == 200
+
+        draft_ts = datetime(2026, 6, 5, 14, 34, 15, 394102, tzinfo=timezone.utc)
+        self._conn.execute(
+            "UPDATE periodic_reviews SET client_attestation_saved_at = ? WHERE id = ?",
+            (draft_ts, self._owned_review_id),
+        )
+        self._conn.commit()
+
+        submit_payload = {
+            "answers": {
+                "directors_changed": {"answer": "yes", "comment": "One director resigned."},
+                "shareholders_changed": {"answer": "no", "comment": ""},
+                "ubos_changed": {"answer": "no", "comment": ""},
+                "business_activity_changed": {"answer": "no", "comment": ""},
+                "jurisdictions_changed": {"answer": "no", "comment": ""},
+                "transaction_volume_changed": {"answer": "no", "comment": ""},
+                "licence_regulatory_status_changed": {"answer": "no", "comment": ""},
+                "company_contact_details_correct": {"answer": "yes", "comment": ""},
+            },
+            "declaration_accepted": True,
+        }
+        submit_resp = self._post(
+            "/api/portal/applications/app-owned/periodic-review/submit",
+            submit_payload,
+            self.client_token,
+        )
+        assert submit_resp.code == 200
+        body = json.loads(submit_resp.body)
+        assert body["attestation"]["status"] == "submitted"
+        assert body["attestation"]["saved_at"] == draft_ts.isoformat()
+        assert isinstance(body["attestation"]["submitted_at"], str)
+
+        stored = self._conn.execute(
+            "SELECT client_attestation_status, client_attestation_payload, client_attestation_saved_at, client_attestation_submitted_at "
+            "FROM periodic_reviews WHERE id = ?",
+            (self._owned_review_id,),
+        ).fetchone()
+        assert stored["client_attestation_status"] == "submitted"
+        payload = json.loads(stored["client_attestation_payload"])
+        assert payload["saved_at"] == draft_ts.isoformat()
+        assert isinstance(payload["submitted_at"], str)
+
+        audit = self._conn.execute(
+            "SELECT action, detail FROM audit_log WHERE action = 'periodic_review_attestation_submitted' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert audit is not None
+        detail = json.loads(audit["detail"])
+        assert detail["periodic_review_id"] == self._owned_review_id
+        assert detail["submitted_at"] == body["attestation"]["submitted_at"]
+
+
+def test_prepare_attestation_submission_update_serializes_datetime_saved_at_from_existing_draft():
+    draft_ts = datetime(2026, 6, 5, 14, 34, 15, 394102, tzinfo=timezone.utc)
+    review_row = {
+        "id": 18,
+        "client_attestation_status": "draft",
+        "client_attestation_saved_at": draft_ts,
+        "client_attestation_submitted_at": None,
+        "client_attestation_submitted_by": None,
+        "client_attestation_payload": json.dumps({
+            "questionnaire_version": "prs2_v1",
+            "answers": {
+                "directors_changed": {"answer": "yes", "comment": "One director resigned."},
+                "shareholders_changed": {"answer": "no", "comment": ""},
+                "ubos_changed": {"answer": "no", "comment": ""},
+                "business_activity_changed": {"answer": "no", "comment": ""},
+                "jurisdictions_changed": {"answer": "no", "comment": ""},
+                "transaction_volume_changed": {"answer": "no", "comment": ""},
+                "licence_regulatory_status_changed": {"answer": "no", "comment": ""},
+                "company_contact_details_correct": {"answer": "yes", "comment": ""},
+            },
+            "declaration_accepted": False,
+            "saved_at": draft_ts.isoformat(),
+            "submitted_at": None,
+        }),
+    }
+    submit_payload = {
+        "answers": {
+            "directors_changed": {"answer": "yes", "comment": "One director resigned."},
+            "shareholders_changed": {"answer": "no", "comment": ""},
+            "ubos_changed": {"answer": "no", "comment": ""},
+            "business_activity_changed": {"answer": "no", "comment": ""},
+            "jurisdictions_changed": {"answer": "no", "comment": ""},
+            "transaction_volume_changed": {"answer": "no", "comment": ""},
+            "licence_regulatory_status_changed": {"answer": "no", "comment": ""},
+            "company_contact_details_correct": {"answer": "yes", "comment": ""},
+        },
+        "declaration_accepted": True,
+    }
+
+    update = prepare_attestation_submission_update(review_row, submit_payload, submitted_by="client001")
+    payload = json.loads(update["payload_json"])
+
+    assert update["status"] == "submitted"
+    assert update["saved_at"] == draft_ts.isoformat()
+    assert payload["saved_at"] == draft_ts.isoformat()
+    assert isinstance(update["submitted_at"], str)
+    assert isinstance(payload["submitted_at"], str)
+    assert update["snapshot"]["saved_at"] == draft_ts.isoformat()
+    assert update["snapshot"]["submitted_by"] == "client001"
