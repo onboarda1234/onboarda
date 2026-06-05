@@ -100,22 +100,24 @@ def test_lifecycle_required_evidence_wires_repository_link_upload_and_custom_req
     assert "does not create a separate periodic-review document store" in html
 
 
-def test_lifecycle_legacy_baseline_form_is_backoffice_conditional_and_auditable():
+def test_overview_periodic_review_baseline_box_is_compact_backoffice_only_and_auditable():
     html = _read_backoffice()
-    assert "Manual Legacy Review Baseline" in html
-    assert "function lifecycleManualLegacyBaselineControls" in html
+    assert 'id="detail-periodic-review-baseline"' in html
+    assert "Periodic Review Baseline" in html
+    assert "function renderOverviewPeriodicReviewBaseline" in html
+    assert "function loadOverviewPeriodicReviewBaseline" in html
+    assert "function saveOverviewPeriodicReviewBaseline" in html
     assert "canEditPeriodicReviewLegacyBaseline" in html
-    assert "lifecycle-legacy-last-review-" in html
-    assert "lifecycle-legacy-evidence-holder-" in html
-    assert "Review evidence / memo reference" in html
-    assert "toggleLifecycleLegacyEvidence" in html
-    assert "/import-setup" in html
-    assert "review_evidence_note" in html
-    assert "Compliance officer, SCO, or admin access is required" in html
-    assert "Overdue imported baselines stay visible as overdue" in html
-    assert "Available before the scheduled review becomes active" in html
-    assert "setupReviewDetail" in html
-    assert "summary.review_setup" in html
+    assert "Officer-only setup metadata" in html
+    assert "N/A disables the baseline date" in html
+    assert "/baseline" in html
+    assert "baseline_status" in html
+    assert "baseline_cadence" in html
+    assert "officer_note" in html
+    assert "Not set" in html
+    assert "Last onboarding date" in html
+    assert "Last periodic review date" in html
+    assert "Imported legacy review" in html
 
 
 def test_lifecycle_required_evidence_uses_document_verification_truth_not_link_only():
@@ -140,19 +142,19 @@ def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
     assert "Current Review Workspace" not in section
 
 
-def test_lifecycle_legacy_baseline_visible_for_scheduled_review_setup():
+def test_overview_periodic_review_baseline_loads_from_active_or_scheduled_review_setup():
     html = _read_backoffice()
-    start = html.index("function renderLifecycleDetailTab(context)")
-    end = html.index("async function loadLifecycleDetailTab(force)", start)
-    section = html[start:end]
-    assert "var setupReviewDetail = activeReview || (context && context.setupReviewDetail)" in section
-    assert "No active periodic review." in section
-    assert "lifecycleManualLegacyBaselineControls(setupReviewDetail.id" in section
-    load_start = html.index("async function loadLifecycleDetailTab(force)")
-    load_end = html.index("// ═══════════════════════════════════════════════════════════", load_start)
-    load_section = html[load_start:load_end]
-    assert "var reviewSetup = (summary && summary.review_setup) || null;" in load_section
-    assert "setupReviewDetail = await boApiCall('GET', '/monitoring/reviews/'" in load_section
+    summary_start = html.index("async function loadLifecycleApplicationSummary(applicationId)")
+    summary_end = html.index("function fetchLifecycleApplicationSummary", summary_start)
+    summary_section = html[summary_start:summary_end]
+    assert "loadOverviewPeriodicReviewBaseline(applicationId, resp);" in summary_section
+    baseline_start = html.index("async function loadOverviewPeriodicReviewBaseline(applicationId, summary)")
+    baseline_end = html.index("function lifecycleDetailBadge", baseline_start)
+    baseline_section = html[baseline_start:baseline_end]
+    assert "var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;" in baseline_section
+    assert "var reviewSetup = (summary && summary.review_setup) || null;" in baseline_section
+    assert "renderOverviewPeriodicReviewBaseline(null);" in baseline_section
+    assert "var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewId));" in baseline_section
 
 
 def test_lifecycle_workspace_uses_scrollable_responsive_layout():

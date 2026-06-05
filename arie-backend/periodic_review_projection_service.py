@@ -154,8 +154,12 @@ def _trigger_source_label(value: Any) -> str:
     mapping = {
         "schedule": "Scheduled cadence",
         "time_based": "Scheduled cadence",
-        "monitoring_alert": "Monitoring alert",
+        "monitoring_alert": "Monitoring escalation",
         "manual": "Manual review",
+        "officer_decision": "Manual review",
+        "policy_routing": "Policy trigger",
+        "policy_trigger": "Policy trigger",
+        "screening_update": "Policy trigger",
         "manual_backfill": "Manual backfill",
         "legacy_import": "Legacy import",
     }

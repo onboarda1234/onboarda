@@ -195,6 +195,7 @@ from periodic_review_management import (
     add_evidence_link as _add_periodic_review_evidence_link,
     assign_review as _assign_periodic_review,
     record_risk_change as _record_periodic_review_risk_change,
+    save_periodic_review_baseline as _save_periodic_review_baseline,
     save_legacy_import_setup as _save_periodic_review_import_setup,
     save_material_change_attestation as _save_periodic_review_material_change,
     save_officer_rationale as _save_periodic_review_rationale,
@@ -19151,6 +19152,41 @@ class PeriodicReviewImportSetupHandler(BaseHandler):
             db.close()
 
 
+class PeriodicReviewBaselineHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/baseline — save overview baseline metadata."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("baseline_status"):
+            return self.error("baseline_status is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_baseline(
+                    db,
+                    review_id,
+                    baseline_status=data.get("baseline_status"),
+                    baseline_date=data.get("baseline_date"),
+                    baseline_cadence=data.get("baseline_cadence"),
+                    officer_note=data.get("officer_note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "baseline_saved", "result": result})
+        finally:
+            db.close()
+
+
 class PeriodicReviewImportAcknowledgementHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/import-acknowledgement."""
     def post(self, review_id):
@@ -19487,6 +19523,62 @@ def _serialize_portal_periodic_review_attestation(review_row, *, projection=None
     }
 
 
+def _periodic_review_baseline_snapshot(review_row) -> dict:
+    status = str(review_row.get("baseline_status") or "").strip().lower()
+    date_value = review_row.get("baseline_date")
+    cadence_months = review_row.get("baseline_cadence_months")
+    note = review_row.get("baseline_note")
+    legacy_import = bool(review_row.get("legacy_import"))
+    if not status:
+        if legacy_import:
+            status = "imported_legacy_review"
+            date_value = date_value or review_row.get("last_review_date")
+            note = note or review_row.get("legacy_source_note")
+        else:
+            status = "not_set"
+    if status in {"last_periodic_review_date", "imported_legacy_review"} and not date_value:
+        date_value = review_row.get("last_review_date")
+    if cadence_months in (None, "", 0, "0"):
+        if review_row.get("frequency_months") not in (None, "", 0, "0") and not str(review_row.get("calculation_basis") or "").startswith("risk_level:"):
+            cadence_months = int(review_row.get("frequency_months"))
+    if cadence_months in (None, "", 0, "0"):
+        cadence_value = "risk_default"
+        cadence_label = "Use risk default"
+    else:
+        cadence_months = int(cadence_months)
+        cadence_value = cadence_months
+        cadence_label = f"{cadence_months} months"
+    status_labels = {
+        "not_set": "Not set",
+        "not_applicable": "N/A",
+        "last_onboarding_date": "Last onboarding date",
+        "last_periodic_review_date": "Last periodic review date",
+        "imported_legacy_review": "Imported legacy review",
+    }
+    next_due = review_row.get("next_review_date") or review_row.get("due_date")
+    placeholder = None
+    if status == "not_applicable":
+        next_due = None
+        placeholder = "N/A"
+    elif status == "not_set":
+        next_due = None
+        placeholder = "Not scheduled yet"
+    elif not date_value:
+        next_due = None
+        placeholder = "Missing baseline date"
+    return {
+        "status": status,
+        "status_label": status_labels.get(status, status.replace("_", " ").title()),
+        "date": date_value,
+        "cadence_value": cadence_value,
+        "cadence_label": cadence_label,
+        "cadence_months": cadence_months,
+        "next_review_due": next_due,
+        "next_review_due_placeholder": placeholder,
+        "officer_note": note,
+    }
+
+
 def _serialize_periodic_review_row(db, review_row, *, projection=None):
     import document_health_monitor as dhm
     import monitoring_routing as mr
@@ -19550,6 +19642,7 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
         "frequency_months": result.get("frequency_months"),
         "policy_version": result.get("policy_version"),
     }
+    result["periodic_review_baseline"] = _periodic_review_baseline_snapshot(result)
     result["memo_status"] = projection.get("memo_status")
     result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
     result["evidence_links"] = projection.get("evidence_links", [])
@@ -22839,6 +22932,7 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)/run-screening-refresh",
          PeriodicReviewScreeningRefreshHandler),
         (r"/api/monitoring/reviews/([^/]+)/assignment", PeriodicReviewAssignmentHandler),
+        (r"/api/monitoring/reviews/([^/]+)/baseline", PeriodicReviewBaselineHandler),
         (r"/api/monitoring/reviews/([^/]+)/import-setup", PeriodicReviewImportSetupHandler),
         (r"/api/monitoring/reviews/([^/]+)/import-acknowledgement",
          PeriodicReviewImportAcknowledgementHandler),

@@ -853,6 +853,10 @@ def _get_postgres_schema() -> str:
         legacy_sco_acknowledged_by TEXT REFERENCES users(id),
         legacy_sco_acknowledged_at TIMESTAMP,
         import_requires_ack BOOLEAN DEFAULT FALSE,
+        baseline_status TEXT,
+        baseline_date TEXT,
+        baseline_cadence_months INTEGER,
+        baseline_note TEXT,
         material_change_attestation TEXT,
         material_change_categories JSONB DEFAULT '[]',
         risk_change_attestation TEXT,
@@ -1853,6 +1857,10 @@ def _get_sqlite_schema() -> str:
         legacy_sco_acknowledged_by TEXT REFERENCES users(id),
         legacy_sco_acknowledged_at TEXT,
         import_requires_ack INTEGER DEFAULT 0,
+        baseline_status TEXT,
+        baseline_date TEXT,
+        baseline_cadence_months INTEGER,
+        baseline_note TEXT,
         material_change_attestation TEXT,
         material_change_categories TEXT DEFAULT '[]',
         risk_change_attestation TEXT,
@@ -3049,6 +3057,22 @@ def _ensure_periodic_review_attestation_schema(db: DBConnection):
         "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_client_attestation_status "
         "ON periodic_reviews(client_attestation_status)"
     )
+
+
+def _ensure_periodic_review_baseline_schema(db: DBConnection):
+    """Add PRS-2B baseline metadata fields for officer-managed setup."""
+    if not _safe_table_exists(db, "periodic_reviews"):
+        return
+
+    review_columns = {
+        "baseline_status": "TEXT",
+        "baseline_date": "TEXT",
+        "baseline_cadence_months": "INTEGER",
+        "baseline_note": "TEXT",
+    }
+    for column, definition in review_columns.items():
+        if not _safe_column_exists(db, "periodic_reviews", column):
+            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
 
 
 SUPERVISOR_AUDIT_LOG_COLUMNS = (
@@ -5828,6 +5852,19 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.38a: Ensured periodic review attestation schema")
     except Exception as e:
         logger.error("Migration v2.38a failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.38b: compact periodic-review baseline metadata for
+    # Application Overview without creating a separate review model.
+    try:
+        _ensure_periodic_review_baseline_schema(db)
+        db.commit()
+        logger.info("Migration v2.38b: Ensured periodic review baseline schema")
+    except Exception as e:
+        logger.error("Migration v2.38b failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

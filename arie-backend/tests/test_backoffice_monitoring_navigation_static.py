@@ -41,6 +41,7 @@ def test_periodic_review_signals_is_a_standalone_view():
 
     view_region = _view_region(html, "view-periodic-review-signals", "view-monitoring")
     show_view_region = _function_region(html, "showView", "signOut")
+    route_region = _function_region(html, "applyBackofficeHashRoute", "renderKPIDashboard")
 
     assert "Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth." in view_region
     assert 'id="review-status-filter"' in view_region
@@ -49,7 +50,12 @@ def test_periodic_review_signals_is_a_standalone_view():
     assert "Open Lifecycle Queue" in view_region
     assert "'periodic-review-signals':'Periodic Review Queue'" in show_view_region
     assert "if (name === 'periodic-review-signals')" in show_view_region
+    assert "renderPeriodicReviewQueue();" in show_view_region
+    assert "if (loaded) renderPeriodicReviewQueue();" in show_view_region
+    assert "if (name === 'periodic-review-signals') {\n    renderMonitoring();" not in show_view_region
     assert "ensureMonitoringDataLoaded()" in show_view_region
+    assert "if (route.view === 'periodic-review-signals')" in route_region
+    assert "if (route.view === 'monitoring')" in route_region
 
 
 def test_monitoring_alerts_view_keeps_agents_and_drops_review_signals_tab():

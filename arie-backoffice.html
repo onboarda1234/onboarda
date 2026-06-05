@@ -1262,6 +1262,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div id="detail-tab-overview">
     <!-- Lifecycle summary: compact actionable strip; full detail remains in Lifecycle tab. -->
     <div id="detail-lifecycle-summary"></div>
+    <div id="detail-periodic-review-baseline"></div>
     <div id="detail-change-management"></div>
 
     <div id="detail-company-name" style="height:0;overflow:hidden;font-size:0;line-height:0;" aria-hidden="true">Company Name</div>
@@ -5313,9 +5314,9 @@ function showView(name, navItem) {
     renderScreening({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length });
   }
   if (name === 'periodic-review-signals') {
-    renderMonitoring();
+    renderPeriodicReviewQueue();
     ensureMonitoringDataLoaded().then(function(loaded) {
-      if (loaded) renderMonitoring();
+      if (loaded) renderPeriodicReviewQueue();
     });
   }
   if (name === 'monitoring') {
@@ -7860,6 +7861,8 @@ function renderAuthoritativeAppDetail(app, options) {
     if (currentApp && currentApp.id === app.id) syncApplicationActionPermissions(currentApp);
   });
   detailLifecycleSummaryOverview = null;
+  var detailBaselineContainer = document.getElementById('detail-periodic-review-baseline');
+  if (detailBaselineContainer) detailBaselineContainer.innerHTML = '';
   renderCaseCommandCentre(app);
   renderApprovalBlockersPanel(app);
 
@@ -13309,11 +13312,14 @@ async function loadLifecycleApplicationSummary(applicationId) {
       summary: resp
     };
     renderLifecycleApplicationSummary(resp);
+    loadOverviewPeriodicReviewBaseline(applicationId, resp);
   } catch (err) {
     // Soft-fail: do not block app detail rendering if the lifecycle
     // endpoint is unavailable. Keep this section out of the way.
     console.warn('Lifecycle summary load failed:', err);
     detailLifecycleSummaryOverview = null;
+    var baselineContainer = document.getElementById('detail-periodic-review-baseline');
+    if (baselineContainer) baselineContainer.innerHTML = '';
     container.innerHTML = err && err.status === 403
       ? '<div style="font-size:11px;color:var(--text3);">Lifecycle summary is restricted for this role.</div>'
       : '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
@@ -13365,6 +13371,173 @@ function renderLifecycleApplicationSummary(resp) {
     '</div>';
   if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
     renderCaseCommandCentre(window._currentDetailApp);
+  }
+}
+
+function periodicReviewBaselineStatusOptions(selected) {
+  return [
+    ['not_set', 'Not set'],
+    ['not_applicable', 'N/A'],
+    ['last_onboarding_date', 'Last onboarding date'],
+    ['last_periodic_review_date', 'Last periodic review date'],
+    ['imported_legacy_review', 'Imported legacy review']
+  ].map(function(option) {
+    return '<option value="' + option[0] + '"' + (selected === option[0] ? ' selected' : '') + '>' + escapeHtml(option[1]) + '</option>';
+  }).join('');
+}
+
+function periodicReviewBaselineCadenceOptions(selected) {
+  return [
+    ['risk_default', 'Use risk default'],
+    ['6', '6 months'],
+    ['12', '12 months'],
+    ['24', '24 months'],
+    ['36', '36 months']
+  ].map(function(option) {
+    return '<option value="' + option[0] + '"' + (String(selected || 'risk_default') === option[0] ? ' selected' : '') + '>' + escapeHtml(option[1]) + '</option>';
+  }).join('');
+}
+
+function periodicReviewBaselineAddMonths(anchor, months) {
+  if (!anchor || !months) return '';
+  var parts = String(anchor).split('-');
+  if (parts.length < 3) return '';
+  var year = Number(parts[0]);
+  var month = Number(parts[1]);
+  var day = Number(parts[2]);
+  if (!year || !month || !day) return '';
+  var totalMonths = (month - 1) + Number(months);
+  var nextYear = year + Math.floor(totalMonths / 12);
+  var nextMonth = (totalMonths % 12) + 1;
+  var nextDate = new Date(Date.UTC(nextYear, nextMonth, 0));
+  var nextDay = Math.min(day, nextDate.getUTCDate());
+  return [nextYear, String(nextMonth).padStart(2, '0'), String(nextDay).padStart(2, '0')].join('-');
+}
+
+function periodicReviewBaselineRiskDefaultMonths(reviewDetail) {
+  var risk = String((reviewDetail && (reviewDetail.new_risk_level || reviewDetail.risk_level || (reviewDetail.projection || {}).risk_level)) || 'MEDIUM').toUpperCase();
+  return { LOW: 36, MEDIUM: 24, HIGH: 12, VERY_HIGH: 6 }[risk] || 24;
+}
+
+function periodicReviewBaselinePreview(reviewId) {
+  var statusEl = document.getElementById('overview-periodic-review-baseline-status-' + reviewId);
+  var dateEl = document.getElementById('overview-periodic-review-baseline-date-' + reviewId);
+  var cadenceEl = document.getElementById('overview-periodic-review-baseline-cadence-' + reviewId);
+  var reviewDetail = window._overviewPeriodicReviewBaselineDetail || null;
+  var status = statusEl ? statusEl.value : 'not_set';
+  var dateValue = dateEl ? dateEl.value : '';
+  var cadenceValue = cadenceEl ? cadenceEl.value : 'risk_default';
+  if (status === 'not_applicable') return { value: '', placeholder: 'N/A' };
+  if (status === 'not_set') return { value: '', placeholder: 'Not scheduled yet' };
+  if (!dateValue) return { value: '', placeholder: 'Missing baseline date' };
+  var months = cadenceValue === 'risk_default' ? periodicReviewBaselineRiskDefaultMonths(reviewDetail) : Number(cadenceValue || 0);
+  return { value: periodicReviewBaselineAddMonths(dateValue, months), placeholder: '' };
+}
+
+function refreshOverviewPeriodicReviewBaselinePreview(reviewId) {
+  var preview = periodicReviewBaselinePreview(reviewId);
+  var target = document.getElementById('overview-periodic-review-baseline-next-due-' + reviewId);
+  var dateEl = document.getElementById('overview-periodic-review-baseline-date-' + reviewId);
+  var statusEl = document.getElementById('overview-periodic-review-baseline-status-' + reviewId);
+  if (dateEl && statusEl) {
+    var disabled = statusEl.value === 'not_applicable' || statusEl.value === 'not_set';
+    dateEl.disabled = disabled;
+    if (disabled) dateEl.value = '';
+  }
+  if (!target) return;
+  target.textContent = preview.value || preview.placeholder || 'Not scheduled yet';
+}
+
+function renderOverviewPeriodicReviewBaseline(detail) {
+  var container = document.getElementById('detail-periodic-review-baseline');
+  if (!container) return;
+  if (!canEditPeriodicReviewLegacyBaseline()) {
+    container.innerHTML = '';
+    return;
+  }
+  if (!detail || detail.id == null) {
+    container.innerHTML =
+      '<div class="detail-section" style="margin-top:16px;">' +
+        '<div class="detail-section-title">Periodic Review Baseline</div>' +
+        '<div style="font-size:12px;color:var(--text2);line-height:1.5;">No periodic review case is available yet for baseline setup on this application.</div>' +
+      '</div>';
+    return;
+  }
+  window._overviewPeriodicReviewBaselineDetail = detail;
+  var baseline = detail.periodic_review_baseline || {};
+  var status = baseline.status || 'not_set';
+  var baselineDate = baseline.date || '';
+  var cadenceValue = baseline.cadence_months != null ? String(baseline.cadence_months) : 'risk_default';
+  var note = baseline.officer_note || '';
+  var nextDue = baseline.next_review_due || baseline.next_review_due_placeholder || 'Not scheduled yet';
+  container.innerHTML =
+    '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
+        '<span>Periodic Review Baseline</span>' +
+        '<span style="font-size:11px;color:var(--text3);">Officer-only setup metadata</span>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;">' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Baseline status</div><select id="overview-periodic-review-baseline-status-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')">' + periodicReviewBaselineStatusOptions(status) + '</select></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Baseline date</div><input id="overview-periodic-review-baseline-date-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')" /></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Review cadence</div><select id="overview-periodic-review-baseline-cadence-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')">' + periodicReviewBaselineCadenceOptions(cadenceValue) + '</select></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Next review due</div><div id="overview-periodic-review-baseline-next-due-' + detail.id + '" style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(nextDue)) + '</div></div>' +
+      '</div>' +
+      '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Officer note</div><input id="overview-periodic-review-baseline-note-' + detail.id + '" class="form-input" type="text" maxlength="500" placeholder="Optional short note" value="' + escapeHtml(String(note || '')) + '" /></div>' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
+        '<div style="font-size:11px;color:var(--text3);max-width:560px;">N/A disables the baseline date and avoids inventing a new overdue schedule. Existing PRS-2 attestation and lifecycle review state remain unchanged.</div>' +
+        '<button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')">Save baseline</button>' +
+      '</div>' +
+    '</div>';
+  refreshOverviewPeriodicReviewBaselinePreview(detail.id);
+}
+
+async function loadOverviewPeriodicReviewBaseline(applicationId, summary) {
+  var container = document.getElementById('detail-periodic-review-baseline');
+  if (!container || !applicationId) return;
+  if (!canEditPeriodicReviewLegacyBaseline()) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = '<div style="font-size:11px;color:var(--text3);margin:0 0 16px;">Loading periodic review baseline…</div>';
+  var activeItems = ((summary && summary.active) || {}).items || [];
+  var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;
+  var reviewSetup = (summary && summary.review_setup) || null;
+  var reviewId = activeReviewItem && activeReviewItem.id != null ? activeReviewItem.id : (reviewSetup && reviewSetup.review_id != null ? reviewSetup.review_id : null);
+  if (reviewId == null) {
+    renderOverviewPeriodicReviewBaseline(null);
+    return;
+  }
+  try {
+    var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewId));
+    renderOverviewPeriodicReviewBaseline(detail);
+  } catch (err) {
+    container.innerHTML = '<div style="margin:0 0 16px;font-size:11px;color:var(--text3);">Periodic review baseline unavailable.</div>';
+  }
+}
+
+async function saveOverviewPeriodicReviewBaseline(reviewId) {
+  var statusEl = document.getElementById('overview-periodic-review-baseline-status-' + reviewId);
+  var dateEl = document.getElementById('overview-periodic-review-baseline-date-' + reviewId);
+  var cadenceEl = document.getElementById('overview-periodic-review-baseline-cadence-' + reviewId);
+  var noteEl = document.getElementById('overview-periodic-review-baseline-note-' + reviewId);
+  if (!statusEl) return;
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/baseline', {
+      baseline_status: statusEl.value,
+      baseline_date: dateEl && !dateEl.disabled ? dateEl.value : '',
+      baseline_cadence: cadenceEl ? cadenceEl.value : 'risk_default',
+      officer_note: noteEl ? noteEl.value.trim() : ''
+    });
+    showToast('Periodic review baseline saved');
+    if (currentApp && currentApp.id) {
+      await loadLifecycleApplicationSummary(currentApp.id);
+      if (document.getElementById('detail-tab-lifecycle') && document.getElementById('detail-tab-lifecycle').style.display !== 'none') {
+        window._detailLifecycleTabCache = null;
+        await loadLifecycleDetailTab(true);
+      }
+    }
+  } catch (err) {
+    showToast('Failed to save periodic review baseline: ' + (err.message || 'unknown error'), 'error');
   }
 }
 
@@ -14359,7 +14532,6 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
     '<div class="lifecycle-workspace-layout">' +
       '<div class="lifecycle-workspace-steps">' + workspaceSteps + '</div>' +
       '<div class="lifecycle-workspace-panels">' +
-        lifecycleWorkspaceSection('Manual Legacy Review Baseline', 'Back-office-only imported-book baseline. Not a system-generated review event.', lifecycleManualLegacyBaselineControls(reviewId, reviewDetail, projection), '#334155') +
         lifecycleWorkspaceSection('Material Change Attestation', 'Officer-owned attestation only. No client profile mutation happens here.', lifecycleMaterialChangeControls(reviewId, reviewDetail), '#7c3aed') +
         lifecycleWorkspaceSection('Risk Rating Change Attestation', 'Record a review-level re-rate only when the officer determines a change is needed.', lifecycleRiskChangeControls(reviewId, reviewDetail, projection), '#ea580c') +
         lifecycleWorkspaceSection('KYC Documents', 'System-derived document repository health and projected evidence readiness.', lifecycleDocumentsPanel(currentApp || {}, reviewDetail), '#0f766e') +
@@ -14715,9 +14887,6 @@ function renderLifecycleDetailTab(context) {
       lifecycleDetailMeta('Status', setupReviewDetail.status_label || (setupReviewProjection && setupReviewProjection.status_label) || setupReviewDetail.status || 'Scheduled') +
       lifecycleDetailMeta('Risk level', setupReviewDetail.risk_level || (setupReviewProjection && setupReviewProjection.risk_level) || '—') +
       lifecycleDetailMeta('Next review date', setupReviewDetail.next_review_date || (setupReviewProjection && setupReviewProjection.next_review_date) || setupReviewDetail.due_date || '—') +
-    '</div>' +
-    '<div style="margin-top:14px;">' +
-      lifecycleWorkspaceSection('Manual Legacy Review Baseline', 'Back-office-only imported-book baseline. Available before the scheduled review becomes active.', lifecycleManualLegacyBaselineControls(setupReviewDetail.id, setupReviewDetail, setupReviewProjection), '#334155') +
     '</div>';
   } else {
     setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">No active periodic review.</div>';
@@ -15597,6 +15766,11 @@ function renderMonitoring() {
   renderMonitoringAlerts();
   renderPeriodicReviews();
   renderMonitoringAgents();
+}
+
+function renderPeriodicReviewQueue() {
+  updateMonitoringReviewSignalStats();
+  renderPeriodicReviews();
 }
 
 function monitoringReviewDueState(review) {
@@ -18592,6 +18766,14 @@ function applyBackofficeHashRoute() {
   }
   if (route.view === 'edd') {
     showView('edd');
+    return true;
+  }
+  if (route.view === 'periodic-review-signals') {
+    showView('periodic-review-signals');
+    return true;
+  }
+  if (route.view === 'monitoring') {
+    showView('monitoring');
     return true;
   }
   return false;
