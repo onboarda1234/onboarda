@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Set
+from datetime import date, datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 from periodic_review_blockers import (
     decode_required_items,
@@ -15,6 +16,18 @@ ACTIVE_REVIEW_STATES = (
     "pending_senior_review",
 )
 COMPLETED_REVIEW_STATE = "completed"
+CANCELLED_REVIEW_STATE = "cancelled"
+
+TERMINAL_QUEUE_STATUSES = {"completed", "cancelled"}
+OPEN_QUEUE_FILTER_STATUSES = {
+    "open",
+    "due",
+    "overdue",
+    "awaiting_client",
+    "in_review",
+}
+
+
 def _row_get(row, key, default=None):
     if row is None:
         return default
@@ -28,6 +41,8 @@ def _row_get(row, key, default=None):
         value = row.get(key, default)
         return default if value is None else value
     return default
+
+
 def _table_columns(db, table: str) -> Set[str]:
     if table not in {"periodic_reviews"}:
         return set()
@@ -47,8 +62,53 @@ def _table_columns(db, table: str) -> Set[str]:
         return set()
 
 
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text[:19], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
 def _effective_risk_level(review) -> Optional[str]:
     return _row_get(review, "new_risk_level") or _row_get(review, "risk_level")
+
+
 def _load_memo_status(db, review_id: int, review_row) -> Optional[str]:
     status = _row_get(review_row, "memo_status")
     if status:
@@ -63,9 +123,13 @@ def _load_memo_status(db, review_id: int, review_row) -> Optional[str]:
     if _row_get(review_row, "outcome"):
         return "pending"
     return None
+
+
 def _status_label(raw_status: str, blocker_count: int, linked_edd_case_id: Any) -> str:
     if raw_status == COMPLETED_REVIEW_STATE:
         return "Completed"
+    if raw_status == CANCELLED_REVIEW_STATE:
+        return "Cancelled"
     if blocker_count:
         return "Blocked"
     if raw_status == "in_progress":
@@ -79,6 +143,102 @@ def _status_label(raw_status: str, blocker_count: int, linked_edd_case_id: Any) 
     return "Due"
 
 
+def _trigger_source_label(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    mapping = {
+        "schedule": "Scheduled cadence",
+        "time_based": "Scheduled cadence",
+        "monitoring_alert": "Monitoring alert",
+        "manual": "Manual review",
+        "manual_backfill": "Manual backfill",
+        "legacy_import": "Legacy import",
+    }
+    if key in mapping:
+        return mapping[key]
+    if not key:
+        return "Periodic review"
+    return key.replace("_", " ").title()
+
+
+def _review_due_state(review, *, raw_status: str) -> Dict[str, Any]:
+    due_text = _row_get(review, "due_date") or _row_get(review, "next_review_date")
+    due_date = _parse_iso_date(due_text)
+    if raw_status in TERMINAL_QUEUE_STATUSES:
+        return {
+            "due_date": due_text,
+            "due_state": "completed" if raw_status == COMPLETED_REVIEW_STATE else "cancelled",
+            "due_status_label": "Completed" if raw_status == COMPLETED_REVIEW_STATE else "Cancelled",
+            "days_until_due": None,
+            "is_overdue": False,
+            "is_due_date_missing": due_date is None,
+        }
+    if due_date is None:
+        return {
+            "due_date": due_text,
+            "due_state": "missing_due_date",
+            "due_status_label": "Missing Due Date",
+            "days_until_due": None,
+            "is_overdue": False,
+            "is_due_date_missing": True,
+        }
+    today = datetime.now(timezone.utc).date()
+    days_until_due = (due_date - today).days
+    if days_until_due < 0:
+        return {
+            "due_date": due_text,
+            "due_state": "overdue",
+            "due_status_label": "Overdue",
+            "days_until_due": days_until_due,
+            "is_overdue": True,
+            "is_due_date_missing": False,
+        }
+    if days_until_due == 0:
+        return {
+            "due_date": due_text,
+            "due_state": "due",
+            "due_status_label": "Due",
+            "days_until_due": 0,
+            "is_overdue": False,
+            "is_due_date_missing": False,
+        }
+    return {
+        "due_date": due_text,
+        "due_state": "scheduled",
+        "due_status_label": "Scheduled",
+        "days_until_due": days_until_due,
+        "is_overdue": False,
+        "is_due_date_missing": False,
+    }
+
+
+def _queue_status(raw_status: str, due_state: str) -> str:
+    if raw_status == COMPLETED_REVIEW_STATE:
+        return "completed"
+    if raw_status == CANCELLED_REVIEW_STATE:
+        return "cancelled"
+    if raw_status == "awaiting_information":
+        return "awaiting_client"
+    if raw_status in {"in_progress", "pending_senior_review"}:
+        return "in_review"
+    if due_state == "overdue":
+        return "overdue"
+    if due_state == "due":
+        return "due"
+    return "open"
+
+
+def _queue_status_label(queue_status: str) -> str:
+    return {
+        "due": "Due",
+        "open": "Open",
+        "awaiting_client": "Awaiting Client",
+        "in_review": "In Review",
+        "overdue": "Overdue",
+        "completed": "Completed",
+        "cancelled": "Cancelled",
+    }.get(queue_status, "Open")
+
+
 def _is_legacy_completed_review(review, raw_status: str) -> bool:
     if raw_status != COMPLETED_REVIEW_STATE:
         return False
@@ -87,16 +247,69 @@ def _is_legacy_completed_review(review, raw_status: str) -> bool:
     return bool(_row_get(review, "decision"))
 
 
-def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def _prefetch_rows_by_id(db, table: str, *, id_column: str, ids: Sequence[Any], columns: str) -> Dict[Any, Dict[str, Any]]:
+    cleaned_ids = [value for value in dict.fromkeys(ids) if value not in (None, "")]
+    if not cleaned_ids:
+        return {}
+    placeholders = ",".join("?" for _ in cleaned_ids)
+    rows = db.execute(
+        f"SELECT {columns} FROM {table} WHERE {id_column} IN ({placeholders})",
+        tuple(cleaned_ids),
+    ).fetchall()
+    return {row[id_column]: dict(row) for row in rows}
+
+
+def _last_activity_timestamp(review) -> Optional[str]:
+    candidates = []
+    for field in (
+        "state_changed_at",
+        "required_items_generated_at",
+        "risk_rerated_at",
+        "assigned_at",
+        "started_at",
+        "outcome_recorded_at",
+        "completed_at",
+        "closed_at",
+        "legacy_entered_at",
+        "created_at",
+    ):
+        raw_value = _row_get(review, field)
+        parsed = _parse_iso_datetime(raw_value)
+        if parsed is not None:
+            candidates.append((parsed, raw_value))
+    if not candidates:
+        return _row_get(review, "created_at")
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def build_review_projection(
+    db,
+    review_row,
+    *,
+    evidence_links: Optional[List[Dict[str, Any]]] = None,
+    application_row: Optional[Dict[str, Any]] = None,
+    assigned_officer_row: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     review = dict(review_row)
     review_id = _row_get(review, "id")
     app_id = _row_get(review, "application_id")
-    application = None
-    if app_id:
-        application = db.execute(
+    application = application_row
+    if application is None and app_id:
+        app_row = db.execute(
             "SELECT id, ref, company_name, risk_level, final_risk_level FROM applications WHERE id = ?",
             (app_id,),
         ).fetchone()
+        application = dict(app_row) if app_row is not None else None
+    assigned_officer = _row_get(review, "assigned_officer")
+    owner_row = assigned_officer_row
+    if owner_row is None and assigned_officer:
+        officer_row = db.execute(
+            "SELECT id, full_name FROM users WHERE id = ?",
+            (assigned_officer,),
+        ).fetchone()
+        owner_row = dict(officer_row) if officer_row is not None else None
+
     evidence_links = evidence_links if evidence_links is not None else load_evidence_links(db, review_id)
     readiness = evaluate_review_readiness(
         db,
@@ -106,6 +319,8 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
     )
     blockers = readiness["operational_blockers"]
     raw_status = str(_row_get(review, "status") or "pending").strip().lower() or "pending"
+    due_meta = _review_due_state(review, raw_status=raw_status)
+    queue_status = _queue_status(raw_status, due_meta["due_state"])
     completion_readiness_applicable = not _is_legacy_completed_review(review, raw_status)
     if completion_readiness_applicable:
         completion_blocker_count = readiness["completion_blocker_count"]
@@ -115,29 +330,62 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
         completion_blocker_count = 0
         completion_blockers = []
         completion_ready = None
+
+    owner_display_name = (
+        _row_get(owner_row, "full_name")
+        or assigned_officer
+        or "Unassigned"
+    )
+    updated_at = _last_activity_timestamp(review)
+    is_terminal = queue_status in TERMINAL_QUEUE_STATUSES
+    trigger_source = _row_get(review, "trigger_source") or _row_get(review, "trigger_type")
+
     return {
         "review_id": review_id,
+        "review_reference": f"PR-{review_id}" if review_id is not None else "",
         "application_id": app_id,
+        "application_ref": _row_get(application, "ref") or app_id,
         "client_name": _row_get(application, "company_name") or _row_get(review, "client_name") or "",
         "status": raw_status,
         "status_label": _status_label(raw_status, len(blockers), _row_get(review, "linked_edd_case_id")),
-        "assigned_officer": _row_get(review, "assigned_officer"),
+        "queue_status": queue_status,
+        "queue_status_label": _queue_status_label(queue_status),
+        "assigned_officer": assigned_officer,
+        "assigned_officer_name": _row_get(owner_row, "full_name"),
+        "owner_display_name": owner_display_name,
+        "owner_state": "assigned" if assigned_officer else "unassigned",
         "linked_edd_case_id": _row_get(review, "linked_edd_case_id"),
-        "due_date": _row_get(review, "due_date"),
+        "linked_monitoring_alert_id": _row_get(review, "linked_monitoring_alert_id"),
+        "due_date": due_meta["due_date"],
+        "due_state": due_meta["due_state"],
+        "due_status_label": due_meta["due_status_label"],
+        "is_overdue": due_meta["is_overdue"],
+        "is_due_date_missing": due_meta["is_due_date_missing"],
+        "days_until_due": due_meta["days_until_due"],
         "priority": _row_get(review, "priority"),
-        "trigger_source": _row_get(review, "trigger_source") or _row_get(review, "trigger_type"),
+        "trigger_source": trigger_source,
+        "trigger_source_label": _trigger_source_label(trigger_source),
         "trigger_reason": _row_get(review, "trigger_reason") or _row_get(review, "review_reason"),
         "last_review_date": _row_get(review, "last_review_date"),
         "next_review_date": _row_get(review, "next_review_date") or _row_get(review, "due_date"),
         "risk_level": _effective_risk_level(review) or _row_get(application, "final_risk_level") or _row_get(application, "risk_level"),
         "blocker_count": len(blockers),
         "blocker_summary": [blocker["label"] for blocker in blockers],
+        "is_blocked": bool(blockers),
         "completion_blocker_count": completion_blocker_count,
         "completion_blocker_summary": [blocker["label"] for blocker in completion_blockers],
         "completion_ready": completion_ready,
         "completion_readiness_applicable": completion_readiness_applicable,
         "outcome": _row_get(review, "outcome"),
         "memo_status": _load_memo_status(db, review_id, review),
+        "created_at": _row_get(review, "created_at"),
+        "updated_at": updated_at,
+        "last_activity_at": updated_at,
+        "completed_at": _row_get(review, "completed_at"),
+        "audit_reference": f"periodic_review:{review_id}" if review_id is not None else None,
+        "can_take_action": not is_terminal,
+        "is_terminal": is_terminal,
+        "primary_action_label": "View review case" if is_terminal else "Open review case",
         "lifecycle_link": {
             "type": "periodic_review",
             "review_id": review_id,
@@ -193,6 +441,23 @@ def list_review_projections(
     sql += " ORDER BY " + ", ".join(order_parts)
     rows = db.execute(sql, tuple(params)).fetchall()
     review_ids = [row["id"] for row in rows]
+    app_ids = [_row_get(row, "application_id") for row in rows]
+    officer_ids = [_row_get(row, "assigned_officer") for row in rows]
+    applications_by_id = _prefetch_rows_by_id(
+        db,
+        "applications",
+        id_column="id",
+        ids=app_ids,
+        columns="id, ref, company_name, risk_level, final_risk_level",
+    )
+    officers_by_id = _prefetch_rows_by_id(
+        db,
+        "users",
+        id_column="id",
+        ids=officer_ids,
+        columns="id, full_name",
+    )
+
     evidence_by_review: Dict[int, List[Dict[str, Any]]] = {rid: [] for rid in review_ids}
     if review_ids:
         placeholders = ",".join("?" for _ in review_ids)
@@ -209,10 +474,27 @@ def list_review_projections(
         ).fetchall()
         for row in link_rows:
             evidence_by_review.setdefault(row["periodic_review_id"], []).append(dict(row))
+
     return [
-        build_review_projection(db, row, evidence_links=evidence_by_review.get(row["id"], []))
+        build_review_projection(
+            db,
+            row,
+            evidence_links=evidence_by_review.get(row["id"], []),
+            application_row=applications_by_id.get(_row_get(row, "application_id")),
+            assigned_officer_row=officers_by_id.get(_row_get(row, "assigned_officer")),
+        )
         for row in rows
     ]
+
+
+def projection_matches_queue_filter(projection: Dict[str, Any], queue_filter: Optional[str]) -> bool:
+    queue = str(queue_filter or "").strip().lower()
+    if not queue:
+        return True
+    queue_status = str(projection.get("queue_status") or "").strip().lower()
+    if queue == "open":
+        return queue_status in OPEN_QUEUE_FILTER_STATUSES
+    return queue_status == queue
 
 
 def latest_active_review_summary(db, application_id: str) -> Optional[Dict[str, Any]]:

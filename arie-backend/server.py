@@ -203,6 +203,7 @@ from periodic_review_projection_service import (
     get_review_projection as _get_periodic_review_projection,
     latest_active_review_summary as _latest_periodic_review_projection,
     list_review_projections as _list_periodic_review_projections,
+    projection_matches_queue_filter as _periodic_review_projection_matches_queue_filter,
 )
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
@@ -18998,6 +18999,8 @@ class PeriodicReviewsListHandler(BaseHandler):
             return
 
         status_filter = self.get_argument("status", None)
+        queue_filter = self.get_argument("queue", None)
+        assigned_to_me = self.get_argument("assigned_to_me", "false").lower() in ("true", "1", "yes")
         db = get_db()
 
         query = "SELECT * FROM periodic_reviews WHERE 1=1"
@@ -19006,18 +19009,31 @@ class PeriodicReviewsListHandler(BaseHandler):
         if status_filter:
             query += " AND status = ?"
             params.append(status_filter)
+        if assigned_to_me:
+            query += " AND assigned_officer = ?"
+            params.append(user.get("sub"))
 
         query += " ORDER BY due_date ASC"
         reviews = db.execute(query, params).fetchall()
 
-        projections = {
-            projection["review_id"]: projection
-            for projection in _list_periodic_review_projections(db)
-        }
+        review_ids = [review["id"] for review in reviews]
+        projections = (
+            {
+                projection["review_id"]: projection
+                for projection in _list_periodic_review_projections(db, review_ids=review_ids)
+            }
+            if review_ids
+            else {}
+        )
         result = []
         for review in reviews:
-            payload = _serialize_periodic_review_row(db, review)
-            payload["projection"] = projections.get(payload["id"])
+            payload = _serialize_periodic_review_row(
+                db,
+                review,
+                projection=projections.get(review["id"]),
+            )
+            if not _periodic_review_projection_matches_queue_filter(payload.get("projection") or {}, queue_filter):
+                continue
             result.append(payload)
         db.close()
         self.success({"reviews": result})
@@ -19424,27 +19440,43 @@ def _parse_review_id(handler, raw_review_id):
     return rid
 
 
-def _serialize_periodic_review_row(db, review_row):
+def _serialize_periodic_review_row(db, review_row, *, projection=None):
     import document_health_monitor as dhm
     import monitoring_routing as mr
     import periodic_review_engine as pre
 
     result = dict(review_row)
-    projection = _get_periodic_review_projection(db, result["id"]) or {}
+    projection = projection or _get_periodic_review_projection(db, result["id"]) or {}
     items = pre.get_required_items(db, result["id"])
     result["required_items"] = items
     result["required_items_count"] = len(items)
     result["assigned_officer"] = projection.get("assigned_officer")
+    result["assigned_officer_name"] = projection.get("assigned_officer_name")
+    result["owner_display_name"] = projection.get("owner_display_name")
+    result["owner_state"] = projection.get("owner_state")
     result["linked_edd_case_id"] = projection.get("linked_edd_case_id", result.get("linked_edd_case_id"))
+    result["linked_monitoring_alert_id"] = projection.get("linked_monitoring_alert_id", result.get("linked_monitoring_alert_id"))
+    result["application_ref"] = projection.get("application_ref")
     result["status_label"] = projection.get("status_label")
+    result["queue_status"] = projection.get("queue_status")
+    result["queue_status_label"] = projection.get("queue_status_label")
+    result["due_state"] = projection.get("due_state")
+    result["due_status_label"] = projection.get("due_status_label")
+    result["is_overdue"] = projection.get("is_overdue", False)
+    result["is_due_date_missing"] = projection.get("is_due_date_missing", False)
+    result["days_until_due"] = projection.get("days_until_due")
     result["blocker_count"] = projection.get("blocker_count", 0)
     result["blocker_summary"] = projection.get("blocker_summary", [])
+    result["is_blocked"] = projection.get("is_blocked", False)
     result["completion_blocker_count"] = projection.get("completion_blocker_count", 0)
     result["completion_blocker_summary"] = projection.get("completion_blocker_summary", [])
     result["completion_ready"] = projection.get("completion_ready", False)
     result["completion_readiness_applicable"] = projection.get("completion_readiness_applicable", True)
     result["last_review_date"] = projection.get("last_review_date")
     result["next_review_date"] = projection.get("next_review_date")
+    result["trigger_source"] = projection.get("trigger_source", result.get("trigger_source"))
+    result["trigger_source_label"] = projection.get("trigger_source_label")
+    result["trigger_reason"] = projection.get("trigger_reason", result.get("trigger_reason"))
     due_text = result.get("next_review_date") or result.get("due_date")
     is_overdue = False
     if due_text:
@@ -19474,6 +19506,15 @@ def _serialize_periodic_review_row(db, review_row):
     result["memo_status"] = projection.get("memo_status")
     result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
     result["evidence_links"] = projection.get("evidence_links", [])
+    result["review_reference"] = projection.get("review_reference")
+    result["audit_reference"] = projection.get("audit_reference")
+    result["created_at"] = projection.get("created_at", result.get("created_at"))
+    result["updated_at"] = projection.get("updated_at", result.get("updated_at"))
+    result["last_activity_at"] = projection.get("last_activity_at")
+    result["completed_at"] = projection.get("completed_at", result.get("completed_at"))
+    result["primary_action_label"] = projection.get("primary_action_label", "Open review case")
+    result["can_take_action"] = projection.get("can_take_action", True)
+    result["is_terminal"] = projection.get("is_terminal", False)
     alert_rows = db.execute(
         "SELECT id, alert_type, status, resolved_at "
         "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
@@ -19497,26 +19538,31 @@ def _serialize_periodic_review_row(db, review_row):
         result["screening_status"] = "Pending review"
 
     raw_status = str(result.get("status") or "").strip().lower()
-    ui_status = "due"
-    ui_status_label = "Due"
-    if raw_status == "in_progress":
-        ui_status = "in_review"
-        ui_status_label = "In Review"
-    elif raw_status == "awaiting_information":
-        ui_status = "waiting_for_info"
-        ui_status_label = "Waiting for Info"
-    elif raw_status == "pending_senior_review":
-        ui_status = "senior_review"
-        ui_status_label = "Senior Review"
-    elif raw_status == "completed":
-        ui_status = "completed"
-        ui_status_label = "Completed"
-    elif result.get("linked_edd_case_id"):
-        ui_status = "escalated_to_edd"
-        ui_status_label = "Escalated to EDD"
+    ui_status = projection.get("queue_status") or "open"
+    ui_status_label = projection.get("queue_status_label") or "Open"
+    if not projection:
+        if raw_status == "in_progress":
+            ui_status = "in_review"
+            ui_status_label = "In Review"
+        elif raw_status == "awaiting_information":
+            ui_status = "waiting_for_info"
+            ui_status_label = "Waiting for Info"
+        elif raw_status == "pending_senior_review":
+            ui_status = "senior_review"
+            ui_status_label = "Senior Review"
+        elif raw_status == "completed":
+            ui_status = "completed"
+            ui_status_label = "Completed"
+        elif result.get("linked_edd_case_id"):
+            ui_status = "escalated_to_edd"
+            ui_status_label = "Escalated to EDD"
+        else:
+            ui_status = "due"
+            ui_status_label = "Due"
     result["ui_status"] = ui_status
-    result["ui_status_label"] = projection.get("status_label") or ui_status_label
+    result["ui_status_label"] = projection.get("queue_status_label") or projection.get("status_label") or ui_status_label
     result["legacy_decision"] = result.get("decision")
+    result["projection"] = projection
     return result
 
 

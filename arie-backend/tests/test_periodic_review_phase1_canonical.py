@@ -5,7 +5,7 @@ import os
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -254,6 +254,92 @@ def test_in_progress_projection_not_blocked_by_completion_only_gaps(phase1_db):
     assert projection["blocker_count"] == 0
     assert projection["completion_ready"] is False
 
+
+
+def test_projection_exposes_queue_case_shell_fields_and_owner_display(phase1_db):
+    from periodic_review_projection_service import get_review_projection
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    review_id = _insert_review(
+        phase1_db,
+        status="pending",
+        assigned_officer="co001",
+        due_date=today,
+        next_review_date=today,
+        created_at="2026-01-10T00:00:00Z",
+        assigned_at="2026-02-10T00:00:00Z",
+        priority="high",
+        trigger_source="schedule",
+        trigger_reason="Scheduled annual review",
+    )
+
+    projection = get_review_projection(phase1_db, review_id)
+
+    assert projection["review_reference"] == f"PR-{review_id}"
+    assert projection["application_id"] == "app-phase1"
+    assert projection["application_ref"] == "APP-PHASE1"
+    assert projection["client_name"] == "Phase1 Test Co"
+    assert projection["risk_level"] == "MEDIUM"
+    assert projection["queue_status"] == "due"
+    assert projection["queue_status_label"] == "Due"
+    assert projection["due_state"] == "due"
+    assert projection["is_overdue"] is False
+    assert projection["assigned_officer"] == "co001"
+    assert projection["assigned_officer_name"] == "CO001"
+    assert projection["owner_display_name"] == "CO001"
+    assert projection["trigger_source_label"] == "Scheduled cadence"
+    assert projection["last_activity_at"] == "2026-02-10T00:00:00Z"
+    assert projection["updated_at"] == "2026-02-10T00:00:00Z"
+    assert projection["primary_action_label"] == "Open review case"
+    assert projection["audit_reference"] == f"periodic_review:{review_id}"
+
+
+def test_projection_maps_queue_statuses_and_missing_due_dates_safely(phase1_db):
+    from periodic_review_projection_service import get_review_projection
+
+    today = datetime.now(timezone.utc).date()
+    overdue_id = _insert_review(
+        phase1_db,
+        status="pending",
+        due_date=(today - timedelta(days=3)).isoformat(),
+        next_review_date=(today - timedelta(days=3)).isoformat(),
+    )
+    future_id = _insert_review(
+        phase1_db,
+        status="pending",
+        due_date=(today + timedelta(days=12)).isoformat(),
+        next_review_date=(today + timedelta(days=12)).isoformat(),
+    )
+    awaiting_id = _insert_review(
+        phase1_db,
+        status="awaiting_information",
+        due_date=None,
+        next_review_date=None,
+    )
+    completed_id = _insert_review(
+        phase1_db,
+        status="completed",
+        completed_at="2026-04-10T12:00:00Z",
+        outcome="no_change",
+    )
+
+    overdue = get_review_projection(phase1_db, overdue_id)
+    future = get_review_projection(phase1_db, future_id)
+    awaiting = get_review_projection(phase1_db, awaiting_id)
+    completed = get_review_projection(phase1_db, completed_id)
+
+    assert overdue["queue_status"] == "overdue"
+    assert overdue["queue_status_label"] == "Overdue"
+    assert overdue["is_overdue"] is True
+    assert future["queue_status"] == "open"
+    assert future["due_state"] == "scheduled"
+    assert awaiting["queue_status"] == "awaiting_client"
+    assert awaiting["queue_status_label"] == "Awaiting Client"
+    assert awaiting["is_due_date_missing"] is True
+    assert awaiting["due_state"] == "missing_due_date"
+    assert completed["queue_status"] == "completed"
+    assert completed["queue_status_label"] == "Completed"
+    assert completed["primary_action_label"] == "View review case"
 
 
 def test_import_setup_saves_last_review_date_and_source_metadata(phase1_db, audit_sink):

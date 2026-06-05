@@ -254,9 +254,9 @@ def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     start = html.index('<div class="view" id="view-periodic-review-signals">')
     end = html.index('<div class="view" id="view-monitoring">', start)
     section = html[start:end]
-    assert "Periodic Review Signals" in section
-    assert "Signals that may indicate a client requires review, reassessment, or monitoring follow-up." in section
-    assert "Signal-only portfolio view" in section
+    assert "Periodic Review Queue" in section
+    assert "Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth." in section
+    assert "Monitoring Alerts remains the signal workspace." in section
     assert "Open Lifecycle Queue" in section
     assert "monitoring-review-due-count" in section
     assert "monitoring-review-overdue-count" in section
@@ -272,7 +272,7 @@ def test_ongoing_monitoring_review_rows_open_application_lifecycle_not_review_ed
     end = html.index("// \u2500\u2500 Monitoring-stage AI agent catalog", start)
     section = html[start:end]
     assert "openMonitoringReviewLifecycle(review.ref)" in section
-    assert "Open Lifecycle" in section
+    assert "Open review case" in section
     assert "openPeriodicReview(review.ref)" not in section
     assert "openPeriodicReview(\\'" not in section
     assert "function openMonitoringReviewLifecycle(ref)" in html
