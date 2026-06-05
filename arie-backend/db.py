@@ -859,6 +859,12 @@ def _get_postgres_schema() -> str:
         risk_rerate_reason TEXT,
         risk_rerated_by TEXT REFERENCES users(id),
         risk_rerated_at TIMESTAMP,
+        client_attestation_status TEXT DEFAULT 'not_started',
+        client_attestation_payload JSONB DEFAULT '{}',
+        client_attestation_saved_at TIMESTAMP,
+        client_attestation_submitted_at TIMESTAMP,
+        client_attestation_submitted_by TEXT REFERENCES clients(id),
+        client_attestation_questionnaire_version TEXT,
         officer_rationale TEXT,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
@@ -1853,6 +1859,12 @@ def _get_sqlite_schema() -> str:
         risk_rerate_reason TEXT,
         risk_rerated_by TEXT REFERENCES users(id),
         risk_rerated_at TEXT,
+        client_attestation_status TEXT DEFAULT 'not_started',
+        client_attestation_payload TEXT DEFAULT '{}',
+        client_attestation_saved_at TEXT,
+        client_attestation_submitted_at TEXT,
+        client_attestation_submitted_by TEXT REFERENCES clients(id),
+        client_attestation_questionnaire_version TEXT,
         officer_rationale TEXT,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
@@ -3012,6 +3024,30 @@ def _ensure_periodic_review_phase1_schema(db: DBConnection):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_next_review_date "
         "ON periodic_reviews(next_review_date)"
+    )
+
+
+def _ensure_periodic_review_attestation_schema(db: DBConnection):
+    """Add PRS-2 client periodic-review attestation fields."""
+    if not _safe_table_exists(db, "periodic_reviews"):
+        return
+
+    ts_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    review_columns = {
+        "client_attestation_status": "TEXT DEFAULT 'not_started'",
+        "client_attestation_payload": "JSONB DEFAULT '{}'" if db.is_postgres else "TEXT DEFAULT '{}'",
+        "client_attestation_saved_at": ts_type,
+        "client_attestation_submitted_at": ts_type,
+        "client_attestation_submitted_by": "TEXT REFERENCES clients(id)",
+        "client_attestation_questionnaire_version": "TEXT",
+    }
+    for column, definition in review_columns.items():
+        if not _safe_column_exists(db, "periodic_reviews", column):
+            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_client_attestation_status "
+        "ON periodic_reviews(client_attestation_status)"
     )
 
 
@@ -5778,6 +5814,20 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.38: Ensured async verification jobs schema")
     except Exception as e:
         logger.error("Migration v2.38 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.38a: Portal periodic-review attestation fields. Keeps
+    # periodic_reviews as the single review-state shell while adding a
+    # client-facing attestation payload/status projection.
+    try:
+        _ensure_periodic_review_attestation_schema(db)
+        db.commit()
+        logger.info("Migration v2.38a: Ensured periodic review attestation schema")
+    except Exception as e:
+        logger.error("Migration v2.38a failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

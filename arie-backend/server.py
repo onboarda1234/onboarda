@@ -205,6 +205,17 @@ from periodic_review_projection_service import (
     list_review_projections as _list_periodic_review_projections,
     projection_matches_queue_filter as _periodic_review_projection_matches_queue_filter,
 )
+from periodic_review_attestation import (
+    ATTESTATION_STATUS_NOT_STARTED,
+    ATTESTATION_STATUS_SUBMITTED,
+    PeriodicReviewAttestationError as _PeriodicReviewAttestationError,
+    attestation_snapshot_from_review as _attestation_snapshot_from_review,
+    material_change_question_keys as _periodic_review_attestation_material_change_keys,
+    portal_task_summary_from_review as _portal_periodic_review_task_summary_from_review,
+    prepare_attestation_draft_update as _prepare_periodic_review_attestation_draft_update,
+    prepare_attestation_submission_update as _prepare_periodic_review_attestation_submission_update,
+    question_definitions as _periodic_review_attestation_question_definitions,
+)
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
 try:
@@ -19440,6 +19451,42 @@ def _parse_review_id(handler, raw_review_id):
     return rid
 
 
+def _serialize_portal_periodic_review_attestation(review_row, *, projection=None, application=None):
+    review = dict(review_row)
+    projection = projection or {}
+    application = application or {}
+    snapshot = _attestation_snapshot_from_review(review)
+    task_summary = _portal_periodic_review_task_summary_from_review(review, projection)
+    return {
+        "review_id": review["id"],
+        "review_reference": task_summary.get("review_reference") or f"PR-{review['id']}",
+        "application_id": review.get("application_id"),
+        "application_ref": application.get("ref") or projection.get("application_ref") or review.get("application_id"),
+        "company_name": application.get("company_name") or projection.get("client_name") or review.get("client_name") or "",
+        "due_date": task_summary.get("due_date"),
+        "is_overdue": bool(task_summary.get("is_overdue")),
+        "task_status": task_summary.get("task_status") or snapshot.get("status"),
+        "task_status_label": task_summary.get("task_status_label"),
+        "primary_action_label": task_summary.get("primary_action_label"),
+        "attestation": {
+            "status": snapshot.get("status") or ATTESTATION_STATUS_NOT_STARTED,
+            "saved_at": snapshot.get("saved_at"),
+            "submitted_at": snapshot.get("submitted_at"),
+            "submitted_by": snapshot.get("submitted_by"),
+            "declaration_accepted": bool(snapshot.get("declaration_accepted")),
+            "questionnaire_version": snapshot.get("questionnaire_version"),
+            "questions": snapshot.get("questions", []),
+            "material_change_question_keys": snapshot.get("material_change_question_keys", []),
+            "has_material_changes": bool(snapshot.get("has_material_changes")),
+        },
+        "questions": _periodic_review_attestation_question_definitions(),
+        "read_only": snapshot.get("status") == ATTESTATION_STATUS_SUBMITTED,
+        "intro_text": "This periodic review is a short attestation and does not require you to repeat full onboarding.",
+        "declaration_text": "I confirm that the information provided is accurate and complete to the best of my knowledge, and that I am authorised to submit this attestation on behalf of the company/client.",
+        "follow_up_text": "I understand that where a material change is declared, supporting documents or additional information may be requested separately.",
+    }
+
+
 def _serialize_periodic_review_row(db, review_row, *, projection=None):
     import document_health_monitor as dhm
     import monitoring_routing as mr
@@ -19506,6 +19553,14 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["memo_status"] = projection.get("memo_status")
     result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
     result["evidence_links"] = projection.get("evidence_links", [])
+    result["client_attestation_status"] = projection.get("attestation_status", result.get("client_attestation_status"))
+    result["client_attestation_status_label"] = projection.get("attestation_status_label")
+    result["client_attestation_saved_at"] = projection.get("attestation_saved_at", result.get("client_attestation_saved_at"))
+    result["client_attestation_submitted_at"] = projection.get("attestation_submitted_at", result.get("client_attestation_submitted_at"))
+    result["client_attestation_submitted_by"] = projection.get("attestation_submitted_by", result.get("client_attestation_submitted_by"))
+    result["client_attestation_has_material_changes"] = projection.get("attestation_has_material_changes", False)
+    result["client_attestation_material_change_question_keys"] = projection.get("attestation_material_change_question_keys", [])
+    result["client_attestation"] = _attestation_snapshot_from_review(review_row)
     result["review_reference"] = projection.get("review_reference")
     result["audit_reference"] = projection.get("audit_reference")
     result["created_at"] = projection.get("created_at", result.get("created_at"))
@@ -21866,11 +21921,266 @@ class PortalApplicationsHandler(BaseHandler):
         db = get_db()
         try:
             rows = db.execute(
-                "SELECT id, ref, company_name, status FROM applications WHERE client_id = ? ORDER BY created_at DESC",
+                "SELECT id, ref, company_name, status, created_at, updated_at "
+                "FROM applications WHERE client_id = ? ORDER BY created_at DESC",
                 (client_id,),
             ).fetchall()
             apps = [dict(r) for r in rows]
+            app_ids = [app["id"] for app in apps]
+            active_review_rows_by_id = {}
+            active_review_projection_by_app = {}
+            if app_ids:
+                projections = _list_periodic_review_projections(
+                    db,
+                    application_ids=app_ids,
+                    statuses=("pending", "in_progress", "awaiting_information", "pending_senior_review"),
+                )
+                for projection in projections:
+                    app_id = projection.get("application_id")
+                    if app_id and app_id not in active_review_projection_by_app:
+                        active_review_projection_by_app[app_id] = projection
+                review_ids = [projection["review_id"] for projection in active_review_projection_by_app.values() if projection.get("review_id")]
+                if review_ids:
+                    placeholders = ",".join("?" for _ in review_ids)
+                    review_rows = db.execute(
+                        f"SELECT * FROM periodic_reviews WHERE id IN ({placeholders})",
+                        tuple(review_ids),
+                    ).fetchall()
+                    active_review_rows_by_id = {row["id"]: dict(row) for row in review_rows}
+            for app in apps:
+                app["status_label"] = get_status_label(app.get("status"))
+                projection = active_review_projection_by_app.get(app["id"])
+                review_row = active_review_rows_by_id.get((projection or {}).get("review_id"))
+                if projection and review_row:
+                    app["periodic_review_task"] = _portal_periodic_review_task_summary_from_review(review_row, projection)
+                else:
+                    app["periodic_review_task"] = None
             self.success({"applications": apps, "total": len(apps)})
+        finally:
+            db.close()
+
+
+def _load_portal_owned_application_and_active_review(handler, db, user, app_id):
+    app = db.execute(
+        "SELECT id, ref, company_name, client_id FROM applications WHERE id = ? OR ref = ?",
+        (app_id, app_id),
+    ).fetchone()
+    if not app:
+        handler.error("Application not found", 404)
+        return None, None, None
+    app = dict(app)
+    if not handler.check_app_ownership(user, app):
+        return None, None, None
+    projection = _latest_periodic_review_projection(db, app["id"])
+    if not projection or not projection.get("review_id"):
+        handler.error("No active periodic review task found", 404)
+        return app, None, None
+    review = db.execute(
+        "SELECT * FROM periodic_reviews WHERE id = ?",
+        (projection["review_id"],),
+    ).fetchone()
+    if not review:
+        handler.error("Periodic review not found", 404)
+        return app, None, None
+    return app, dict(review), projection
+
+
+class PortalApplicationPeriodicReviewAttestationHandler(BaseHandler):
+    """GET /api/portal/applications/:id/periodic-review."""
+
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can view periodic review attestation tasks", 403)
+
+        db = get_db()
+        try:
+            app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
+            if not app or not review or not projection:
+                return
+            self.success(_serialize_portal_periodic_review_attestation(review, projection=projection, application=app))
+        finally:
+            db.close()
+
+
+class PortalApplicationPeriodicReviewAttestationDraftHandler(BaseHandler):
+    """POST /api/portal/applications/:id/periodic-review/save-draft."""
+
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can save periodic review attestations", 403)
+
+        db = get_db()
+        try:
+            app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
+            if not app or not review or not projection:
+                return
+            before_snapshot = _attestation_snapshot_from_review(review)
+            data = self.get_json() or {}
+            try:
+                update = _prepare_periodic_review_attestation_draft_update(review, data)
+            except _PeriodicReviewAttestationError as exc:
+                message = str(exc)
+                return self.error(message, 409 if "read-only" in message.lower() else 400)
+            db.execute(
+                """
+                UPDATE periodic_reviews
+                   SET client_attestation_status = ?,
+                       client_attestation_payload = ?,
+                       client_attestation_saved_at = ?,
+                       client_attestation_submitted_at = ?,
+                       client_attestation_submitted_by = ?,
+                       client_attestation_questionnaire_version = ?,
+                       state_changed_at = COALESCE(state_changed_at, ?)
+                 WHERE id = ?
+                """,
+                (
+                    update["status"],
+                    update["payload_json"],
+                    update["saved_at"],
+                    update["submitted_at"],
+                    update["submitted_by"],
+                    update["snapshot"]["questionnaire_version"],
+                    review.get("state_changed_at") or update["saved_at"],
+                    review["id"],
+                ),
+            )
+            audit_detail = {
+                "event": "periodic_review_attestation_draft_saved",
+                "periodic_review_id": review["id"],
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "client_id": app["client_id"],
+                "actor_user_id": user.get("sub"),
+                "material_change_question_keys": _periodic_review_attestation_material_change_keys(update["snapshot"]),
+                "declaration_accepted": bool(update["snapshot"].get("declaration_accepted")),
+                "submitted_at": update["snapshot"].get("submitted_at"),
+                "source_surface": "portal_periodic_review_attestation",
+            }
+            self.log_audit(
+                user,
+                "periodic_review_attestation_draft_saved",
+                app["ref"],
+                json.dumps(audit_detail, sort_keys=True),
+                db=db,
+                commit=False,
+                before_state=before_snapshot,
+                after_state=update["snapshot"],
+            )
+            db.commit()
+            refreshed_review = dict(review)
+            refreshed_review.update({
+                "client_attestation_status": update["status"],
+                "client_attestation_payload": update["payload_json"],
+                "client_attestation_saved_at": update["saved_at"],
+                "client_attestation_submitted_at": update["submitted_at"],
+                "client_attestation_submitted_by": update["submitted_by"],
+                "client_attestation_questionnaire_version": update["snapshot"]["questionnaire_version"],
+            })
+            self.success(_serialize_portal_periodic_review_attestation(refreshed_review, projection=projection, application=app))
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.close()
+
+
+class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
+    """POST /api/portal/applications/:id/periodic-review/submit."""
+
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can submit periodic review attestations", 403)
+
+        db = get_db()
+        try:
+            app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
+            if not app or not review or not projection:
+                return
+            before_snapshot = _attestation_snapshot_from_review(review)
+            data = self.get_json() or {}
+            try:
+                update = _prepare_periodic_review_attestation_submission_update(
+                    review,
+                    data,
+                    submitted_by=user.get("sub", ""),
+                )
+            except _PeriodicReviewAttestationError as exc:
+                message = str(exc)
+                return self.error(message, 409 if "read-only" in message.lower() else 400)
+            db.execute(
+                """
+                UPDATE periodic_reviews
+                   SET client_attestation_status = ?,
+                       client_attestation_payload = ?,
+                       client_attestation_saved_at = ?,
+                       client_attestation_submitted_at = ?,
+                       client_attestation_submitted_by = ?,
+                       client_attestation_questionnaire_version = ?,
+                       state_changed_at = COALESCE(state_changed_at, ?)
+                 WHERE id = ?
+                """,
+                (
+                    update["status"],
+                    update["payload_json"],
+                    update["saved_at"],
+                    update["submitted_at"],
+                    update["submitted_by"],
+                    update["snapshot"]["questionnaire_version"],
+                    review.get("state_changed_at") or update["submitted_at"],
+                    review["id"],
+                ),
+            )
+            audit_detail = {
+                "event": "periodic_review_attestation_submitted",
+                "periodic_review_id": review["id"],
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "client_id": app["client_id"],
+                "actor_user_id": user.get("sub"),
+                "material_change_question_keys": _periodic_review_attestation_material_change_keys(update["snapshot"]),
+                "declaration_accepted": bool(update["snapshot"].get("declaration_accepted")),
+                "submitted_at": update["snapshot"].get("submitted_at"),
+                "source_surface": "portal_periodic_review_attestation",
+            }
+            self.log_audit(
+                user,
+                "periodic_review_attestation_submitted",
+                app["ref"],
+                json.dumps(audit_detail, sort_keys=True),
+                db=db,
+                commit=False,
+                before_state=before_snapshot,
+                after_state=update["snapshot"],
+            )
+            db.commit()
+            refreshed_review = dict(review)
+            refreshed_review.update({
+                "client_attestation_status": update["status"],
+                "client_attestation_payload": update["payload_json"],
+                "client_attestation_saved_at": update["saved_at"],
+                "client_attestation_submitted_at": update["submitted_at"],
+                "client_attestation_submitted_by": update["submitted_by"],
+                "client_attestation_questionnaire_version": update["snapshot"]["questionnaire_version"],
+            })
+            self.success(_serialize_portal_periodic_review_attestation(refreshed_review, projection=projection, application=app))
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             db.close()
 
@@ -22590,6 +22900,12 @@ def make_app():
          PortalApplicationEnhancedRequirementUploadHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/response",
          PortalApplicationEnhancedRequirementResponseHandler),
+        (r"/api/portal/applications/([^/]+)/periodic-review/save-draft",
+         PortalApplicationPeriodicReviewAttestationDraftHandler),
+        (r"/api/portal/applications/([^/]+)/periodic-review/submit",
+         PortalApplicationPeriodicReviewAttestationSubmitHandler),
+        (r"/api/portal/applications/([^/]+)/periodic-review",
+         PortalApplicationPeriodicReviewAttestationHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements",
          PortalApplicationEnhancedRequirementsHandler),
         (r"/api/portal/applications", PortalApplicationsHandler),

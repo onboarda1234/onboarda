@@ -1145,6 +1145,87 @@
   .dash-cta-title { font-size: 16px; font-weight: 800; letter-spacing: -0.3px; }
   .dash-cta-desc { font-size: 12px; opacity: 0.8; line-height: 1.5; }
   .dash-cta-arrow { font-size: 17px; margin-top: 8px; }
+  .periodic-review-task-list {
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px;
+    margin-bottom:28px; animation: fadeInUp 0.5s ease-out 0.25s both;
+  }
+  .periodic-review-task-card {
+    background:linear-gradient(135deg, rgba(11,94,141,0.05), rgba(16,185,129,0.05));
+    border:1px solid rgba(11,94,141,0.12); border-radius:var(--radius); padding:20px 22px;
+    box-shadow:0 1px 3px rgba(0,0,0,0.04); display:flex; flex-direction:column; gap:12px;
+  }
+  .periodic-review-task-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+  .periodic-review-task-title { font-size:15px; font-weight:800; letter-spacing:-0.2px; }
+  .periodic-review-task-sub { font-size:12px; color:var(--text2); line-height:1.5; }
+  .periodic-review-task-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .periodic-review-task-meta-item {
+    background:rgba(255,255,255,0.8); border:1px solid var(--border); border-radius:12px; padding:10px 12px;
+  }
+  .periodic-review-task-meta-label { font-size:10px; color:var(--text3); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+  .periodic-review-task-meta-value { font-size:12px; font-weight:600; color:var(--text); }
+  .periodic-review-task-footer { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .periodic-review-task-hint { font-size:11px; color:var(--text3); line-height:1.5; max-width:360px; }
+  .periodic-review-modal {
+    position:fixed; inset:0; background:rgba(15,23,42,0.45); display:none; align-items:center; justify-content:center;
+    padding:24px; z-index:1200;
+  }
+  .periodic-review-modal.open { display:flex; }
+  .periodic-review-modal-card {
+    width:min(920px,100%); max-height:calc(100vh - 48px); overflow:auto; background:var(--bg2);
+    border:1px solid var(--border); border-radius:24px; box-shadow:0 32px 80px rgba(15,23,42,0.28);
+  }
+  .periodic-review-modal-head {
+    padding:24px 28px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
+  }
+  .periodic-review-modal-body { padding:24px 28px 28px; display:grid; gap:18px; }
+  .periodic-review-modal-title { font-size:22px; font-weight:800; letter-spacing:-0.4px; margin-bottom:6px; }
+  .periodic-review-modal-sub { font-size:13px; color:var(--text2); line-height:1.6; }
+  .periodic-review-banner {
+    padding:14px 16px; border-radius:14px; border:1px solid rgba(11,94,141,0.16); background:rgba(11,94,141,0.06);
+    font-size:12px; color:var(--text2); line-height:1.6;
+  }
+  .periodic-review-errors {
+    display:none; padding:14px 16px; border-radius:14px; border:1px solid rgba(239,68,68,0.18); background:rgba(239,68,68,0.06);
+    color:#991b1b; font-size:12px; line-height:1.6;
+  }
+  .periodic-review-errors.open { display:block; }
+  .periodic-review-question {
+    border:1px solid var(--border); border-radius:18px; padding:18px 18px 16px; background:var(--bg);
+  }
+  .periodic-review-question-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
+  .periodic-review-question-title { font-size:14px; font-weight:700; line-height:1.5; }
+  .periodic-review-answer-group { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .periodic-review-answer-pill {
+    display:inline-flex; align-items:center; gap:8px; border:1px solid var(--border2); border-radius:999px; padding:8px 14px; background:var(--bg2);
+    font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .periodic-review-answer-pill input { margin:0; }
+  .periodic-review-comment-wrap { display:none; }
+  .periodic-review-comment-wrap.open { display:block; }
+  .periodic-review-comment-wrap textarea {
+    width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:var(--bg2); font-size:13px; resize:vertical;
+  }
+  .periodic-review-readonly-answer {
+    display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-size:11px; font-weight:700;
+    background:var(--bg2); border:1px solid var(--border);
+  }
+  .periodic-review-declaration {
+    padding:16px 18px; border:1px solid var(--border); border-radius:18px; background:var(--bg);
+    display:grid; gap:10px;
+  }
+  .periodic-review-modal-actions {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  }
+  .periodic-review-modal-actions .btn-outline,
+  .periodic-review-modal-actions .btn-submit { min-width:160px; }
+  @media(max-width:640px) {
+    .periodic-review-task-meta { grid-template-columns:1fr; }
+    .periodic-review-modal { padding:12px; }
+    .periodic-review-modal-head, .periodic-review-modal-body { padding:18px; }
+    .periodic-review-modal-actions { flex-direction:column; align-items:stretch; }
+    .periodic-review-modal-actions .btn-outline,
+    .periodic-review-modal-actions .btn-submit { width:100%; }
+  }
   .dash-section-title {
     font-size: 14px; font-weight: 700; margin-bottom: 14px; letter-spacing: -0.2px;
     display: flex; align-items: center; justify-content: space-between;
@@ -1859,6 +1940,12 @@
           </div>
         </div>
 
+        <div class="dash-section-title" id="periodic-review-tasks-title" style="display:none;">
+          Periodic Review Tasks
+          <span style="font-size:12px;color:var(--text3);font-weight:500;">Short attestations only</span>
+        </div>
+        <div id="periodic-review-tasks-container" class="periodic-review-task-list" style="display:none;"></div>
+
         <!-- Applications Table -->
         <div class="dash-section-title">
           All Applications
@@ -1889,6 +1976,21 @@
           <div style="padding:2rem;text-align:center;color:#999;">No recent activity</div>
         </div>
 
+    </div>
+  </div>
+
+  <div id="periodic-review-modal" class="periodic-review-modal" aria-hidden="true">
+    <div class="periodic-review-modal-card" role="dialog" aria-modal="true" aria-labelledby="periodic-review-modal-title">
+      <div class="periodic-review-modal-head">
+        <div>
+          <div class="periodic-review-modal-title" id="periodic-review-modal-title">Periodic Review</div>
+          <div class="periodic-review-modal-sub" id="periodic-review-modal-subtitle">Loading review task…</div>
+        </div>
+        <button type="button" class="btn-outline" onclick="closePeriodicReviewModal()" style="padding:8px 14px;">Close</button>
+      </div>
+      <div class="periodic-review-modal-body" id="periodic-review-modal-body">
+        <div class="periodic-review-banner">Loading review task…</div>
+      </div>
     </div>
   </div>
 
@@ -4758,6 +4860,8 @@ let currentEnhancedRequirements = [];
 let portalEnhancedRequirementBusy = {};
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
+var portalPeriodicReviewTasks = [];
+var currentPortalPeriodicReviewTask = null;
 var PRESCREENING_FIELD_BINDINGS = {
   'f-reg-name': 'registered_entity_name',
   'f-trade-name': 'trading_name',
@@ -5215,6 +5319,270 @@ async function clientSignOut() {
   showView('landing');
 }
 
+function periodicReviewAnswerLabel(answer) {
+  if (answer === 'yes') return 'Yes';
+  if (answer === 'no') return 'No';
+  return 'Unanswered';
+}
+
+function periodicReviewMaterialChange(question, answer) {
+  return question && question.material_change_answer === 'no' ? answer === 'no' : answer === 'yes';
+}
+
+function periodicReviewTaskStatusTone(statusLabel) {
+  var key = String(statusLabel || '').toLowerCase();
+  if (key.indexOf('submitted') !== -1) return { bg: 'var(--green-dim)', color: 'var(--green)' };
+  if (key.indexOf('overdue') !== -1) return { bg: 'var(--red-dim)', color: 'var(--red)' };
+  if (key.indexOf('draft') !== -1) return { bg: 'var(--amber-dim)', color: 'var(--amber)' };
+  return { bg: 'var(--blue-dim)', color: 'var(--blue)' };
+}
+
+function renderPeriodicReviewTasks(tasks) {
+  var title = document.getElementById('periodic-review-tasks-title');
+  var container = document.getElementById('periodic-review-tasks-container');
+  if (!title || !container) return;
+  portalPeriodicReviewTasks = Array.isArray(tasks) ? tasks.slice() : [];
+  if (!portalPeriodicReviewTasks.length) {
+    title.style.display = 'none';
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  title.style.display = '';
+  container.style.display = 'grid';
+  container.innerHTML = portalPeriodicReviewTasks.map(function(task) {
+    var tone = periodicReviewTaskStatusTone(task.task_status_label);
+    var appIdJs = JSON.stringify(task.application_id || '').replace(/"/g, '&quot;');
+    return '<div class="periodic-review-task-card">' +
+      '<div class="periodic-review-task-header">' +
+        '<div>' +
+          '<div class="periodic-review-task-title">Periodic Review Attestation</div>' +
+          '<div class="periodic-review-task-sub">' + escapeHtml(task.company_name || 'Client') + ' · ' + escapeHtml(task.review_reference || '') + '</div>' +
+        '</div>' +
+        '<span style="display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;border-radius:999px;background:' + tone.bg + ';color:' + tone.color + ';font-size:11px;font-weight:700;">' + escapeHtml(task.task_status_label || 'Not started') + '</span>' +
+      '</div>' +
+      '<div class="periodic-review-task-meta">' +
+        '<div class="periodic-review-task-meta-item"><div class="periodic-review-task-meta-label">Due date</div><div class="periodic-review-task-meta-value">' + escapeHtml(task.due_date ? new Date(task.due_date).toLocaleDateString() : 'Not set') + '</div></div>' +
+        '<div class="periodic-review-task-meta-item"><div class="periodic-review-task-meta-label">What you need to do</div><div class="periodic-review-task-meta-value">Answer 8 short questions</div></div>' +
+      '</div>' +
+      '<div class="periodic-review-task-footer">' +
+        '<div class="periodic-review-task-hint">This step is a short review attestation only. Supporting documents may be requested separately if needed.</div>' +
+        '<button type="button" class="btn-submit" onclick="openPeriodicReviewTask(' + appIdJs + ')" style="padding:10px 18px;font-size:13px;">' + escapeHtml(task.primary_action_label || 'Start review') + '</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function closePeriodicReviewModal() {
+  currentPortalPeriodicReviewTask = null;
+  var modal = document.getElementById('periodic-review-modal');
+  var body = document.getElementById('periodic-review-modal-body');
+  var subtitle = document.getElementById('periodic-review-modal-subtitle');
+  if (modal) {
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  if (body) body.innerHTML = '<div class="periodic-review-banner">Loading review task…</div>';
+  if (subtitle) subtitle.textContent = 'Loading review task…';
+}
+
+function buildPeriodicReviewFormPayload() {
+  if (!currentPortalPeriodicReviewTask) return null;
+  var questions = currentPortalPeriodicReviewTask.questions || [];
+  var answers = {};
+  questions.forEach(function(question) {
+    var selected = document.querySelector('input[name="pr-attestation-' + question.key + '"]:checked');
+    var answer = selected ? selected.value : 'unanswered';
+    var commentEl = document.getElementById('pr-attestation-comment-' + question.key);
+    answers[question.key] = {
+      answer: answer,
+      comment: commentEl ? commentEl.value.trim() : ''
+    };
+  });
+  var declarationEl = document.getElementById('pr-attestation-declaration');
+  return {
+    answers: answers,
+    declaration_accepted: !!(declarationEl && declarationEl.checked)
+  };
+}
+
+function validatePeriodicReviewPayload(payload) {
+  var errors = [];
+  var questions = (currentPortalPeriodicReviewTask && currentPortalPeriodicReviewTask.questions) || [];
+  questions.forEach(function(question) {
+    var entry = payload.answers[question.key] || { answer: 'unanswered', comment: '' };
+    if (entry.answer !== 'yes' && entry.answer !== 'no') {
+      errors.push('Answer the question about ' + question.label.toLowerCase().replace(/\?$/, '') + '.');
+      return;
+    }
+    if (periodicReviewMaterialChange(question, entry.answer) && !entry.comment) {
+      errors.push('Add a comment for "' + question.label + '" because you declared a material change.');
+    }
+  });
+  if (!payload.declaration_accepted) {
+    errors.push('Accept the declaration before submitting the attestation.');
+  }
+  return errors;
+}
+
+function showPeriodicReviewErrors(errors) {
+  var box = document.getElementById('periodic-review-errors');
+  if (!box) return;
+  if (!errors || !errors.length) {
+    box.classList.remove('open');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.add('open');
+  box.innerHTML = '<strong>Please fix the following:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
+    errors.map(function(err) { return '<li>' + escapeHtml(err) + '</li>'; }).join('') +
+    '</ul>';
+}
+
+function togglePeriodicReviewQuestionComment(questionKey) {
+  if (!currentPortalPeriodicReviewTask) return;
+  var questions = currentPortalPeriodicReviewTask.questions || [];
+  var question = questions.find(function(item) { return item.key === questionKey; });
+  if (!question) return;
+  var selected = document.querySelector('input[name="pr-attestation-' + questionKey + '"]:checked');
+  var commentWrap = document.getElementById('pr-attestation-comment-wrap-' + questionKey);
+  var label = document.getElementById('pr-attestation-comment-label-' + questionKey);
+  if (!commentWrap || !label) return;
+  var isRequired = periodicReviewMaterialChange(question, selected ? selected.value : 'unanswered');
+  commentWrap.classList.toggle('open', isRequired || !!document.getElementById('pr-attestation-comment-' + questionKey).value.trim());
+  label.textContent = question.comment_prompt + (isRequired ? ' *' : '');
+}
+
+function renderPeriodicReviewModal(task) {
+  currentPortalPeriodicReviewTask = task;
+  var modal = document.getElementById('periodic-review-modal');
+  var title = document.getElementById('periodic-review-modal-title');
+  var subtitle = document.getElementById('periodic-review-modal-subtitle');
+  var body = document.getElementById('periodic-review-modal-body');
+  if (!modal || !title || !subtitle || !body) return;
+  title.textContent = 'Periodic Review Attestation';
+  subtitle.textContent = (task.company_name || '') + ' · ' + (task.review_reference || '');
+  var attestation = task.attestation || {};
+  var answersByKey = {};
+  (attestation.questions || []).forEach(function(entry) { answersByKey[entry.key] = entry; });
+  var readOnly = !!task.read_only;
+  var questionHtml = (task.questions || []).map(function(question, index) {
+    var saved = answersByKey[question.key] || {};
+    var answer = saved.answer || 'unanswered';
+    var comment = saved.comment || '';
+    var isMaterial = periodicReviewMaterialChange(question, answer);
+    var keyJs = JSON.stringify(question.key).replace(/"/g, '&quot;');
+    var headBadge = readOnly && isMaterial
+      ? '<span class="periodic-review-readonly-answer" style="background:var(--amber-dim);color:var(--amber);border-color:rgba(245,158,11,0.18);">Material change flagged</span>'
+      : '';
+    if (readOnly) {
+      return '<div class="periodic-review-question">' +
+        '<div class="periodic-review-question-head">' +
+          '<div class="periodic-review-question-title">' + (index + 1) + '. ' + escapeHtml(question.label) + '</div>' +
+          headBadge +
+        '</div>' +
+        '<div class="periodic-review-readonly-answer">' + escapeHtml(periodicReviewAnswerLabel(answer)) + '</div>' +
+        (comment ? '<div style="margin-top:12px;font-size:12px;color:var(--text2);line-height:1.6;"><strong>Comment:</strong> ' + escapeHtml(comment) + '</div>' : '') +
+      '</div>';
+    }
+    return '<div class="periodic-review-question">' +
+      '<div class="periodic-review-question-head">' +
+        '<div class="periodic-review-question-title">' + (index + 1) + '. ' + escapeHtml(question.label) + '</div>' +
+      '</div>' +
+      '<div class="periodic-review-answer-group">' +
+        '<label class="periodic-review-answer-pill"><input type="radio" name="pr-attestation-' + question.key + '" value="yes"' + (answer === 'yes' ? ' checked' : '') + ' onchange="togglePeriodicReviewQuestionComment(' + keyJs + ')"> Yes</label>' +
+        '<label class="periodic-review-answer-pill"><input type="radio" name="pr-attestation-' + question.key + '" value="no"' + (answer === 'no' ? ' checked' : '') + ' onchange="togglePeriodicReviewQuestionComment(' + keyJs + ')"> No</label>' +
+      '</div>' +
+      '<div id="pr-attestation-comment-wrap-' + question.key + '" class="periodic-review-comment-wrap' + ((isMaterial || comment) ? ' open' : '') + '">' +
+        '<label id="pr-attestation-comment-label-' + question.key + '" style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">' + escapeHtml(question.comment_prompt + (isMaterial ? ' *' : '')) + '</label>' +
+        '<textarea id="pr-attestation-comment-' + question.key + '" rows="3" placeholder="' + escapeHtml(question.comment_prompt) + '" oninput="togglePeriodicReviewQuestionComment(' + keyJs + ')">' + escapeHtml(comment) + '</textarea>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  body.innerHTML =
+    '<div class="periodic-review-banner"><strong>This is not full onboarding.</strong> ' + escapeHtml(task.intro_text || '') + '</div>' +
+    '<div id="periodic-review-errors" class="periodic-review-errors"></div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+      '<span class="periodic-review-readonly-answer">' + escapeHtml(task.task_status_label || '') + '</span>' +
+      '<span class="periodic-review-readonly-answer">Due: ' + escapeHtml(task.due_date ? new Date(task.due_date).toLocaleDateString() : 'Not set') + '</span>' +
+      (attestation.submitted_at ? '<span class="periodic-review-readonly-answer">Submitted: ' + escapeHtml(new Date(attestation.submitted_at).toLocaleString()) + '</span>' : '') +
+    '</div>' +
+    '<div style="display:grid;gap:14px;">' + questionHtml + '</div>' +
+    '<div class="periodic-review-declaration">' +
+      '<label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.6;">' +
+        '<input type="checkbox" id="pr-attestation-declaration"' + (attestation.declaration_accepted ? ' checked' : '') + (readOnly ? ' disabled' : '') + ' style="margin-top:3px;">' +
+        '<span>' + escapeHtml(task.declaration_text || '') + '</span>' +
+      '</label>' +
+      '<div style="font-size:12px;color:var(--text2);line-height:1.6;">' + escapeHtml(task.follow_up_text || '') + '</div>' +
+    '</div>' +
+    '<div class="periodic-review-modal-actions">' +
+      '<div style="font-size:12px;color:var(--text3);line-height:1.6;">' + (readOnly ? 'This attestation has been submitted and is now read-only. Compliance may request supporting documents separately.' : 'You can save a partial draft now and submit when all answers are complete.') + '</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+        (readOnly ? '' : '<button type="button" class="btn-outline" onclick="savePeriodicReviewDraft()">Save draft</button>') +
+        (readOnly ? '' : '<button type="button" class="btn-submit" onclick="submitPeriodicReviewAttestation()">Submit attestation</button>') +
+      '</div>' +
+    '</div>';
+  showPeriodicReviewErrors([]);
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+async function openPeriodicReviewTask(applicationId) {
+  if (!AUTH_TOKEN || !applicationId) return;
+  var modal = document.getElementById('periodic-review-modal');
+  var body = document.getElementById('periodic-review-modal-body');
+  if (modal) {
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+  if (body) {
+    body.innerHTML = '<div class="periodic-review-banner">Loading review task…</div>';
+  }
+  try {
+    var data = await apiCall('GET', '/portal/applications/' + encodeURIComponent(applicationId) + '/periodic-review');
+    renderPeriodicReviewModal(data);
+  } catch (err) {
+    if (body) {
+      body.innerHTML = '<div class="periodic-review-errors open">Failed to load periodic review task: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
+    }
+  }
+}
+
+async function savePeriodicReviewDraft() {
+  if (!currentPortalPeriodicReviewTask) return;
+  var payload = buildPeriodicReviewFormPayload();
+  if (!payload) return;
+  showPeriodicReviewErrors([]);
+  try {
+    var data = await apiCall('POST', '/portal/applications/' + encodeURIComponent(currentPortalPeriodicReviewTask.application_id) + '/periodic-review/save-draft', payload);
+    renderPeriodicReviewModal(data);
+    showToast('success', 'Draft Saved', 'Your periodic review attestation draft has been saved.');
+    loadMyApplications();
+  } catch (err) {
+    showPeriodicReviewErrors([err.message || 'Could not save this draft.']);
+  }
+}
+
+async function submitPeriodicReviewAttestation() {
+  if (!currentPortalPeriodicReviewTask) return;
+  var payload = buildPeriodicReviewFormPayload();
+  if (!payload) return;
+  var errors = validatePeriodicReviewPayload(payload);
+  if (errors.length) {
+    showPeriodicReviewErrors(errors);
+    return;
+  }
+  showPeriodicReviewErrors([]);
+  try {
+    var data = await apiCall('POST', '/portal/applications/' + encodeURIComponent(currentPortalPeriodicReviewTask.application_id) + '/periodic-review/submit', payload);
+    renderPeriodicReviewModal(data);
+    showToast('success', 'Attestation Submitted', 'Your periodic review attestation has been submitted.');
+    loadMyApplications();
+  } catch (err) {
+    showPeriodicReviewErrors([err.message || 'Could not submit this attestation.']);
+  }
+}
+
 async function loadMyApplications() {
   if (!AUTH_TOKEN) return;
 
@@ -5226,7 +5594,7 @@ async function loadMyApplications() {
   }
 
   try {
-    var resp = await apiCall('GET', '/applications');
+    var resp = await apiCall('GET', '/portal/applications');
     var apps = resp.applications || [];
     var activeDrafts = [];
     try {
@@ -5253,28 +5621,58 @@ async function loadMyApplications() {
 
     if (apps.length === 0) {
       tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:#999;">No applications yet. Click "Start Application" to begin.</td></tr>';
+      renderPeriodicReviewTasks([]);
       return;
     }
 
     var html = '';
+    var stageLabels = {
+      draft: 'Application started',
+      submitted: 'Submitted',
+      prescreening_submitted: 'Pre-screening',
+      pricing_review: 'Pricing review',
+      pricing_accepted: 'Pricing accepted',
+      pre_approval_review: 'Pre-approval review',
+      pre_approved: 'Pre-approved',
+      kyc_documents: 'KYC documents',
+      kyc_submitted: 'KYC submitted',
+      compliance_review: 'Compliance review',
+      in_review: 'Verification review',
+      under_review: 'Verification review',
+      edd_required: 'Additional review',
+      approved: 'Approved',
+      rejected: 'Declined',
+      rmi_sent: 'Info requested',
+      withdrawn: 'Withdrawn',
+      pending: 'Pending'
+    };
+    var progressLabels = {
+      draft: 'You can continue this draft',
+      kyc_documents: 'Documents needed',
+      rmi_sent: 'Waiting on you',
+      approved: 'Completed',
+      rejected: 'Closed',
+      withdrawn: 'Closed'
+    };
     apps.forEach(function(app) {
       var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
       var statusLabels = {draft:'Application Started',submitted:'Application Submitted',prescreening_submitted:'Pre-Screening in Progress',pricing_review:'Pricing Under Review',pricing_accepted:'Pricing Accepted',pre_approval_review:'Pre-Approval Under Review',pre_approved:'Pre-Approved',kyc_documents:'KYC Documents Required',kyc_submitted:'KYC Documents Submitted',compliance_review:'Compliance Review in Progress',in_review:'Verification Ongoing',under_review:'Under Compliance Review',edd_required:'Enhanced Due Diligence Required',approved:'Approved \u2013 Ready for Activation',rejected:'Application Declined',rmi_sent:'Further Information Requested',withdrawn:'Application Withdrawn',pending:'Pending'};
       var color = statusColors[app.status] || '#999';
       var label = app.status_label || statusLabels[app.status] || app.status;
-      var riskColors = {LOW:'#10b981',MEDIUM:'#f59e0b',HIGH:'#ef4444',VERY_HIGH:'#dc2626'};
-      var riskColor = riskColors[app.risk_level] || '#999';
-      var date = app.created_at ? new Date(app.created_at).toLocaleDateString() : '';
+      var date = (app.updated_at || app.created_at) ? new Date(app.updated_at || app.created_at).toLocaleDateString() : '';
       var ref = app.ref || app.id;
       var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
       var statusJs = JSON.stringify(app.status || '').replace(/"/g, '&quot;');
       var companyJs = JSON.stringify(app.company_name || 'this draft application').replace(/"/g, '&quot;');
       var isDraft = (app.status || '') === 'draft';
+      var stageLabel = stageLabels[app.status] || label;
+      var progressLabel = progressLabels[app.status] || 'In progress';
       html += '<tr style="cursor:pointer;" onclick="resumeApplication(' + refJs + ', ' + statusJs + ')">';
-      html += '<td style="font-weight:600;">' + escapeHtml(app.ref || app.id) + '</td>';
-      html += '<td>' + escapeHtml(app.company_name || '-') + '</td>';
+      html += '<td><div class="app-tbl-name">' + escapeHtml(app.company_name || '-') + '</div></td>';
+      html += '<td><div class="app-tbl-ref">' + escapeHtml(app.ref || app.id) + '</div></td>';
+      html += '<td>' + escapeHtml(stageLabel) + '</td>';
+      html += '<td>' + escapeHtml(progressLabel) + '</td>';
       html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + escapeHtml(label) + '</span></td>';
-      html += '<td><span style="color:' + riskColor + ';font-weight:600;">' + escapeHtml(app.risk_level || '-') + '</span></td>';
       html += '<td>' + escapeHtml(date) + '</td>';
       html += '<td class="actions-cell"><div class="app-table-actions"><button type="button" class="btn-table-action" onclick="event.stopPropagation();resumeApplication(' + refJs + ', ' + statusJs + ')">Open</button>' +
         (isDraft ? '<button type="button" class="btn-table-action danger" onclick="event.stopPropagation();deleteApplication(' + refJs + ', ' + companyJs + ')">Delete</button>' : '') +
@@ -5287,12 +5685,27 @@ async function loadMyApplications() {
     renderSidebarApps(apps);
     renderResumeCTA(apps, activeDrafts);
     renderRecentActivity(apps);
+    renderPeriodicReviewTasks(apps.map(function(app) {
+      var task = app.periodic_review_task;
+      if (!task) return null;
+      return {
+        application_id: app.id,
+        company_name: app.company_name,
+        review_reference: task.review_reference,
+        due_date: task.due_date,
+        task_status: task.task_status,
+        task_status_label: task.task_status_label,
+        primary_action_label: task.primary_action_label,
+        is_overdue: task.is_overdue
+      };
+    }).filter(Boolean));
   } catch(e) {
     console.error('Failed to load applications:', e);
     var tbody = document.getElementById('my-apps-tbody');
     if (tbody) {
       tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
     }
+    renderPeriodicReviewTasks([]);
   }
 }
 
