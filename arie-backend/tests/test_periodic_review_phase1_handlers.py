@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -89,6 +90,52 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         self.assertEqual(body["projection"]["status_label"], "Due")
         self.assertEqual(body["projection"]["blocker_count"], 0)
         self.assertGreaterEqual(body["projection"]["completion_blocker_count"], 1)
+
+    def test_review_queue_list_supports_canonical_filters_and_payload(self):
+        today = datetime.now(timezone.utc).date()
+        overdue_due_date = (today - timedelta(days=2)).isoformat()
+        open_due_date = (today + timedelta(days=10)).isoformat()
+        completed_due_date = (today - timedelta(days=30)).isoformat()
+
+        self._conn.execute(
+            "INSERT OR REPLACE INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, 'active')",
+            ("co001", "co001@example.com", "x", "Test CO", "co"),
+        )
+        self._conn.commit()
+
+        overdue_id = self._create_review(status="pending", risk_level="HIGH")
+        open_id = self._create_review(status="in_progress", risk_level="MEDIUM")
+        completed_id = self._create_review(status="completed", risk_level="LOW")
+        self._conn.execute(
+            "UPDATE periodic_reviews SET due_date=?, next_review_date=?, assigned_officer=?, assigned_at=? WHERE id=?",
+            (overdue_due_date, overdue_due_date, "co001", "2026-05-01T09:30:00Z", overdue_id),
+        )
+        self._conn.execute(
+            "UPDATE periodic_reviews SET due_date=?, next_review_date=?, assigned_officer=?, assigned_at=? WHERE id=?",
+            (open_due_date, open_due_date, "admin001", "2026-05-03T09:30:00Z", open_id),
+        )
+        self._conn.execute(
+            "UPDATE periodic_reviews SET due_date=?, next_review_date=?, assigned_officer=?, completed_at=? WHERE id=?",
+            (completed_due_date, completed_due_date, "co001", "2026-04-01T10:00:00Z", completed_id),
+        )
+        self._conn.commit()
+
+        resp = self._get("/api/monitoring/reviews?queue=overdue&assigned_to_me=true", token=self.co_token)
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+
+        self.assertEqual(len(body["reviews"]), 1)
+        row = body["reviews"][0]
+        self.assertEqual(row["id"], overdue_id)
+        self.assertEqual(row["application_id"], self._app_id)
+        self.assertEqual(row["application_ref"], "APP-PR03")
+        self.assertEqual(row["client_name"], "PR03 Test Co")
+        self.assertTrue(row["is_overdue"])
+        self.assertEqual(row["queue_status"], "overdue")
+        self.assertEqual(row["queue_status_label"], "Overdue")
+        self.assertEqual(row["owner_display_name"], "Test CO")
+        self.assertEqual(row["primary_action_label"], "Open review case")
+        self.assertEqual(row["projection"]["audit_reference"], f"periodic_review:{overdue_id}")
 
     def test_review_detail_projection_surfaces_linked_edd_case_id(self):
         rid = self._create_review(status="in_progress", risk_level="HIGH")

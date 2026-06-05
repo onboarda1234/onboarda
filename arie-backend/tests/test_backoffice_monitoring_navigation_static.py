@@ -32,7 +32,7 @@ def test_sidebar_lists_periodic_review_signals_above_monitoring_alerts():
     periodic_index = html.index('data-view="periodic-review-signals"')
     monitoring_index = html.index('data-view="monitoring"')
     assert periodic_index < monitoring_index
-    assert '> Periodic Review Signals</div>' in html
+    assert '> Periodic Review Queue</div>' in html
     assert '> Monitoring Alerts</div>' in html
 
 
@@ -42,12 +42,12 @@ def test_periodic_review_signals_is_a_standalone_view():
     view_region = _view_region(html, "view-periodic-review-signals", "view-monitoring")
     show_view_region = _function_region(html, "showView", "signOut")
 
-    assert "Signals that may indicate a client requires review, reassessment, or monitoring follow-up." in view_region
+    assert "Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth." in view_region
     assert 'id="review-status-filter"' in view_region
     assert 'id="review-risk-filter"' in view_region
     assert 'id="periodic-reviews-body"' in view_region
     assert "Open Lifecycle Queue" in view_region
-    assert "'periodic-review-signals':'Periodic Review Signals'" in show_view_region
+    assert "'periodic-review-signals':'Periodic Review Queue'" in show_view_region
     assert "if (name === 'periodic-review-signals')" in show_view_region
     assert "ensureMonitoringDataLoaded()" in show_view_region
 
