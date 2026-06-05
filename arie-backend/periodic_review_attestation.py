@@ -104,6 +104,8 @@ def _serialize_temporal(value: Any) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
@@ -113,7 +115,10 @@ def _serialize_temporal(value: Any) -> Optional[str]:
             return None
         normalized = text.replace("Z", "+00:00")
         try:
-            return datetime.fromisoformat(normalized).isoformat()
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.isoformat()
         except ValueError:
             try:
                 return date.fromisoformat(text[:10]).isoformat()

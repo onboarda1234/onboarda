@@ -354,7 +354,13 @@ class TestPeriodicReviewAttestationHandlers(_PeriodicReviewAttestationBase):
         body = json.loads(submit_resp.body)
         assert body["attestation"]["status"] == "submitted"
         assert body["attestation"]["saved_at"] == draft_ts.isoformat()
-        assert isinstance(body["attestation"]["submitted_at"], str)
+        assert body["attestation"]["submitted_at"].endswith("+00:00")
+
+        reload_resp = self._get("/api/portal/applications/app-owned/periodic-review", self.client_token)
+        assert reload_resp.code == 200
+        reload_body = json.loads(reload_resp.body)
+        assert reload_body["attestation"]["saved_at"] == draft_ts.isoformat()
+        assert reload_body["attestation"]["submitted_at"].endswith("+00:00")
 
         stored = self._conn.execute(
             "SELECT client_attestation_status, client_attestation_payload, client_attestation_saved_at, client_attestation_submitted_at "
