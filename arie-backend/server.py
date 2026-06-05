@@ -19010,13 +19010,25 @@ class PeriodicReviewsListHandler(BaseHandler):
         if not user:
             return
 
+        from fixture_filter import (
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
         status_filter = self.get_argument("status", None)
         queue_filter = self.get_argument("queue", None)
         assigned_to_me = self.get_argument("assigned_to_me", "false").lower() in ("true", "1", "yes")
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         db = get_db()
 
         query = "SELECT * FROM periodic_reviews WHERE 1=1"
         params = []
+
+        if not show_fx:
+            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+            query += f" AND {fx_excl}"
+            params.extend(fx_params)
 
         if status_filter:
             query += " AND status = ?"
@@ -19166,6 +19178,40 @@ class PeriodicReviewBaselineHandler(BaseHandler):
             return self.error("baseline_status is required", 400)
         db = get_db()
         try:
+            review_row = db.execute(
+                "SELECT application_id FROM periodic_reviews WHERE id = ?",
+                (review_id,),
+            ).fetchone()
+            app_id = review_row["application_id"] if review_row else None
+            app_ref = None
+            if app_id:
+                app_row = db.execute(
+                    "SELECT ref FROM applications WHERE id = ?",
+                    (app_id,),
+                ).fetchone()
+                app_ref = (app_row or {}).get("ref") if app_row else None
+
+            def _audit_writer(audit_user, action, target, detail, db=None, before_state=None, after_state=None, commit=False):
+                try:
+                    detail_payload = json.loads(detail) if isinstance(detail, str) else dict(detail or {})
+                except Exception:
+                    detail_payload = {"detail": str(detail)}
+                if app_id and "application_id" not in detail_payload:
+                    detail_payload["application_id"] = app_id
+                if app_ref and "application_ref" not in detail_payload:
+                    detail_payload["application_ref"] = app_ref
+                detail_payload.setdefault("periodic_review_target", target)
+                self.log_audit(
+                    audit_user,
+                    action,
+                    app_ref or target,
+                    json.dumps(detail_payload, default=str, sort_keys=True),
+                    db=db,
+                    before_state=before_state,
+                    after_state=after_state,
+                    commit=commit,
+                )
+
             try:
                 result = _save_periodic_review_baseline(
                     db,
@@ -19175,7 +19221,7 @@ class PeriodicReviewBaselineHandler(BaseHandler):
                     baseline_cadence=data.get("baseline_cadence"),
                     officer_note=data.get("officer_note"),
                     user=user,
-                    audit_writer=self.log_audit,
+                    audit_writer=_audit_writer,
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
