@@ -19,6 +19,9 @@ def test_overview_contains_compact_periodic_review_baseline_box():
     assert "Is this a legacy file?" in html
     assert "Derived cadence" in html
     assert "Cadence is derived from the current officer-visible risk level." in html
+    assert "/periodic-review-baseline" in html
+    assert "Periodic review baseline can be configured after onboarding approval." in html
+    assert "No periodic review case is available yet for baseline setup on this application." not in html
 
 
 def test_portal_does_not_render_officer_baseline_box():

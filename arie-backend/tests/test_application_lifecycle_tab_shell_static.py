@@ -106,13 +106,13 @@ def test_overview_periodic_review_baseline_box_is_simplified_backoffice_only_and
     assert "Is this a legacy file?" in html
     assert "Last review date" in html
     assert "Derived cadence" in html
-    assert "/baseline" in html
+    assert "/periodic-review-baseline" in html
     assert "legacy_file" in html
     assert "last_review_date" in html
     assert "overview-periodic-review-baseline-cadence-" not in html
 
 
-def test_overview_periodic_review_baseline_loads_from_active_or_scheduled_review_setup():
+def test_overview_periodic_review_baseline_loads_from_application_detail_without_review_gate():
     html = _read_backoffice()
     summary_start = html.index("async function loadLifecycleApplicationSummary(applicationId)")
     summary_end = html.index("function fetchLifecycleApplicationSummary", summary_start)
@@ -121,10 +121,9 @@ def test_overview_periodic_review_baseline_loads_from_active_or_scheduled_review
     baseline_start = html.index("async function loadOverviewPeriodicReviewBaseline(applicationId, summary)")
     baseline_end = html.index("function lifecycleDetailBadge", baseline_start)
     baseline_section = html[baseline_start:baseline_end]
-    assert "var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;" in baseline_section
-    assert "var reviewSetup = (summary && summary.review_setup) || null;" in baseline_section
-    assert "renderOverviewPeriodicReviewBaseline(null);" in baseline_section
-    assert "var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewId));" in baseline_section
+    assert "var detail = await boApiCall('GET', '/applications/' + encodeURIComponent(applicationId));" in baseline_section
+    assert "No periodic review case is available yet for baseline setup on this application." not in baseline_section
+    assert "Periodic review baseline can be configured after onboarding approval." in html
 
 
 def test_lifecycle_workspace_uses_scrollable_responsive_layout():

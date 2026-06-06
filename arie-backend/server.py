@@ -185,6 +185,7 @@ from monitoring_enrollment import (
     enroll_approved_application as _enroll_approved_application_for_monitoring,
     latest_active_review_summary as _latest_monitoring_review_summary,
 )
+from periodic_review_policy import policy_snapshot_for_application as _periodic_review_policy_snapshot
 from periodic_review_management import (
     InvalidPeriodicReviewInput as _InvalidPeriodicReviewInput,
     EvidenceLinkError as _PeriodicReviewEvidenceLinkError,
@@ -195,6 +196,7 @@ from periodic_review_management import (
     add_evidence_link as _add_periodic_review_evidence_link,
     assign_review as _assign_periodic_review,
     record_risk_change as _record_periodic_review_risk_change,
+    save_application_periodic_review_baseline as _save_application_periodic_review_baseline,
     save_periodic_review_baseline as _save_periodic_review_baseline,
     save_workspace_findings as _save_periodic_review_findings,
     save_legacy_import_setup as _save_periodic_review_import_setup,
@@ -4090,6 +4092,15 @@ class ApplicationDetailHandler(BaseHandler):
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
         result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
         result["periodic_reviews"] = _list_periodic_review_projections(db, application_id=result["id"])
+        if user["type"] != "client":
+            latest_review_row = db.execute(
+                "SELECT * FROM periodic_reviews WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (result["id"],),
+            ).fetchone()
+            result["periodic_review_baseline"] = _periodic_review_baseline_snapshot(
+                _application_periodic_review_baseline_source(result, latest_review_row)
+            )
+            result["periodic_review_baseline_eligibility"] = _application_periodic_review_baseline_eligibility(result)
         if user["type"] != "client" and HAS_CHANGE_MANAGEMENT:
             try:
                 result["change_requests"] = cm.list_change_requests(
@@ -19266,6 +19277,68 @@ class PeriodicReviewBaselineHandler(BaseHandler):
             db.close()
 
 
+class ApplicationPeriodicReviewBaselineHandler(BaseHandler):
+    """POST /api/applications/:id/periodic-review-baseline — save application baseline metadata."""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        if not data.get("legacy_file") and not data.get("baseline_status"):
+            return self.error("legacy_file is required", 400)
+        db = get_db()
+        try:
+            app_row = db.execute(
+                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app_row:
+                return self.error("Application not found", 404)
+            real_app_id = app_row["id"]
+            app_ref = app_row["ref"]
+
+            def _audit_writer(audit_user, action, target, detail, db=None, before_state=None, after_state=None, commit=False):
+                try:
+                    detail_payload = json.loads(detail) if isinstance(detail, str) else dict(detail or {})
+                except Exception:
+                    detail_payload = {"detail": str(detail)}
+                detail_payload.setdefault("application_id", real_app_id)
+                detail_payload.setdefault("application_ref", app_ref)
+                detail_payload.setdefault("periodic_review_target", target)
+                self.log_audit(
+                    audit_user,
+                    action,
+                    app_ref,
+                    json.dumps(detail_payload, default=str, sort_keys=True),
+                    db=db,
+                    before_state=before_state,
+                    after_state=after_state,
+                    commit=commit,
+                )
+
+            try:
+                result = _save_application_periodic_review_baseline(
+                    db,
+                    real_app_id,
+                    baseline_status=data.get("baseline_status"),
+                    baseline_date=data.get("baseline_date"),
+                    baseline_cadence=data.get("baseline_cadence"),
+                    officer_note=data.get("officer_note"),
+                    legacy_file=data.get("legacy_file"),
+                    last_review_date=data.get("last_review_date"),
+                    user=user,
+                    audit_writer=_audit_writer,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Application not found", 404)
+            except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "baseline_saved", "result": result})
+        finally:
+            db.close()
+
+
 class PeriodicReviewImportAcknowledgementHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/import-acknowledgement."""
     def post(self, review_id):
@@ -19653,6 +19726,86 @@ def _serialize_portal_periodic_review_attestation(db, review_row, *, projection=
     }
 
 
+def _application_periodic_review_baseline_source(application_row, fallback_review=None) -> dict:
+    app = dict(application_row or {})
+    review = dict(fallback_review or {})
+    if any(
+        app.get(key) not in (None, "")
+        for key in (
+            "periodic_review_baseline_status",
+            "periodic_review_baseline_date",
+            "periodic_review_baseline_cadence_months",
+            "periodic_review_baseline_note",
+            "periodic_review_last_review_date",
+            "periodic_review_next_review_due",
+        )
+    ):
+        return {
+            "baseline_status": app.get("periodic_review_baseline_status"),
+            "baseline_date": app.get("periodic_review_baseline_date"),
+            "baseline_cadence_months": app.get("periodic_review_baseline_cadence_months"),
+            "baseline_note": app.get("periodic_review_baseline_note"),
+            "last_review_date": app.get("periodic_review_last_review_date"),
+            "next_review_date": app.get("periodic_review_next_review_due"),
+            "due_date": app.get("periodic_review_next_review_due"),
+            "frequency_months": app.get("periodic_review_baseline_cadence_months"),
+            "calculation_basis": app.get("periodic_review_baseline_calculation_basis"),
+            "policy_version": app.get("periodic_review_baseline_policy_version"),
+            "legacy_import": False,
+            "risk_level": app.get("final_risk_level") or app.get("risk_level"),
+            "application_id": app.get("id"),
+        }
+    if any(
+        review.get(key) not in (None, "")
+        for key in ("baseline_status", "baseline_date", "baseline_cadence_months", "baseline_note", "last_review_date")
+    ):
+        return review
+    approval_anchor = (
+        app.get("first_approved_at")
+        or app.get("approved_at")
+        or app.get("decided_at")
+        or app.get("completed_at")
+    )
+    if approval_anchor:
+        policy = _periodic_review_policy_snapshot(
+            app,
+            anchor_date=approval_anchor,
+            override_risk_level=app.get("final_risk_level") or app.get("risk_level"),
+        )
+        return {
+            "baseline_status": "last_onboarding_date",
+            "baseline_date": str(approval_anchor)[:10],
+            "baseline_cadence_months": policy.get("frequency_months"),
+            "baseline_note": None,
+            "last_review_date": None,
+            "next_review_date": policy.get("next_review_date"),
+            "due_date": policy.get("next_review_date"),
+            "frequency_months": policy.get("frequency_months"),
+            "calculation_basis": policy.get("calculation_basis"),
+            "policy_version": policy.get("policy_version"),
+            "legacy_import": False,
+            "risk_level": app.get("final_risk_level") or app.get("risk_level"),
+            "application_id": app.get("id"),
+        }
+    return review
+
+
+def _application_periodic_review_baseline_eligibility(application_row) -> dict:
+    app = dict(application_row or {})
+    status = str(app.get("status") or "").strip().lower()
+    has_periodic_review_context = bool(app.get("periodic_review")) or bool(app.get("periodic_reviews"))
+    enabled = status == "approved" or has_periodic_review_context
+    if enabled:
+        message = ""
+    else:
+        message = "Periodic review baseline can be configured after onboarding approval."
+    return {
+        "enabled": enabled,
+        "reason": "approved_or_existing_periodic_review_context" if enabled else "awaiting_onboarding_approval",
+        "message": message,
+    }
+
+
 def _periodic_review_baseline_snapshot(review_row) -> dict:
     status = str(review_row.get("baseline_status") or "").strip().lower()
     date_value = review_row.get("baseline_date")
@@ -19887,7 +20040,6 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
         "frequency_months": result.get("frequency_months"),
         "policy_version": result.get("policy_version"),
     }
-    result["periodic_review_baseline"] = _periodic_review_baseline_snapshot(result)
     result["memo_status"] = projection.get("memo_status")
     result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
     result["evidence_links"] = projection.get("evidence_links", [])
@@ -19904,6 +20056,9 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
         (result.get("application_id"),),
     ).fetchone()
     app_dict = dict(app_row) if app_row else {"id": result.get("application_id"), "ref": result.get("application_ref")}
+    result["periodic_review_baseline"] = _periodic_review_baseline_snapshot(
+        _application_periodic_review_baseline_source(app_dict, result)
+    )
     result["periodic_review_document_requests"] = _list_backoffice_periodic_review_document_requests(
         db,
         app_dict,
@@ -23116,6 +23271,7 @@ def make_app():
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
+        (r"/api/applications/([^/]+)/periodic-review-baseline", ApplicationPeriodicReviewBaselineHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/upload", ApplicationEnhancedRequirementUploadHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/request", ApplicationEnhancedRequirementRequestHandler),
