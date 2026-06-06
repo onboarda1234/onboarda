@@ -11542,6 +11542,18 @@ def _audit_target_values_for_ref(ref):
     return [ref, f"application:{ref}"]
 
 
+def _application_audit_targets(db, app):
+    """Return application audit targets, including linked periodic review targets."""
+    targets = list(_audit_target_values_for_ref(app["ref"]))
+    review_rows = db.execute(
+        "SELECT id FROM periodic_reviews WHERE application_id = ? ORDER BY id ASC",
+        (app["id"],),
+    ).fetchall()
+    for row in review_rows:
+        targets.append(f"periodic_review:{row['id']}")
+    return list(dict.fromkeys(target for target in targets if target))
+
+
 def _append_audit_filters(handler, query, params, *, exclude_fixtures=False):
     """Append safe audit_log filters shared by list/export endpoints."""
     start_date = handler.get_argument("from", None) or handler.get_argument("start_date", None)
@@ -11638,13 +11650,14 @@ class ApplicationAuditLogHandler(BaseHandler):
             return self.error("Application not found", 404)
         limit = min(int(self.get_argument("limit", "200")), 500)
         offset = max(0, int(self.get_argument("offset", "0")))
-        targets = _audit_target_values_for_ref(app["ref"])
+        targets = _application_audit_targets(db, app)
+        placeholders = ",".join(["?"] * len(targets))
         rows = db.execute(
-            "SELECT * FROM audit_log WHERE target IN (?, ?) ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM audit_log WHERE target IN ({placeholders}) ORDER BY timestamp DESC LIMIT ? OFFSET ?",
             (*targets, limit, offset)
         ).fetchall()
         total = db.execute(
-            "SELECT COUNT(*) as c FROM audit_log WHERE target IN (?, ?)",
+            f"SELECT COUNT(*) as c FROM audit_log WHERE target IN ({placeholders})",
             tuple(targets)
         ).fetchone()["c"]
         db.close()

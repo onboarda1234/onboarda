@@ -127,3 +127,10 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         detail = json.loads(audit["detail"])
         assert detail["periodic_review_id"] == self._owned_review_id
         assert detail["source_surface"] == "backoffice_periodic_review_workspace"
+
+        audit_log_resp = self._get("/api/applications/app-owned/audit-log?limit=20", self.admin_token)
+        assert audit_log_resp.code == 200
+        audit_entries = json.loads(audit_log_resp.body)["entries"]
+        matching = [entry for entry in audit_entries if entry["action"] == "periodic_review_findings_saved"]
+        assert matching
+        assert matching[0]["target"] == f"periodic_review:{self._owned_review_id}"
