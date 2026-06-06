@@ -3080,18 +3080,33 @@ def _ensure_periodic_review_attestation_schema(db: DBConnection):
 
 def _ensure_periodic_review_baseline_schema(db: DBConnection):
     """Add PRS-2B baseline metadata fields for officer-managed setup."""
-    if not _safe_table_exists(db, "periodic_reviews"):
+    if _safe_table_exists(db, "periodic_reviews"):
+        review_columns = {
+            "baseline_status": "TEXT",
+            "baseline_date": "TEXT",
+            "baseline_cadence_months": "INTEGER",
+            "baseline_note": "TEXT",
+        }
+        for column, definition in review_columns.items():
+            if not _safe_column_exists(db, "periodic_reviews", column):
+                db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+    if not _safe_table_exists(db, "applications"):
         return
 
-    review_columns = {
-        "baseline_status": "TEXT",
-        "baseline_date": "TEXT",
-        "baseline_cadence_months": "INTEGER",
-        "baseline_note": "TEXT",
+    application_columns = {
+        "periodic_review_baseline_status": "TEXT",
+        "periodic_review_baseline_date": "TEXT",
+        "periodic_review_baseline_cadence_months": "INTEGER",
+        "periodic_review_baseline_note": "TEXT",
+        "periodic_review_last_review_date": "TEXT",
+        "periodic_review_next_review_due": "TEXT",
+        "periodic_review_baseline_calculation_basis": "TEXT",
+        "periodic_review_baseline_policy_version": "TEXT",
     }
-    for column, definition in review_columns.items():
-        if not _safe_column_exists(db, "periodic_reviews", column):
-            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+    for column, definition in application_columns.items():
+        if not _safe_column_exists(db, "applications", column):
+            db.execute(f"ALTER TABLE applications ADD COLUMN {column} {definition}")
 
 
 def _ensure_periodic_review_findings_schema(db: DBConnection):

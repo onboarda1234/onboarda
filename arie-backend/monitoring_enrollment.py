@@ -164,7 +164,13 @@ def _review_payload(
     priority = review_priority_for_application(app, previous_status=previous_status)
     due_date = policy["due_date"]
     next_review_date = policy["next_review_date"]
-    cadence_label = f"{policy['frequency_months']}-month cadence"
+    frequency_months = policy["frequency_months"]
+    application_baseline_status = str(app.get("periodic_review_baseline_status") or "").strip().lower()
+    if application_baseline_status and app.get("periodic_review_next_review_due"):
+        due_date = str(app.get("periodic_review_next_review_due"))
+        next_review_date = due_date
+        frequency_months = int(app.get("periodic_review_baseline_cadence_months") or policy["frequency_months"])
+    cadence_label = f"{frequency_months}-month cadence"
     trigger_reason = (
         "Initial periodic review scheduled after application approval "
         f"({risk_level} final risk, {cadence_label})."
@@ -187,7 +193,7 @@ def _review_payload(
         "review_cycle_number": review_cycle_number,
         "review_type": "scheduled",
         "policy_version": policy["policy_version"],
-        "frequency_months": policy["frequency_months"],
+        "frequency_months": frequency_months,
         "calculation_basis": policy["calculation_basis"],
         "next_review_date": next_review_date,
         "enhanced_monitoring_reasons": policy["enhanced_monitoring_reasons"],

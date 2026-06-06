@@ -13420,13 +13420,17 @@ function periodicReviewBaselinePreview(reviewId) {
   var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + reviewId);
   var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + reviewId);
   var reviewDetail = window._overviewPeriodicReviewBaselineDetail || null;
+  var eligibility = (reviewDetail && reviewDetail.periodic_review_baseline_eligibility) || {};
   var legacyFile = legacyEl ? legacyEl.value : 'no';
   var dateValue = dateEl ? dateEl.value : '';
   if (legacyFile === 'yes' && !dateValue) return { value: '', placeholder: 'Last review date required' };
   var anchorDate = legacyFile === 'yes'
     ? dateValue
     : String(((reviewDetail || {}).periodic_review_baseline || {}).anchor_date || '');
-  if (!anchorDate) return { value: '', placeholder: 'Awaiting onboarding approval date' };
+  if (!anchorDate) {
+    if (eligibility && eligibility.enabled === false) return { value: '', placeholder: eligibility.message || 'Awaiting onboarding approval' };
+    return { value: '', placeholder: 'Awaiting onboarding approval' };
+  }
   var months = periodicReviewBaselineRiskDefaultMonths(reviewDetail);
   return { value: periodicReviewBaselineAddMonths(anchorDate, months), placeholder: '' };
 }
@@ -13459,33 +13463,37 @@ function renderOverviewPeriodicReviewBaseline(detail) {
     container.innerHTML =
       '<div class="detail-section" style="margin-top:16px;">' +
         '<div class="detail-section-title">Periodic Review Baseline</div>' +
-        '<div style="font-size:12px;color:var(--text2);line-height:1.5;">No periodic review case is available yet for baseline setup on this application.</div>' +
+        '<div style="font-size:12px;color:var(--text2);line-height:1.5;">Application detail unavailable.</div>' +
       '</div>';
     return;
   }
   window._overviewPeriodicReviewBaselineDetail = detail;
   var baseline = detail.periodic_review_baseline || {};
+  var eligibility = detail.periodic_review_baseline_eligibility || { enabled: true, message: '' };
+  var canEdit = eligibility.enabled !== false;
+  var disabled = canEdit ? '' : ' disabled';
   var legacyFile = baseline.legacy_file || 'no';
   var baselineDate = baseline.last_review_date || '';
   var note = baseline.officer_note || '';
   var cadenceLabel = baseline.derived_cadence_label || ((baseline.derived_cadence_months || 'Risk') + ' months');
-  var nextDue = baseline.next_review_due || 'Not scheduled yet';
+  var nextDue = baseline.next_review_due || (canEdit ? 'Not scheduled yet' : (eligibility.message || 'Awaiting onboarding approval'));
   container.innerHTML =
     '<div class="detail-section" style="margin-top:16px;">' +
       '<div class="detail-section-title" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
         '<span>Periodic Review Baseline</span>' +
         '<span style="font-size:11px;color:var(--text3);">Officer-only setup metadata</span>' +
       '</div>' +
+      (!canEdit ? '<div style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);line-height:1.45;">' + escapeHtml(String(eligibility.message || 'Periodic review baseline can be configured after onboarding approval.')) + '</div>' : '') +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;">' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Is this a legacy file?</div><select id="overview-periodic-review-baseline-legacy-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')">' + periodicReviewBaselineLegacyOptions(legacyFile) + '</select></div>' +
-        '<div id="overview-periodic-review-baseline-last-review-wrap-' + detail.id + '"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Last review date</div><input id="overview-periodic-review-baseline-last-review-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')" /></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Is this a legacy file?</div><select id="overview-periodic-review-baseline-legacy-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + '>' + periodicReviewBaselineLegacyOptions(legacyFile) + '</select></div>' +
+        '<div id="overview-periodic-review-baseline-last-review-wrap-' + detail.id + '"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Last review date</div><input id="overview-periodic-review-baseline-last-review-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + ' /></div>' +
         '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Derived cadence</div><div style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(cadenceLabel)) + '</div></div>' +
         '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Next review due</div><div id="overview-periodic-review-baseline-next-due-' + detail.id + '" style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(nextDue)) + '</div></div>' +
       '</div>' +
-      '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Officer note</div><input id="overview-periodic-review-baseline-note-' + detail.id + '" class="form-input" type="text" maxlength="500" placeholder="Optional short note" value="' + escapeHtml(String(note || '')) + '" /></div>' +
+      '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Officer note</div><input id="overview-periodic-review-baseline-note-' + detail.id + '" class="form-input" type="text" maxlength="500" placeholder="Optional short note" value="' + escapeHtml(String(note || '')) + '"' + disabled + ' /></div>' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
         '<div style="font-size:11px;color:var(--text3);max-width:560px;">Cadence is derived from the current officer-visible risk level. Legacy files must provide the last review date; current files derive next due from onboarding approval/completion.</div>' +
-        '<button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')">Save baseline</button>' +
+        '<button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')"' + disabled + '>Save baseline</button>' +
       '</div>' +
     '</div>';
   refreshOverviewPeriodicReviewBaselinePreview(detail.id);
@@ -13499,33 +13507,25 @@ async function loadOverviewPeriodicReviewBaseline(applicationId, summary) {
     return;
   }
   container.innerHTML = '<div style="font-size:11px;color:var(--text3);margin:0 0 16px;">Loading periodic review baseline…</div>';
-  var activeItems = ((summary && summary.active) || {}).items || [];
-  var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;
-  var reviewSetup = (summary && summary.review_setup) || null;
-  var reviewId = activeReviewItem && activeReviewItem.id != null ? activeReviewItem.id : (reviewSetup && reviewSetup.review_id != null ? reviewSetup.review_id : null);
-  if (reviewId == null) {
-    renderOverviewPeriodicReviewBaseline(null);
-    return;
-  }
   try {
-    var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewId));
+    var detail = await boApiCall('GET', '/applications/' + encodeURIComponent(applicationId));
     renderOverviewPeriodicReviewBaseline(detail);
   } catch (err) {
     container.innerHTML = '<div style="margin:0 0 16px;font-size:11px;color:var(--text3);">Periodic review baseline unavailable.</div>';
   }
 }
 
-async function saveOverviewPeriodicReviewBaseline(reviewId) {
-  var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + reviewId);
-  var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + reviewId);
-  var noteEl = document.getElementById('overview-periodic-review-baseline-note-' + reviewId);
+async function saveOverviewPeriodicReviewBaseline(applicationId) {
+  var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + applicationId);
+  var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + applicationId);
+  var noteEl = document.getElementById('overview-periodic-review-baseline-note-' + applicationId);
   if (!legacyEl) return;
   if (legacyEl.value === 'yes' && (!dateEl || !dateEl.value)) {
     showToast('Last review date is required for a legacy file.', 'error');
     return;
   }
   try {
-    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/baseline', {
+    await boApiCall('POST', '/applications/' + encodeURIComponent(applicationId) + '/periodic-review-baseline', {
       legacy_file: legacyEl.value,
       last_review_date: dateEl && !dateEl.disabled ? dateEl.value : '',
       officer_note: noteEl ? noteEl.value.trim() : ''
