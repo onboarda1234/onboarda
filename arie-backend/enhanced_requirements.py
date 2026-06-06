@@ -3221,6 +3221,7 @@ _PORTAL_STATUS_LABELS = {
     "requested": ("required", "Required"),
     "uploaded": ("submitted", "Submitted"),
     "under_review": ("under_review", "Under review"),
+    "accepted": ("accepted", "Accepted / verified"),
     "rejected": ("additional_information_needed", "Additional information needed"),
 }
 
@@ -3315,9 +3316,10 @@ def serialize_portal_application_requirement(db, row):
     return result
 
 
-def list_portal_application_enhanced_requirements(db, application_id):
+def list_portal_application_enhanced_requirements(db, application_id, *, exclude_linked_periodic_review=False):
     """List only client-visible requested enhanced requirements for the portal."""
     placeholders = ",".join(["?"] * len(APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES))
+    periodic_review_filter = "AND aer.linked_periodic_review_id IS NULL" if exclude_linked_periodic_review else ""
     rows = db.execute(
         f"""
         SELECT aer.*, err.active AS source_rule_active
@@ -3327,6 +3329,7 @@ def list_portal_application_enhanced_requirements(db, application_id):
           AND aer.active = 1
           AND aer.audience IN ('client', 'both')
           AND aer.status IN ({placeholders})
+          {periodic_review_filter}
         ORDER BY aer.requested_at DESC, aer.updated_at DESC, aer.requirement_label, aer.id
         """,
         (application_id, *APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES),

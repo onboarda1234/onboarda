@@ -8,16 +8,32 @@ PORTAL_HTML = REPO_ROOT / "arie-portal.html"
 
 def test_backoffice_periodic_review_workspace_sections_exist():
     html = BACKOFFICE_HTML.read_text()
+    start = html.index("function renderLifecycleDetailTab(context)")
+    end = html.index("async function loadLifecycleDetailTab(force)", start)
+    section = html[start:end]
 
-    assert "Review Overview" in html
-    assert "Client Attestation Summary" in html
-    assert "Documents & Evidence" in html
-    assert "Active Blockers / Readiness" in html
-    assert "Screening / Monitoring Context" in html
-    assert "Officer Findings Draft" in html
-    assert "Future Actions" in html
+    overview_idx = section.index("Review Overview")
+    blockers_idx = section.index("Active Blockers / Readiness")
+    attestation_idx = section.index("Client Attestation Summary")
+    documents_idx = section.index("Documents & Evidence")
+    monitoring_idx = section.index("Screening / Monitoring Context")
+    findings_idx = section.index("Officer Findings Draft")
+    assert overview_idx < blockers_idx < attestation_idx < documents_idx < monitoring_idx < findings_idx
+    assert "Future Actions" in section
     assert "Save draft findings" in html
     assert "/monitoring/reviews/' + encodeURIComponent(reviewId) + '/findings" in html
+
+
+def test_application_detail_uses_periodic_reviews_label_and_alerts_tab():
+    html = BACKOFFICE_HTML.read_text()
+
+    assert 'id="tab-lifecycle"' in html
+    assert ">Periodic Reviews</button>" in html
+    assert 'id="tab-alerts"' in html
+    assert ">Alerts</button>" in html
+    assert 'id="detail-tab-alerts"' in html
+    assert "No active alerts linked to this application." in html
+    assert "Open Monitoring Alerts" in html
 
 
 def test_periodic_review_queue_routes_into_lifecycle_workspace():
