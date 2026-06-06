@@ -8158,6 +8158,7 @@ function enhancedRequirementClientSubmissionSummary(req) {
 
 function enhancedRequirementSourceLabel(req) {
   var ctx = (req && req.trigger_context) || {};
+  if (req && req.trigger_category === 'periodic_review_attestation') return 'Periodic review attestation';
   return req.generation_source || ctx.generation_source || req.trigger_category || req.trigger_key || 'Onboarding risk trigger';
 }
 
@@ -8178,6 +8179,9 @@ function renderEnhancedRequirementDetails(req) {
   ];
   if (req && req.source_rule_active === false) {
     rows.push(['Admin setting', 'Disabled source rule; historical requirement retained for audit']);
+  }
+  if (req && req.linked_periodic_review_id) {
+    rows.push(['Linked review', 'Periodic Review #' + String(req.linked_periodic_review_id).slice(0, 8)]);
   }
   rows = rows.map(function(item) {
     return '<div><span style="color:var(--text3);font-size:10px;text-transform:uppercase;font-weight:700;">' + escapeHtml(item[0]) + '</span><div style="font-size:12px;color:var(--text2);margin-top:2px;">' + escapeHtml(item[1]) + '</div></div>';
@@ -14794,6 +14798,44 @@ async function saveLifecycleRiskChange(reviewId) {
   }
 }
 
+function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail) {
+  var requests = Array.isArray(reviewDetail && reviewDetail.periodic_review_document_requests)
+    ? reviewDetail.periodic_review_document_requests
+    : [];
+  if (!requests.length) {
+    return '<div style="margin-top:16px;padding:12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No conditional periodic review document requests have been generated for this review yet.</div>';
+  }
+  var rows = requests.map(function(req) {
+    var trigger = enhancedRequirementTriggerReason(req) || req.trigger_label || req.trigger_key || 'Periodic review attestation';
+    var doc = enhancedRequirementLinkedDocument(req);
+    var docLine = doc
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Uploaded file: ' + escapeHtml(doc.doc_name || doc.id || 'Document') + '</div>'
+      : '';
+    var verification = doc
+      ? '<div style="margin-top:6px;">' + enhancedRequirementVerificationBadge(req) + '</div>'
+      : '';
+    return '<div style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Requested document') + '</div>' +
+          '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:4px;">Triggering question: ' + escapeHtml(trigger) + '</div>' +
+          docLine +
+          verification +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          enhancedRequirementStatusBadge(req.status, req) +
+          enhancedRequirementTypeBadge(req) +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  return '<div style="margin-top:16px;padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
+    '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:6px;">Conditional periodic review document requests</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px;">Generated follow-up documents are shown here in review context. Material changes and supporting documents will be routed to Change Management / officer outcome in a later step.</div>' +
+    rows +
+  '</div>';
+}
+
 function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection) {
   var attestation = reviewDetail && reviewDetail.client_attestation ? reviewDetail.client_attestation : {};
   var questions = Array.isArray(attestation.questions) ? attestation.questions : [];
@@ -14826,10 +14868,11 @@ function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection) {
       }).join('')
     : '<div style="font-size:12px;color:var(--text2);">No client attestation answers have been saved yet.</div>';
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' + badges.join('') + '</div>' +
-    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Client-facing periodic review attestations are read-only in back office. Material changes will be routed to document requests and Change Management in the next workflow step.</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Client-facing periodic review attestations are read-only in back office. Conditional document requests are generated from the submitted attestation; Change Management and final officer outcome remain later-step workflows.</div>' +
     '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Declared material-change keys: ' + (materialKeys.length ? materialKeys.map(escapeHtml).join(', ') : 'none') + '</div>' +
     '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Declaration accepted: <strong style="color:' + (attestation.declaration_accepted ? 'var(--green)' : 'var(--amber)') + ';">' + (attestation.declaration_accepted ? 'Yes' : 'No') + '</strong></div>' +
-    rows;
+    rows +
+    renderLifecyclePeriodicReviewDocumentRequests(reviewDetail);
 }
 
 function renderLifecycleDetailTab(context) {

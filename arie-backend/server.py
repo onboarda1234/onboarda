@@ -217,6 +217,13 @@ from periodic_review_attestation import (
     prepare_attestation_submission_update as _prepare_periodic_review_attestation_submission_update,
     question_definitions as _periodic_review_attestation_question_definitions,
 )
+from periodic_review_document_requests import (
+    PERIODIC_REVIEW_DOCUMENT_GENERATION_SOURCE,
+    emit_periodic_review_document_uploaded_audit as _emit_periodic_review_document_uploaded_audit,
+    generate_periodic_review_document_requests as _generate_periodic_review_document_requests,
+    list_backoffice_periodic_review_document_requests as _list_backoffice_periodic_review_document_requests,
+    list_portal_periodic_review_document_requests as _list_portal_periodic_review_document_requests,
+)
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
 try:
@@ -10199,6 +10206,16 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 before_state={"requirement": before, "documents": previous_documents},
                 after_state={"requirement": after, "document_id": document_id},
             )
+            _emit_periodic_review_document_uploaded_audit(
+                db,
+                app,
+                after,
+                document_id,
+                actor=user,
+                source_surface="backoffice_periodic_review_documents",
+                before_state=before,
+                after_state=after,
+            )
             decorated_requirements = decorate_application_requirements_for_backoffice(db, app, [after])
             decorated_after = decorated_requirements[0] if decorated_requirements else after
             summary = build_enhanced_requirement_operational_summary(db, app["id"], app_row=app)
@@ -19533,12 +19550,20 @@ def _parse_review_id(handler, raw_review_id):
     return rid
 
 
-def _serialize_portal_periodic_review_attestation(review_row, *, projection=None, application=None):
+def _serialize_portal_periodic_review_attestation(db, review_row, *, projection=None, application=None):
     review = dict(review_row)
     projection = projection or {}
     application = application or {}
     snapshot = _attestation_snapshot_from_review(review)
     task_summary = _portal_periodic_review_task_summary_from_review(review, projection)
+    document_requests = []
+    if review.get("id") and review.get("application_id"):
+        document_requests = _list_portal_periodic_review_document_requests(
+            db,
+            review.get("application_id"),
+            review.get("id"),
+        )
+    submitted_with_documents = snapshot.get("status") == ATTESTATION_STATUS_SUBMITTED and bool(document_requests)
     return {
         "review_id": review["id"],
         "review_reference": task_summary.get("review_reference") or f"PR-{review['id']}",
@@ -19562,10 +19587,21 @@ def _serialize_portal_periodic_review_attestation(review_row, *, projection=None
             "has_material_changes": bool(snapshot.get("has_material_changes")),
         },
         "questions": _periodic_review_attestation_question_definitions(),
+        "document_requests": document_requests,
+        "document_request_count": len(document_requests),
         "read_only": snapshot.get("status") == ATTESTATION_STATUS_SUBMITTED,
         "intro_text": "This periodic review is a short attestation and does not require you to repeat full onboarding.",
         "declaration_text": "I confirm that the information provided is accurate and complete to the best of my knowledge, and that I am authorised to submit this attestation on behalf of the company/client.",
-        "follow_up_text": "I understand that where a material change is declared, supporting documents or additional information may be requested separately.",
+        "follow_up_text": (
+            "Thank you. Based on the changes declared, additional documents may be required."
+            if submitted_with_documents
+            else "I understand that where a material change is declared, supporting documents or additional information may be requested separately."
+        ),
+        "submitted_follow_up_text": (
+            "Thank you. Based on the changes declared, additional documents may be required."
+            if submitted_with_documents
+            else "Thank you. Your attestation has been submitted."
+        ),
     }
 
 
@@ -19700,6 +19736,17 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["client_attestation_has_material_changes"] = projection.get("attestation_has_material_changes", False)
     result["client_attestation_material_change_question_keys"] = projection.get("attestation_material_change_question_keys", [])
     result["client_attestation"] = _attestation_snapshot_from_review(review_row)
+    app_row = db.execute(
+        "SELECT * FROM applications WHERE id = ?",
+        (result.get("application_id"),),
+    ).fetchone()
+    app_dict = dict(app_row) if app_row else {"id": result.get("application_id"), "ref": result.get("application_ref")}
+    result["periodic_review_document_requests"] = _list_backoffice_periodic_review_document_requests(
+        db,
+        app_dict,
+        result["id"],
+    )
+    result["periodic_review_document_request_count"] = len(result["periodic_review_document_requests"])
     result["review_reference"] = projection.get("review_reference")
     result["audit_reference"] = projection.get("audit_reference")
     result["created_at"] = projection.get("created_at", result.get("created_at"))
@@ -22139,7 +22186,7 @@ class PortalApplicationPeriodicReviewAttestationHandler(BaseHandler):
             app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
             if not app or not review or not projection:
                 return
-            self.success(_serialize_portal_periodic_review_attestation(review, projection=projection, application=app))
+            self.success(_serialize_portal_periodic_review_attestation(db, review, projection=projection, application=app))
         finally:
             db.close()
 
@@ -22221,7 +22268,7 @@ class PortalApplicationPeriodicReviewAttestationDraftHandler(BaseHandler):
                 "client_attestation_submitted_by": update["submitted_by"],
                 "client_attestation_questionnaire_version": update["snapshot"]["questionnaire_version"],
             })
-            self.success(_serialize_portal_periodic_review_attestation(refreshed_review, projection=projection, application=app))
+            self.success(_serialize_portal_periodic_review_attestation(db, refreshed_review, projection=projection, application=app))
         except Exception:
             try:
                 db.rollback()
@@ -22303,7 +22350,6 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
                 before_state=before_snapshot,
                 after_state=update["snapshot"],
             )
-            db.commit()
             refreshed_review = dict(review)
             refreshed_review.update({
                 "client_attestation_status": update["status"],
@@ -22313,7 +22359,16 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
                 "client_attestation_submitted_by": update["submitted_by"],
                 "client_attestation_questionnaire_version": update["snapshot"]["questionnaire_version"],
             })
-            self.success(_serialize_portal_periodic_review_attestation(refreshed_review, projection=projection, application=app))
+            _generate_periodic_review_document_requests(
+                db,
+                refreshed_review,
+                app,
+                update["snapshot"],
+                actor=user,
+                generation_source=PERIODIC_REVIEW_DOCUMENT_GENERATION_SOURCE,
+            )
+            db.commit()
+            self.success(_serialize_portal_periodic_review_attestation(db, refreshed_review, projection=projection, application=app))
         except Exception:
             try:
                 db.rollback()
@@ -22577,6 +22632,15 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 ip_address=self.get_client_ip(),
                 before_state={"documents": previous_documents} if previous_documents else safe_req,
                 after_state={"requirement": safe_after, "document_id": document_id},
+            )
+            _emit_periodic_review_document_uploaded_audit(
+                db,
+                app,
+                result.get("requirement") or {},
+                document_id,
+                actor=user,
+                source_surface="portal_periodic_review_documents",
+                after_state=result.get("requirement") or {},
             )
             db.commit()
             self.success({

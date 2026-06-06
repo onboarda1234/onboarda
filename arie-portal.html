@@ -5453,6 +5453,31 @@ function togglePeriodicReviewQuestionComment(questionKey) {
   label.textContent = question.comment_prompt + (isRequired ? ' *' : '');
 }
 
+function periodicReviewDocumentRequestSummaryHtml(task) {
+  var requests = Array.isArray(task && task.document_requests) ? task.document_requests : [];
+  if (!task || !task.read_only) return '';
+  var defaultHeading = 'Thank you. Based on the changes declared, additional documents may be required.';
+  var heading = task.submitted_follow_up_text || (requests.length ? defaultHeading : 'Thank you. Your attestation has been submitted.');
+  if (!requests.length) {
+    return '<div class="periodic-review-banner" style="margin-top:4px;">' + escapeHtml(heading) + '</div>';
+  }
+  var rows = requests.map(function(req) {
+    var statusLabel = req.status_label || 'Required';
+    return '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border1);">' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(req.label || 'Requested document') + '</div>' +
+        (req.description ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:4px;">' + escapeHtml(req.description) + '</div>' : '') +
+      '</div>' +
+      '<span class="periodic-review-readonly-answer">' + escapeHtml(statusLabel) + '</span>' +
+    '</div>';
+  }).join('');
+  return '<div style="margin-top:8px;padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
+    '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:6px;">' + escapeHtml(heading) + '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px;">Use the requested documents card on your dashboard to upload these items using the existing secure upload flow.</div>' +
+    rows +
+  '</div>';
+}
+
 function renderPeriodicReviewModal(task) {
   currentPortalPeriodicReviewTask = task;
   var modal = document.getElementById('periodic-review-modal');
@@ -5515,8 +5540,9 @@ function renderPeriodicReviewModal(task) {
       '</label>' +
       '<div style="font-size:12px;color:var(--text2);line-height:1.6;">' + escapeHtml(task.follow_up_text || '') + '</div>' +
     '</div>' +
+    periodicReviewDocumentRequestSummaryHtml(task) +
     '<div class="periodic-review-modal-actions">' +
-      '<div style="font-size:12px;color:var(--text3);line-height:1.6;">' + (readOnly ? 'This attestation has been submitted and is now read-only. Compliance may request supporting documents separately.' : 'You can save a partial draft now and submit when all answers are complete.') + '</div>' +
+      '<div style="font-size:12px;color:var(--text3);line-height:1.6;">' + (readOnly ? 'This attestation has been submitted and is now read-only. Requested documents, if any, can be uploaded from the dashboard requested documents card.' : 'You can save a partial draft now and submit when all answers are complete.') + '</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
         (readOnly ? '' : '<button type="button" class="btn-outline" onclick="savePeriodicReviewDraft()">Save draft</button>') +
         (readOnly ? '' : '<button type="button" class="btn-submit" onclick="submitPeriodicReviewAttestation()">Submit attestation</button>') +
@@ -5576,6 +5602,7 @@ async function submitPeriodicReviewAttestation() {
   try {
     var data = await apiCall('POST', '/portal/applications/' + encodeURIComponent(currentPortalPeriodicReviewTask.application_id) + '/periodic-review/submit', payload);
     renderPeriodicReviewModal(data);
+    await loadPortalEnhancedRequirements();
     showToast('success', 'Attestation Submitted', 'Your periodic review attestation has been submitted.');
     loadMyApplications();
   } catch (err) {
