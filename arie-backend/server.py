@@ -196,6 +196,7 @@ from periodic_review_management import (
     assign_review as _assign_periodic_review,
     record_risk_change as _record_periodic_review_risk_change,
     save_periodic_review_baseline as _save_periodic_review_baseline,
+    save_workspace_findings as _save_periodic_review_findings,
     save_legacy_import_setup as _save_periodic_review_import_setup,
     save_material_change_attestation as _save_periodic_review_material_change,
     save_officer_rationale as _save_periodic_review_rationale,
@@ -19191,8 +19192,8 @@ class PeriodicReviewBaselineHandler(BaseHandler):
         if review_id is None:
             return
         data = self.get_json() or {}
-        if not data.get("baseline_status"):
-            return self.error("baseline_status is required", 400)
+        if not data.get("legacy_file") and not data.get("baseline_status"):
+            return self.error("legacy_file is required", 400)
         db = get_db()
         try:
             review_row = db.execute(
@@ -19237,6 +19238,8 @@ class PeriodicReviewBaselineHandler(BaseHandler):
                     baseline_date=data.get("baseline_date"),
                     baseline_cadence=data.get("baseline_cadence"),
                     officer_note=data.get("officer_note"),
+                    legacy_file=data.get("legacy_file"),
+                    last_review_date=data.get("last_review_date"),
                     user=user,
                     audit_writer=_audit_writer,
                 )
@@ -19304,6 +19307,38 @@ class PeriodicReviewRationaleHandler(BaseHandler):
                 return self.error(str(exc), 400)
             db.commit()
             self.success({"status": "officer_rationale_saved", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewFindingsHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/findings."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_findings(
+                    db,
+                    review_id,
+                    findings_note=data.get("officer_findings_note"),
+                    deficiencies_note=data.get("officer_deficiencies_note"),
+                    internal_review_note=data.get("officer_internal_review_note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "findings_saved", "result": result})
         finally:
             db.close()
 
@@ -19611,53 +19646,168 @@ def _periodic_review_baseline_snapshot(review_row) -> dict:
     cadence_months = review_row.get("baseline_cadence_months")
     note = review_row.get("baseline_note")
     legacy_import = bool(review_row.get("legacy_import"))
-    if not status:
-        if legacy_import:
-            status = "imported_legacy_review"
-            date_value = date_value or review_row.get("last_review_date")
-            note = note or review_row.get("legacy_source_note")
-        else:
-            status = "not_set"
-    if status in {"last_periodic_review_date", "imported_legacy_review"} and not date_value:
-        date_value = review_row.get("last_review_date")
+    if not status and legacy_import:
+        status = "imported_legacy_review"
+        date_value = date_value or review_row.get("last_review_date")
+        note = note or review_row.get("legacy_source_note")
+    if status in {"last_periodic_review_date", "imported_legacy_review"} and not review_row.get("last_review_date"):
+        review_row["last_review_date"] = date_value
+    legacy_file = "yes" if status in {"last_periodic_review_date", "imported_legacy_review"} else "no"
     if cadence_months in (None, "", 0, "0"):
-        if review_row.get("frequency_months") not in (None, "", 0, "0") and not str(review_row.get("calculation_basis") or "").startswith("risk_level:"):
-            cadence_months = int(review_row.get("frequency_months"))
-    if cadence_months in (None, "", 0, "0"):
-        cadence_value = "risk_default"
-        cadence_label = "Use risk default"
-    else:
-        cadence_months = int(cadence_months)
-        cadence_value = cadence_months
-        cadence_label = f"{cadence_months} months"
-    status_labels = {
-        "not_set": "Not set",
-        "not_applicable": "N/A",
-        "last_onboarding_date": "Last onboarding date",
-        "last_periodic_review_date": "Last periodic review date",
-        "imported_legacy_review": "Imported legacy review",
-    }
+        cadence_months = review_row.get("frequency_months")
+    cadence_months = int(cadence_months) if cadence_months not in (None, "", 0, "0") else None
     next_due = review_row.get("next_review_date") or review_row.get("due_date")
-    placeholder = None
-    if status == "not_applicable":
-        next_due = None
-        placeholder = "N/A"
-    elif status == "not_set":
-        next_due = None
-        placeholder = "Not scheduled yet"
-    elif not date_value:
-        next_due = None
-        placeholder = "Missing baseline date"
+    anchor_label = "Last review date" if legacy_file == "yes" else "Onboarding approval/completion date"
     return {
         "status": status,
-        "status_label": status_labels.get(status, status.replace("_", " ").title()),
+        "status_label": "Legacy file" if legacy_file == "yes" else "Current onboarding file",
+        "legacy_file": legacy_file,
+        "legacy_file_label": "Yes" if legacy_file == "yes" else "No",
         "date": date_value,
-        "cadence_value": cadence_value,
-        "cadence_label": cadence_label,
+        "anchor_date": date_value,
+        "anchor_label": anchor_label,
         "cadence_months": cadence_months,
+        "derived_cadence_months": cadence_months,
+        "derived_cadence_label": f"{cadence_months} months" if cadence_months else "Risk derived",
         "next_review_due": next_due,
-        "next_review_due_placeholder": placeholder,
         "officer_note": note,
+        "last_review_date": review_row.get("last_review_date"),
+        "legacy_source_note": review_row.get("legacy_source_note"),
+        "legacy_import": legacy_import,
+    }
+
+
+def _periodic_review_doc_request_ready(requirement) -> bool:
+    requirement = dict(requirement or {})
+    linked = requirement.get("linked_document") if isinstance(requirement.get("linked_document"), dict) else {}
+    verification_status = str(
+        linked.get("verification_status") or requirement.get("document_verification_status") or ""
+    ).strip().lower()
+    review_status = str(
+        linked.get("review_status") or requirement.get("document_review_status") or ""
+    ).strip().lower()
+    return verification_status == "verified" or (
+        verification_status == "flagged" and review_status in {"accepted", "approved"}
+    )
+
+
+def _periodic_review_workspace_snapshot(review_row) -> dict:
+    review = dict(review_row or {})
+    projection = dict(review.get("projection") or {})
+    baseline = dict(review.get("periodic_review_baseline") or {})
+    attestation = dict(review.get("client_attestation") or {})
+    requests = [
+        dict(item) for item in (review.get("periodic_review_document_requests") or [])
+        if isinstance(item, dict)
+    ]
+    evidence_requests = [
+        item for item in requests
+        if str(item.get("requirement_display_type") or "evidence").lower() == "evidence"
+    ]
+    required_requests = [item for item in evidence_requests if bool(item.get("mandatory"))]
+    missing_requests = [item for item in required_requests if not item.get("linked_document_id")]
+    review_pending_requests = [
+        item for item in required_requests
+        if item.get("linked_document_id") and not _periodic_review_doc_request_ready(item)
+    ]
+    monitoring_screening_blockers = [
+        label for label in (projection.get("blocker_summary") or [])
+        if "screening" in str(label or "").lower() or "alert" in str(label or "").lower()
+    ]
+    attestation_submitted = str(attestation.get("status") or "not_started") == "submitted"
+    findings_present = any(
+        str(review.get(field) or "").strip()
+        for field in ("officer_findings_note", "officer_deficiencies_note", "officer_internal_review_note")
+    )
+    if not attestation_submitted:
+        readiness_state = "awaiting_client_attestation"
+        readiness_label = "Awaiting client attestation"
+    elif missing_requests:
+        readiness_state = "awaiting_documents"
+        readiness_label = "Awaiting documents"
+    elif review_pending_requests:
+        readiness_state = "documents_uploaded_review_required"
+        readiness_label = "Documents uploaded — review required"
+    elif monitoring_screening_blockers:
+        readiness_state = "not_ready"
+        readiness_label = "Not ready"
+    elif findings_present:
+        readiness_state = "ready_for_outcome_decision"
+        readiness_label = "Ready for outcome decision"
+    else:
+        readiness_state = "ready_for_officer_findings"
+        readiness_label = "Ready for officer findings"
+    blockers = []
+    if not attestation_submitted:
+        blockers.append("Client attestation has not been submitted")
+    blockers.extend(
+        (item.get("requirement_label") or item.get("requirement_key") or "Required document") + " is still missing"
+        for item in missing_requests
+    )
+    blockers.extend(
+        (item.get("requirement_label") or item.get("requirement_key") or "Uploaded document") + " still requires officer review"
+        for item in review_pending_requests
+    )
+    blockers.extend(monitoring_screening_blockers)
+    next_step = {
+        "awaiting_client_attestation": "Wait for the client to submit the periodic review attestation.",
+        "awaiting_documents": "Chase the requested periodic review documents from the client.",
+        "documents_uploaded_review_required": "Review uploaded documents and verify or accept them.",
+        "not_ready": "Resolve the linked monitoring or screening blockers.",
+        "ready_for_officer_findings": "Draft officer findings and follow-up notes.",
+        "ready_for_outcome_decision": "Prepare for PRS-5 outcome decision.",
+    }.get(readiness_state, "Review the periodic review workspace.")
+    return {
+        "overview": {
+            "review_reference": review.get("review_reference") or projection.get("review_reference"),
+            "periodic_review_id": review.get("id"),
+            "application_ref": review.get("application_ref") or projection.get("application_ref"),
+            "application_id": review.get("application_id"),
+            "company_name": projection.get("client_name") or review.get("client_name"),
+            "risk_level": projection.get("risk_level") or review.get("risk_level"),
+            "status": projection.get("status") or review.get("status"),
+            "status_label": projection.get("status_label") or review.get("status_label"),
+            "due_date": projection.get("due_date") or review.get("next_review_date") or review.get("due_date"),
+            "is_overdue": bool(projection.get("is_overdue")),
+            "owner": projection.get("owner_display_name") or review.get("assigned_officer") or "Unassigned",
+            "trigger_source_label": projection.get("trigger_source_label") or review.get("trigger_source_label"),
+            "last_activity_at": review.get("last_activity_at") or projection.get("last_activity_at"),
+            "baseline_summary": baseline,
+            "next_expected_step": next_step,
+        },
+        "attestation_summary": attestation,
+        "documents_summary": {
+            "count": len(requests),
+            "required_count": len(required_requests),
+            "missing_count": len(missing_requests),
+            "review_required_count": len(review_pending_requests),
+            "items": requests,
+        },
+        "readiness": {
+            "state": readiness_state,
+            "label": readiness_label,
+            "blocker_count": len(blockers),
+            "blockers": blockers,
+        },
+        "monitoring_screening_context": {
+            "linked_monitoring_alert_id": review.get("linked_monitoring_alert_id"),
+            "linked_edd_case_id": review.get("linked_edd_case_id"),
+            "open_alerts_count": int(review.get("open_alerts_count") or 0),
+            "screening_status": review.get("screening_status") or "Pending review",
+            "blockers": monitoring_screening_blockers,
+        },
+        "findings_draft": {
+            "officer_findings_note": review.get("officer_findings_note"),
+            "officer_deficiencies_note": review.get("officer_deficiencies_note"),
+            "officer_internal_review_note": review.get("officer_internal_review_note"),
+            "updated_by": review.get("findings_updated_by"),
+            "updated_at": review.get("findings_updated_at"),
+        },
+        "future_actions": [
+            "Outcome decision will be handled in PRS-5.",
+            "Risk reassessment and memo addendum will be handled later.",
+            "Change Management and Investigation linkage will be handled later.",
+        ],
     }
 
 
@@ -19747,6 +19897,11 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
         result["id"],
     )
     result["periodic_review_document_request_count"] = len(result["periodic_review_document_requests"])
+    result["officer_findings_note"] = result.get("officer_findings_note")
+    result["officer_deficiencies_note"] = result.get("officer_deficiencies_note")
+    result["officer_internal_review_note"] = result.get("officer_internal_review_note")
+    result["findings_updated_by"] = result.get("findings_updated_by")
+    result["findings_updated_at"] = result.get("findings_updated_at")
     result["review_reference"] = projection.get("review_reference")
     result["audit_reference"] = projection.get("audit_reference")
     result["created_at"] = projection.get("created_at", result.get("created_at"))
@@ -19804,6 +19959,7 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["ui_status_label"] = projection.get("queue_status_label") or projection.get("status_label") or ui_status_label
     result["legacy_decision"] = result.get("decision")
     result["projection"] = projection
+    result["periodic_review_workspace"] = _periodic_review_workspace_snapshot(result)
     return result
 
 
@@ -23046,6 +23202,7 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)/import-setup", PeriodicReviewImportSetupHandler),
         (r"/api/monitoring/reviews/([^/]+)/import-acknowledgement",
          PeriodicReviewImportAcknowledgementHandler),
+        (r"/api/monitoring/reviews/([^/]+)/findings", PeriodicReviewFindingsHandler),
         (r"/api/monitoring/reviews/([^/]+)/officer-rationale", PeriodicReviewRationaleHandler),
         (r"/api/monitoring/reviews/([^/]+)/material-change-attestation",
          PeriodicReviewMaterialChangeHandler),

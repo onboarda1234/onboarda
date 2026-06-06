@@ -13378,27 +13378,12 @@ function renderLifecycleApplicationSummary(resp) {
   }
 }
 
-function periodicReviewBaselineStatusOptions(selected) {
+function periodicReviewBaselineLegacyOptions(selected) {
   return [
-    ['not_set', 'Not set'],
-    ['not_applicable', 'N/A'],
-    ['last_onboarding_date', 'Last onboarding date'],
-    ['last_periodic_review_date', 'Last periodic review date'],
-    ['imported_legacy_review', 'Imported legacy review']
+    ['no', 'No'],
+    ['yes', 'Yes']
   ].map(function(option) {
     return '<option value="' + option[0] + '"' + (selected === option[0] ? ' selected' : '') + '>' + escapeHtml(option[1]) + '</option>';
-  }).join('');
-}
-
-function periodicReviewBaselineCadenceOptions(selected) {
-  return [
-    ['risk_default', 'Use risk default'],
-    ['6', '6 months'],
-    ['12', '12 months'],
-    ['24', '24 months'],
-    ['36', '36 months']
-  ].map(function(option) {
-    return '<option value="' + option[0] + '"' + (String(selected || 'risk_default') === option[0] ? ' selected' : '') + '>' + escapeHtml(option[1]) + '</option>';
   }).join('');
 }
 
@@ -13424,29 +13409,32 @@ function periodicReviewBaselineRiskDefaultMonths(reviewDetail) {
 }
 
 function periodicReviewBaselinePreview(reviewId) {
-  var statusEl = document.getElementById('overview-periodic-review-baseline-status-' + reviewId);
-  var dateEl = document.getElementById('overview-periodic-review-baseline-date-' + reviewId);
-  var cadenceEl = document.getElementById('overview-periodic-review-baseline-cadence-' + reviewId);
+  var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + reviewId);
+  var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + reviewId);
   var reviewDetail = window._overviewPeriodicReviewBaselineDetail || null;
-  var status = statusEl ? statusEl.value : 'not_set';
+  var legacyFile = legacyEl ? legacyEl.value : 'no';
   var dateValue = dateEl ? dateEl.value : '';
-  var cadenceValue = cadenceEl ? cadenceEl.value : 'risk_default';
-  if (status === 'not_applicable') return { value: '', placeholder: 'N/A' };
-  if (status === 'not_set') return { value: '', placeholder: 'Not scheduled yet' };
-  if (!dateValue) return { value: '', placeholder: 'Missing baseline date' };
-  var months = cadenceValue === 'risk_default' ? periodicReviewBaselineRiskDefaultMonths(reviewDetail) : Number(cadenceValue || 0);
-  return { value: periodicReviewBaselineAddMonths(dateValue, months), placeholder: '' };
+  if (legacyFile === 'yes' && !dateValue) return { value: '', placeholder: 'Last review date required' };
+  var anchorDate = legacyFile === 'yes'
+    ? dateValue
+    : String(((reviewDetail || {}).periodic_review_baseline || {}).anchor_date || '');
+  if (!anchorDate) return { value: '', placeholder: 'Awaiting onboarding approval date' };
+  var months = periodicReviewBaselineRiskDefaultMonths(reviewDetail);
+  return { value: periodicReviewBaselineAddMonths(anchorDate, months), placeholder: '' };
 }
 
 function refreshOverviewPeriodicReviewBaselinePreview(reviewId) {
   var preview = periodicReviewBaselinePreview(reviewId);
   var target = document.getElementById('overview-periodic-review-baseline-next-due-' + reviewId);
-  var dateEl = document.getElementById('overview-periodic-review-baseline-date-' + reviewId);
-  var statusEl = document.getElementById('overview-periodic-review-baseline-status-' + reviewId);
-  if (dateEl && statusEl) {
-    var disabled = statusEl.value === 'not_applicable' || statusEl.value === 'not_set';
-    dateEl.disabled = disabled;
-    if (disabled) dateEl.value = '';
+  var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + reviewId);
+  var dateWrap = document.getElementById('overview-periodic-review-baseline-last-review-wrap-' + reviewId);
+  var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + reviewId);
+  if (dateEl && legacyEl) {
+    var enabled = legacyEl.value === 'yes';
+    dateEl.disabled = !enabled;
+    dateEl.required = enabled;
+    if (dateWrap) dateWrap.style.display = enabled ? '' : 'none';
+    if (!enabled) dateEl.value = '';
   }
   if (!target) return;
   target.textContent = preview.value || preview.placeholder || 'Not scheduled yet';
@@ -13469,11 +13457,11 @@ function renderOverviewPeriodicReviewBaseline(detail) {
   }
   window._overviewPeriodicReviewBaselineDetail = detail;
   var baseline = detail.periodic_review_baseline || {};
-  var status = baseline.status || 'not_set';
-  var baselineDate = baseline.date || '';
-  var cadenceValue = baseline.cadence_months != null ? String(baseline.cadence_months) : 'risk_default';
+  var legacyFile = baseline.legacy_file || 'no';
+  var baselineDate = baseline.last_review_date || '';
   var note = baseline.officer_note || '';
-  var nextDue = baseline.next_review_due || baseline.next_review_due_placeholder || 'Not scheduled yet';
+  var cadenceLabel = baseline.derived_cadence_label || ((baseline.derived_cadence_months || 'Risk') + ' months');
+  var nextDue = baseline.next_review_due || 'Not scheduled yet';
   container.innerHTML =
     '<div class="detail-section" style="margin-top:16px;">' +
       '<div class="detail-section-title" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
@@ -13481,14 +13469,14 @@ function renderOverviewPeriodicReviewBaseline(detail) {
         '<span style="font-size:11px;color:var(--text3);">Officer-only setup metadata</span>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;">' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Baseline status</div><select id="overview-periodic-review-baseline-status-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')">' + periodicReviewBaselineStatusOptions(status) + '</select></div>' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Baseline date</div><input id="overview-periodic-review-baseline-date-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')" /></div>' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Review cadence</div><select id="overview-periodic-review-baseline-cadence-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')">' + periodicReviewBaselineCadenceOptions(cadenceValue) + '</select></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Is this a legacy file?</div><select id="overview-periodic-review-baseline-legacy-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')">' + periodicReviewBaselineLegacyOptions(legacyFile) + '</select></div>' +
+        '<div id="overview-periodic-review-baseline-last-review-wrap-' + detail.id + '"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Last review date</div><input id="overview-periodic-review-baseline-last-review-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')" /></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Derived cadence</div><div style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(cadenceLabel)) + '</div></div>' +
         '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Next review due</div><div id="overview-periodic-review-baseline-next-due-' + detail.id + '" style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(nextDue)) + '</div></div>' +
       '</div>' +
       '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Officer note</div><input id="overview-periodic-review-baseline-note-' + detail.id + '" class="form-input" type="text" maxlength="500" placeholder="Optional short note" value="' + escapeHtml(String(note || '')) + '" /></div>' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
-        '<div style="font-size:11px;color:var(--text3);max-width:560px;">N/A disables the baseline date and avoids inventing a new overdue schedule. Existing PRS-2 attestation and lifecycle review state remain unchanged.</div>' +
+        '<div style="font-size:11px;color:var(--text3);max-width:560px;">Cadence is derived from the current officer-visible risk level. Legacy files must provide the last review date; current files derive next due from onboarding approval/completion.</div>' +
         '<button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')">Save baseline</button>' +
       '</div>' +
     '</div>';
@@ -13520,16 +13508,18 @@ async function loadOverviewPeriodicReviewBaseline(applicationId, summary) {
 }
 
 async function saveOverviewPeriodicReviewBaseline(reviewId) {
-  var statusEl = document.getElementById('overview-periodic-review-baseline-status-' + reviewId);
-  var dateEl = document.getElementById('overview-periodic-review-baseline-date-' + reviewId);
-  var cadenceEl = document.getElementById('overview-periodic-review-baseline-cadence-' + reviewId);
+  var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + reviewId);
+  var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + reviewId);
   var noteEl = document.getElementById('overview-periodic-review-baseline-note-' + reviewId);
-  if (!statusEl) return;
+  if (!legacyEl) return;
+  if (legacyEl.value === 'yes' && (!dateEl || !dateEl.value)) {
+    showToast('Last review date is required for a legacy file.', 'error');
+    return;
+  }
   try {
     await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/baseline', {
-      baseline_status: statusEl.value,
-      baseline_date: dateEl && !dateEl.disabled ? dateEl.value : '',
-      baseline_cadence: cadenceEl ? cadenceEl.value : 'risk_default',
+      legacy_file: legacyEl.value,
+      last_review_date: dateEl && !dateEl.disabled ? dateEl.value : '',
       officer_note: noteEl ? noteEl.value.trim() : ''
     });
     showToast('Periodic review baseline saved');
@@ -14803,35 +14793,38 @@ function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail) {
     ? reviewDetail.periodic_review_document_requests
     : [];
   if (!requests.length) {
-    return '<div style="margin-top:16px;padding:12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No conditional periodic review document requests have been generated for this review yet.</div>';
+    return '<div style="padding:12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No conditional periodic review document requests have been generated for this review yet.</div>';
   }
   var rows = requests.map(function(req) {
     var trigger = enhancedRequirementTriggerReason(req) || req.trigger_label || req.trigger_key || 'Periodic review attestation';
-    var doc = enhancedRequirementLinkedDocument(req);
-    var docLine = doc
-      ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Uploaded file: ' + escapeHtml(doc.doc_name || doc.id || 'Document') + '</div>'
-      : '';
-    var verification = doc
-      ? '<div style="margin-top:6px;">' + enhancedRequirementVerificationBadge(req) + '</div>'
-      : '';
+    var doc = enhancedRequirementLinkedDocument(req) || {};
+    var hasDoc = !!(req.linked_document_id || doc.id);
+    var uploadStatus = hasDoc ? 'Uploaded' : 'Missing';
+    var uploadTone = hasDoc ? 'green' : 'amber';
+    var verification = hasDoc ? enhancedRequirementVerificationBadge(req) : lifecycleDetailBadge('Awaiting upload', 'amber');
+    var uploadedAt = doc.uploaded_at || req.client_response_at || '';
+    var requiredLabel = req.mandatory ? 'Required' : 'Optional';
     return '<div style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
         '<div>' +
           '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Requested document') + '</div>' +
           '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:4px;">Triggering question: ' + escapeHtml(trigger) + '</div>' +
-          docLine +
-          verification +
+          '<div style="font-size:11px;color:var(--text3);margin-top:5px;">' + escapeHtml(requiredLabel) + ' · Upload status: ' + escapeHtml(uploadStatus) + (uploadedAt ? ' · Uploaded ' + escapeHtml(String(uploadedAt).slice(0, 10)) : '') + '</div>' +
+          (hasDoc ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Uploaded file: ' + escapeHtml(doc.doc_name || doc.id || req.linked_document_id || 'Document') + '</div>' : '') +
+          '<div style="margin-top:6px;">' + verification + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          lifecycleDetailBadge(requiredLabel, req.mandatory ? 'amber' : 'slate') +
+          lifecycleDetailBadge(uploadStatus, uploadTone) +
           enhancedRequirementStatusBadge(req.status, req) +
           enhancedRequirementTypeBadge(req) +
         '</div>' +
       '</div>' +
     '</div>';
   }).join('');
-  return '<div style="margin-top:16px;padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
+  return '<div style="padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
     '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:6px;">Conditional periodic review document requests</div>' +
-    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px;">Generated follow-up documents are shown here in review context. Material changes and supporting documents will be routed to Change Management / officer outcome in a later step.</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px;">Generated follow-up evidence is shown here in review context. Uploaded documents reuse the existing repository and verification surfaces.</div>' +
     rows +
   '</div>';
 }
@@ -14847,7 +14840,6 @@ function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection) {
     : [];
   var badges = [
     lifecycleDetailBadge(statusLabel, statusLabel === 'Submitted' ? 'green' : (statusLabel === 'Draft saved' ? 'amber' : 'blue')),
-    lifecycleDetailBadge('Risk level: ' + String(reviewDetail.risk_level || (reviewProjection && reviewProjection.risk_level) || '—'), 'slate'),
   ];
   if (submittedAt) {
     badges.push(lifecycleDetailBadge('Submitted ' + String(submittedAt).slice(0, 10), 'green'));
@@ -14868,11 +14860,128 @@ function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection) {
       }).join('')
     : '<div style="font-size:12px;color:var(--text2);">No client attestation answers have been saved yet.</div>';
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' + badges.join('') + '</div>' +
-    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Client-facing periodic review attestations are read-only in back office. Conditional document requests are generated from the submitted attestation; Change Management and final officer outcome remain later-step workflows.</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px;">Client-facing periodic review attestations are read-only in back office. Highlighted answers indicate declared material changes or incorrect company/contact details.</div>' +
     '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Declared material-change keys: ' + (materialKeys.length ? materialKeys.map(escapeHtml).join(', ') : 'none') + '</div>' +
     '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Declaration accepted: <strong style="color:' + (attestation.declaration_accepted ? 'var(--green)' : 'var(--amber)') + ';">' + (attestation.declaration_accepted ? 'Yes' : 'No') + '</strong></div>' +
-    rows +
-    renderLifecyclePeriodicReviewDocumentRequests(reviewDetail);
+    rows;
+}
+
+function renderPeriodicReviewWorkspaceOverview(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var overview = workspace.overview || {};
+  var baseline = overview.baseline_summary || {};
+  var meta = [
+    lifecycleDetailMeta('Review reference', overview.review_reference || ('PR-' + String(reviewDetail && reviewDetail.id || ''))),
+    lifecycleDetailMeta('Application reference', overview.application_ref || reviewDetail.application_ref || '—'),
+    lifecycleDetailMeta('Company', overview.company_name || reviewDetail.client_name || '—'),
+    lifecycleDetailMeta('Risk rating', overview.risk_level || reviewDetail.risk_level || '—'),
+    lifecycleDetailMeta('Review status', overview.status_label || reviewDetail.status_label || '—'),
+    lifecycleDetailMeta('Due date', lifecycleFormatDate(overview.due_date || reviewDetail.next_review_date || reviewDetail.due_date)),
+    lifecycleDetailMeta('Overdue', overview.is_overdue ? 'Yes' : 'No'),
+    lifecycleDetailMeta('Owner', overview.owner || reviewDetail.assigned_officer || 'Unassigned'),
+    lifecycleDetailMeta('Trigger / source', overview.trigger_source_label || reviewDetail.trigger_source_label || 'Periodic review'),
+    lifecycleDetailMeta('Last activity', lifecycleFormatDate(overview.last_activity_at || reviewDetail.last_activity_at)),
+    lifecycleDetailMeta('Baseline summary', 'Legacy file: ' + String((baseline.legacy_file_label || baseline.legacy_file || 'No'))),
+    lifecycleDetailMeta('Next expected step', overview.next_expected_step || 'Review the workspace'),
+  ].join('');
+  return '<div id="' + escapeHtml(lifecycleQueueItemDomId('review', reviewDetail && reviewDetail.id)) + '" data-lifecycle-item-type="review" data-lifecycle-item-id="' + escapeHtml(String(reviewDetail && reviewDetail.id || '')) + '">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+      lifecycleDetailBadge(overview.status_label || reviewDetail.status_label || 'In Review', 'purple') +
+      lifecycleDetailBadge((overview.is_overdue ? 'Overdue' : 'On track'), overview.is_overdue ? 'red' : 'green') +
+      lifecycleDetailBadge('Risk: ' + String(overview.risk_level || reviewDetail.risk_level || '—'), 'slate') +
+    '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:16px;">' + meta + '</div>' +
+    '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);font-size:12px;color:var(--text2);line-height:1.6;">Periodic Review Workspace is officer-only. It consolidates attestation, evidence, blockers, and monitoring context without creating duplicate state outside the canonical periodic review shell.</div>' +
+  '</div>';
+}
+
+function renderPeriodicReviewWorkspaceReadiness(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var readiness = workspace.readiness || {};
+  var blockers = Array.isArray(readiness.blockers) ? readiness.blockers : [];
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+      lifecycleDetailBadge(readiness.label || 'Not ready', blockers.length ? 'amber' : 'green') +
+      lifecycleDetailBadge('Blockers: ' + String(readiness.blocker_count || blockers.length || 0), blockers.length ? 'red' : 'green') +
+    '</div>' +
+    (blockers.length
+      ? blockers.map(function(label) {
+          return '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">• ' + escapeHtml(label) + '</div>';
+        }).join('')
+      : '<div style="font-size:12px;color:var(--text2);">No active blockers are currently preventing the officer from progressing this review.</div>');
+}
+
+function renderPeriodicReviewWorkspaceMonitoring(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var ctx = workspace.monitoring_screening_context || {};
+  var blockers = Array.isArray(ctx.blockers) ? ctx.blockers : [];
+  var actions = [];
+  if (ctx.linked_monitoring_alert_id) actions.push('Open monitoring alert #' + ctx.linked_monitoring_alert_id);
+  actions.push('Open Monitoring Alerts');
+  actions.push('Open Screening Queue');
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+      lifecycleDetailBadge('Open linked alerts: ' + String(ctx.open_alerts_count || 0), ctx.open_alerts_count ? 'amber' : 'green') +
+      lifecycleDetailBadge('Screening: ' + String(ctx.screening_status || 'Pending review'), blockers.length ? 'amber' : 'blue') +
+      (ctx.linked_edd_case_id ? lifecycleDetailBadge('Linked EDD #' + ctx.linked_edd_case_id, 'purple') : '') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;">Adverse media, PEP, sanctions, and monitoring context remain authoritative in their owner workflows. This panel is a compact summary only.</div>' +
+    (blockers.length
+      ? '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">' + blockers.map(escapeHtml).join(' • ') + '</div>'
+      : '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">No monitoring or screening blockers are currently projected into this review.</div>') +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open Monitoring Alerts</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="showView(\'screening\')">Open Screening Queue</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="showView(\'change-mgmt\')">Open Change Management</button>' +
+    '</div>';
+}
+
+function renderPeriodicReviewWorkspaceFindingsDraft(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var draft = workspace.findings_draft || {};
+  var reviewId = reviewDetail && reviewDetail.id;
+  return '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer findings note</label><textarea id="periodic-review-findings-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_findings_note || '') + '</textarea></div>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Deficiencies / follow-up points</label><textarea id="periodic-review-deficiencies-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_deficiencies_note || '') + '</textarea></div>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Internal review note</label><textarea id="periodic-review-internal-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_internal_review_note || '') + '</textarea></div>' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
+      '<div style="font-size:11px;color:var(--text3);">Draft findings are internal only and do not close the review. Final outcome controls arrive in PRS-5.' + (draft.updated_at ? ' Last saved ' + escapeHtml(String(draft.updated_at).slice(0, 19).replace('T', ' ')) : '') + '</div>' +
+      '<button class="btn btn-primary btn-sm" onclick="savePeriodicReviewWorkspaceFindings(\'' + reviewId + '\')">Save draft findings</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderPeriodicReviewWorkspaceFutureActions(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var actions = Array.isArray(workspace.future_actions) ? workspace.future_actions : [];
+  if (!actions.length) {
+    return '<div style="font-size:12px;color:var(--text2);">Future actions will be added in later phases.</div>';
+  }
+  return actions.map(function(label) {
+    return '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);"><span>' + escapeHtml(label) + '</span><span class="badge draft">Later phase</span></div>';
+  }).join('');
+}
+
+async function savePeriodicReviewWorkspaceFindings(reviewId) {
+  var findingsEl = document.getElementById('periodic-review-findings-note-' + reviewId);
+  var deficienciesEl = document.getElementById('periodic-review-deficiencies-note-' + reviewId);
+  var internalEl = document.getElementById('periodic-review-internal-note-' + reviewId);
+  var findings = findingsEl ? findingsEl.value.trim() : '';
+  var deficiencies = deficienciesEl ? deficienciesEl.value.trim() : '';
+  var internalNote = internalEl ? internalEl.value.trim() : '';
+  if (!findings && !deficiencies && !internalNote) {
+    showToast('Enter at least one findings field before saving.', 'error');
+    return;
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/findings', {
+      officer_findings_note: findings,
+      officer_deficiencies_note: deficiencies,
+      officer_internal_review_note: internalNote
+    });
+    showToast('Periodic review findings saved');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to save periodic review findings: ' + (err.message || 'unknown error'), 'error');
+  }
 }
 
 function renderLifecycleDetailTab(context) {
@@ -14881,40 +14990,35 @@ function renderLifecycleDetailTab(context) {
   var summary = (context && context.summary) || {};
   var active = ((summary.active || {}).items) || [];
   var historical = ((summary.historical || {}).items) || [];
-  var linkageEdges = ((summary.linkage || {}).edges) || [];
   var activeReview = context && context.reviewDetail;
   var setupReviewDetail = activeReview || (context && context.setupReviewDetail) || null;
-  var requiredItems = Array.isArray(context && context.requiredItems) ? context.requiredItems : [];
-  var evidenceLinks = Array.isArray(activeReview && activeReview.evidence_links) ? activeReview.evidence_links : [];
-  var applicationDocuments = Array.isArray(currentApp && currentApp._documents) ? currentApp._documents : [];
   var activeReviewProjection = activeReview && activeReview.projection ? activeReview.projection : null;
   var setupReviewProjection = activeReviewProjection || (setupReviewDetail && setupReviewDetail.projection) || (context && context.reviewSetup) || null;
   var activeReviewItem = context && context.activeReviewItem ? context.activeReviewItem : null;
-  var agentSignalCount = Number(((summary.agent_signals || {}).count) || 0);
   var currentReviewActive = !!activeReview;
   var activeWorkItems = currentReviewActive ? active.filter(function(item) {
     return !(item && item.type === 'review' && String(item.id) === String(activeReview && activeReview.id));
   }) : active;
-  var requiredOpenCount = lifecycleOpenEvidenceRequirements(requiredItems, evidenceLinks, applicationDocuments).length;
-  var operationalBlockerCount = Number((activeReview && activeReview.blocker_count) || (activeReviewProjection && activeReviewProjection.blocker_count) || 0);
-  var completionBlockerCount = Number((activeReview && activeReview.completion_blocker_count) || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0);
+  var workspace = (activeReview && activeReview.periodic_review_workspace) || {};
+  var readiness = workspace.readiness || {};
+  var documentsSummary = workspace.documents_summary || {};
+  var monitoringContext = workspace.monitoring_screening_context || {};
   var lifecycleBanner = '<div class="lifecycle-detail-banner">' +
-    '<strong style="color:#153a7d;">Lifecycle owns periodic review only.</strong> Screening, EDD, Change Management, Monitoring, and KYC Documents remain owner workflows and are projected here without duplicating their state.' +
+    '<strong style="color:#153a7d;">Lifecycle owns the periodic review cockpit.</strong> Screening, Monitoring, KYC Documents, and Change Management remain owner workflows and are summarised here without duplicating their state.' +
   '</div>';
   var metricsRow = '<div class="lifecycle-metrics-grid">' +
     lifecycleDetailMetric('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'None active', activeReview ? 'purple' : 'slate') +
     lifecycleDetailMetric('Active items', String((((summary.active || {}).counts) || {}).total || 0), 'blue') +
-    lifecycleDetailMetric('Operational blockers', String(operationalBlockerCount), operationalBlockerCount ? 'amber' : 'green') +
-    lifecycleDetailMetric('Completion blockers', String(completionBlockerCount), completionBlockerCount ? 'amber' : 'green') +
-    lifecycleDetailMetric('Required evidence open', String(requiredOpenCount), requiredOpenCount ? 'amber' : 'green') +
-    lifecycleDetailMetric('Agent signals', String(agentSignalCount), agentSignalCount ? 'blue' : 'slate') +
+    lifecycleDetailMetric('Readiness', String(readiness.label || 'Not ready'), (readiness.blocker_count || 0) ? 'amber' : 'green') +
+    lifecycleDetailMetric('Missing documents', String(documentsSummary.missing_count || 0), (documentsSummary.missing_count || 0) ? 'amber' : 'green') +
+    lifecycleDetailMetric('Docs pending review', String(documentsSummary.review_required_count || 0), (documentsSummary.review_required_count || 0) ? 'amber' : 'green') +
+    lifecycleDetailMetric('Open alerts', String(monitoringContext.open_alerts_count || 0), (monitoringContext.open_alerts_count || 0) ? 'blue' : 'slate') +
   '</div>';
 
   var setupBody = '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
     lifecycleDetailMeta('Lifecycle items', String((((summary.active || {}).counts) || {}).total || 0)) +
     lifecycleDetailMeta('Historical items', String((((summary.historical || {}).counts) || {}).total || 0)) +
-    lifecycleDetailMeta('Linked objects', String(((summary.linkage || {}).count) || 0)) +
-    lifecycleDetailMeta('Agent signals', String(agentSignalCount)) +
+    lifecycleDetailMeta('Readiness', readiness.label || 'No active review') +
     lifecycleDetailMeta('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'No active review') +
   '</div>';
   if (activeReview) {
@@ -14938,101 +15042,27 @@ function renderLifecycleDetailTab(context) {
   var activeWorkBody = activeWorkItems.length
     ? activeWorkItems.map(lifecycleDetailItemRow).join('')
     : '<div style="font-size:12px;color:var(--text2);">No active lifecycle work is currently linked to this client.</div>';
-
-  var workspaceBody = currentReviewActive
-    ? lifecycleCurrentReviewWorkspaceBody(summary, activeReview, activeReviewItem, requiredItems, activeReviewProjection, evidenceLinks, applicationDocuments)
-    : activeWorkBody;
-
-  var memoDraft = activeReview ? lifecycleMemoDraft(activeReview) : { rationale: '', outcome: '' };
-  var memoGate = activeReview ? lifecycleMemoGateState(activeReview, activeReviewProjection, memoDraft) : null;
-  var memoControlsBody = activeReview
-    ? '<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border1);">' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
-          lifecycleDetailBadge(activeReview.memo_status || 'Not started', activeReview.memo_status === 'generated' ? 'green' : 'amber') +
-          lifecycleDetailBadge(activeReview.periodic_review_memo_id ? ('Memo #' + String(activeReview.periodic_review_memo_id)) : 'No memo ID yet', 'slate') +
-          lifecycleDetailBadge('Onboarding memo unchanged', 'blue') +
-        '</div>' +
-        '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
-          '<div>' +
-            '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer rationale</label>' +
-            '<textarea id="lifecycle-review-rationale-' + activeReview.id + '" rows="4" oninput="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;" placeholder="Officer judgment only. Explain the review conclusion in regulator-defensible terms.">' + escapeHtml(memoDraft.rationale || '') + '</textarea>' +
-            '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
-              '<div style="font-size:11px;color:var(--text3);">Saved to canonical periodic review state. No AI-authored conclusion is inserted here.</div>' +
-              '<button class="btn btn-outline btn-sm" onclick="saveLifecycleOfficerRationale(\'' + activeReview.id + '\')">Save rationale</button>' +
-            '</div>' +
-          '</div>' +
-          '<div>' +
-            '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Outcome</label>' +
-            '<select id="lifecycle-review-outcome-' + activeReview.id + '" onchange="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' +
-              '<option value="">Select outcome…</option>' +
-              '<option value="no_change"' + (memoDraft.outcome === 'no_change' ? ' selected' : '') + '>Continue — No Change</option>' +
-              '<option value="enhanced_monitoring"' + (memoDraft.outcome === 'enhanced_monitoring' ? ' selected' : '') + '>Continue — Enhanced Monitoring</option>' +
-              '<option value="edd_required"' + (memoDraft.outcome === 'edd_required' ? ' selected' : '') + '>Escalate to EDD</option>' +
-            '</select>' +
-            '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Outcome writes the canonical periodic review outcome only and does not mutate the onboarding memo.</div>' +
-          '</div>' +
-          '<div style="padding:12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">' +
-            '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">Memo readiness</div>' +
-            '<div id="lifecycle-memo-readiness-' + activeReview.id + '" style="display:grid;grid-template-columns:1fr;gap:8px;font-size:12px;color:var(--text2);">' +
-              (memoGate ? [
-                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Officer rationale</span><strong style="color:' + (memoGate.rationaleReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.rationaleReady ? 'Ready' : 'Required') + '</strong></div>',
-                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Outcome selection</span><strong style="color:' + (memoGate.outcomeReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.outcomeReady ? 'Ready' : 'Required') + '</strong></div>',
-                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Operational blockers</span><strong style="color:' + (!memoGate.operationalSummary.length ? 'var(--green)' : 'var(--red)') + ';">' + (!memoGate.operationalSummary.length ? 'Clear' : (memoGate.operationalSummary.length + ' open')) + '</strong></div>',
-                '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Completion blockers</span><strong style="color:' + (!memoGate.adjustedCompletionSummary.length ? 'var(--green)' : 'var(--amber)') + ';">' + (!memoGate.adjustedCompletionSummary.length ? 'Clear' : (memoGate.adjustedCompletionSummary.length + ' open')) + '</strong></div>',
-                (memoGate.unresolvedSummary.length
-                  ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Still blocking: ' + memoGate.unresolvedSummary.map(escapeHtml).join(' • ') + '</div>'
-                  : '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Ready to write the canonical review outcome and trigger deterministic periodic-review memo generation.</div>')
-              ].join('')
-              : '') +
-            '</div>' +
-          '</div>' +
-          '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
-            '<div style="font-size:11px;color:var(--text3);max-width:520px;">Periodic review memo generation remains deterministic and separate from onboarding memo generation.</div>' +
-            '<button class="btn btn-primary btn-sm" id="lifecycle-review-complete-btn-' + activeReview.id + '" onclick="completeLifecycleReviewAndGenerateMemo(\'' + activeReview.id + '\')"' + ((memoGate && memoGate.ready) ? '' : ' disabled') + '>' + (activeReview.memo_status === 'generated' ? 'Complete review & regenerate memo' : 'Complete review & generate memo') + '</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>'
-    : '';
-
-  var completionSummary = [];
-  if (activeReview && Array.isArray(activeReview.completion_blocker_summary) && activeReview.completion_blocker_summary.length) {
-    completionSummary = activeReview.completion_blocker_summary;
-  } else if (activeReviewProjection && Array.isArray(activeReviewProjection.completion_blocker_summary) && activeReviewProjection.completion_blocker_summary.length) {
-    completionSummary = activeReviewProjection.completion_blocker_summary;
-  }
-  var blockerSummary = [];
-  if (activeReview && Array.isArray(activeReview.blocker_summary) && activeReview.blocker_summary.length) {
-    blockerSummary = activeReview.blocker_summary;
-  } else if (activeReviewProjection && Array.isArray(activeReviewProjection.blocker_summary) && activeReviewProjection.blocker_summary.length) {
-    blockerSummary = activeReviewProjection.blocker_summary;
-  }
-  var completionBody = activeReview
-    ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
-        lifecycleDetailBadge('Completion blockers: ' + String(activeReview.completion_blocker_count || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0), 'amber') +
-        lifecycleDetailBadge('Operational blockers: ' + String(activeReview.blocker_count || (activeReviewProjection && activeReviewProjection.blocker_count) || 0), blockerSummary.length ? 'red' : 'green') +
-      '</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
-        '<div><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Operational blockers</div>' +
-          (blockerSummary.length ? blockerSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No operational blockers projected.</div>') +
-        '</div>' +
-        '<div><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Completion blockers</div>' +
-          (completionSummary.length ? completionSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No completion blockers for the current lifecycle state.</div>') +
-        '</div>' +
-      '</div>' +
-      memoControlsBody
-    : '<div style="font-size:12px;color:var(--text2);">No completion blockers for the current lifecycle state.</div>';
-
-  var requiredEvidenceBody = activeReview
-    ? renderLifecycleRequiredEvidenceCard(activeReview.id, requiredItems, evidenceLinks, applicationDocuments)
-    : '<div style="font-size:12px;color:var(--text2);">No required evidence is currently open.</div>';
   var clientAttestationBody = activeReview
     ? renderLifecycleClientAttestationPanel(activeReview, activeReviewProjection)
     : '<div style="font-size:12px;color:var(--text2);">No active periodic review attestation is available.</div>';
-
-  var crossLinksBody = linkageEdges.length
-    ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + linkageEdges.map(lifecycleDetailEdgeChip).join('') + '</div>' +
-      '<div style="font-size:12px;color:var(--text2);">Lifecycle consumes these linked owner-workflow objects without duplicating Screening, EDD, Change Management, or KYC repository state.</div>'
-    : '<div style="font-size:12px;color:var(--text2);">No cross-module links are currently projected.</div>';
+  var overviewBody = activeReview
+    ? renderPeriodicReviewWorkspaceOverview(activeReview)
+    : '<div style="font-size:12px;color:var(--text2);">No active periodic review is available for workspace review.</div>';
+  var documentsBody = activeReview
+    ? renderLifecyclePeriodicReviewDocumentRequests(activeReview)
+    : '<div style="font-size:12px;color:var(--text2);">No periodic review evidence requests are active.</div>';
+  var readinessBody = activeReview
+    ? renderPeriodicReviewWorkspaceReadiness(activeReview)
+    : '<div style="font-size:12px;color:var(--text2);">No active readiness state while no review is open.</div>';
+  var monitoringBody = activeReview
+    ? renderPeriodicReviewWorkspaceMonitoring(activeReview)
+    : '<div style="font-size:12px;color:var(--text2);">Monitoring and screening context appears here when a periodic review is active.</div>';
+  var findingsBody = activeReview
+    ? renderPeriodicReviewWorkspaceFindingsDraft(activeReview)
+    : '<div style="font-size:12px;color:var(--text2);">Officer findings draft becomes available once a periodic review is active.</div>';
+  var futureActionsBody = activeReview
+    ? renderPeriodicReviewWorkspaceFutureActions(activeReview)
+    : '<div style="font-size:12px;color:var(--text2);">Future outcome actions are enabled in later phases.</div>';
 
   var historyItems = historical.filter(function(item) { return item.type === 'review'; });
   var historyBody = historyItems.length
@@ -15047,9 +15077,8 @@ function renderLifecycleDetailTab(context) {
         '</div>';
       }).join('')
     : '<div style="font-size:12px;color:var(--text2);">No historical periodic reviews yet.</div>';
-
   var currentReviewCardHtml = currentReviewActive
-    ? lifecycleDetailCard('Active Work', 'Officer controls and system-derived panels for the active periodic review.', workspaceBody, '#4f46e5')
+    ? lifecycleDetailCard('Review Overview', 'Officer-facing periodic review cockpit for the active review.', overviewBody, '#4f46e5')
     : lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client when no periodic review is active.', activeWorkBody, '#2563eb');
 
   container.innerHTML =
@@ -15057,7 +15086,7 @@ function renderLifecycleDetailTab(context) {
     '<div class="lifecycle-detail-hero">' +
       '<div>' +
         '<h2>Lifecycle</h2>' +
-        '<p>Client-level periodic review workspace backed by canonical lifecycle and periodic review projections. Officer attestations live here; owner workflows remain in their native modules.</p>' +
+        '<p>Officer-facing periodic review workspace backed by canonical lifecycle and periodic review projections. The cockpit summarises attestation, evidence, blockers, and linked monitoring context in one place.</p>' +
       '</div>' +
       '<button class="btn btn-outline btn-sm" onclick="loadLifecycleDetailTab(true)">⟳ Refresh Lifecycle</button>' +
     '</div>' +
@@ -15065,12 +15094,13 @@ function renderLifecycleDetailTab(context) {
     metricsRow +
     '<div class="lifecycle-section-stack">' +
       currentReviewCardHtml +
-      lifecycleDetailCard('Client Attestation', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
-      lifecycleDetailCard('Required Evidence', 'Canonical evidence requirements linked to the existing KYC document repository.', requiredEvidenceBody, '#0f766e') +
-      lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
-      lifecycleDetailCard('Agent Signals', 'Agent 6/7/8/10 decision-support signals projected into Lifecycle without mutating officer-owned review state.', lifecycleAgentSignalsPanel(summary), '#2557d6') +
+      lifecycleDetailCard('Client Attestation Summary', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
+      lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
+      lifecycleDetailCard('Active Blockers / Readiness', 'Deterministic readiness state for the next officer step.', readinessBody, '#f59e0b') +
+      lifecycleDetailCard('Screening / Monitoring Context', 'Compact summary of linked alerts and screening freshness.', monitoringBody, '#2557d6') +
+      lifecycleDetailCard('Officer Findings Draft', 'Internal draft notes only. Final outcome controls arrive in PRS-5.', findingsBody, '#7c3aed') +
+      lifecycleDetailCard('Future Actions', 'Placeholders for later periodic review phases.', futureActionsBody, '#475569') +
       lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
-      lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
       lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
     '</div>' +
     '</div>';
@@ -15887,10 +15917,13 @@ function openMonitoringLifecycleQueue() {
   showView('lifecycle');
 }
 
-function openMonitoringReviewLifecycle(ref) {
+function openMonitoringReviewLifecycle(ref, reviewId) {
   if (!ref) {
     showToast('Periodic review is missing an application reference', 'error');
     return;
+  }
+  if (reviewId != null) {
+    window._lifecycleDeepLinkTarget = { type: 'review', id: reviewId };
   }
   openAppDetail(ref, { initialTab: 'lifecycle' });
 }
@@ -15962,7 +15995,7 @@ function renderPeriodicReviews() {
     var statusBadge = monitoringReviewSignalBadgeClass(review);
     var riskClass = review.risk.toLowerCase().replace(' ','-');
     var owner = review.assignedOfficerName || review.assignedOfficerId || 'Unassigned';
-    tr.onclick = function() { openMonitoringReviewLifecycle(review.ref); };
+    tr.onclick = function() { openMonitoringReviewLifecycle(review.ref, review.id); };
     tr.innerHTML = '<td><div>' + escapeHtml(review.client) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(review.ref || review.reviewReference || '') + '</div></td>' +
       '<td><span class="badge ' + riskClass + '" style="font-size:11px;">' + escapeHtml(review.risk) + '</span></td>' +
@@ -15971,7 +16004,7 @@ function renderPeriodicReviews() {
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(reviewQueueTriggerSummary(review)) + '</div></td>' +
       '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
       '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(reviewQueueDateLabel(review.lastActivityAt)) + '</td>' +
-      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openMonitoringReviewLifecycle(\'' + escapeHtml(review.ref) + '\')">' + escapeHtml(review.primaryActionLabel || 'Open review case') + '</button></td>';
+      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openMonitoringReviewLifecycle(\'' + escapeHtml(review.ref) + '\',' + JSON.stringify(review.id) + ')">' + escapeHtml(review.primaryActionLabel || 'Open review case') + '</button></td>';
     tbody.appendChild(tr);
     rendered++;
   });

@@ -40,7 +40,7 @@ def test_portal_periodic_review_modal_wires_fetch_save_submit_and_read_only_copy
 def test_backoffice_lifecycle_surfaces_read_only_client_attestation_summary():
     html = BACKOFFICE_HTML.read_text()
     assert "function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection)" in html
-    assert "Client Attestation" in html
+    assert "Client Attestation Summary" in html
     assert "read-only in back office" in html
-    assert "Conditional document requests are generated from the submitted attestation" in html
-    assert "Risk level: " in html
+    assert "Highlighted answers indicate declared material changes or incorrect company/contact details." in html
+    assert "Declared material-change keys:" in html

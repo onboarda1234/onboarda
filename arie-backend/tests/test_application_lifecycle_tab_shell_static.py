@@ -29,20 +29,22 @@ def test_application_detail_tabs_include_lifecycle_in_required_order():
     ]
 
 
-def test_lifecycle_tab_shell_sections_exist():
+def test_lifecycle_tab_shell_sections_match_prs4_workspace():
     html = _read_backoffice()
     assert 'id="detail-tab-lifecycle"' in html
     for title in (
+        "Review Overview",
+        "Client Attestation Summary",
+        "Documents & Evidence",
+        "Active Blockers / Readiness",
+        "Screening / Monitoring Context",
+        "Officer Findings Draft",
+        "Future Actions",
         "Review Setup Summary",
-        "Active Work",
-        "Completion Gate",
-        "Required Evidence",
-        "Cross-module Links",
-        "Agent Signals",
         "History",
     ):
         assert title in html
-    assert "Memo Status" not in html
+    assert "Completion Gate" not in html
 
 
 def test_lifecycle_tab_loader_uses_existing_projection_endpoints():
@@ -51,7 +53,6 @@ def test_lifecycle_tab_loader_uses_existing_projection_endpoints():
     assert "/lifecycle/applications/" in html
     assert "/summary" in html
     assert "/monitoring/reviews/" in html
-    assert "required_items" in html
     assert "Refresh Lifecycle" in html
 
 
@@ -66,41 +67,20 @@ def test_switch_detail_tab_supports_lifecycle_without_regressing_activity_loads(
     assert "loadNotes()" in section
 
 
-def test_lifecycle_workspace_adds_attestation_controls_and_system_panels():
+def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_findings_helpers():
     html = _read_backoffice()
-    assert "Material Change Attestation" in html
-    assert "Risk Rating Change Attestation" in html
-    assert "Save material change attestation" in html
-    assert "Record review-level risk change" in html
-    assert "KYC Documents" in html
-    assert "Screening" in html
-    assert "Alerts / EDD / Changes" in html
-    assert "/material-change-attestation" in html
-    assert "/risk-change" in html
+    assert "function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection)" in html
+    assert "function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail)" in html
+    assert "function renderPeriodicReviewWorkspaceReadiness(reviewDetail)" in html
+    assert "function renderPeriodicReviewWorkspaceMonitoring(reviewDetail)" in html
+    assert "function renderPeriodicReviewWorkspaceFindingsDraft(reviewDetail)" in html
+    assert "async function savePeriodicReviewWorkspaceFindings(reviewId)" in html
+    assert "/findings" in html
+    assert "Save draft findings" in html
+    assert "Final outcome controls arrive in PRS-5." in html
 
 
-def test_lifecycle_required_evidence_renders_single_canonical_surface():
-    html = _read_backoffice()
-    assert "renderLifecycleRequiredEvidenceCard" in html
-    assert "Canonical evidence requirements linked to the existing KYC document repository." in html
-    assert "Evidence linking and uploads arrive in PR 5." not in html
-    assert "Projected requirement snapshot only. PR 5 adds evidence-link controls." not in html
-    assert "Required Evidence Snapshot" not in html
-
-
-def test_lifecycle_required_evidence_wires_repository_link_upload_and_custom_requirement_controls():
-    html = _read_backoffice()
-    assert "async function linkLifecycleEvidenceDocument(reviewId, requirementId)" in html
-    assert "async function submitLifecycleEvidenceUpload(reviewId)" in html
-    assert "async function addLifecycleCustomEvidenceRequirement(reviewId)" in html
-    assert "/evidence-links" in html
-    assert "/required-items/custom" in html
-    assert "Upload and link evidence" in html
-    assert "Add custom requirement" in html
-    assert "does not create a separate periodic-review document store" in html
-
-
-def test_overview_periodic_review_baseline_box_is_compact_backoffice_only_and_auditable():
+def test_overview_periodic_review_baseline_box_is_simplified_backoffice_only_and_auditable():
     html = _read_backoffice()
     assert 'id="detail-periodic-review-baseline"' in html
     assert "Periodic Review Baseline" in html
@@ -109,37 +89,13 @@ def test_overview_periodic_review_baseline_box_is_compact_backoffice_only_and_au
     assert "function saveOverviewPeriodicReviewBaseline" in html
     assert "canEditPeriodicReviewLegacyBaseline" in html
     assert "Officer-only setup metadata" in html
-    assert "N/A disables the baseline date" in html
+    assert "Is this a legacy file?" in html
+    assert "Last review date" in html
+    assert "Derived cadence" in html
     assert "/baseline" in html
-    assert "baseline_status" in html
-    assert "baseline_cadence" in html
-    assert "officer_note" in html
-    assert "Not set" in html
-    assert "Last onboarding date" in html
-    assert "Last periodic review date" in html
-    assert "Imported legacy review" in html
-
-
-def test_lifecycle_required_evidence_uses_document_verification_truth_not_link_only():
-    html = _read_backoffice()
-    assert "function lifecycleEvidenceLinkReady(entry)" in html
-    assert "document_verification_status" in html
-    assert "document_review_status" in html
-    assert "Senior accepted flagged evidence" in html
-    assert "Pending verification" in html
-    assert "lifecycleOpenEvidenceRequirements(requiredItems, evidenceLinks, applicationDocuments)" in html
-
-
-def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
-    html = _read_backoffice()
-    start = html.index("function renderLifecycleDetailTab(context)")
-    end = html.index("async function loadLifecycleDetailTab(force)", start)
-    section = html[start:end]
-    assert "var currentReviewActive = !!activeReview;" in section
-    assert "var activeWorkItems = currentReviewActive ?" in section
-    assert "var currentReviewCardHtml = currentReviewActive" in section
-    assert "lifecycleDetailCard('Active Work'" in section
-    assert "Current Review Workspace" not in section
+    assert "legacy_file" in html
+    assert "last_review_date" in html
+    assert "overview-periodic-review-baseline-cadence-" not in html
 
 
 def test_overview_periodic_review_baseline_loads_from_active_or_scheduled_review_setup():
@@ -162,93 +118,21 @@ def test_lifecycle_workspace_uses_scrollable_responsive_layout():
     assert ".lifecycle-detail-root" in html
     assert ".lifecycle-section-stack" in html
     assert "grid-template-columns:repeat(6,minmax(0,1fr))" in html
-    assert ".lifecycle-workspace-layout" in html
-    assert ".lifecycle-workspace-panels" in html
-    assert ".lifecycle-evidence-list" in html
     assert "max-height:440px; overflow:auto" in html
     assert "@media (max-width:1180px)" in html
     assert "@media (max-width:760px)" in html
 
 
-def test_lifecycle_workspace_save_helpers_refresh_canonical_projection():
+def test_ongoing_monitoring_review_rows_open_application_lifecycle_with_review_deep_link():
     html = _read_backoffice()
-    assert "async function saveLifecycleMaterialChange(reviewId)" in html
-    assert "async function saveLifecycleRiskChange(reviewId)" in html
-    assert "await refreshLifecycleWorkspaceTab();" in html
-    assert "window._detailLifecycleTabCache = null;" in html
-
-
-def test_lifecycle_workspace_adds_owner_workflow_deep_links_without_duplicate_workflows():
-    html = _read_backoffice()
-    assert "function lifecycleOpenChangeManagementRequests()" in html
-    assert "function lifecycleOpenOrCreateChangeRequest(reviewId)" in html
-    assert "Open monitoring alert #" in html
-    assert "Open linked EDD #" in html
-    assert "Create / link EDD case" in html
-    assert "Open Change Management" in html
-    assert "Open / create change request" in html
-    assert "Formal approval and implementation of material changes remain canonical in Change Management." in html
-    assert "Owner-workflow actions stay in Monitoring, EDD, and Change Management" in html
-
-
-def test_lifecycle_workspace_surfaces_agent_signals_as_decision_support_only():
-    html = _read_backoffice()
-    assert "function lifecycleAgentSignalsPanel(summary)" in html
-    assert "function lifecycleAgentSignalRow(signal)" in html
-    assert "Agent 6/7/8/10 decision-support signals" in html
-    assert "Source:" in html
-    assert "Confidence " in html
-    assert "Linked object:" in html
-    assert "Destination:" in html
-    assert "recommended owner module" in html
-    assert "They do not write officer-owned review fields." in html
-
-
-def test_lifecycle_link_rows_surface_source_module_object_id_status_and_next_action():
-    html = _read_backoffice()
-    start = html.index("function lifecycleDetailItemRow(item)")
-    end = html.index("var LIFECYCLE_MATERIAL_CHANGE_OPTIONS", start)
+    start = html.index("function renderPeriodicReviews()")
+    end = html.index("// ── Monitoring-stage AI agent catalog", start)
     section = html[start:end]
-    assert "lifecycleSourceModuleLabel(item)" in section
-    assert "Linked object:" in section
-    assert "Next action:" in section
-    assert "Open " in section
-    assert "Owner:" in section
-
-
-def test_lifecycle_edge_chips_are_clickable_owner_workflow_deep_links():
-    html = _read_backoffice()
-    start = html.index("function lifecycleDetailEdgeChip(edge)")
-    end = html.index("function lifecycleDetailItemRow(item)", start)
-    section = html[start:end]
-    assert "lifecycleOpenItemAction(obj)" in section
-    assert "event.stopPropagation();" in section
-    assert "btn btn-outline btn-sm" in section
-
-
-def test_lifecycle_memo_gate_adds_officer_rationale_outcome_and_completion_action():
-    html = _read_backoffice()
-    helper_start = html.index("window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};")
-    helper_end = html.index("async function saveLifecycleMaterialChange(reviewId)", helper_start)
-    helper_section = html[helper_start:helper_end]
-    memo_start = html.index("var memoControlsBody = activeReview")
-    memo_end = html.index("var historyItems = historical.filter", memo_start)
-    memo_section = html[memo_start:memo_end]
-    assert "window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};" in helper_section
-    assert "async function saveLifecycleOfficerRationale(reviewId)" in helper_section
-    assert "async function completeLifecycleReviewAndGenerateMemo(reviewId)" in helper_section
-    assert "Officer rationale" in memo_section
-    assert "Save rationale" in memo_section
-    assert "Continue — No Change" in memo_section
-    assert "Continue — Enhanced Monitoring" in memo_section
-    assert "Escalate to EDD" in memo_section
-    assert "Complete review & generate memo" in memo_section
-    assert "Complete review & regenerate memo" in memo_section
-    assert "Periodic review memo generation remains deterministic" in memo_section
-    assert "/officer-rationale" in helper_section
-    assert "/complete" in helper_section
-    assert "Recommend Exit" not in memo_section
-    assert "Exit Recommended" not in memo_section
+    assert "openMonitoringReviewLifecycle(review.ref, review.id)" in section
+    assert "Open review case" in section
+    assert "function openMonitoringReviewLifecycle(ref, reviewId)" in html
+    assert "window._lifecycleDeepLinkTarget = { type: 'review', id: reviewId };" in html
+    assert "openAppDetail(ref, { initialTab: 'lifecycle' })" in html
 
 
 def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
@@ -258,52 +142,11 @@ def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     section = html[start:end]
     assert "Periodic Review Queue" in section
     assert "Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth." in section
-    assert "Monitoring Alerts remains the signal workspace." in section
     assert "Open Lifecycle Queue" in section
     assert "monitoring-review-due-count" in section
     assert "monitoring-review-overdue-count" in section
     assert "monitoring-review-blocked-count" in section
     assert "Schedule Due Reviews" not in section
-    assert "schedulePeriodicReviews" not in section
-    assert "Complete Review" not in section
-
-
-def test_ongoing_monitoring_review_rows_open_application_lifecycle_not_review_editor():
-    html = _read_backoffice()
-    start = html.index("function renderPeriodicReviews()")
-    end = html.index("// \u2500\u2500 Monitoring-stage AI agent catalog", start)
-    section = html[start:end]
-    assert "openMonitoringReviewLifecycle(review.ref)" in section
-    assert "Open review case" in section
-    assert "openPeriodicReview(review.ref)" not in section
-    assert "openPeriodicReview(\\'" not in section
-    assert "function openMonitoringReviewLifecycle(ref)" in html
-    assert "openAppDetail(ref, { initialTab: 'lifecycle' })" in html
-
-
-def test_ongoing_monitoring_keeps_alerts_and_agents_tabs():
-    html = _read_backoffice()
-    start = html.index('<div class="view" id="view-monitoring">')
-    end = html.index("<!-- Unified operator queue", start)
-    section = html[start:end]
-    assert "Monitoring Alerts" in section
-    assert "Review Signals" not in section
-    assert "Monitoring Agents" in section
-    assert 'id="monitoring-alerts-body"' in section
-    assert 'id="agents-status-list"' in section
-
-
-def test_legacy_periodic_review_modal_is_read_only_not_completion_surface():
-    html = _read_backoffice()
-    assert 'id="review-modal-decide-btn"' not in html
-    assert "function showReviewDecisionForm()" not in html
-    assert "async function submitReviewDecision()" not in html
-    start = html.index("function renderPrcReviewDetailSection(detail)")
-    end = html.index("async function refreshOpenPeriodicReview()", start)
-    section = html[start:end]
-    assert "var canMutate = false;" in section
-    assert "Read-only projection" in section
-    assert "Periodic review work is completed in the Application Lifecycle tab" in section
 
 
 def test_lifecycle_queue_rows_are_launchpad_deep_links_to_application_lifecycle():
@@ -319,49 +162,17 @@ def test_lifecycle_queue_rows_are_launchpad_deep_links_to_application_lifecycle(
     assert "data-application-id" in helper_section
     assert "openLifecycleQueueItemFromElement(this)" in section
     assert "Open Lifecycle" in section
-    assert "Complete review" not in section
-    assert "/complete" not in section
 
 
-def test_lifecycle_queue_chips_open_application_lifecycle_not_old_modals():
-    html = _read_backoffice()
-    start = html.index("function lifecycleQueueChipHtml(item, label, kind, id)")
-    end = html.index("function lifecycleQuarantineChips", start)
-    section = html[start:end]
-    assert "openLifecycleQueueItemFromElement(this)" in section
-    assert "Open Application Lifecycle item" in section
-    assert "prcChipHtml" not in section
-    assert "openReviewDetailById" not in section
-    assert "openEDDDetail" not in section
-
-
-def test_lifecycle_queue_deep_link_focuses_exact_lifecycle_item():
+def test_lifecycle_queue_deep_link_focuses_exact_review_or_linked_item():
     html = _read_backoffice()
     helper_start = html.index("function lifecycleQueueItemDomId(type, id)")
     helper_end = html.index("function lifecycleQuarantineChips", helper_start)
     helper_section = html[helper_start:helper_end]
-    detail_start = html.index("function lifecycleDetailItemRow(item)")
-    detail_end = html.index("var LIFECYCLE_MATERIAL_CHANGE_OPTIONS", detail_start)
+    detail_start = html.index("function renderPeriodicReviewWorkspaceOverview(reviewDetail)")
+    detail_end = html.index("function renderPeriodicReviewWorkspaceReadiness(reviewDetail)", detail_start)
     detail_section = html[detail_start:detail_end]
-    current_start = html.index("function lifecycleCurrentReviewWorkspaceBody")
-    current_end = html.index("function toggleLifecycleMaterialChangeCategories", current_start)
-    current_section = html[current_start:current_end]
     assert "window._lifecycleDeepLinkTarget" in html
     assert "focusLifecycleDeepLinkTarget" in helper_section
     assert "scrollIntoView" in helper_section
-    assert "lifecycleQueueItemDomId(type, itemId)" in detail_section
-    assert "data-lifecycle-item-type" in detail_section
-    assert "lifecycleQueueItemDomId('review', reviewId)" in current_section
-    assert "data-lifecycle-item-type=\"review\"" in current_section
-
-
-def test_lifecycle_queue_preserves_active_historical_and_legacy_buckets():
-    html = _read_backoffice()
-    start = html.index("function switchLifecycleTab(include)")
-    end = html.index("async function loadLifecycleQueue", start)
-    section = html[start:end]
-    assert "active" in section
-    assert "historical" in section
-    assert "legacy_unmapped" in section
-    assert "include=active" in html
-    assert "Legacy (unmapped)" in html
+    assert "lifecycleQueueItemDomId('review', reviewDetail && reviewDetail.id)" in detail_section

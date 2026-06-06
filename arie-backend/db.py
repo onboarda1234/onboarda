@@ -870,6 +870,11 @@ def _get_postgres_schema() -> str:
         client_attestation_submitted_by TEXT REFERENCES clients(id),
         client_attestation_questionnaire_version TEXT,
         officer_rationale TEXT,
+        officer_findings_note TEXT,
+        officer_deficiencies_note TEXT,
+        officer_internal_review_note TEXT,
+        findings_updated_by TEXT REFERENCES users(id),
+        findings_updated_at TIMESTAMP,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
         required_items TEXT,
@@ -1874,6 +1879,11 @@ def _get_sqlite_schema() -> str:
         client_attestation_submitted_by TEXT REFERENCES clients(id),
         client_attestation_questionnaire_version TEXT,
         officer_rationale TEXT,
+        officer_findings_note TEXT,
+        officer_deficiencies_note TEXT,
+        officer_internal_review_note TEXT,
+        findings_updated_by TEXT REFERENCES users(id),
+        findings_updated_at TEXT,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
         required_items TEXT,
@@ -3078,6 +3088,24 @@ def _ensure_periodic_review_baseline_schema(db: DBConnection):
         "baseline_date": "TEXT",
         "baseline_cadence_months": "INTEGER",
         "baseline_note": "TEXT",
+    }
+    for column, definition in review_columns.items():
+        if not _safe_column_exists(db, "periodic_reviews", column):
+            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+
+def _ensure_periodic_review_findings_schema(db: DBConnection):
+    """Add PRS-4 officer findings draft fields."""
+    if not _safe_table_exists(db, "periodic_reviews"):
+        return
+
+    ts_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    review_columns = {
+        "officer_findings_note": "TEXT",
+        "officer_deficiencies_note": "TEXT",
+        "officer_internal_review_note": "TEXT",
+        "findings_updated_by": "TEXT REFERENCES users(id)",
+        "findings_updated_at": ts_type,
     }
     for column, definition in review_columns.items():
         if not _safe_column_exists(db, "periodic_reviews", column):
@@ -5874,6 +5902,19 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.38b: Ensured periodic review baseline schema")
     except Exception as e:
         logger.error("Migration v2.38b failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.38c: officer periodic-review workspace findings
+    # draft fields for PRS-4.
+    try:
+        _ensure_periodic_review_findings_schema(db)
+        db.commit()
+        logger.info("Migration v2.38c: Ensured periodic review findings schema")
+    except Exception as e:
+        logger.error("Migration v2.38c failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

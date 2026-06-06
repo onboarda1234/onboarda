@@ -10,5 +10,5 @@ def test_backoffice_lifecycle_surfaces_conditional_periodic_review_documents():
     assert "function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail)" in html
     assert "Conditional periodic review document requests" in html
     assert "Triggering question:" in html
-    assert "Material changes and supporting documents will be routed to Change Management / officer outcome in a later step." in html
-    assert "Linked review" in html
+    assert "Uploaded documents reuse the existing repository and verification surfaces." in html
+    assert "Upload status:" in html

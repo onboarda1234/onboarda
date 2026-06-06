@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from lifecycle_linkage import MissingAuditWriter, _row_get
-from periodic_review_policy import add_months, normalize_risk_level, policy_snapshot_for_application
+from periodic_review_policy import normalize_risk_level, parse_review_date, policy_snapshot_for_application
 
 ASSIGNABLE_REVIEW_ROLES = {"admin", "sco", "co"}
 LEGACY_SOURCE_TYPES = {
@@ -34,6 +34,9 @@ BASELINE_STATUSES = {
 BASELINE_CADENCE_RISK_DEFAULT = "risk_default"
 BASELINE_ALLOWED_CADENCE_MONTHS = {6, 12, 24, 36}
 BASELINE_SOURCE_SURFACE = "backoffice_application_overview_periodic_review_baseline"
+WORKSPACE_SOURCE_SURFACE = "backoffice_periodic_review_workspace"
+LEGACY_FILE_NO = "no"
+LEGACY_FILE_YES = "yes"
 MATERIAL_CHANGE_ATTESTATION_NONE = "no_material_change"
 MATERIAL_CHANGE_ATTESTATION_PRESENT = "material_change_identified"
 MATERIAL_CHANGE_ATTESTATIONS = {
@@ -211,12 +214,40 @@ def _baseline_months_value(cadence: str) -> Optional[int]:
     return int(cadence)
 
 
+def _normalize_legacy_file(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text not in {LEGACY_FILE_NO, LEGACY_FILE_YES}:
+        raise InvalidPeriodicReviewInput("legacy_file must be yes or no")
+    return text
+
+
+def _baseline_anchor_for_application(review, app: Optional[Dict[str, Any]]) -> str:
+    app = dict(app or {})
+    anchor = (
+        app.get("first_approved_at")
+        or app.get("approved_at")
+        or app.get("completed_at")
+        or app.get("created_at")
+        or _row_get(review, "created_at")
+        or _utc_now_iso()
+    )
+    return parse_review_date(anchor).isoformat()
+
+
+def _legacy_file_from_review(review) -> str:
+    status = str(_row_get(review, "baseline_status") or "").strip().lower()
+    if status in {BASELINE_STATUS_LAST_PERIODIC, BASELINE_STATUS_IMPORTED_LEGACY}:
+        return LEGACY_FILE_YES
+    return LEGACY_FILE_NO
+
+
 def _serialize_baseline_state(review) -> Dict[str, Any]:
     return {
         "baseline_status": _row_get(review, "baseline_status"),
         "baseline_date": _row_get(review, "baseline_date"),
         "baseline_cadence_months": _row_get(review, "baseline_cadence_months"),
         "baseline_note": _row_get(review, "baseline_note"),
+        "legacy_file": _legacy_file_from_review(review),
         "last_review_date": _row_get(review, "last_review_date"),
         "next_review_date": _row_get(review, "next_review_date"),
         "due_date": _row_get(review, "due_date"),
@@ -471,61 +502,59 @@ def save_periodic_review_baseline(
     db,
     review_id: int,
     *,
-    baseline_status: Any,
+    baseline_status: Any = None,
     baseline_date: Any = None,
     baseline_cadence: Any = None,
     officer_note: Any = None,
+    legacy_file: Any = None,
+    last_review_date: Any = None,
     user=None,
     audit_writer=None,
 ) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
-    status = _normalize_baseline_status(baseline_status)
-    cadence = _normalize_baseline_cadence(baseline_cadence)
     note = _clean_optional_text(officer_note, limit=500)
-    date_value = _clean_optional_text(baseline_date)
-
-    if status in {
-        BASELINE_STATUS_LAST_ONBOARDING,
-        BASELINE_STATUS_LAST_PERIODIC,
-        BASELINE_STATUS_IMPORTED_LEGACY,
-    } and not date_value:
-        raise InvalidPeriodicReviewInput("baseline_date is required for the selected baseline status")
-    if status in {BASELINE_STATUS_NOT_SET, BASELINE_STATUS_NOT_APPLICABLE}:
-        date_value = None
-
-    existing_next_due = _row_get(review, "next_review_date") or _row_get(review, "due_date")
-    next_due = existing_next_due
-    frequency_months = _row_get(review, "frequency_months")
-    calculation_basis = _row_get(review, "calculation_basis")
-    policy_version = _row_get(review, "policy_version")
-    last_review_date = _row_get(review, "last_review_date")
-
-    if status in {
-        BASELINE_STATUS_LAST_ONBOARDING,
-        BASELINE_STATUS_LAST_PERIODIC,
-        BASELINE_STATUS_IMPORTED_LEGACY,
-    }:
-        if cadence == BASELINE_CADENCE_RISK_DEFAULT:
-            risk_level = _effective_risk_level(db, review)
-            app = _application_row(db, review) or {}
-            policy = policy_snapshot_for_application(
-                app,
-                anchor_date=date_value,
-                override_risk_level=risk_level,
-            )
-            next_due = policy["next_review_date"]
-            frequency_months = policy["frequency_months"]
-            calculation_basis = policy["calculation_basis"]
-            policy_version = policy["policy_version"]
-        else:
-            months = int(cadence)
-            next_due = add_months(date_value, months)
-            frequency_months = months
-            calculation_basis = f"manual_baseline:{months}m"
+    app = _application_row(db, review) or {}
+    compatibility_status = _clean_optional_text(baseline_status)
+    legacy_choice = legacy_file
+    if legacy_choice in (None, "") and compatibility_status:
+        status = _normalize_baseline_status(compatibility_status)
         if status in {BASELINE_STATUS_LAST_PERIODIC, BASELINE_STATUS_IMPORTED_LEGACY}:
-            last_review_date = date_value
-    legacy_import = status == BASELINE_STATUS_IMPORTED_LEGACY
+            legacy_choice = LEGACY_FILE_YES
+            last_review_date = last_review_date or baseline_date
+        else:
+            legacy_choice = LEGACY_FILE_NO
+    legacy_choice = _normalize_legacy_file(legacy_choice or LEGACY_FILE_NO)
+    entered_last_review = _clean_optional_text(last_review_date or baseline_date)
+    if legacy_choice == LEGACY_FILE_YES and not entered_last_review:
+        raise InvalidPeriodicReviewInput("last_review_date is required when legacy_file is yes")
+    if entered_last_review:
+        entered_last_review = parse_review_date(entered_last_review).isoformat()
+
+    anchor_date = (
+        entered_last_review
+        if legacy_choice == LEGACY_FILE_YES
+        else _baseline_anchor_for_application(review, app)
+    )
+    risk_level = _effective_risk_level(db, review)
+    policy = policy_snapshot_for_application(
+        app,
+        anchor_date=anchor_date,
+        override_risk_level=risk_level,
+    )
+    status = (
+        BASELINE_STATUS_LAST_PERIODIC
+        if legacy_choice == LEGACY_FILE_YES
+        else BASELINE_STATUS_LAST_ONBOARDING
+    )
+    existing_next_due = _row_get(review, "next_review_date") or _row_get(review, "due_date")
+    next_due = policy["next_review_date"]
+    frequency_months = policy["frequency_months"]
+    calculation_basis = policy["calculation_basis"]
+    policy_version = policy["policy_version"]
+    stored_last_review_date = entered_last_review if legacy_choice == LEGACY_FILE_YES else None
+    stored_baseline_date = anchor_date
+    legacy_import = bool(_row_get(review, "legacy_import")) and legacy_choice == LEGACY_FILE_YES
     before = _serialize_baseline_state(review)
     db.execute(
         "UPDATE periodic_reviews SET baseline_status = ?, baseline_date = ?, baseline_cadence_months = ?, baseline_note = ?, "
@@ -533,10 +562,10 @@ def save_periodic_review_baseline(
         "WHERE id = ?",
         (
             status,
-            date_value,
-            _baseline_months_value(cadence),
+            stored_baseline_date,
+            frequency_months,
             note,
-            last_review_date,
+            stored_last_review_date,
             next_due,
             next_due,
             frequency_months,
@@ -551,12 +580,16 @@ def save_periodic_review_baseline(
         "application_id": _row_get(review, "application_id"),
         "periodic_review_id": review_id,
         "actor_officer_user_id": (user or {}).get("sub"),
+        "legacy_file": legacy_choice,
+        "last_review_date": stored_last_review_date,
+        "derived_cadence": frequency_months,
+        "next_review_due": next_due,
         "old_baseline_status": before.get("baseline_status"),
         "old_baseline_date": before.get("baseline_date"),
         "old_baseline_cadence": before.get("baseline_cadence_months"),
         "new_baseline_status": status,
-        "new_baseline_date": date_value,
-        "new_baseline_cadence": _baseline_months_value(cadence),
+        "new_baseline_date": stored_baseline_date,
+        "new_baseline_cadence": frequency_months,
         "next_review_due_before": existing_next_due,
         "next_review_due_after": next_due,
         "source_surface": BASELINE_SOURCE_SURFACE,
@@ -564,10 +597,11 @@ def save_periodic_review_baseline(
     after = {
         **before,
         "baseline_status": status,
-        "baseline_date": date_value,
-        "baseline_cadence_months": _baseline_months_value(cadence),
+        "baseline_date": stored_baseline_date,
+        "baseline_cadence_months": frequency_months,
         "baseline_note": note,
-        "last_review_date": last_review_date,
+        "legacy_file": legacy_choice,
+        "last_review_date": stored_last_review_date,
         "next_review_date": next_due,
         "due_date": next_due,
         "frequency_months": frequency_months,
@@ -587,34 +621,14 @@ def save_periodic_review_baseline(
         before_state=before,
         after_state=after,
     )
-    if status == BASELINE_STATUS_NOT_APPLICABLE:
-        _emit_audit(
-            audit_writer,
-            user,
-            "periodic_review_baseline_marked_na",
-            review_id,
-            audit_detail,
-            db,
-            before_state=before,
-            after_state=after,
-        )
-    if next_due != existing_next_due:
-        _emit_audit(
-            audit_writer,
-            user,
-            "periodic_review_next_due_recalculated",
-            review_id,
-            audit_detail,
-            db,
-            before_state=before,
-            after_state=after,
-        )
     return {
         "review_id": review_id,
         "baseline_status": status,
-        "baseline_date": date_value,
-        "baseline_cadence": cadence,
-        "baseline_cadence_months": _baseline_months_value(cadence),
+        "legacy_file": legacy_choice,
+        "baseline_date": stored_baseline_date,
+        "last_review_date": stored_last_review_date,
+        "baseline_cadence": BASELINE_CADENCE_RISK_DEFAULT,
+        "baseline_cadence_months": frequency_months,
         "baseline_note": note,
         "next_review_due": next_due,
         "source_surface": BASELINE_SOURCE_SURFACE,
@@ -683,6 +697,86 @@ def save_officer_rationale(db, review_id: int, *, rationale: str, user, audit_wr
         after_state=after,
     )
     return {"review_id": review_id, **after}
+
+
+def save_workspace_findings(
+    db,
+    review_id: int,
+    *,
+    findings_note: Any = None,
+    deficiencies_note: Any = None,
+    internal_review_note: Any = None,
+    user=None,
+    audit_writer=None,
+) -> Dict[str, Any]:
+    _require_audit_writer(audit_writer)
+    review = _fetch_review(db, review_id)
+    findings_note = _clean_optional_text(findings_note, limit=4000)
+    deficiencies_note = _clean_optional_text(deficiencies_note, limit=4000)
+    internal_review_note = _clean_optional_text(internal_review_note, limit=4000)
+    if not any((findings_note, deficiencies_note, internal_review_note)):
+        raise InvalidPeriodicReviewInput("At least one findings field is required")
+    before = {
+        "officer_findings_note": _row_get(review, "officer_findings_note"),
+        "officer_deficiencies_note": _row_get(review, "officer_deficiencies_note"),
+        "officer_internal_review_note": _row_get(review, "officer_internal_review_note"),
+        "findings_updated_by": _row_get(review, "findings_updated_by"),
+        "findings_updated_at": _row_get(review, "findings_updated_at"),
+    }
+    ts = _utc_now_iso()
+    db.execute(
+        "UPDATE periodic_reviews SET officer_findings_note = ?, officer_deficiencies_note = ?, "
+        "officer_internal_review_note = ?, findings_updated_by = ?, findings_updated_at = ? WHERE id = ?",
+        (
+            findings_note,
+            deficiencies_note,
+            internal_review_note,
+            (user or {}).get("sub"),
+            ts,
+            review_id,
+        ),
+    )
+    after = {
+        "officer_findings_note": findings_note,
+        "officer_deficiencies_note": deficiencies_note,
+        "officer_internal_review_note": internal_review_note,
+        "findings_updated_by": (user or {}).get("sub"),
+        "findings_updated_at": ts,
+    }
+    changed_fields = sorted(
+        key for key in (
+            "officer_findings_note",
+            "officer_deficiencies_note",
+            "officer_internal_review_note",
+        )
+        if before.get(key) != after.get(key)
+    )
+    action = (
+        "periodic_review_findings_saved"
+        if not any(
+            before.get(key)
+            for key in ("officer_findings_note", "officer_deficiencies_note", "officer_internal_review_note")
+        )
+        else "periodic_review_findings_updated"
+    )
+    _emit_audit(
+        audit_writer,
+        user,
+        action,
+        review_id,
+        {
+            "review_id": review_id,
+            "periodic_review_id": review_id,
+            "application_id": _row_get(review, "application_id"),
+            "actor_officer_user_id": (user or {}).get("sub"),
+            "changed_fields": changed_fields,
+            "source_surface": WORKSPACE_SOURCE_SURFACE,
+        },
+        db,
+        before_state=before,
+        after_state=after,
+    )
+    return {"review_id": review_id, **after, "changed_fields": changed_fields}
 
 
 
