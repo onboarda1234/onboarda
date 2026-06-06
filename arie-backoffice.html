@@ -16806,6 +16806,7 @@ function setCaseWorkFilter(filter, btn) {
 
 function switchDetailTab(tab) {
   var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'alerts', 'activity'];
+  if (tab === 'activity') loadDecisionRecords();
   tabs.forEach(function(t) {
     var tabEl = document.getElementById('tab-' + t);
     var panelEl = document.getElementById('detail-tab-' + t);
@@ -16819,7 +16820,7 @@ function switchDetailTab(tab) {
   if (tab === 'supervisor') loadSupervisorForApp();
   if (tab === 'lifecycle') loadLifecycleDetailTab();
   if (tab === 'alerts') renderApplicationAlertsDetailTab();
-  if (tab === 'activity') { loadDecisionRecords(); loadActivityLog(); loadNotes(); }
+  if (tab === 'activity') { loadActivityLog(); loadNotes(); }
 }
 
 // ═══════════════════════════════════════════════════════════
