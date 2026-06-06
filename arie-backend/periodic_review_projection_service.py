@@ -62,8 +62,6 @@ def _row_get(row, key, default=None):
 
 
 def _table_columns(db, table: str) -> Set[str]:
-    if table not in {"periodic_reviews"}:
-        return set()
     try:
         rows = db.execute(f"PRAGMA table_info({table})").fetchall()
         if rows:
@@ -329,6 +327,64 @@ def _last_activity_timestamp(review) -> Optional[str]:
     return candidates[0][1]
 
 
+def _periodic_review_doc_request_ready(requirement: Dict[str, Any]) -> bool:
+    linked = requirement.get("linked_document") if isinstance(requirement.get("linked_document"), dict) else {}
+    verification_status = str(
+        linked.get("verification_status") or requirement.get("document_verification_status") or ""
+    ).strip().lower()
+    review_status = str(
+        linked.get("review_status") or requirement.get("document_review_status") or ""
+    ).strip().lower()
+    return verification_status == "verified" or (
+        verification_status == "flagged" and review_status in {"accepted", "approved"}
+    )
+
+
+def _periodic_review_document_request_status(db, review_id: int) -> Dict[str, int]:
+    if review_id in (None, ""):
+        return {"count": 0, "required_count": 0, "missing_count": 0, "review_required_count": 0}
+    req_columns = _table_columns(db, "application_enhanced_requirements")
+    requirement_display_select = (
+        "aer.requirement_display_type"
+        if "requirement_display_type" in req_columns
+        else "'evidence'"
+    )
+    active_filter = "AND COALESCE(aer.active, 1) = 1" if "active" in req_columns else ""
+    rows = db.execute(
+        f"""
+        SELECT aer.id,
+               aer.mandatory,
+               aer.linked_document_id,
+               {requirement_display_select} AS requirement_display_type,
+               d.verification_status AS document_verification_status,
+               d.review_status AS document_review_status
+        FROM application_enhanced_requirements aer
+        LEFT JOIN documents d ON d.id = aer.linked_document_id
+        WHERE aer.linked_periodic_review_id = ?
+          {active_filter}
+        ORDER BY aer.id ASC
+        """,
+        (review_id,),
+    ).fetchall()
+    requests = [dict(row) for row in rows]
+    evidence_requests = [
+        item for item in requests
+        if str(item.get("requirement_display_type") or "evidence").strip().lower() == "evidence"
+    ]
+    required_requests = [item for item in evidence_requests if bool(item.get("mandatory"))]
+    missing_requests = [item for item in required_requests if not item.get("linked_document_id")]
+    review_pending_requests = [
+        item for item in required_requests
+        if item.get("linked_document_id") and not _periodic_review_doc_request_ready(item)
+    ]
+    return {
+        "count": len(requests),
+        "required_count": len(required_requests),
+        "missing_count": len(missing_requests),
+        "review_required_count": len(review_pending_requests),
+    }
+
+
 def build_review_projection(
     db,
     review_row,
@@ -387,11 +443,20 @@ def build_review_projection(
     trigger_source = _row_get(review, "trigger_source") or _row_get(review, "trigger_type")
     attestation = attestation_snapshot_from_review(review)
     attestation_status = str(attestation.get("status") or ATTESTATION_STATUS_NOT_STARTED)
+    document_request_status = _periodic_review_document_request_status(db, review_id)
+    findings_present = any(
+        str(_row_get(review, field) or "").strip()
+        for field in ("officer_findings_note", "officer_deficiencies_note", "officer_internal_review_note")
+    )
     operational_status = derive_operational_review_status(
         raw_status=raw_status,
         due_state=due_meta["due_state"],
         blocker_count=len(blockers),
         linked_edd_case_id=_row_get(review, "linked_edd_case_id"),
+        attestation_status=attestation_status,
+        has_missing_documents=bool(document_request_status["missing_count"]),
+        has_documents_pending_review=bool(document_request_status["review_required_count"]),
+        findings_present=findings_present,
     )
 
     return {
@@ -446,6 +511,10 @@ def build_review_projection(
         "attestation_submitted_by": attestation.get("submitted_by"),
         "attestation_has_material_changes": bool(attestation.get("has_material_changes")),
         "attestation_material_change_question_keys": attestation.get("material_change_question_keys", []),
+        "periodic_review_document_request_count": document_request_status["count"],
+        "periodic_review_required_document_request_count": document_request_status["required_count"],
+        "periodic_review_missing_document_request_count": document_request_status["missing_count"],
+        "periodic_review_documents_pending_review_count": document_request_status["review_required_count"],
         "created_at": _row_get(review, "created_at"),
         "updated_at": updated_at,
         "last_activity_at": updated_at,

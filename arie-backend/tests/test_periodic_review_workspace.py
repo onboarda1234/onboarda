@@ -53,11 +53,13 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
 
         lifecycle = self._get("/api/lifecycle/applications/app-owned/summary", self.admin_token)
         assert lifecycle.code == 200
+        lifecycle_body = json.loads(lifecycle.body)
         review_item = next(
-            item for item in json.loads(lifecycle.body)["active"]["items"]
+            item for item in lifecycle_body["active"]["items"]
             if item["type"] == "review" and item["id"] == self._owned_review_id
         )
         assert review_item["status_label"] == "Awaiting client attestation"
+        assert lifecycle_body["review_setup"]["status_label"] == "Awaiting client attestation"
 
     def test_workspace_readiness_awaits_documents_when_required_request_missing(self):
         submit = self._post(
@@ -78,6 +80,21 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         assert readiness["state"] == "awaiting_documents"
         assert readiness["blocker_count"] >= 1
         assert any("missing" in blocker.lower() for blocker in readiness["blockers"])
+
+        detail = self._get("/api/applications/app-owned", self.admin_token)
+        assert detail.code == 200
+        detail_body = json.loads(detail.body)
+        assert detail_body["periodic_review"]["status_label"] == "Awaiting documents"
+
+        lifecycle = self._get("/api/lifecycle/applications/app-owned/summary", self.admin_token)
+        assert lifecycle.code == 200
+        lifecycle_body = json.loads(lifecycle.body)
+        review_item = next(
+            item for item in lifecycle_body["active"]["items"]
+            if item["type"] == "review" and item["id"] == self._owned_review_id
+        )
+        assert review_item["status_label"] == "Awaiting documents"
+        assert lifecycle_body["review_setup"]["status_label"] == "Awaiting documents"
 
     def test_workspace_readiness_becomes_ready_for_officer_findings_when_docs_are_uploaded(self):
         submit = self._post(
