@@ -201,6 +201,55 @@ class TestPeriodicReviewDocumentRequests(_PeriodicReviewAttestationBase):
         forbidden = self._get("/api/portal/applications/app-owned/enhanced-requirements", self.other_client_token)
         assert forbidden.code == 403
 
+    def test_generic_portal_document_list_can_exclude_periodic_review_linked_requests(self):
+        self._post(
+            "/api/portal/applications/app-owned/periodic-review/submit",
+            self._submit_payload({
+                "directors_changed": {"answer": "yes", "comment": "One new director was appointed."},
+            }),
+            self.client_token,
+        )
+
+        unfiltered = self._get("/api/portal/applications/app-owned/enhanced-requirements", self.client_token)
+        assert unfiltered.code == 200
+        assert json.loads(unfiltered.body)["total"] == 3
+
+        filtered = self._get(
+            "/api/portal/applications/app-owned/enhanced-requirements?exclude_periodic_review=true",
+            self.client_token,
+        )
+        assert filtered.code == 200
+        filtered_body = json.loads(filtered.body)
+        assert filtered_body["total"] == 0
+        assert filtered_body["requirements"] == []
+
+    def test_periodic_review_portal_detail_keeps_accepted_document_status_visible(self):
+        submit = self._post(
+            "/api/portal/applications/app-owned/periodic-review/submit",
+            self._submit_payload({
+                "shareholders_changed": {"answer": "yes", "comment": "Shareholding changed."},
+            }),
+            self.client_token,
+        )
+        assert submit.code == 200
+        requirement_id = json.loads(submit.body)["document_requests"][0]["id"]
+        self._conn.execute(
+            """
+            UPDATE application_enhanced_requirements
+            SET status = 'accepted'
+            WHERE id = ?
+            """,
+            (requirement_id,),
+        )
+        self._conn.commit()
+
+        resp = self._get("/api/portal/applications/app-owned/periodic-review", self.client_token)
+        assert resp.code == 200
+        body = json.loads(resp.body)
+        accepted = next(item for item in body["document_requests"] if item["id"] == requirement_id)
+        assert accepted["status"] == "accepted"
+        assert accepted["status_label"] == "Accepted / verified"
+
     def test_backoffice_review_detail_surfaces_review_linked_document_requests_and_triggering_question(self):
         self._post(
             "/api/portal/applications/app-owned/periodic-review/submit",

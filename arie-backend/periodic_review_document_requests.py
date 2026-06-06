@@ -4,7 +4,6 @@ import json
 from datetime import datetime, timezone
 
 from enhanced_requirements import (
-    APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES,
     _actor_user_fk_value,
     _application_target,
     _audit_user,
@@ -19,6 +18,13 @@ from periodic_review_attestation import QUESTION_INDEX
 CONDITIONAL_DOCUMENT_MAPPING_VERSION = "prs3_v1"
 PERIODIC_REVIEW_DOCUMENT_GENERATION_SOURCE = "portal_periodic_review_attestation_submit"
 PERIODIC_REVIEW_TRIGGER_CATEGORY = "periodic_review_attestation"
+PERIODIC_REVIEW_PORTAL_VISIBLE_STATUSES = (
+    "requested",
+    "uploaded",
+    "under_review",
+    "accepted",
+    "rejected",
+)
 
 
 QUESTION_REQUIREMENT_MAP = {
@@ -404,7 +410,7 @@ def _insert_periodic_review_requirement(db, payload):
 
 
 def _list_review_rows(db, application_id, review_id):
-    placeholders = ",".join(["?"] * len(APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES))
+    placeholders = ",".join(["?"] * len(PERIODIC_REVIEW_PORTAL_VISIBLE_STATUSES))
     return db.execute(
         f"""
         SELECT aer.*, err.active AS source_rule_active
@@ -416,15 +422,32 @@ def _list_review_rows(db, application_id, review_id):
           AND aer.status IN ({placeholders})
         ORDER BY aer.requested_at DESC, aer.updated_at DESC, aer.requirement_label, aer.id
         """,
-        (application_id, review_id, *APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES),
+        (application_id, review_id, *PERIODIC_REVIEW_PORTAL_VISIBLE_STATUSES),
     ).fetchall()
+
+
+def _serialize_portal_review_requirement(db, row):
+    safe = serialize_portal_application_requirement(db, row)
+    if not safe:
+        return None
+    requirement = serialize_application_requirement(row)
+    if not requirement:
+        return None
+    safe.update({
+        "linked_periodic_review_id": requirement.get("linked_periodic_review_id"),
+        "trigger_question_key": requirement.get("trigger_question_key"),
+        "trigger_question_label": requirement.get("trigger_question_label") or requirement.get("trigger_label"),
+        "trigger_reason": requirement.get("trigger_reason") or "",
+        "mandatory": bool(requirement.get("mandatory")),
+    })
+    return safe
 
 
 def list_portal_periodic_review_document_requests(db, application_id, review_id):
     rows = _list_review_rows(db, application_id, review_id)
     items = []
     for row in rows:
-        safe = serialize_portal_application_requirement(db, row)
+        safe = _serialize_portal_review_requirement(db, row)
         if safe:
             items.append(safe)
     return items

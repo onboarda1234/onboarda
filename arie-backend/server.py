@@ -22560,6 +22560,9 @@ class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
             return
         if user.get("type") != "client":
             return self.error("Only clients can view requested information", 403)
+        exclude_periodic_review = str(
+            self.get_argument("exclude_periodic_review", "false") or ""
+        ).strip().lower() in ("1", "true", "yes")
 
         db = get_db()
         try:
@@ -22573,7 +22576,11 @@ class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
             if not self.check_app_ownership(user, app):
                 return
 
-            requirements = list_portal_application_enhanced_requirements(db, app["id"])
+            requirements = list_portal_application_enhanced_requirements(
+                db,
+                app["id"],
+                exclude_linked_periodic_review=exclude_periodic_review,
+            )
             self.success({
                 "application_id": app["id"],
                 "application_ref": app["ref"],

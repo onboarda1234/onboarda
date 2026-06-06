@@ -1254,7 +1254,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
     <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Compliance Supervisor</button>
-    <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Lifecycle</button>
+    <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Periodic Reviews</button>
+    <button class="btn btn-outline btn-sm" id="tab-alerts" onclick="switchDetailTab('alerts')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Alerts</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
 
@@ -1636,7 +1637,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <!-- Tab: Lifecycle (hidden by default) -->
   <div id="detail-tab-lifecycle" style="display:none;">
     <div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:16px;">
-      Loading lifecycle workspace…
+      Loading periodic reviews workspace…
+    </div>
+  </div>
+
+  <!-- Tab: Alerts (hidden by default) -->
+  <div id="detail-tab-alerts" style="display:none;">
+    <div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:16px;">
+      Loading application alerts…
     </div>
   </div>
 
@@ -14984,6 +14992,85 @@ async function savePeriodicReviewWorkspaceFindings(reviewId) {
   }
 }
 
+function applicationAlertsSeverityTone(severity) {
+  var value = String(severity || '').trim().toLowerCase();
+  if (value === 'critical') return { bg: 'rgba(220, 38, 38, 0.12)', color: '#b91c1c' };
+  if (value === 'high') return { bg: 'rgba(245, 158, 11, 0.14)', color: '#b45309' };
+  if (value === 'medium') return { bg: 'rgba(37, 99, 235, 0.12)', color: '#1d4ed8' };
+  if (value === 'low') return { bg: 'rgba(5, 150, 105, 0.12)', color: '#047857' };
+  return { bg: 'rgba(100, 116, 139, 0.12)', color: '#475569' };
+}
+
+function renderApplicationAlertsDetailTab() {
+  var container = document.getElementById('detail-tab-alerts');
+  var app = currentApp;
+  if (!container) return;
+  if (!app || !app.id) {
+    container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Application alerts are unavailable until an application is loaded.</div>';
+    return;
+  }
+  var alerts = (app && Array.isArray(app.monitoringAlerts)) ? app.monitoringAlerts.slice() : [];
+  alerts.sort(function(a, b) {
+    var left = String((b && (b.discovered_at || b.created_at || '')) || '');
+    var right = String((a && (a.discovered_at || a.created_at || '')) || '');
+    return left.localeCompare(right);
+  });
+  var highRiskCount = alerts.filter(function(alert) {
+    var severity = String((alert && alert.severity) || '').trim().toLowerCase();
+    return severity === 'critical' || severity === 'high';
+  }).length;
+  var mediaCount = alerts.filter(function(alert) {
+    var alertType = String((alert && alert.alert_type) || '').trim().toLowerCase().replace(/\s+/g, '_');
+    return alertType === 'media' || alertType === 'adverse_media';
+  }).length;
+  var body = alerts.length
+    ? alerts.map(function(alert) {
+        var tone = applicationAlertsSeverityTone(alert && alert.severity);
+        var discoveredAt = alert && (alert.discovered_at || alert.created_at);
+        var subjectScope = monitoringAlertSubjectScope(alert);
+        var sourceLabel = alert && (alert.discovered_via || alert.provider || 'Linked signal');
+        return '<div style="padding:14px 0;border-bottom:1px solid var(--border1);display:grid;gap:8px;">' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+            '<div style="display:grid;gap:4px;min-width:220px;">' +
+              '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(alert.summary || 'Linked alert') + '</div>' +
+              '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(alert.alert_type || 'Alert') + ' · ' + escapeHtml(alert.provider || 'Provider not recorded') + '</div>' +
+            '</div>' +
+            '<span style="display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;border-radius:999px;background:' + tone.bg + ';color:' + tone.color + ';font-size:11px;font-weight:700;">' + escapeHtml(alert.severity || 'Unrated') + '</span>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<span class="periodic-review-readonly-answer">Source: ' + escapeHtml(sourceLabel) + '</span>' +
+            (subjectScope ? '<span class="periodic-review-readonly-answer">Scope: ' + escapeHtml(subjectScope) + '</span>' : '') +
+            (alert.case_identifier ? '<span class="periodic-review-readonly-answer">Case: ' + escapeHtml(alert.case_identifier) + '</span>' : '') +
+            (discoveredAt ? '<span class="periodic-review-readonly-answer">Seen: ' + escapeHtml(discoveredAt) + '</span>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('')
+    : '<div style="padding:18px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No active alerts linked to this application.</div>';
+
+  container.innerHTML =
+    '<div class="lifecycle-detail-root">' +
+    '<div class="lifecycle-detail-hero">' +
+      '<div>' +
+        '<h2>Alerts</h2>' +
+        '<p>Contextual application-level alert view using linked monitoring, adverse media, and risk signal data already stored for this client.</p>' +
+      '</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open Monitoring Alerts</button>' +
+    '</div>' +
+    '<div class="lifecycle-detail-banner">' +
+      '<strong style="color:#153a7d;">This tab is contextual only.</strong> Monitoring Alerts remains the owner workflow. This view keeps linked signals beside the application review and Periodic Reviews workspace.' +
+    '</div>' +
+    '<div class="lifecycle-metrics-grid">' +
+      lifecycleDetailMetric('Linked alerts', String(alerts.length), alerts.length ? 'blue' : 'slate') +
+      lifecycleDetailMetric('High / critical', String(highRiskCount), highRiskCount ? 'amber' : 'green') +
+      lifecycleDetailMetric('Media alerts', String(mediaCount), mediaCount ? 'blue' : 'slate') +
+      lifecycleDetailMetric('Primary source', alerts[0] ? (alerts[0].provider || alerts[0].discovered_via || 'Recorded signal') : 'No linked alerts', 'slate') +
+    '</div>' +
+    '<div class="lifecycle-section-stack">' +
+      lifecycleDetailCard('Linked Alerts', 'Linked monitoring, media, and risk signals for this application using existing alert data only.', body, '#2557d6') +
+    '</div>' +
+    '</div>';
+}
+
 function renderLifecycleDetailTab(context) {
   var container = document.getElementById('detail-tab-lifecycle');
   if (!container) return;
@@ -15004,7 +15091,7 @@ function renderLifecycleDetailTab(context) {
   var documentsSummary = workspace.documents_summary || {};
   var monitoringContext = workspace.monitoring_screening_context || {};
   var lifecycleBanner = '<div class="lifecycle-detail-banner">' +
-    '<strong style="color:#153a7d;">Lifecycle owns the periodic review cockpit.</strong> Screening, Monitoring, KYC Documents, and Change Management remain owner workflows and are summarised here without duplicating their state.' +
+    '<strong style="color:#153a7d;">Periodic Reviews owns the review cockpit.</strong> Screening, Monitoring, KYC Documents, and Change Management remain owner workflows and are summarised here without duplicating their state.' +
   '</div>';
   var metricsRow = '<div class="lifecycle-metrics-grid">' +
     lifecycleDetailMetric('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'None active', activeReview ? 'purple' : 'slate') +
@@ -15085,18 +15172,18 @@ function renderLifecycleDetailTab(context) {
     '<div class="lifecycle-detail-root">' +
     '<div class="lifecycle-detail-hero">' +
       '<div>' +
-        '<h2>Lifecycle</h2>' +
+        '<h2>Periodic Reviews</h2>' +
         '<p>Officer-facing periodic review workspace backed by canonical lifecycle and periodic review projections. The cockpit summarises attestation, evidence, blockers, and linked monitoring context in one place.</p>' +
       '</div>' +
-      '<button class="btn btn-outline btn-sm" onclick="loadLifecycleDetailTab(true)">⟳ Refresh Lifecycle</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="loadLifecycleDetailTab(true)">⟳ Refresh Periodic Reviews</button>' +
     '</div>' +
     lifecycleBanner +
     metricsRow +
     '<div class="lifecycle-section-stack">' +
       currentReviewCardHtml +
+      lifecycleDetailCard('Active Blockers / Readiness', 'Deterministic readiness state for the next officer step.', readinessBody, '#f59e0b') +
       lifecycleDetailCard('Client Attestation Summary', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
       lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
-      lifecycleDetailCard('Active Blockers / Readiness', 'Deterministic readiness state for the next officer step.', readinessBody, '#f59e0b') +
       lifecycleDetailCard('Screening / Monitoring Context', 'Compact summary of linked alerts and screening freshness.', monitoringBody, '#2557d6') +
       lifecycleDetailCard('Officer Findings Draft', 'Internal draft notes only. Final outcome controls arrive in PRS-5.', findingsBody, '#7c3aed') +
       lifecycleDetailCard('Future Actions', 'Placeholders for later periodic review phases.', futureActionsBody, '#475569') +
@@ -15111,7 +15198,7 @@ async function loadLifecycleDetailTab(force) {
   var app = currentApp;
   if (!container) return;
   if (!app || !app.id) {
-    container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Lifecycle detail is unavailable until an application is loaded.</div>';
+    container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Periodic Reviews detail is unavailable until an application is loaded.</div>';
     return;
   }
   if (!force && window._detailLifecycleTabCache && window._detailLifecycleTabCache.applicationId === app.id) {
@@ -15119,7 +15206,7 @@ async function loadLifecycleDetailTab(force) {
     focusLifecycleDeepLinkTarget();
     return;
   }
-  container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading lifecycle workspace…</div>';
+  container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading periodic reviews workspace…</div>';
   try {
     var summary = await fetchLifecycleApplicationSummary(app.id, !!force);
     var activeItems = ((summary && summary.active) || {}).items || [];
@@ -15153,7 +15240,7 @@ async function loadLifecycleDetailTab(force) {
     }
   } catch (err) {
     console.warn('Lifecycle detail tab load failed:', err);
-    container.innerHTML = '<div style="padding:16px;border:1px solid rgba(239,68,68,0.25);border-radius:10px;background:rgba(239,68,68,0.05);font-size:12px;color:#991b1b;">Failed to load lifecycle workspace: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
+    container.innerHTML = '<div style="padding:16px;border:1px solid rgba(239,68,68,0.25);border-radius:10px;background:rgba(239,68,68,0.05);font-size:12px;color:#991b1b;">Failed to load periodic reviews workspace: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
   }
 }
 
@@ -16718,7 +16805,7 @@ function setCaseWorkFilter(filter, btn) {
 }
 
 function switchDetailTab(tab) {
-  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'activity'];
+  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'alerts', 'activity'];
   tabs.forEach(function(t) {
     var tabEl = document.getElementById('tab-' + t);
     var panelEl = document.getElementById('detail-tab-' + t);
@@ -16731,6 +16818,7 @@ function switchDetailTab(tab) {
   });
   if (tab === 'supervisor') loadSupervisorForApp();
   if (tab === 'lifecycle') loadLifecycleDetailTab();
+  if (tab === 'alerts') renderApplicationAlertsDetailTab();
   if (tab === 'activity') { loadDecisionRecords(); loadActivityLog(); loadNotes(); }
 }
 

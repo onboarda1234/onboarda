@@ -13,20 +13,23 @@ def _read_backoffice():
         return f.read()
 
 
-def test_application_detail_tabs_include_lifecycle_in_required_order():
+def test_application_detail_tabs_include_periodic_reviews_and_alerts_in_required_order():
     html = _read_backoffice()
     tabs_start = html.index("<!-- Content tabs -->")
     tabs_end = html.index("<!-- Tab: Overview (full width) -->", tabs_start)
     tabs_html = html[tabs_start:tabs_end]
     tab_ids = re.findall(r'id="tab-([^"]+)"', tabs_html)
-    assert tab_ids[:6] == [
+    assert tab_ids[:7] == [
         "overview",
         "kyc-docs",
         "screening",
         "supervisor",
         "lifecycle",
+        "alerts",
         "activity",
     ]
+    assert ">Periodic Reviews</button>" in tabs_html
+    assert ">Alerts</button>" in tabs_html
 
 
 def test_lifecycle_tab_shell_sections_match_prs4_workspace():
@@ -34,9 +37,9 @@ def test_lifecycle_tab_shell_sections_match_prs4_workspace():
     assert 'id="detail-tab-lifecycle"' in html
     for title in (
         "Review Overview",
+        "Active Blockers / Readiness",
         "Client Attestation Summary",
         "Documents & Evidence",
-        "Active Blockers / Readiness",
         "Screening / Monitoring Context",
         "Officer Findings Draft",
         "Future Actions",
@@ -53,18 +56,29 @@ def test_lifecycle_tab_loader_uses_existing_projection_endpoints():
     assert "/lifecycle/applications/" in html
     assert "/summary" in html
     assert "/monitoring/reviews/" in html
-    assert "Refresh Lifecycle" in html
+    assert "Refresh Periodic Reviews" in html
 
 
-def test_switch_detail_tab_supports_lifecycle_without_regressing_activity_loads():
+def test_switch_detail_tab_supports_lifecycle_alerts_and_activity_without_regressions():
     html = _read_backoffice()
     start = html.index("function switchDetailTab(tab)")
     section = html[start:start + 1200]
     assert "'lifecycle'" in section
+    assert "'alerts'" in section
     assert "loadLifecycleDetailTab()" in section
+    assert "renderApplicationAlertsDetailTab()" in section
     assert "loadDecisionRecords()" in section
     assert "loadActivityLog()" in section
     assert "loadNotes()" in section
+
+
+def test_alerts_tab_shell_uses_existing_application_monitoring_alert_data():
+    html = _read_backoffice()
+    assert 'id="detail-tab-alerts"' in html
+    assert "function renderApplicationAlertsDetailTab()" in html
+    assert "monitoringAlerts: detail.monitoring_alerts || []" in html
+    assert "No active alerts linked to this application." in html
+    assert "showView('monitoring')" in html
 
 
 def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_findings_helpers():
