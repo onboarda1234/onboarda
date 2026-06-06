@@ -1781,12 +1781,12 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
     <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
+      <option value="open" selected>Active Review Cases</option>
       <option value="">All Review Cases</option>
       <option value="due">Due</option>
       <option value="overdue">Overdue</option>
-      <option value="open">Open</option>
-      <option value="awaiting_client">Awaiting Client</option>
-      <option value="in_review">In Review</option>
+      <option value="awaiting_client">Awaiting client attestation</option>
+      <option value="in_review">Officer review required</option>
       <option value="blocked">Blocked</option>
       <option value="completed">Completed</option>
     </select>
@@ -13372,13 +13372,15 @@ function renderLifecycleApplicationSummary(resp) {
   });
   var visibleLabels = labels.slice(0, 3);
   var moreCount = Math.max(labels.length - visibleLabels.length, 0);
-  var itemWord = activeCount === 1 ? 'item' : 'items';
   var labelText = visibleLabels.join(', ');
   if (moreCount > 0) labelText += ' +' + moreCount + ' more';
+  var summaryLabel = activeCount === 1 && labels.length === 1 && /^Alert #/i.test(labels[0] || '')
+    ? 'Related monitoring alert'
+    : 'Related lifecycle items';
 
   container.innerHTML =
     '<div class="overview-compact-lifecycle">' +
-      '<div class="overview-compact-lifecycle-copy"><strong>Lifecycle:</strong> ' + escapeHtml(String(activeCount)) + ' active linked ' + escapeHtml(itemWord) + ' — ' + escapeHtml(labelText) + '</div>' +
+      '<div class="overview-compact-lifecycle-copy"><strong>' + escapeHtml(summaryLabel) + ':</strong> ' + escapeHtml(labelText) + '</div>' +
       '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'lifecycle\',\'detail-tab-lifecycle\')">Review lifecycle</button>' +
     '</div>';
   if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
@@ -14899,7 +14901,7 @@ function renderPeriodicReviewWorkspaceOverview(reviewDetail) {
       lifecycleDetailBadge('Risk: ' + String(overview.risk_level || reviewDetail.risk_level || '—'), 'slate') +
     '</div>' +
     '<div style="display:flex;flex-wrap:wrap;gap:16px;">' + meta + '</div>' +
-    '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);font-size:12px;color:var(--text2);line-height:1.6;">Periodic Review Workspace is officer-only. It consolidates attestation, evidence, blockers, and monitoring context without creating duplicate state outside the canonical periodic review shell.</div>' +
+    '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);font-size:12px;color:var(--text2);line-height:1.6;">Use this workspace to review the current case context, evidence, blockers, and officer notes.</div>' +
   '</div>';
 }
 
@@ -14922,23 +14924,17 @@ function renderPeriodicReviewWorkspaceMonitoring(reviewDetail) {
   var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
   var ctx = workspace.monitoring_screening_context || {};
   var blockers = Array.isArray(ctx.blockers) ? ctx.blockers : [];
-  var actions = [];
-  if (ctx.linked_monitoring_alert_id) actions.push('Open monitoring alert #' + ctx.linked_monitoring_alert_id);
-  actions.push('Open Monitoring Alerts');
-  actions.push('Open Screening Queue');
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
       lifecycleDetailBadge('Open linked alerts: ' + String(ctx.open_alerts_count || 0), ctx.open_alerts_count ? 'amber' : 'green') +
       lifecycleDetailBadge('Screening: ' + String(ctx.screening_status || 'Pending review'), blockers.length ? 'amber' : 'blue') +
       (ctx.linked_edd_case_id ? lifecycleDetailBadge('Linked EDD #' + ctx.linked_edd_case_id, 'purple') : '') +
     '</div>' +
-    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;">Adverse media, PEP, sanctions, and monitoring context remain authoritative in their owner workflows. This panel is a compact summary only.</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;">Monitoring alerts considered in this review are summarised here for context.</div>' +
     (blockers.length
       ? '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">' + blockers.map(escapeHtml).join(' • ') + '</div>'
       : '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">No monitoring or screening blockers are currently projected into this review.</div>') +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-      '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open Monitoring Alerts</button>' +
-      '<button class="btn btn-outline btn-sm" onclick="showView(\'screening\')">Open Screening Queue</button>' +
-      '<button class="btn btn-outline btn-sm" onclick="showView(\'change-mgmt\')">Open Change Management</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open in Monitoring Alerts</button>' +
     '</div>';
 }
 
@@ -15090,45 +15086,34 @@ function renderLifecycleDetailTab(context) {
   var readiness = workspace.readiness || {};
   var documentsSummary = workspace.documents_summary || {};
   var monitoringContext = workspace.monitoring_screening_context || {};
-  var lifecycleBanner = '<div class="lifecycle-detail-banner">' +
-    '<strong style="color:#153a7d;">Periodic Reviews owns the review cockpit.</strong> Screening, Monitoring, KYC Documents, and Change Management remain owner workflows and are summarised here without duplicating their state.' +
-  '</div>';
+  var historyItems = historical.filter(function(item) { return item.type === 'review'; });
+  var lastCompletedReview = historyItems.find(function(item) {
+    return String(item.state || '').toLowerCase() === 'completed';
+  }) || null;
   var metricsRow = '<div class="lifecycle-metrics-grid">' +
     lifecycleDetailMetric('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'None active', activeReview ? 'purple' : 'slate') +
     lifecycleDetailMetric('Active items', String((((summary.active || {}).counts) || {}).total || 0), 'blue') +
-    lifecycleDetailMetric('Readiness', String(readiness.label || 'Not ready'), (readiness.blocker_count || 0) ? 'amber' : 'green') +
+    lifecycleDetailMetric('Status', String((activeReview && activeReview.status_label) || readiness.label || 'No active review'), (readiness.blocker_count || 0) ? 'amber' : 'green') +
     lifecycleDetailMetric('Missing documents', String(documentsSummary.missing_count || 0), (documentsSummary.missing_count || 0) ? 'amber' : 'green') +
     lifecycleDetailMetric('Docs pending review', String(documentsSummary.review_required_count || 0), (documentsSummary.review_required_count || 0) ? 'amber' : 'green') +
     lifecycleDetailMetric('Open alerts', String(monitoringContext.open_alerts_count || 0), (monitoringContext.open_alerts_count || 0) ? 'blue' : 'slate') +
   '</div>';
 
-  var setupBody = '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
-    lifecycleDetailMeta('Lifecycle items', String((((summary.active || {}).counts) || {}).total || 0)) +
-    lifecycleDetailMeta('Historical items', String((((summary.historical || {}).counts) || {}).total || 0)) +
-    lifecycleDetailMeta('Readiness', readiness.label || 'No active review') +
+  var reviewContextBody = '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
     lifecycleDetailMeta('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'No active review') +
+    lifecycleDetailMeta('Status', activeReview ? (activeReview.status_label || (activeReviewProjection && activeReviewProjection.status_label) || activeReview.status || '—') : 'No active review') +
+    lifecycleDetailMeta('Owner', activeReview ? (activeReview.assigned_officer_name || activeReview.assigned_officer || (activeReviewProjection && activeReviewProjection.owner_display_name) || 'Unassigned') : ((setupReviewProjection && setupReviewProjection.owner_display_name) || 'Unassigned')) +
+    lifecycleDetailMeta('Risk level', (activeReview && (activeReview.risk_level || (activeReviewProjection && activeReviewProjection.risk_level))) || (setupReviewDetail && (setupReviewDetail.risk_level || (setupReviewProjection && setupReviewProjection.risk_level))) || '—') +
+    lifecycleDetailMeta('Next review date', (activeReview && (activeReview.next_review_date || (activeReviewProjection && activeReviewProjection.next_review_date) || activeReview.due_date)) || (setupReviewDetail && (setupReviewDetail.next_review_date || (setupReviewProjection && setupReviewProjection.next_review_date) || setupReviewDetail.due_date)) || '—') +
+    lifecycleDetailMeta('Last completed review', lastCompletedReview ? ('Review #' + String(lastCompletedReview.id || '').slice(0, 8)) : 'None recorded') +
   '</div>';
-  if (activeReview) {
-    setupBody += '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);">' +
-      lifecycleDetailMeta('Status', activeReview.status_label || (activeReviewProjection && activeReviewProjection.status_label) || activeReview.status || '—') +
-      lifecycleDetailMeta('Assigned officer', activeReview.assigned_officer || (activeReviewProjection && activeReviewProjection.assigned_officer) || 'Unassigned') +
-      lifecycleDetailMeta('Risk level', activeReview.risk_level || (activeReviewProjection && activeReviewProjection.risk_level) || '—') +
-      lifecycleDetailMeta('Next review date', activeReview.next_review_date || (activeReviewProjection && activeReviewProjection.next_review_date) || activeReview.due_date || '—') +
-    '</div>';
-  } else if (setupReviewDetail) {
-    setupBody += '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);">' +
-      lifecycleDetailMeta('Review setup', 'Review #' + String(setupReviewDetail.id || (setupReviewProjection && setupReviewProjection.review_id) || '').slice(0, 8)) +
-      lifecycleDetailMeta('Status', setupReviewDetail.status_label || (setupReviewProjection && setupReviewProjection.status_label) || setupReviewDetail.status || 'Scheduled') +
-      lifecycleDetailMeta('Risk level', setupReviewDetail.risk_level || (setupReviewProjection && setupReviewProjection.risk_level) || '—') +
-      lifecycleDetailMeta('Next review date', setupReviewDetail.next_review_date || (setupReviewProjection && setupReviewProjection.next_review_date) || setupReviewDetail.due_date || '—') +
-    '</div>';
-  } else {
-    setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">No active periodic review.</div>';
+  if (lastCompletedReview) {
+    reviewContextBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">Completed ' + escapeHtml(lifecycleFormatDate(lastCompletedReview.completed_at || lastCompletedReview.state_changed_at || lastCompletedReview.created_at)) + ' · ' + escapeHtml(lastCompletedReview.status_label || 'Historical / Superseded') + '</div>';
   }
 
   var activeWorkBody = activeWorkItems.length
     ? activeWorkItems.map(lifecycleDetailItemRow).join('')
-    : '<div style="font-size:12px;color:var(--text2);">No active lifecycle work is currently linked to this client.</div>';
+    : '<div style="font-size:12px;color:var(--text2);">No related lifecycle work is currently linked to this client.</div>';
   var clientAttestationBody = activeReview
     ? renderLifecycleClientAttestationPanel(activeReview, activeReviewProjection)
     : '<div style="font-size:12px;color:var(--text2);">No active periodic review attestation is available.</div>';
@@ -15151,14 +15136,13 @@ function renderLifecycleDetailTab(context) {
     ? renderPeriodicReviewWorkspaceFutureActions(activeReview)
     : '<div style="font-size:12px;color:var(--text2);">Future outcome actions are enabled in later phases.</div>';
 
-  var historyItems = historical.filter(function(item) { return item.type === 'review'; });
   var historyBody = historyItems.length
     ? historyItems.slice(0, 5).map(function(item) {
         var historyDomId = lifecycleQueueItemDomId(item.type || 'review', item.id || '');
         return '<div id="' + escapeHtml(historyDomId) + '" data-lifecycle-item-type="' + escapeHtml(String(item.type || 'review')) + '" data-lifecycle-item-id="' + escapeHtml(String(item.id || '')) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
-          '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.state || item.status || 'historical') + '</div></div>' +
+          '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Historical review</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-            lifecycleDetailBadge(item.status_label || item.state || 'Historical', 'slate') +
+            lifecycleDetailBadge(item.status_label || 'Historical / Superseded', 'slate') +
             '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(item.owner_name || item.owner || '—') + '</span>' +
           '</div>' +
         '</div>';
@@ -15166,29 +15150,28 @@ function renderLifecycleDetailTab(context) {
     : '<div style="font-size:12px;color:var(--text2);">No historical periodic reviews yet.</div>';
   var currentReviewCardHtml = currentReviewActive
     ? lifecycleDetailCard('Review Overview', 'Officer-facing periodic review cockpit for the active review.', overviewBody, '#4f46e5')
-    : lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client when no periodic review is active.', activeWorkBody, '#2563eb');
+    : lifecycleDetailCard('Related Lifecycle Work', 'Monitoring, EDD, or other linked lifecycle items that remain outside the current periodic-review owner workflow.', activeWorkBody, '#2563eb');
 
   container.innerHTML =
     '<div class="lifecycle-detail-root">' +
     '<div class="lifecycle-detail-hero">' +
       '<div>' +
         '<h2>Periodic Reviews</h2>' +
-        '<p>Officer-facing periodic review workspace backed by canonical lifecycle and periodic review projections. The cockpit summarises attestation, evidence, blockers, and linked monitoring context in one place.</p>' +
+        '<p>Officer-facing workspace for the current periodic review case, with linked evidence, readiness, history, and monitoring context shown in one place.</p>' +
       '</div>' +
       '<button class="btn btn-outline btn-sm" onclick="loadLifecycleDetailTab(true)">⟳ Refresh Periodic Reviews</button>' +
     '</div>' +
-    lifecycleBanner +
     metricsRow +
     '<div class="lifecycle-section-stack">' +
       currentReviewCardHtml +
       lifecycleDetailCard('Active Blockers / Readiness', 'Deterministic readiness state for the next officer step.', readinessBody, '#f59e0b') +
       lifecycleDetailCard('Client Attestation Summary', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
       lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
-      lifecycleDetailCard('Screening / Monitoring Context', 'Compact summary of linked alerts and screening freshness.', monitoringBody, '#2557d6') +
+      lifecycleDetailCard('Monitoring Alerts Considered In This Review', 'Compact monitoring context with a direct link back to the owner workflow.', monitoringBody, '#2557d6') +
       lifecycleDetailCard('Officer Findings Draft', 'Internal draft notes only. Final outcome controls arrive in PRS-5.', findingsBody, '#7c3aed') +
       lifecycleDetailCard('Future Actions', 'Placeholders for later periodic review phases.', futureActionsBody, '#475569') +
-      lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
-      lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
+      lifecycleDetailCard('Review Context', 'Compact current-review context without duplicating the top-line metrics.', reviewContextBody, '#7c3aed') +
+      lifecycleDetailCard('Review History', 'Historical periodic reviews are kept separate from the current case context.', historyBody, '#475569') +
     '</div>' +
     '</div>';
 }
@@ -15939,23 +15922,24 @@ function monitoringReviewDueState(review) {
 }
 
 function monitoringReviewSignalLabel(review) {
-  if (review && review.isBlocked) return 'Blocked';
-  var state = monitoringReviewDueState(review);
-  if (state === 'awaiting_client') return 'Awaiting Client';
-  if (state === 'in_review') return 'In Review';
-  if (state === 'completed') return 'Completed';
-  if (state === 'cancelled') return 'Cancelled';
-  if (state === 'overdue') return 'Overdue';
-  if (state === 'due') return 'Due';
-  return (review && review.queueStatusLabel) || 'Open';
+  if (review && review.operationalStatusLabel) return review.operationalStatusLabel;
+  if (review && review.queueStatusLabel) return review.queueStatusLabel;
+  if (review && review.status) return review.status;
+  return 'Open';
 }
 
 function monitoringReviewSignalBadgeClass(review) {
+  var label = String((review && monitoringReviewSignalLabel(review)) || '').toLowerCase();
+  if (label === 'blocked') return 'high';
+  if (label === 'awaiting client attestation' || label === 'awaiting documents') return 'pending';
+  if (label === 'officer review required') return 'in-review';
+  if (label === 'ready for decision') return 'blue';
+  if (label === 'completed' || label === 'historical / superseded') return 'approved';
   if (review && review.isBlocked) return 'high';
   var state = monitoringReviewDueState(review);
   if (state === 'overdue') return 'very-high';
   if (state === 'due') return 'pending';
-  if (state === 'awaiting_client') return 'draft';
+  if (state === 'awaiting_client') return 'pending';
   if (state === 'in_review') return 'in-review';
   if (state === 'completed') return 'approved';
   if (state === 'cancelled') return 'draft';

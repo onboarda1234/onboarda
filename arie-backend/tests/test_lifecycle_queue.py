@@ -675,6 +675,27 @@ class TestApplicationSummary(_LifecycleQueueBase):
         self.assertEqual(summary["review_setup"]["next_review_date"], "2028-01-15")
         self.assertFalse(summary["review_setup"]["is_active_work"])
 
+    def test_historical_completed_review_does_not_override_active_current_review_display(self):
+        import lifecycle_queue as lq
+
+        active_id = self._review(status="pending", due_date="2026-08-01", next_review_date="2026-08-01")
+        completed_id = self._review(
+            status="completed",
+            completed_at="2026-05-01T10:00:00Z",
+            due_date="2026-05-01",
+            next_review_date="2026-05-01",
+            outcome="no_change",
+        )
+
+        summary = lq.build_application_lifecycle_summary(self._conn, self._app_id)
+        active_review = next(item for item in summary["active"]["items"] if item["type"] == "review")
+        historical_review = next(item for item in summary["historical"]["items"] if item["id"] == completed_id)
+
+        self.assertEqual(active_review["id"], active_id)
+        self.assertEqual(active_review["status_label"], "Awaiting client attestation")
+        self.assertEqual(historical_review["status_label"], "Historical / Superseded")
+        self.assertEqual(summary["review_setup"]["review_id"], active_id)
+
     def test_summary_requires_application_id(self):
         import lifecycle_queue as lq
         with self.assertRaises(ValueError):

@@ -40,14 +40,16 @@ def test_lifecycle_tab_shell_sections_match_prs4_workspace():
         "Active Blockers / Readiness",
         "Client Attestation Summary",
         "Documents & Evidence",
-        "Screening / Monitoring Context",
+        "Monitoring Alerts Considered In This Review",
         "Officer Findings Draft",
         "Future Actions",
-        "Review Setup Summary",
-        "History",
+        "Review Context",
+        "Review History",
     ):
         assert title in html
     assert "Completion Gate" not in html
+    assert "Periodic Reviews owns the review cockpit." not in html
+    assert "Review Setup Summary" not in html
 
 
 def test_lifecycle_tab_loader_uses_existing_projection_endpoints():
@@ -160,6 +162,14 @@ def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     assert "monitoring-review-overdue-count" in section
     assert "monitoring-review-blocked-count" in section
     assert "Schedule Due Reviews" not in section
+
+
+def test_periodic_review_cleanup_removes_internal_banner_and_linked_item_wording():
+    html = _read_backoffice()
+    assert "Lifecycle: 1 active linked item" not in html
+    assert "Periodic Reviews owns the review cockpit." not in html
+    assert "Lifecycle:" not in html or "Lifecycle: 1 active linked item" not in html
+    assert "Related monitoring alert" in html
 
 
 def test_lifecycle_queue_rows_are_launchpad_deep_links_to_application_lifecycle():

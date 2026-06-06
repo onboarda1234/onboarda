@@ -204,6 +204,7 @@ from periodic_review_management import (
     save_officer_rationale as _save_periodic_review_rationale,
 )
 from periodic_review_projection_service import (
+    derive_operational_review_status as _derive_periodic_review_operational_status,
     get_review_projection as _get_periodic_review_projection,
     latest_active_review_summary as _latest_periodic_review_projection,
     list_review_projections as _list_periodic_review_projections,
@@ -4090,8 +4091,37 @@ class ApplicationDetailHandler(BaseHandler):
         )
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
-        result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
-        result["periodic_reviews"] = _list_periodic_review_projections(db, application_id=result["id"])
+        base_periodic_reviews = _list_periodic_review_projections(db, application_id=result["id"])
+        projection_by_review_id = {
+            projection.get("review_id"): projection
+            for projection in base_periodic_reviews
+            if projection.get("review_id") is not None
+        }
+        review_rows = db.execute(
+            "SELECT * FROM periodic_reviews WHERE application_id = ? ORDER BY due_date ASC, created_at DESC, id DESC",
+            (result["id"],),
+        ).fetchall()
+        result["periodic_reviews"] = [
+            _refined_periodic_review_projection_from_row(
+                db,
+                review_row,
+                projection=projection_by_review_id.get(review_row["id"]),
+            )
+            for review_row in review_rows
+        ]
+        result["periodic_review"] = next(
+            (
+                review
+                for review in result["periodic_reviews"]
+                if str(review.get("status") or "").strip().lower() in {
+                    "pending",
+                    "in_progress",
+                    "awaiting_information",
+                    "pending_senior_review",
+                }
+            ),
+            None,
+        )
         if user["type"] != "client":
             latest_review_row = db.execute(
                 "SELECT * FROM periodic_reviews WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -19119,7 +19149,6 @@ class PeriodicReviewDetailHandler(BaseHandler):
             return self.error("Review not found", 404)
 
         result = _serialize_periodic_review_row(db, review)
-        result["projection"] = _get_periodic_review_projection(db, result["id"])
         if result["review_memo"]:
             result["review_memo"] = safe_json_loads(result["review_memo"])
 
@@ -19792,16 +19821,21 @@ def _application_periodic_review_baseline_source(application_row, fallback_revie
 
 def _application_periodic_review_baseline_eligibility(application_row) -> dict:
     app = dict(application_row or {})
-    status = str(app.get("status") or "").strip().lower()
     has_periodic_review_context = bool(app.get("periodic_review")) or bool(app.get("periodic_reviews"))
-    enabled = status == "approved" or has_periodic_review_context
+    approval_anchor = (
+        app.get("first_approved_at")
+        or app.get("approved_at")
+        or app.get("decided_at")
+        or app.get("completed_at")
+    )
+    enabled = bool(approval_anchor) or has_periodic_review_context
     if enabled:
         message = ""
     else:
         message = "Periodic review baseline can be configured after onboarding approval."
     return {
         "enabled": enabled,
-        "reason": "approved_or_existing_periodic_review_context" if enabled else "awaiting_onboarding_approval",
+        "reason": "approval_anchor_or_existing_periodic_review_context" if enabled else "awaiting_onboarding_approval",
         "message": message,
     }
 
@@ -19935,7 +19969,7 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
             "status_label": projection.get("status_label") or review.get("status_label"),
             "due_date": projection.get("due_date") or review.get("next_review_date") or review.get("due_date"),
             "is_overdue": bool(projection.get("is_overdue")),
-            "owner": projection.get("owner_display_name") or review.get("assigned_officer") or "Unassigned",
+            "owner": projection.get("owner_display_name") or review.get("owner_display_name") or review.get("assigned_officer_name") or review.get("assigned_officer") or "Unassigned",
             "trigger_source_label": projection.get("trigger_source_label") or review.get("trigger_source_label"),
             "last_activity_at": review.get("last_activity_at") or projection.get("last_activity_at"),
             "baseline_summary": baseline,
@@ -19975,6 +20009,38 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
             "Change Management and Investigation linkage will be handled later.",
         ],
     }
+
+
+def _refine_periodic_review_operational_projection(review_row, projection, workspace) -> dict:
+    review = dict(review_row or {})
+    refined = dict(projection or {})
+    workspace_dict = dict(workspace or {})
+    documents_summary = dict(workspace_dict.get("documents_summary") or {})
+    findings_draft = dict(workspace_dict.get("findings_draft") or {})
+    raw_status = str(review.get("status") or refined.get("status") or "pending").strip().lower() or "pending"
+    findings_present = any(
+        str(findings_draft.get(field) or "").strip()
+        for field in ("officer_findings_note", "officer_deficiencies_note", "officer_internal_review_note")
+    )
+    operational = _derive_periodic_review_operational_status(
+        raw_status=raw_status,
+        due_state=refined.get("due_state"),
+        blocker_count=int(refined.get("blocker_count") or 0),
+        linked_edd_case_id=review.get("linked_edd_case_id") or refined.get("linked_edd_case_id"),
+        attestation_status=refined.get("attestation_status") or review.get("client_attestation_status"),
+        has_missing_documents=bool(documents_summary.get("missing_count")),
+        has_documents_pending_review=bool(documents_summary.get("review_required_count")),
+        findings_present=findings_present,
+    )
+    refined["operational_status"] = operational["status_key"]
+    refined["status_label"] = operational["status_label"]
+    refined["queue_status_label"] = operational["status_label"]
+    return refined
+
+
+def _refined_periodic_review_projection_from_row(db, review_row, *, projection=None) -> dict:
+    serialised = _serialize_periodic_review_row(db, review_row, projection=projection)
+    return dict(serialised.get("projection") or projection or {})
 
 
 def _serialize_periodic_review_row(db, review_row, *, projection=None):
@@ -20126,8 +20192,16 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["ui_status"] = ui_status
     result["ui_status_label"] = projection.get("queue_status_label") or projection.get("status_label") or ui_status_label
     result["legacy_decision"] = result.get("decision")
+    workspace = _periodic_review_workspace_snapshot(result)
+    projection = _refine_periodic_review_operational_projection(result, projection, workspace)
+    result["status_label"] = projection.get("status_label")
+    result["queue_status_label"] = projection.get("queue_status_label")
+    result["ui_status_label"] = projection.get("queue_status_label") or projection.get("status_label") or ui_status_label
     result["projection"] = projection
-    result["periodic_review_workspace"] = _periodic_review_workspace_snapshot(result)
+    result["periodic_review_workspace"] = workspace
+    result["periodic_review_workspace"]["overview"]["status_label"] = projection.get("status_label") or result["periodic_review_workspace"]["overview"].get("status_label")
+    result["periodic_review_workspace"]["overview"]["status"] = projection.get("operational_status") or result["periodic_review_workspace"]["overview"].get("status")
+    result["periodic_review_workspace"]["overview"]["owner"] = projection.get("owner_display_name") or result.get("owner_display_name") or result["periodic_review_workspace"]["overview"].get("owner")
     return result
 
 

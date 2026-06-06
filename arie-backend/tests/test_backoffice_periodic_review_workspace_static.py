@@ -16,10 +16,13 @@ def test_backoffice_periodic_review_workspace_sections_exist():
     blockers_idx = section.index("Active Blockers / Readiness")
     attestation_idx = section.index("Client Attestation Summary")
     documents_idx = section.index("Documents & Evidence")
-    monitoring_idx = section.index("Screening / Monitoring Context")
+    monitoring_idx = section.index("Monitoring Alerts Considered In This Review")
     findings_idx = section.index("Officer Findings Draft")
     assert overview_idx < blockers_idx < attestation_idx < documents_idx < monitoring_idx < findings_idx
     assert "Future Actions" in section
+    assert "Review Context" in section
+    assert "Review History" in section
+    assert "Review Setup Summary" not in section
     assert "Save draft findings" in html
     assert "/monitoring/reviews/' + encodeURIComponent(reviewId) + '/findings" in html
 
@@ -33,7 +36,7 @@ def test_application_detail_uses_periodic_reviews_label_and_alerts_tab():
     assert ">Alerts</button>" in html
     assert 'id="detail-tab-alerts"' in html
     assert "No active alerts linked to this application." in html
-    assert "Open Monitoring Alerts" in html
+    assert "Open in Monitoring Alerts" in html
 
 
 def test_periodic_review_queue_routes_into_lifecycle_workspace():
@@ -66,3 +69,11 @@ def test_portal_still_does_not_expose_officer_workspace_or_baseline():
     assert "Periodic Review Workspace" not in html
     assert "Officer Findings Draft" not in html
     assert "Periodic Review Baseline" not in html
+
+
+def test_periodic_review_cleanup_text_removes_internal_banner_and_old_linkage_strip():
+    html = BACKOFFICE_HTML.read_text()
+
+    assert "Periodic Reviews owns the review cockpit." not in html
+    assert "Lifecycle: 1 active linked item" not in html
+    assert "Related monitoring alert" in html
