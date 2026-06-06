@@ -2719,6 +2719,7 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
             generation_source TEXT NOT NULL DEFAULT 'manual_api',
             trigger_reason TEXT,
             trigger_context TEXT DEFAULT '{}',
+            linked_periodic_review_id INTEGER REFERENCES periodic_reviews(id) ON DELETE SET NULL,
             linked_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
             linked_rmi_item_id TEXT,
             requested_at TIMESTAMP,
@@ -2749,6 +2750,7 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_app ON application_enhanced_requirements(application_id);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_rule ON application_enhanced_requirements(source_rule_id);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_linked_review ON application_enhanced_requirements(linked_periodic_review_id);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
         """)
@@ -2775,6 +2777,7 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
             generation_source TEXT NOT NULL DEFAULT 'manual_api',
             trigger_reason TEXT,
             trigger_context TEXT DEFAULT '{}',
+            linked_periodic_review_id INTEGER REFERENCES periodic_reviews(id) ON DELETE SET NULL,
             linked_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
             linked_rmi_item_id TEXT,
             requested_at TEXT,
@@ -2805,6 +2808,7 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_app ON application_enhanced_requirements(application_id);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_rule ON application_enhanced_requirements(source_rule_id);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_linked_review ON application_enhanced_requirements(linked_periodic_review_id);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
         """)
@@ -2825,12 +2829,17 @@ def _ensure_application_enhanced_requirement_fulfilment_columns(db: DBConnection
         "workflow_test_accepted_at": "TIMESTAMP" if db.is_postgres else "TEXT",
         "workflow_test_acceptance_environment": "TEXT",
         "workflow_test_acceptance_document_id": "TEXT REFERENCES documents(id) ON DELETE SET NULL",
+        "linked_periodic_review_id": "INTEGER REFERENCES periodic_reviews(id) ON DELETE SET NULL",
     }
     for column, definition in column_types.items():
         if not _safe_column_exists(db, "application_enhanced_requirements", column):
             db.execute(
                 f"ALTER TABLE application_enhanced_requirements ADD COLUMN {column} {definition}"
             )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_linked_review "
+        "ON application_enhanced_requirements(linked_periodic_review_id)"
+    )
 
 
 def _ensure_default_enhanced_requirement_rules(db: DBConnection):

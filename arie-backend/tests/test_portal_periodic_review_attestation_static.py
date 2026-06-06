@@ -17,6 +17,8 @@ def test_dashboard_uses_client_safe_portal_applications_endpoint_and_task_surfac
     load_region = _function_region(html, "loadMyApplications", "generateRef")
     assert "apiCall('GET', '/portal/applications')" in load_region
     assert "renderPeriodicReviewTasks(" in load_region
+    assert "application_ref: app.ref" in load_region
+    assert "application_status: app.status" in load_region
     assert "app.risk_level" not in load_region
     assert "riskColor" not in load_region
 
@@ -32,6 +34,7 @@ def test_portal_periodic_review_modal_wires_fetch_save_submit_and_read_only_copy
     assert "This is not full onboarding." in html
     assert "This attestation has been submitted and is now read-only." in html
     assert "supporting documents may be requested separately" in lower
+    assert "Thank you. Based on the changes declared, additional documents may be required." in html
 
 
 def test_backoffice_lifecycle_surfaces_read_only_client_attestation_summary():
@@ -39,5 +42,5 @@ def test_backoffice_lifecycle_surfaces_read_only_client_attestation_summary():
     assert "function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection)" in html
     assert "Client Attestation" in html
     assert "read-only in back office" in html
-    assert "Material changes will be routed to document requests and Change Management in the next workflow step." in html
+    assert "Conditional document requests are generated from the submitted attestation" in html
     assert "Risk level: " in html

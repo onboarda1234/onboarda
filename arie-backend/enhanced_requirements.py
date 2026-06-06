@@ -763,6 +763,9 @@ def serialize_application_requirement(row):
         item["source_rule_active"] = _bool(item.get("source_rule_active"))
     item["waiver_roles"] = _loads_json(item.get("waiver_roles"), [])
     item["trigger_context"] = _loads_json(item.get("trigger_context"), {})
+    if isinstance(item.get("trigger_context"), dict):
+        item["trigger_question_key"] = _clean_text(item["trigger_context"].get("trigger_question_key"))
+        item["trigger_question_label"] = _clean_text(item["trigger_context"].get("trigger_question_label"))
     subject = item["trigger_context"].get("subject") if isinstance(item.get("trigger_context"), dict) else None
     if isinstance(subject, dict):
         item["subject"] = {
