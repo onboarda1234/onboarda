@@ -5555,6 +5555,9 @@ function renderPeriodicReviewModal(task) {
 
 async function openPeriodicReviewTask(applicationId) {
   if (!AUTH_TOKEN || !applicationId) return;
+  var taskMeta = portalPeriodicReviewTasks.find(function(task) {
+    return String((task && task.application_id) || '') === String(applicationId || '');
+  }) || {};
   var modal = document.getElementById('periodic-review-modal');
   var body = document.getElementById('periodic-review-modal-body');
   if (modal) {
@@ -5566,6 +5569,8 @@ async function openPeriodicReviewTask(applicationId) {
   }
   try {
     var data = await apiCall('GET', '/portal/applications/' + encodeURIComponent(applicationId) + '/periodic-review');
+    if (!data.application_ref && taskMeta.application_ref) data.application_ref = taskMeta.application_ref;
+    if (!data.application_status && taskMeta.application_status) data.application_status = taskMeta.application_status;
     renderPeriodicReviewModal(data);
   } catch (err) {
     if (body) {
@@ -5602,6 +5607,13 @@ async function submitPeriodicReviewAttestation() {
   try {
     var data = await apiCall('POST', '/portal/applications/' + encodeURIComponent(currentPortalPeriodicReviewTask.application_id) + '/periodic-review/submit', payload);
     renderPeriodicReviewModal(data);
+    var targetRef = data.application_ref || currentPortalPeriodicReviewTask.application_ref || appRef || '';
+    var targetStage = data.application_status || currentPortalPeriodicReviewTask.application_status || 'approved';
+    var onboardingView = document.getElementById('view-onboarding');
+    var viewingApplicationContext = !!(onboardingView && !onboardingView.classList.contains('hidden'));
+    if (targetRef && (!viewingApplicationContext || String(currentApplicationId || '') !== String(currentPortalPeriodicReviewTask.application_id || ''))) {
+      await resumeApplication(targetRef, targetStage);
+    }
     await loadPortalEnhancedRequirements();
     showToast('success', 'Attestation Submitted', 'Your periodic review attestation has been submitted.');
     loadMyApplications();
@@ -5717,6 +5729,8 @@ async function loadMyApplications() {
       if (!task) return null;
       return {
         application_id: app.id,
+        application_ref: app.ref,
+        application_status: app.status,
         company_name: app.company_name,
         review_reference: task.review_reference,
         due_date: task.due_date,

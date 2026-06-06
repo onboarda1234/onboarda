@@ -17,6 +17,8 @@ def test_dashboard_uses_client_safe_portal_applications_endpoint_and_task_surfac
     load_region = _function_region(html, "loadMyApplications", "generateRef")
     assert "apiCall('GET', '/portal/applications')" in load_region
     assert "renderPeriodicReviewTasks(" in load_region
+    assert "application_ref: app.ref" in load_region
+    assert "application_status: app.status" in load_region
     assert "app.risk_level" not in load_region
     assert "riskColor" not in load_region
 
