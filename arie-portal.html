@@ -5613,6 +5613,8 @@ async function submitPeriodicReviewAttestation() {
     var viewingApplicationContext = !!(onboardingView && !onboardingView.classList.contains('hidden'));
     if (targetRef && (!viewingApplicationContext || String(currentApplicationId || '') !== String(currentPortalPeriodicReviewTask.application_id || ''))) {
       await resumeApplication(targetRef, targetStage);
+      showView('onboarding');
+      applyApplicationViewState('onboarding');
     }
     await loadPortalEnhancedRequirements();
     showToast('success', 'Attestation Submitted', 'Your periodic review attestation has been submitted.');
