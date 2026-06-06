@@ -61,6 +61,22 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         assert review_item["status_label"] == "Awaiting client attestation"
         assert lifecycle_body["review_setup"]["status_label"] == "Awaiting client attestation"
 
+    def test_workspace_decision_payload_exposes_current_review_gates(self):
+        resp = self._get(f"/api/monitoring/reviews/{self._owned_review_id}", self.admin_token)
+        assert resp.code == 200
+        body = json.loads(resp.body)
+        workspace = body["periodic_review_workspace"]
+        decision = workspace["decision"]
+
+        assert decision["periodic_review_id"] == self._owned_review_id
+        assert decision["review_reference"].startswith("PR-")
+        assert decision["status_label"] == "Awaiting client attestation"
+        assert decision["owner"] == "Compliance Officer"
+        assert decision["risk_level"] == "HIGH"
+        assert decision["attestation_status"] == "not_started"
+        assert "Client attestation has not been submitted" in decision["readiness_blockers"]
+        assert workspace["future_actions"] == []
+
     def test_workspace_readiness_awaits_documents_when_required_request_missing(self):
         submit = self._post(
             "/api/portal/applications/app-owned/periodic-review/submit",
@@ -168,7 +184,7 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
             SET officer_findings_note = ?, officer_internal_review_note = ?
             WHERE id = ?
             """,
-            ("Evidence reviewed.", "Prepare PRS-5 outcome.", self._owned_review_id),
+            ("Evidence reviewed.", "Prepare closure outcome.", self._owned_review_id),
         )
         self._conn.commit()
 
@@ -179,13 +195,54 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         assert body["projection"]["status_label"] == "Ready for decision"
         assert body["periodic_review_workspace"]["readiness"]["state"] == "ready_for_outcome_decision"
 
+    def test_completed_historical_review_does_not_override_new_active_review(self):
+        self._conn.execute(
+            """
+            UPDATE periodic_reviews
+            SET status = 'completed',
+                outcome = 'no_material_change',
+                outcome_reason = 'Historical review completed.',
+                completed_at = datetime('now')
+            WHERE id = ?
+            """,
+            (self._owned_review_id,),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO periodic_reviews
+            (application_id, client_name, risk_level, status, due_date, assigned_officer, baseline_status, client_attestation_status, created_at)
+            VALUES
+            ('app-owned', 'Owned Co Ltd', 'HIGH', 'in_progress', '2026-07-20', 'co001', 'not_applicable', 'submitted', datetime('now'))
+            """
+        )
+        self._conn.commit()
+        new_review_id = self._conn.execute(
+            "SELECT id FROM periodic_reviews WHERE application_id = 'app-owned' AND status = 'in_progress' ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+
+        lifecycle = self._get("/api/lifecycle/applications/app-owned/summary", self.admin_token)
+        assert lifecycle.code == 200
+        body = json.loads(lifecycle.body)
+        active_review_ids = [
+            item["id"] for item in body["active"]["items"]
+            if item["type"] == "review"
+        ]
+        historical_review_ids = [
+            item["id"] for item in body["historical"]["items"]
+            if item["type"] == "review"
+        ]
+        assert new_review_id in active_review_ids
+        assert self._owned_review_id not in active_review_ids
+        assert self._owned_review_id in historical_review_ids
+        assert body["review_setup"]["review_id"] == new_review_id
+
     def test_officer_can_save_workspace_findings_and_audit_event_is_created(self):
         resp = self._post(
             f"/api/monitoring/reviews/{self._owned_review_id}/findings",
             {
                 "officer_findings_note": "Attestation and evidence reviewed.",
                 "officer_deficiencies_note": "Awaiting officer review on one uploaded file.",
-                "officer_internal_review_note": "Prepare PRS-5 outcome once the last document is cleared.",
+                "officer_internal_review_note": "Prepare closure outcome once the last document is cleared.",
             },
             self.admin_token,
         )
@@ -200,7 +257,7 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         ).fetchone()
         assert row["officer_findings_note"] == "Attestation and evidence reviewed."
         assert row["officer_deficiencies_note"] == "Awaiting officer review on one uploaded file."
-        assert row["officer_internal_review_note"] == "Prepare PRS-5 outcome once the last document is cleared."
+        assert row["officer_internal_review_note"] == "Prepare closure outcome once the last document is cleared."
 
         audit = self._conn.execute(
             "SELECT action, detail FROM audit_log WHERE action = 'periodic_review_findings_saved' ORDER BY id DESC LIMIT 1"

@@ -29,6 +29,14 @@ OPERATIONAL_ITEM_TYPES = {
 HIGH_SEVERITY_ITEM_TYPES = DOCUMENT_EVIDENCE_ITEM_TYPES | OPERATIONAL_ITEM_TYPES
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 SENIOR_DOCUMENT_REVIEW_ROLES = {"admin", "sco"}
+BASELINE_READY_STATUSES = {
+    "last_onboarding_date",
+    "last_periodic_review_date",
+    "imported_legacy_review",
+    "not_applicable",
+}
+ATTESTATION_NOT_REQUIRED_STATUSES = {"not_required", "not_applicable", "waived"}
+DOCUMENT_REQUEST_TERMINAL_STATUSES = {"accepted", "waived", "cancelled"}
 
 
 def _row_get(row, key, default=None):
@@ -102,6 +110,126 @@ def evidence_link_satisfies_requirement(link: Dict[str, Any]) -> bool:
         and review_status == "accepted"
         and reviewer_role in SENIOR_DOCUMENT_REVIEW_ROLES
         and bool(review_comment)
+    )
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _document_request_ready(row: Dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").strip().lower()
+    if status in DOCUMENT_REQUEST_TERMINAL_STATUSES:
+        return True
+    if _truthy(row.get("workflow_test_accepted")):
+        return True
+    if not str(row.get("linked_document_id") or "").strip():
+        return False
+    verification_status = str(row.get("document_verification_status") or "").strip().lower()
+    if verification_status == "verified":
+        return True
+    review_status = str(row.get("document_review_status") or "").strip().lower()
+    reviewer_role = str(row.get("document_reviewer_role") or "").strip().lower()
+    review_comment = str(row.get("document_review_comment") or "").strip()
+    return (
+        verification_status == "flagged"
+        and review_status in {"accepted", "approved"}
+        and reviewer_role in SENIOR_DOCUMENT_REVIEW_ROLES
+        and bool(review_comment)
+    )
+
+
+def _periodic_review_document_request_blockers(db, review) -> List[Dict[str, Any]]:
+    review_id = _row_get(review, "id")
+    application_id = _row_get(review, "application_id")
+    if not review_id or not application_id:
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT aer.id,
+                   aer.requirement_label,
+                   aer.requirement_key,
+                   aer.mandatory,
+                   aer.status,
+                   aer.linked_document_id,
+                   aer.workflow_test_accepted,
+                   d.verification_status AS document_verification_status,
+                   d.review_status AS document_review_status,
+                   d.reviewer_role AS document_reviewer_role,
+                   d.review_comment AS document_review_comment
+            FROM application_enhanced_requirements aer
+            LEFT JOIN documents d ON d.id = aer.linked_document_id
+            WHERE aer.application_id = ?
+              AND aer.linked_periodic_review_id = ?
+              AND aer.active = 1
+              AND aer.requirement_type = 'document'
+            ORDER BY aer.id ASC
+            """,
+            (application_id, review_id),
+        ).fetchall()
+    except Exception:
+        return []
+    blockers: List[Dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        if not _truthy(row.get("mandatory")):
+            continue
+        if _document_request_ready(row):
+            continue
+        label = row.get("requirement_label") or row.get("requirement_key") or "Required periodic review document"
+        reason = "is still missing" if not row.get("linked_document_id") else "still requires officer review"
+        blockers.append(
+            _blocker(
+                "periodic_review_document_required",
+                f"{label} {reason}",
+                source="application_enhanced_requirements",
+                source_id=row.get("id"),
+                completion_only=False,
+            )
+        )
+    return blockers
+
+
+def _periodic_review_attestation_blocker(review) -> Optional[Dict[str, Any]]:
+    review_id = _row_get(review, "id")
+    status = str(_row_get(review, "client_attestation_status") or "not_started").strip().lower()
+    if status == "submitted" or status in ATTESTATION_NOT_REQUIRED_STATUSES:
+        return None
+    return _blocker(
+        "client_attestation_required",
+        "Client attestation has not been submitted",
+        source="periodic_reviews",
+        source_id=review_id,
+        completion_only=False,
+    )
+
+
+def _periodic_review_baseline_blocker(db, review) -> Optional[Dict[str, Any]]:
+    review_id = _row_get(review, "id")
+    application_id = _row_get(review, "application_id")
+    review_status = str(_row_get(review, "baseline_status") or "").strip().lower()
+    app_status = ""
+    if application_id:
+        try:
+            app = db.execute(
+                "SELECT periodic_review_baseline_status FROM applications WHERE id = ?",
+                (application_id,),
+            ).fetchone()
+            app_status = str(_row_get(app, "periodic_review_baseline_status") or "").strip().lower()
+        except Exception:
+            app_status = ""
+    status = review_status or app_status
+    if status in BASELINE_READY_STATUSES:
+        return None
+    return _blocker(
+        "periodic_review_baseline_required",
+        "Periodic review baseline is missing or not marked N/A",
+        source="periodic_reviews",
+        source_id=review_id,
+        completion_only=False,
     )
 
 
@@ -208,11 +336,21 @@ def evaluate_operational_blockers(
     required_items: Optional[List[Dict[str, Any]]] = None,
     evidence_links: Optional[List[Dict[str, Any]]] = None,
     outcome: Optional[str] = None,
+    include_periodic_review_closure_gates: bool = True,
 ) -> List[Dict[str, Any]]:
     review_id = _row_get(review, "id")
     required_items = decode_required_items(required_items if required_items is not None else _row_get(review, "required_items"))
     evidence_links = load_evidence_links(db, review_id) if evidence_links is None else evidence_links
     blockers: List[Dict[str, Any]] = []
+
+    if include_periodic_review_closure_gates:
+        attestation_blocker = _periodic_review_attestation_blocker(review)
+        if attestation_blocker is not None:
+            blockers.append(attestation_blocker)
+        baseline_blocker = _periodic_review_baseline_blocker(db, review)
+        if baseline_blocker is not None:
+            blockers.append(baseline_blocker)
+        blockers.extend(_periodic_review_document_request_blockers(db, review))
 
     if _row_get(review, "import_requires_ack") and not _row_get(review, "legacy_sco_acknowledged_at"):
         blockers.append(
@@ -418,6 +556,7 @@ def evaluate_review_readiness(
     outcome: Optional[str] = None,
     outcome_reason: Optional[str] = None,
     include_completion_fields: bool = True,
+    include_periodic_review_closure_gates: bool = True,
 ) -> Dict[str, Any]:
     required_items = decode_required_items(required_items if required_items is not None else _row_get(review, "required_items"))
     evidence_links = load_evidence_links(db, _row_get(review, "id")) if evidence_links is None else evidence_links
@@ -427,6 +566,7 @@ def evaluate_review_readiness(
         required_items=required_items,
         evidence_links=evidence_links,
         outcome=outcome,
+        include_periodic_review_closure_gates=include_periodic_review_closure_gates,
     )
     completion = evaluate_completion_blockers(
         db,

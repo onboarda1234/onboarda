@@ -14524,7 +14524,7 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
     lifecycleWorkspaceStep(2, 'Risk review decision', riskRecorded ? 'A review-level risk decision has been recorded in the canonical review state.' : 'Record a review-level risk change only if the officer determines one is required.', riskRecorded ? 'done' : 'idle'),
     lifecycleWorkspaceStep(3, 'System-derived KYC and screening facts', screeningBlocked || documentIssuesCount ? 'Operational signals remain open in the owner modules and are projected here.' : 'Repository and screening facts are available without re-entry inside Lifecycle.', screeningBlocked || documentIssuesCount ? 'warn' : 'done'),
     lifecycleWorkspaceStep(4, 'Linked owner workflows', linkedEDD || openAlerts ? 'Linked EDD or monitoring work remains active outside Lifecycle.' : 'No linked EDD or monitoring escalation is currently open.', linkedEDD || openAlerts ? 'warn' : 'idle'),
-    lifecycleWorkspaceStep(5, 'Completion gate readiness', completionBlockers || evidenceOpen ? 'Completion blockers still remain before memo and outcome controls arrive in the next phase.' : 'Completion blockers are currently clear on the canonical projection.', completionBlockers || evidenceOpen ? 'warn' : 'done')
+    lifecycleWorkspaceStep(5, 'Completion gate readiness', completionBlockers || evidenceOpen ? 'Completion blockers still remain before closure.' : 'Completion blockers are currently clear on the canonical projection.', completionBlockers || evidenceOpen ? 'warn' : 'done')
   ].join('');
   return '<div class="lifecycle-workspace-root" id="' + escapeHtml(workspaceDomId) + '" data-lifecycle-item-type="review" data-lifecycle-item-id="' + escapeHtml(String(reviewId)) + '">' +
     '<div class="lifecycle-workspace-statusbar">' +
@@ -14947,21 +14947,193 @@ function renderPeriodicReviewWorkspaceFindingsDraft(reviewDetail) {
     '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Deficiencies / follow-up points</label><textarea id="periodic-review-deficiencies-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_deficiencies_note || '') + '</textarea></div>' +
     '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Internal review note</label><textarea id="periodic-review-internal-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_internal_review_note || '') + '</textarea></div>' +
     '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
-      '<div style="font-size:11px;color:var(--text3);">Draft findings are internal only and do not close the review. Final outcome controls arrive in PRS-5.' + (draft.updated_at ? ' Last saved ' + escapeHtml(String(draft.updated_at).slice(0, 19).replace('T', ' ')) : '') + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);">Draft findings are internal only and do not close the review.' + (draft.updated_at ? ' Last saved ' + escapeHtml(String(draft.updated_at).slice(0, 19).replace('T', ' ')) : '') + '</div>' +
       '<button class="btn btn-primary btn-sm" onclick="savePeriodicReviewWorkspaceFindings(\'' + reviewId + '\')">Save draft findings</button>' +
     '</div>' +
   '</div>';
 }
 
-function renderPeriodicReviewWorkspaceFutureActions(reviewDetail) {
+function periodicReviewDecisionDraft(reviewId) {
+  var outcomeEl = document.getElementById('periodic-review-decision-outcome-' + reviewId);
+  var findingsEl = document.getElementById('periodic-review-decision-findings-' + reviewId);
+  var rationaleEl = document.getElementById('periodic-review-decision-rationale-' + reviewId);
+  var riskChangedEl = document.getElementById('periodic-review-decision-risk-changed-' + reviewId);
+  var newRiskEl = document.getElementById('periodic-review-decision-new-risk-' + reviewId);
+  var riskImpactEl = document.getElementById('periodic-review-decision-risk-impact-' + reviewId);
+  var eddEl = document.getElementById('periodic-review-decision-edd-required-' + reviewId);
+  var followEl = document.getElementById('periodic-review-decision-follow-up-' + reviewId);
+  var followNotesEl = document.getElementById('periodic-review-decision-follow-up-notes-' + reviewId);
+  var exitEl = document.getElementById('periodic-review-decision-exit-' + reviewId);
+  var seniorEl = document.getElementById('periodic-review-decision-senior-note-' + reviewId);
+  var ackEl = document.getElementById('periodic-review-decision-ack-' + reviewId);
+  var outcome = outcomeEl ? outcomeEl.value : '';
+  return {
+    outcome: outcome,
+    findings_summary: findingsEl ? findingsEl.value.trim() : '',
+    rationale: rationaleEl ? rationaleEl.value.trim() : '',
+    risk_changed: !!((riskChangedEl && riskChangedEl.checked) || outcome === 'risk_rating_changed'),
+    new_risk_level: newRiskEl ? newRiskEl.value : '',
+    risk_impact: riskImpactEl ? riskImpactEl.value.trim() : '',
+    edd_required: !!((eddEl && eddEl.checked) || outcome === 'edd_required'),
+    follow_up_required: !!((followEl && followEl.checked) || outcome === 'client_follow_up_required'),
+    follow_up_notes: followNotesEl ? followNotesEl.value.trim() : '',
+    exit_recommended: !!((exitEl && exitEl.checked) || outcome === 'exit_recommended'),
+    senior_review_note: seniorEl ? seniorEl.value.trim() : '',
+    officer_acknowledgement: !!(ackEl && ackEl.checked)
+  };
+}
+
+function periodicReviewDecisionBlockers(reviewDetail, draft) {
   var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
-  var actions = Array.isArray(workspace.future_actions) ? workspace.future_actions : [];
-  if (!actions.length) {
-    return '<div style="font-size:12px;color:var(--text2);">Future actions will be added in later phases.</div>';
+  var decision = workspace.decision || {};
+  var readiness = workspace.readiness || {};
+  var blockers = Array.isArray(decision.readiness_blockers)
+    ? decision.readiness_blockers.slice()
+    : (Array.isArray(readiness.blockers) ? readiness.blockers.slice() : []);
+  blockers = blockers.filter(function(label) {
+    var text = String(label || '');
+    if (text === 'Officer rationale is required' && draft.rationale) return false;
+    if (text === 'Review outcome is required before completion' && draft.outcome) return false;
+    return !!text;
+  });
+  if (!draft.outcome) blockers.push('Select a final outcome');
+  if (!draft.rationale) blockers.push('Rationale is required');
+  if (draft.risk_changed && !draft.new_risk_level) blockers.push('New risk level is required when risk changed');
+  if (draft.risk_changed && !draft.risk_impact) blockers.push('Risk impact explanation is required when risk changed');
+  if (draft.edd_required && !draft.risk_impact) blockers.push('EDD rationale is required when EDD is required');
+  if (draft.follow_up_required && !draft.follow_up_notes) blockers.push('Follow-up note is required when client follow-up is required');
+  if (draft.follow_up_required) blockers.push('Client follow-up required must be resolved before closure');
+  if (draft.exit_recommended && !draft.risk_impact) blockers.push('Exit/offboarding rationale is required when exit is recommended');
+  if (!draft.officer_acknowledgement) blockers.push('Officer acknowledgement is required');
+  return Array.from(new Set(blockers));
+}
+
+function refreshPeriodicReviewDecisionActions(reviewId) {
+  var context = window._detailLifecycleTabCache && window._detailLifecycleTabCache.data;
+  var reviewDetail = context && context.reviewDetail;
+  if (!reviewDetail || String(reviewDetail.id) !== String(reviewId)) return;
+  var draft = periodicReviewDecisionDraft(reviewId);
+  var blockers = periodicReviewDecisionBlockers(reviewDetail, draft);
+  var blockerEl = document.getElementById('periodic-review-decision-blockers-' + reviewId);
+  var btn = document.getElementById('periodic-review-decision-complete-btn-' + reviewId);
+  var riskGroup = document.getElementById('periodic-review-decision-risk-group-' + reviewId);
+  var followGroup = document.getElementById('periodic-review-decision-follow-group-' + reviewId);
+  if (riskGroup) {
+    riskGroup.style.display = (draft.risk_changed || draft.edd_required || draft.exit_recommended) ? 'grid' : 'none';
   }
-  return actions.map(function(label) {
-    return '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);"><span>' + escapeHtml(label) + '</span><span class="badge draft">Later phase</span></div>';
+  if (followGroup) {
+    followGroup.style.display = draft.follow_up_required ? '' : 'none';
+  }
+  if (blockerEl) {
+    blockerEl.innerHTML = blockers.length
+      ? '<div style="padding:10px 12px;border-radius:12px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);font-size:12px;color:#92400e;"><strong>Completion blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' + blockers.map(function(label) { return '<li>' + escapeHtml(label) + '</li>'; }).join('') + '</ul></div>'
+      : '<div style="padding:10px 12px;border-radius:12px;background:rgba(5,150,105,0.10);border:1px solid rgba(5,150,105,0.22);font-size:12px;color:#047857;"><strong>Ready for closure:</strong> completion gates will be rechecked before completion.</div>';
+  }
+  if (btn) btn.disabled = blockers.length > 0;
+}
+
+function renderPeriodicReviewWorkspaceDecision(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var decision = workspace.decision || {};
+  var reviewId = reviewDetail && reviewDetail.id;
+  if (!reviewId) {
+    return '<div style="font-size:12px;color:var(--text2);">No active periodic review case is available for decision.</div>';
+  }
+  var isCompleted = String((reviewDetail && reviewDetail.status) || '').toLowerCase() === 'completed' || !!(reviewDetail && reviewDetail.is_terminal);
+  if (isCompleted) {
+    return '<div style="display:grid;gap:10px;font-size:12px;color:var(--text2);">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:14px;">' +
+        lifecycleDetailMeta('Outcome', decision.outcome || reviewDetail.outcome || 'Completed') +
+        lifecycleDetailMeta('Completed', decision.completed_at || reviewDetail.completed_at || '—') +
+        lifecycleDetailMeta('Completed by', decision.completed_by || reviewDetail.decided_by || '—') +
+        lifecycleDetailMeta('Next review date', decision.next_review_date || reviewDetail.next_review_date || '—') +
+      '</div>' +
+      '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">Completed reviews are read-only historical records.</div>' +
+      (decision.rationale ? '<div><strong>Rationale:</strong> ' + escapeHtml(decision.rationale) + '</div>' : '') +
+    '</div>';
+  }
+  var outcomeOptions = [
+    ['', 'Select outcome'],
+    ['no_material_change', 'No material change'],
+    ['material_change_identified', 'Material change identified'],
+    ['risk_rating_unchanged', 'Risk rating unchanged'],
+    ['risk_rating_changed', 'Risk rating changed'],
+    ['edd_required', 'EDD required'],
+    ['client_follow_up_required', 'Client follow-up required'],
+    ['exit_recommended', 'Exit / offboarding recommended']
+  ];
+  var optionHtml = outcomeOptions.map(function(pair) {
+    var selected = String(decision.outcome || reviewDetail.outcome || '') === pair[0] ? ' selected' : '';
+    return '<option value="' + escapeHtml(pair[0]) + '"' + selected + '>' + escapeHtml(pair[1]) + '</option>';
   }).join('');
+  var blockers = Array.isArray(decision.readiness_blockers) ? decision.readiness_blockers : [];
+  return '<div style="display:grid;gap:14px;">' +
+    '<div style="display:flex;flex-wrap:wrap;gap:14px;">' +
+      lifecycleDetailMeta('Current review', decision.review_reference || ('Review #' + String(reviewId).slice(0, 8))) +
+      lifecycleDetailMeta('Status', decision.status_label || reviewDetail.status_label || 'In review') +
+      lifecycleDetailMeta('Readiness', decision.readiness_label || 'Review readiness') +
+      lifecycleDetailMeta('Owner', decision.owner || reviewDetail.owner_display_name || 'Unassigned') +
+      lifecycleDetailMeta('Risk level', decision.risk_level || reviewDetail.risk_level || '—') +
+      lifecycleDetailMeta('Attestation', decision.attestation_status || reviewDetail.client_attestation_status || 'not_started') +
+    '</div>' +
+    (blockers.length ? '<div style="font-size:12px;color:var(--text2);">Completion blockers currently shown: ' + blockers.map(escapeHtml).join(' • ') + '</div>' : '<div style="font-size:12px;color:var(--text2);">No completion blockers are currently shown.</div>') +
+    '<div id="periodic-review-decision-blockers-' + reviewId + '"></div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+      '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Final outcome</label><select id="periodic-review-decision-outcome-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' + optionHtml + '</select></div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);padding-top:28px;"><input type="checkbox" id="periodic-review-decision-risk-changed-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')"> Risk changed</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);padding-top:28px;"><input type="checkbox" id="periodic-review-decision-edd-required-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')"> EDD required</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);padding-top:28px;"><input type="checkbox" id="periodic-review-decision-follow-up-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')"> Client follow-up required</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);padding-top:28px;"><input type="checkbox" id="periodic-review-decision-exit-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')"> Exit recommended</label>' +
+    '</div>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Review findings summary</label><textarea id="periodic-review-decision-findings-' + reviewId + '" rows="3" oninput="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(decision.findings_summary || reviewDetail.officer_findings_note || '') + '</textarea></div>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Rationale for decision</label><textarea id="periodic-review-decision-rationale-' + reviewId + '" rows="4" oninput="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(decision.rationale || reviewDetail.officer_rationale || reviewDetail.outcome_reason || '') + '</textarea></div>' +
+    '<div id="periodic-review-decision-risk-group-' + reviewId + '" style="display:none;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+      '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">New risk level</label><select id="periodic-review-decision-new-risk-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;"><option value="">Select if risk changed</option><option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option><option value="VERY_HIGH">VERY_HIGH</option></select></div>' +
+      '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Risk / EDD / exit rationale</label><textarea id="periodic-review-decision-risk-impact-' + reviewId + '" rows="3" oninput="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(decision.risk_impact || reviewDetail.risk_rerate_reason || '') + '</textarea></div>' +
+    '</div>' +
+    '<div id="periodic-review-decision-follow-group-' + reviewId + '" style="display:none;"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Follow-up note</label><textarea id="periodic-review-decision-follow-up-notes-' + reviewId + '" rows="3" oninput="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(decision.follow_up_notes || reviewDetail.officer_deficiencies_note || '') + '</textarea></div>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Senior review note, if applicable</label><textarea id="periodic-review-decision-senior-note-' + reviewId + '" rows="3" oninput="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(decision.senior_review_note || reviewDetail.officer_internal_review_note || '') + '</textarea></div>' +
+    '<label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text2);"><input type="checkbox" id="periodic-review-decision-ack-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="margin-top:2px;"> I confirm the current-review blockers, attestation, documents, baseline, and monitoring context have been reviewed and the required completion gates may be applied.</label>' +
+    '<div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">' +
+      '<button class="btn btn-primary btn-sm" id="periodic-review-decision-complete-btn-' + reviewId + '" onclick="completePeriodicReviewDecision(\'' + reviewId + '\')" disabled>Complete periodic review</button>' +
+    '</div>' +
+  '</div>';
+}
+
+async function completePeriodicReviewDecision(reviewId) {
+  var context = window._detailLifecycleTabCache && window._detailLifecycleTabCache.data;
+  var reviewDetail = context && context.reviewDetail;
+  if (!reviewDetail || String(reviewDetail.id) !== String(reviewId)) return;
+  var draft = periodicReviewDecisionDraft(reviewId);
+  var blockers = periodicReviewDecisionBlockers(reviewDetail, draft);
+  if (blockers.length) {
+    showToast('Completion blocked: ' + blockers.join('; '), 'error');
+    refreshPeriodicReviewDecisionActions(reviewId);
+    return;
+  }
+  var btn = document.getElementById('periodic-review-decision-complete-btn-' + reviewId);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Completing…';
+  }
+  try {
+    var resp = await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/complete', draft);
+    var nextDate = resp && resp.result && resp.result.next_review_date ? (' Next review: ' + resp.result.next_review_date) : '';
+    showToast('Periodic review completed.' + nextDate);
+    if (typeof loadMonitoringReviews === 'function') {
+      try { await loadMonitoringReviews(); } catch (e) {}
+    }
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    var payload = err && err.payload ? err.payload : null;
+    if (payload && Array.isArray(payload.blocking_items)) {
+      showToast('Completion blocked: ' + payload.blocking_items.map(function(item) { return item.label; }).join('; '), 'error');
+    } else {
+      showToast('Failed to complete periodic review: ' + (err.message || 'unknown error'), 'error');
+    }
+    if (btn) btn.textContent = 'Complete periodic review';
+    refreshPeriodicReviewDecisionActions(reviewId);
+  }
 }
 
 async function savePeriodicReviewWorkspaceFindings(reviewId) {
@@ -15132,15 +15304,17 @@ function renderLifecycleDetailTab(context) {
   var findingsBody = activeReview
     ? renderPeriodicReviewWorkspaceFindingsDraft(activeReview)
     : '<div style="font-size:12px;color:var(--text2);">Officer findings draft becomes available once a periodic review is active.</div>';
-  var futureActionsBody = activeReview
-    ? renderPeriodicReviewWorkspaceFutureActions(activeReview)
-    : '<div style="font-size:12px;color:var(--text2);">Future outcome actions are enabled in later phases.</div>';
+  var decisionCardHtml = activeReview
+    ? lifecycleDetailCard('Periodic Review Decision', 'Officer-controlled closure with required completion gates.', renderPeriodicReviewWorkspaceDecision(activeReview), '#0f172a')
+    : '';
 
   var historyBody = historyItems.length
     ? historyItems.slice(0, 5).map(function(item) {
         var historyDomId = lifecycleQueueItemDomId(item.type || 'review', item.id || '');
+        var outcomeLabel = String(item.outcome || item.recommended_outcome || 'Not recorded').replace(/_/g, ' ');
+        var completedAt = item.completed_at || item.state_changed_at || item.updated_at || item.created_at || '';
         return '<div id="' + escapeHtml(historyDomId) + '" data-lifecycle-item-type="' + escapeHtml(String(item.type || 'review')) + '" data-lifecycle-item-id="' + escapeHtml(String(item.id || '')) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
-          '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Historical review</div></div>' +
+          '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Historical read-only review · Outcome: ' + escapeHtml(outcomeLabel) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Completed: ' + escapeHtml(lifecycleFormatDate(completedAt)) + (item.next_review_date ? ' · Next review: ' + escapeHtml(lifecycleFormatDate(item.next_review_date)) : '') + '</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
             lifecycleDetailBadge(item.status_label || 'Historical / Superseded', 'slate') +
             '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(item.owner_name || item.owner || '—') + '</span>' +
@@ -15168,8 +15342,8 @@ function renderLifecycleDetailTab(context) {
       lifecycleDetailCard('Client Attestation Summary', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
       lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
       lifecycleDetailCard('Monitoring Alerts Considered In This Review', 'Compact monitoring context with a direct link back to the owner workflow.', monitoringBody, '#2557d6') +
-      lifecycleDetailCard('Officer Findings Draft', 'Internal draft notes only. Final outcome controls arrive in PRS-5.', findingsBody, '#7c3aed') +
-      lifecycleDetailCard('Future Actions', 'Placeholders for later periodic review phases.', futureActionsBody, '#475569') +
+      lifecycleDetailCard('Officer Findings Draft', 'Internal notes that can feed the final decision.', findingsBody, '#7c3aed') +
+      decisionCardHtml +
       lifecycleDetailCard('Review Context', 'Compact current-review context without duplicating the top-line metrics.', reviewContextBody, '#7c3aed') +
       lifecycleDetailCard('Review History', 'Historical periodic reviews are kept separate from the current case context.', historyBody, '#475569') +
     '</div>' +
@@ -15187,6 +15361,9 @@ async function loadLifecycleDetailTab(force) {
   if (!force && window._detailLifecycleTabCache && window._detailLifecycleTabCache.applicationId === app.id) {
     renderLifecycleDetailTab(window._detailLifecycleTabCache.data);
     focusLifecycleDeepLinkTarget();
+    if (window._detailLifecycleTabCache.data && window._detailLifecycleTabCache.data.reviewDetail) {
+      try { refreshPeriodicReviewDecisionActions(window._detailLifecycleTabCache.data.reviewDetail.id); } catch (e) {}
+    }
     return;
   }
   container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading periodic reviews workspace…</div>';
@@ -15220,6 +15397,7 @@ async function loadLifecycleDetailTab(force) {
     focusLifecycleDeepLinkTarget();
     if (activeReviewItem && reviewDetail) {
       try { refreshLifecycleMemoActions(reviewDetail.id); } catch (e) {}
+      try { refreshPeriodicReviewDecisionActions(reviewDetail.id); } catch (e) {}
     }
   } catch (err) {
     console.warn('Lifecycle detail tab load failed:', err);

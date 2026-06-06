@@ -63,10 +63,10 @@ class _PeriodicReviewAttestationBase(AsyncHTTPTestCase):
         conn.execute(
             """
             INSERT INTO periodic_reviews
-            (application_id, client_name, risk_level, status, due_date, assigned_officer, created_at)
+            (application_id, client_name, risk_level, status, due_date, assigned_officer, baseline_status, created_at)
             VALUES
-            ('app-owned', 'Owned Co Ltd', 'HIGH', 'awaiting_information', '2026-06-20', 'co001', datetime('now')),
-            ('app-other', 'Other Co Ltd', 'LOW', 'pending', '2026-06-21', 'co001', datetime('now'))
+            ('app-owned', 'Owned Co Ltd', 'HIGH', 'awaiting_information', '2026-06-20', 'co001', 'not_applicable', datetime('now')),
+            ('app-other', 'Other Co Ltd', 'LOW', 'pending', '2026-06-21', 'co001', 'not_applicable', datetime('now'))
             """
         )
         conn.commit()

@@ -17,14 +17,19 @@ def test_backoffice_periodic_review_workspace_sections_exist():
     attestation_idx = section.index("Client Attestation Summary")
     documents_idx = section.index("Documents & Evidence")
     monitoring_idx = section.index("Monitoring Alerts Considered In This Review")
-    findings_idx = section.index("Officer Findings Draft")
-    assert overview_idx < blockers_idx < attestation_idx < documents_idx < monitoring_idx < findings_idx
-    assert "Future Actions" in section
+    findings_idx = section.index("lifecycleDetailCard('Officer Findings Draft'")
+    decision_idx = section.index("decisionCardHtml +", findings_idx)
+    assert overview_idx < blockers_idx < attestation_idx < documents_idx < monitoring_idx < findings_idx < decision_idx
+    assert "Future Actions" not in section
     assert "Review Context" in section
     assert "Review History" in section
     assert "Review Setup Summary" not in section
     assert "Save draft findings" in html
+    assert "Complete periodic review" in html
+    assert "function renderPeriodicReviewWorkspaceDecision(reviewDetail)" in html
+    assert "async function completePeriodicReviewDecision(reviewId)" in html
     assert "/monitoring/reviews/' + encodeURIComponent(reviewId) + '/findings" in html
+    assert "/monitoring/reviews/' + encodeURIComponent(reviewId) + '/complete" in html
 
 
 def test_application_detail_uses_periodic_reviews_label_and_alerts_tab():
@@ -77,3 +82,22 @@ def test_periodic_review_cleanup_text_removes_internal_banner_and_old_linkage_st
     assert "Periodic Reviews owns the review cockpit." not in html
     assert "Lifecycle: 1 active linked item" not in html
     assert "Related monitoring alert" in html
+
+
+def test_periodic_review_decision_panel_has_required_fields_and_no_internal_copy():
+    html = BACKOFFICE_HTML.read_text()
+    start = html.index("function renderPeriodicReviewWorkspaceDecision(reviewDetail)")
+    end = html.index("async function completePeriodicReviewDecision(reviewId)", start)
+    section = html[start:end]
+
+    assert "Periodic Review Decision" in html
+    assert "Final outcome" in section
+    assert "Review findings summary" in section
+    assert "Rationale for decision" in section
+    assert "Risk / EDD / exit rationale" in section
+    assert "Follow-up note" in section
+    assert "Senior review note, if applicable" in section
+    assert "Officer acknowledgement is required" in html
+    assert "Completed reviews are read-only historical records." in section
+    assert "Future actions will be added in later phases." not in html
+    assert "backend" not in section.lower()

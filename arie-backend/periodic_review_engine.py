@@ -120,12 +120,22 @@ OUTCOME_NO_CHANGE = "no_change"
 OUTCOME_ENHANCED_MONITORING = "enhanced_monitoring"
 OUTCOME_EDD_REQUIRED = "edd_required"
 OUTCOME_EXIT_RECOMMENDED = "exit_recommended"
+OUTCOME_NO_MATERIAL_CHANGE = "no_material_change"
+OUTCOME_MATERIAL_CHANGE_IDENTIFIED = "material_change_identified"
+OUTCOME_RISK_RATING_UNCHANGED = "risk_rating_unchanged"
+OUTCOME_RISK_RATING_CHANGED = "risk_rating_changed"
+OUTCOME_CLIENT_FOLLOW_UP_REQUIRED = "client_follow_up_required"
 
 VALID_REVIEW_OUTCOMES = (
     OUTCOME_NO_CHANGE,
     OUTCOME_ENHANCED_MONITORING,
     OUTCOME_EDD_REQUIRED,
     OUTCOME_EXIT_RECOMMENDED,
+    OUTCOME_NO_MATERIAL_CHANGE,
+    OUTCOME_MATERIAL_CHANGE_IDENTIFIED,
+    OUTCOME_RISK_RATING_UNCHANGED,
+    OUTCOME_RISK_RATING_CHANGED,
+    OUTCOME_CLIENT_FOLLOW_UP_REQUIRED,
 )
 
 # Vocabulary for structured required items. Kept narrow and explicit;
@@ -307,6 +317,38 @@ def _fetch_application(db, application_id):
         return dict(row)
     except Exception:
         return {k: row[k] for k in row.keys()}
+
+
+def _clean_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _boolish(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _completion_blocker(item_type: str, label: str, review_id) -> Dict[str, Any]:
+    return {
+        "item_type": item_type,
+        "label": label,
+        "severity": "high",
+        "source": "periodic_reviews",
+        "source_id": review_id,
+        "completion_only": True,
+    }
+
+
+def _normalise_requested_risk_level(value):
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    if text not in {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}:
+        return None
+    return text
 
 
 def _coerce_state(value: Optional[str]) -> str:
@@ -1417,20 +1459,34 @@ def _auto_clear_outcome_item(items: List[Dict[str, Any]], *, outcome: str,
 
 
 def _blocking_items_for_completion(db, review, items, *, outcome: str,
-                                   outcome_reason: str) -> List[Dict[str, Any]]:
+                                   outcome_reason: str,
+                                   enforce_prs5_gates: bool = False) -> List[Dict[str, Any]]:
     readiness = evaluate_review_readiness(
         db,
         review,
         required_items=items,
         outcome=outcome,
         outcome_reason=outcome_reason,
+        include_periodic_review_closure_gates=enforce_prs5_gates,
     )
     return readiness["blocking_items_for_completion"]
 
 
 def record_review_outcome(db, review_id, *,
                           outcome: str,
-                          outcome_reason: str,
+                          outcome_reason: Optional[str] = None,
+                          findings_summary: Optional[str] = None,
+                          rationale: Optional[str] = None,
+                          risk_impact: Optional[str] = None,
+                          risk_changed: Any = False,
+                          new_risk_level: Optional[str] = None,
+                          edd_required: Any = False,
+                          follow_up_required: Any = False,
+                          exit_recommended: Any = False,
+                          follow_up_notes: Optional[str] = None,
+                          senior_review_note: Optional[str] = None,
+                          officer_acknowledgement: Any = False,
+                          enforce_prs5_gates: bool = False,
                           user=None, audit_writer=None) -> Dict[str, Any]:
     """Close a periodic review with an explicit outcome.
 
@@ -1470,12 +1526,69 @@ def record_review_outcome(db, review_id, *,
         raise InvalidReviewOutcome(
             f"outcome={outcome!r} is not one of {VALID_REVIEW_OUTCOMES}"
         )
+    effective_reason = _clean_text(rationale or outcome_reason)
+    if not effective_reason:
+        raise PeriodicReviewEngineError("outcome_reason is required")
     review = _fetch_review(db, review_id)
     current_state = _coerce_state(_row_get(review, "status"))
     if current_state == STATE_COMPLETED:
         raise ReviewClosedError(
             f"periodic_review id={review_id} is already completed"
         )
+
+    risk_changed_flag = _boolish(risk_changed) or outcome == OUTCOME_RISK_RATING_CHANGED
+    edd_required_flag = _boolish(edd_required) or outcome == OUTCOME_EDD_REQUIRED
+    follow_up_required_flag = _boolish(follow_up_required) or outcome == OUTCOME_CLIENT_FOLLOW_UP_REQUIRED
+    exit_recommended_flag = _boolish(exit_recommended) or outcome == OUTCOME_EXIT_RECOMMENDED
+    risk_impact_text = _clean_text(risk_impact)
+    findings_text = _clean_text(findings_summary)
+    follow_up_text = _clean_text(follow_up_notes)
+    senior_note_text = _clean_text(senior_review_note)
+    normalized_new_risk = _normalise_requested_risk_level(new_risk_level)
+    strict_field_blockers: List[Dict[str, Any]] = []
+    if enforce_prs5_gates:
+        if not _boolish(officer_acknowledgement):
+            strict_field_blockers.append(_completion_blocker(
+                "officer_acknowledgement_required",
+                "Officer acknowledgement is required",
+                review_id,
+            ))
+        if risk_changed_flag and not normalized_new_risk:
+            strict_field_blockers.append(_completion_blocker(
+                "new_risk_level_required",
+                "New risk level is required when risk changed",
+                review_id,
+            ))
+        if risk_changed_flag and not risk_impact_text:
+            strict_field_blockers.append(_completion_blocker(
+                "risk_impact_required",
+                "Risk impact explanation is required when risk changed",
+                review_id,
+            ))
+        if edd_required_flag and not risk_impact_text:
+            strict_field_blockers.append(_completion_blocker(
+                "edd_rationale_required",
+                "EDD rationale is required when EDD is required",
+                review_id,
+            ))
+        if follow_up_required_flag and not follow_up_text:
+            strict_field_blockers.append(_completion_blocker(
+                "follow_up_note_required",
+                "Follow-up note is required when client follow-up is required",
+                review_id,
+            ))
+        if follow_up_required_flag:
+            strict_field_blockers.append(_completion_blocker(
+                "client_follow_up_open",
+                "Client follow-up required must be resolved before closure",
+                review_id,
+            ))
+        if exit_recommended_flag and not risk_impact_text:
+            strict_field_blockers.append(_completion_blocker(
+                "exit_rationale_required",
+                "Exit/offboarding rationale is required when exit is recommended",
+                review_id,
+            ))
 
     application_id = _row_get(review, "application_id")
     if application_id:
@@ -1487,19 +1600,65 @@ def record_review_outcome(db, review_id, *,
         )
     items = _load_required_items(_row_get(review, "required_items"))
     blocking_items = _blocking_items_for_completion(
-        db, review, items, outcome=outcome, outcome_reason=outcome_reason
+        db,
+        review,
+        items,
+        outcome=outcome,
+        outcome_reason=effective_reason,
+        enforce_prs5_gates=enforce_prs5_gates,
     )
+    blocking_items = [*strict_field_blockers, *blocking_items]
     if blocking_items:
         raise ReviewCompletionBlocked(blocking_items)
 
     ts = _utc_now_iso()
-    items = _auto_clear_outcome_item(items, outcome=outcome, outcome_reason=outcome_reason, user=user, ts=ts)
+    completion_date = ts[:10]
+    application = _fetch_application(db, application_id)
+    policy = None
+    policy_risk_level = normalized_new_risk if risk_changed_flag else (
+        _row_get(review, "new_risk_level")
+        or _row_get(review, "risk_level")
+    )
+    if application is not None:
+        try:
+            from periodic_review_policy import policy_snapshot_for_application
+            policy = policy_snapshot_for_application(
+                application,
+                anchor_date=completion_date,
+                override_risk_level=policy_risk_level,
+            )
+        except Exception:
+            logger.exception("Periodic review policy calculation failed review_id=%s", review_id)
+            policy = None
+    next_review_date = (policy or {}).get("next_review_date") or _row_get(review, "next_review_date")
+    due_date = (policy or {}).get("due_date") or next_review_date or _row_get(review, "due_date")
+    frequency_months = (policy or {}).get("frequency_months") or _row_get(review, "frequency_months")
+    calculation_basis = (policy or {}).get("calculation_basis") or _row_get(review, "calculation_basis")
+    policy_version = (policy or {}).get("policy_version") or _row_get(review, "policy_version")
+    risk_before = _row_get(review, "previous_risk_level") or _row_get(review, "risk_level")
+    risk_after = normalized_new_risk if risk_changed_flag else (_row_get(review, "new_risk_level") or risk_before)
+    risk_attestation = (
+        "risk_change_required" if risk_changed_flag
+        else ("risk_unchanged" if outcome == OUTCOME_RISK_RATING_UNCHANGED else _row_get(review, "risk_change_attestation"))
+    )
+    actor_id = (user or {}).get("sub") or (user or {}).get("id")
+    items = _auto_clear_outcome_item(items, outcome=outcome, outcome_reason=effective_reason, user=user, ts=ts)
     before = {
         "status": current_state,
         "outcome": _row_get(review, "outcome"),
         "outcome_reason": _row_get(review, "outcome_reason"),
         "outcome_recorded_at": _row_get(review, "outcome_recorded_at"),
         "completed_at": _row_get(review, "completed_at"),
+        "completed_by": _row_get(review, "decided_by"),
+        "officer_rationale": _row_get(review, "officer_rationale"),
+        "officer_findings_note": _row_get(review, "officer_findings_note"),
+        "officer_deficiencies_note": _row_get(review, "officer_deficiencies_note"),
+        "officer_internal_review_note": _row_get(review, "officer_internal_review_note"),
+        "previous_risk_level": risk_before,
+        "new_risk_level": _row_get(review, "new_risk_level"),
+        "risk_change_attestation": _row_get(review, "risk_change_attestation"),
+        "risk_rerate_reason": _row_get(review, "risk_rerate_reason"),
+        "next_review_date": _row_get(review, "next_review_date"),
         "required_items": _row_get(review, "required_items"),
     }
     db.execute(
@@ -1509,6 +1668,25 @@ def record_review_outcome(db, review_id, *,
         "    outcome_reason = ?, "
         "    outcome_recorded_at = ?, "
         "    completed_at = ?, "
+        "    decided_by = ?, "
+        "    officer_rationale = ?, "
+        "    officer_findings_note = COALESCE(NULLIF(?, ''), officer_findings_note), "
+        "    officer_deficiencies_note = COALESCE(NULLIF(?, ''), officer_deficiencies_note), "
+        "    officer_internal_review_note = COALESCE(NULLIF(?, ''), officer_internal_review_note), "
+        "    findings_updated_by = CASE WHEN NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL THEN ? ELSE findings_updated_by END, "
+        "    findings_updated_at = CASE WHEN NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL THEN ? ELSE findings_updated_at END, "
+        "    previous_risk_level = COALESCE(previous_risk_level, ?), "
+        "    new_risk_level = COALESCE(?, new_risk_level), "
+        "    risk_change_attestation = COALESCE(?, risk_change_attestation), "
+        "    risk_rerate_reason = COALESCE(NULLIF(?, ''), risk_rerate_reason), "
+        "    risk_rerated_by = CASE WHEN ? IS NOT NULL THEN ? ELSE risk_rerated_by END, "
+        "    risk_rerated_at = CASE WHEN ? IS NOT NULL THEN ? ELSE risk_rerated_at END, "
+        "    last_review_date = ?, "
+        "    next_review_date = ?, "
+        "    due_date = ?, "
+        "    frequency_months = COALESCE(?, frequency_months), "
+        "    calculation_basis = COALESCE(?, calculation_basis), "
+        "    policy_version = COALESCE(?, policy_version), "
         "    state_changed_at = ?, "
         "    required_items = ? "
         # NB: ``decision`` is intentionally NOT included in this UPDATE.
@@ -1520,9 +1698,36 @@ def record_review_outcome(db, review_id, *,
         (
             STATE_COMPLETED,
             outcome,
-            outcome_reason,
+            effective_reason,
             ts,
             ts,
+            actor_id,
+            effective_reason,
+            findings_text,
+            follow_up_text,
+            senior_note_text,
+            findings_text,
+            follow_up_text,
+            senior_note_text,
+            actor_id,
+            findings_text,
+            follow_up_text,
+            senior_note_text,
+            ts,
+            risk_before,
+            normalized_new_risk if risk_changed_flag else None,
+            risk_attestation,
+            risk_impact_text,
+            actor_id if risk_changed_flag else None,
+            actor_id,
+            actor_id if risk_changed_flag else None,
+            ts,
+            completion_date,
+            next_review_date,
+            due_date,
+            frequency_months,
+            calculation_basis,
+            policy_version,
             ts,
             json.dumps(items, default=str),
             review_id,
@@ -1536,9 +1741,21 @@ def record_review_outcome(db, review_id, *,
     after = {
         "status": STATE_COMPLETED,
         "outcome": outcome,
-        "outcome_reason": outcome_reason,
+        "outcome_reason": effective_reason,
         "outcome_recorded_at": ts,
         "completed_at": ts,
+        "completed_by": actor_id,
+        "officer_rationale": effective_reason,
+        "officer_findings_note": findings_text or _row_get(review, "officer_findings_note"),
+        "officer_deficiencies_note": follow_up_text or _row_get(review, "officer_deficiencies_note"),
+        "officer_internal_review_note": senior_note_text or _row_get(review, "officer_internal_review_note"),
+        "previous_risk_level": risk_before,
+        "new_risk_level": risk_after if risk_changed_flag else _row_get(review, "new_risk_level"),
+        "risk_change_attestation": risk_attestation,
+        "risk_rerate_reason": risk_impact_text or _row_get(review, "risk_rerate_reason"),
+        "last_review_date": completion_date,
+        "next_review_date": next_review_date,
+        "due_date": due_date,
         "required_items": items,
     }
     _emit_audit(
@@ -1551,11 +1768,37 @@ def record_review_outcome(db, review_id, *,
         },
         db, before_state=before, after_state=after,
     )
+    _emit_audit(
+        audit_writer, user, "periodic_review_completed",
+        f"periodic_review:{review_id}",
+        {
+            "review_id": review_id,
+            "application_id": application_id,
+            "outcome": outcome,
+            "risk_level_before": risk_before,
+            "risk_level_after": risk_after,
+            "risk_changed": risk_changed_flag,
+            "next_review_date": next_review_date,
+            "completed_by": actor_id,
+        },
+        db, before_state=before, after_state=after,
+    )
     return {
         "review_id": review_id,
         "status": STATE_COMPLETED,
         "outcome": outcome,
+        "outcome_reason": effective_reason,
         "outcome_recorded_at": ts,
+        "completed_at": ts,
+        "completed_by": actor_id,
+        "next_review_date": next_review_date,
+        "risk_level_before": risk_before,
+        "risk_level_after": risk_after,
+        "risk_changed": risk_changed_flag,
+        "risk_governance_status": (
+            "review_level_only_change_management_required"
+            if risk_changed_flag else "unchanged"
+        ),
     }
 
 
@@ -1574,6 +1817,11 @@ __all__ = [
     "OUTCOME_ENHANCED_MONITORING",
     "OUTCOME_EDD_REQUIRED",
     "OUTCOME_EXIT_RECOMMENDED",
+    "OUTCOME_NO_MATERIAL_CHANGE",
+    "OUTCOME_MATERIAL_CHANGE_IDENTIFIED",
+    "OUTCOME_RISK_RATING_UNCHANGED",
+    "OUTCOME_RISK_RATING_CHANGED",
+    "OUTCOME_CLIENT_FOLLOW_UP_REQUIRED",
     # Required-item vocabulary
     "REQUIRED_ITEM_CODES",
     # Exceptions
