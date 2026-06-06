@@ -87,7 +87,7 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         review_detail = self._get(f"/api/monitoring/reviews/{rid}")
         self.assertEqual(review_detail.code, 200)
         body = json.loads(review_detail.body)
-        self.assertEqual(body["projection"]["status_label"], "Due")
+        self.assertEqual(body["projection"]["status_label"], "Awaiting client attestation")
         self.assertEqual(body["projection"]["blocker_count"], 0)
         self.assertGreaterEqual(body["projection"]["completion_blocker_count"], 1)
 
@@ -132,7 +132,7 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         self.assertEqual(row["client_name"], "PR03 Test Co")
         self.assertTrue(row["is_overdue"])
         self.assertEqual(row["queue_status"], "overdue")
-        self.assertEqual(row["queue_status_label"], "Overdue")
+        self.assertEqual(row["queue_status_label"], "Awaiting client attestation")
         self.assertEqual(row["owner_display_name"], "Test CO")
         self.assertEqual(row["primary_action_label"], "Open review case")
         self.assertEqual(row["projection"]["audit_reference"], f"periodic_review:{overdue_id}")

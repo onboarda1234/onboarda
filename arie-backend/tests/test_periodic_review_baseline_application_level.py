@@ -106,3 +106,20 @@ class TestPeriodicReviewBaselineApplicationLevel(_PRReviewHandlerBase):
         assert baseline["last_review_date"] == "2025-01-15"
         assert baseline["derived_cadence_months"] == 12
         assert baseline["next_review_due"] == "2026-01-15"
+
+    def test_baseline_is_editable_when_completion_anchor_exists_without_approved_status(self):
+        self._conn.execute(
+            "UPDATE applications SET status = ?, first_approved_at = ? WHERE id = ?",
+            ("compliance_review", "2026-03-05T00:00:00Z", self._app_id),
+        )
+        self._conn.commit()
+
+        resp = self._get(f"/api/applications/{self._app_id}")
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        eligibility = body["periodic_review_baseline_eligibility"]
+        baseline = body["periodic_review_baseline"]
+
+        assert eligibility["enabled"] is True
+        assert eligibility["reason"] == "approval_anchor_or_existing_periodic_review_context"
+        assert baseline["anchor_label"] == "Onboarding approval/completion date"

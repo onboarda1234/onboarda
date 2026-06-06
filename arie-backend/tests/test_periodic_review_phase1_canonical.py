@@ -250,7 +250,7 @@ def test_in_progress_projection_not_blocked_by_completion_only_gaps(phase1_db):
     review_id = _insert_review(phase1_db, status="in_progress")
     projection = get_review_projection(phase1_db, review_id)
 
-    assert projection["status_label"] == "In Review"
+    assert projection["status_label"] == "Officer review required"
     assert projection["blocker_count"] == 0
     assert projection["completion_ready"] is False
 
@@ -329,12 +329,12 @@ def test_projection_maps_queue_statuses_and_missing_due_dates_safely(phase1_db):
     completed = get_review_projection(phase1_db, completed_id)
 
     assert overdue["queue_status"] == "overdue"
-    assert overdue["queue_status_label"] == "Overdue"
+    assert overdue["queue_status_label"] == "Due"
     assert overdue["is_overdue"] is True
     assert future["queue_status"] == "open"
     assert future["due_state"] == "scheduled"
     assert awaiting["queue_status"] == "awaiting_client"
-    assert awaiting["queue_status_label"] == "Awaiting Client"
+    assert awaiting["queue_status_label"] == "Officer review required"
     assert awaiting["is_due_date_missing"] is True
     assert awaiting["due_state"] == "missing_due_date"
     assert completed["queue_status"] == "completed"

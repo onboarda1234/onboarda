@@ -33,6 +33,18 @@ OPEN_QUEUE_FILTER_STATUSES = {
     "in_review",
 }
 
+OPERATIONAL_STATUS_LABELS = {
+    "no_active_review": "No active review",
+    "due": "Due",
+    "awaiting_client_attestation": "Awaiting client attestation",
+    "awaiting_documents": "Awaiting documents",
+    "officer_review_required": "Officer review required",
+    "blocked": "Blocked",
+    "ready_for_decision": "Ready for decision",
+    "completed": "Completed",
+    "historical_superseded": "Historical / Superseded",
+}
+
 
 def _row_get(row, key, default=None):
     if row is None:
@@ -131,22 +143,44 @@ def _load_memo_status(db, review_id: int, review_row) -> Optional[str]:
     return None
 
 
-def _status_label(raw_status: str, blocker_count: int, linked_edd_case_id: Any) -> str:
-    if raw_status == COMPLETED_REVIEW_STATE:
-        return "Completed"
-    if raw_status == CANCELLED_REVIEW_STATE:
-        return "Cancelled"
-    if blocker_count:
-        return "Blocked"
-    if raw_status == "in_progress":
-        return "In Review"
-    if raw_status == "awaiting_information":
-        return "Waiting for Info"
-    if raw_status == "pending_senior_review":
-        return "Senior Review"
-    if linked_edd_case_id:
-        return "Escalated to EDD"
-    return "Due"
+def derive_operational_review_status(
+    *,
+    raw_status: str,
+    due_state: Optional[str] = None,
+    blocker_count: int = 0,
+    linked_edd_case_id: Any = None,
+    attestation_status: Optional[str] = None,
+    has_missing_documents: bool = False,
+    has_documents_pending_review: bool = False,
+    findings_present: bool = False,
+    historical: bool = False,
+) -> Dict[str, str]:
+    status = str(raw_status or "pending").strip().lower() or "pending"
+    attestation = str(attestation_status or "").strip().lower()
+    if historical:
+        key = "historical_superseded"
+    elif status == COMPLETED_REVIEW_STATE:
+        key = "completed"
+    elif status == CANCELLED_REVIEW_STATE:
+        key = "historical_superseded"
+    elif blocker_count or linked_edd_case_id:
+        key = "blocked"
+    elif attestation and attestation != "submitted":
+        key = "awaiting_client_attestation"
+    elif has_missing_documents:
+        key = "awaiting_documents"
+    elif findings_present:
+        key = "ready_for_decision"
+    elif has_documents_pending_review or status in {"in_progress", "pending_senior_review", "awaiting_information"}:
+        key = "officer_review_required"
+    elif status == "pending" or due_state in {"due", "overdue", "scheduled", "missing_due_date"}:
+        key = "due"
+    else:
+        key = "no_active_review"
+    return {
+        "status_key": key,
+        "status_label": OPERATIONAL_STATUS_LABELS[key],
+    }
 
 
 def _trigger_source_label(value: Any) -> str:
@@ -353,6 +387,12 @@ def build_review_projection(
     trigger_source = _row_get(review, "trigger_source") or _row_get(review, "trigger_type")
     attestation = attestation_snapshot_from_review(review)
     attestation_status = str(attestation.get("status") or ATTESTATION_STATUS_NOT_STARTED)
+    operational_status = derive_operational_review_status(
+        raw_status=raw_status,
+        due_state=due_meta["due_state"],
+        blocker_count=len(blockers),
+        linked_edd_case_id=_row_get(review, "linked_edd_case_id"),
+    )
 
     return {
         "review_id": review_id,
@@ -361,9 +401,10 @@ def build_review_projection(
         "application_ref": _row_get(application, "ref") or app_id,
         "client_name": _row_get(application, "company_name") or _row_get(review, "client_name") or "",
         "status": raw_status,
-        "status_label": _status_label(raw_status, len(blockers), _row_get(review, "linked_edd_case_id")),
+        "operational_status": operational_status["status_key"],
+        "status_label": operational_status["status_label"],
         "queue_status": queue_status,
-        "queue_status_label": _queue_status_label(queue_status),
+        "queue_status_label": operational_status["status_label"],
         "assigned_officer": assigned_officer,
         "assigned_officer_name": _row_get(owner_row, "full_name"),
         "owner_display_name": owner_display_name,

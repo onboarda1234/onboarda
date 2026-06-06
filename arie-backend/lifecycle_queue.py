@@ -504,6 +504,10 @@ def _materialise_review(row, *, user_names: Dict[str, str],
     if payload and isinstance(review_reason, str) and "FIX_REVIEW_JSON:" in review_reason:
         review_reason = "Seeded fixture review trigger"
     owner_id = _row_get(row, "assigned_officer")
+    status_label = projection.get("status_label")
+    attestation_status = str(projection.get("attestation_status") or "").strip().lower()
+    if status in ACTIVE_REVIEW_STATES and attestation_status and attestation_status != "submitted" and status_label not in {"Blocked", "Completed"}:
+        status_label = "Awaiting client attestation"
     item = {
         "type": "review",
         "id": _row_get(row, "id"),
@@ -529,7 +533,7 @@ def _materialise_review(row, *, user_names: Dict[str, str],
         "completed_at": _row_get(row, "completed_at"),
         "state_changed_at": _row_get(row, "state_changed_at"),
         "assigned_officer": owner_id,
-        "status_label": projection.get("status_label"),
+        "status_label": "Historical / Superseded" if status in HISTORICAL_REVIEW_STATES else status_label,
         "blocker_count": projection.get("blocker_count", 0),
         "blocker_summary": projection.get("blocker_summary", []),
         "memo_status": projection.get("memo_status"),
