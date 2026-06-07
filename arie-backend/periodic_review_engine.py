@@ -1598,10 +1598,14 @@ def record_review_outcome(db, review_id, *,
             user=user,
             audit_writer=audit_writer,
         )
+    review_for_completion = dict(review)
+    review_for_completion["officer_rationale"] = effective_reason
+    review_for_completion["outcome"] = outcome
+    review_for_completion["outcome_reason"] = effective_reason
     items = _load_required_items(_row_get(review, "required_items"))
     blocking_items = _blocking_items_for_completion(
         db,
-        review,
+        review_for_completion,
         items,
         outcome=outcome,
         outcome_reason=effective_reason,

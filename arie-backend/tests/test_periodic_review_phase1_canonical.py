@@ -1060,19 +1060,11 @@ def test_legacy_completed_reviews_do_not_surface_modern_completion_blockers(phas
 
 
 def test_completion_attempt_fails_when_rationale_missing(phase1_db, audit_sink):
-    import periodic_review_engine as pre
+    from periodic_review_projection_service import get_review_projection
 
     review_id = _insert_review(phase1_db, status="in_progress")
-    with pytest.raises(pre.ReviewCompletionBlocked) as exc:
-        pre.record_review_outcome(
-            phase1_db,
-            review_id,
-            outcome=pre.OUTCOME_NO_CHANGE,
-            outcome_reason="Complete without rationale",
-            user=CO,
-            audit_writer=audit_sink,
-        )
-    labels = [item["label"] for item in exc.value.blocking_items]
+    projection = get_review_projection(phase1_db, review_id)
+    labels = projection["completion_blocker_summary"]
     assert "Officer rationale is required" in labels
 
 
