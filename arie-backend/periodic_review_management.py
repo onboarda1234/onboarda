@@ -37,6 +37,7 @@ BASELINE_SOURCE_SURFACE = "backoffice_application_overview_periodic_review_basel
 WORKSPACE_SOURCE_SURFACE = "backoffice_periodic_review_workspace"
 LEGACY_FILE_NO = "no"
 LEGACY_FILE_YES = "yes"
+LEGACY_FILE_NA = "n/a"
 MATERIAL_CHANGE_ATTESTATION_NONE = "no_material_change"
 MATERIAL_CHANGE_ATTESTATION_PRESENT = "material_change_identified"
 MATERIAL_CHANGE_ATTESTATIONS = {
@@ -216,17 +217,27 @@ def _baseline_months_value(cadence: str) -> Optional[int]:
 
 def _normalize_legacy_file(value: Any) -> str:
     text = str(value or "").strip().lower()
-    if text not in {LEGACY_FILE_NO, LEGACY_FILE_YES}:
-        raise InvalidPeriodicReviewInput("legacy_file must be yes or no")
+    if text in {"na", "n.a.", "not_applicable", "not applicable"}:
+        text = LEGACY_FILE_NA
+    if text not in {LEGACY_FILE_NO, LEGACY_FILE_YES, LEGACY_FILE_NA}:
+        raise InvalidPeriodicReviewInput("legacy_file must be yes, no, or n/a")
     return text
+
+
+def _application_approval_anchor(app: Optional[Dict[str, Any]]) -> Optional[str]:
+    app = dict(app or {})
+    return (
+        app.get("first_approved_at")
+        or app.get("approved_at")
+        or app.get("completed_at")
+        or app.get("decided_at")
+    )
 
 
 def _baseline_anchor_for_application(review, app: Optional[Dict[str, Any]]) -> str:
     app = dict(app or {})
     anchor = (
-        app.get("first_approved_at")
-        or app.get("approved_at")
-        or app.get("completed_at")
+        _application_approval_anchor(app)
         or app.get("created_at")
         or _row_get(review, "created_at")
         or _utc_now_iso()
@@ -264,10 +275,17 @@ def _serialize_application_baseline_state(app) -> Dict[str, Any]:
         "application_baseline_date": _row_get(app, "periodic_review_baseline_date"),
         "application_baseline_cadence_months": _row_get(app, "periodic_review_baseline_cadence_months"),
         "application_baseline_note": _row_get(app, "periodic_review_baseline_note"),
-        "legacy_file": LEGACY_FILE_YES
-        if str(_row_get(app, "periodic_review_baseline_status") or "").strip().lower()
-        in {BASELINE_STATUS_LAST_PERIODIC, BASELINE_STATUS_IMPORTED_LEGACY}
-        else LEGACY_FILE_NO,
+        "legacy_file": (
+            LEGACY_FILE_YES
+            if str(_row_get(app, "periodic_review_baseline_status") or "").strip().lower()
+            in {BASELINE_STATUS_LAST_PERIODIC, BASELINE_STATUS_IMPORTED_LEGACY}
+            else (
+                LEGACY_FILE_NA
+                if str(_row_get(app, "periodic_review_baseline_status") or "").strip().lower()
+                == BASELINE_STATUS_NOT_APPLICABLE
+                else LEGACY_FILE_NO
+            )
+        ),
         "last_review_date": _row_get(app, "periodic_review_last_review_date"),
         "next_review_due": _row_get(app, "periodic_review_next_review_due"),
         "frequency_months": _row_get(app, "periodic_review_baseline_cadence_months"),
@@ -312,13 +330,13 @@ def _persist_application_baseline(
     application_id: Any,
     *,
     status: str,
-    anchor_date: str,
-    frequency_months: int,
+    anchor_date: Optional[str],
+    frequency_months: Optional[int],
     note: Optional[str],
     stored_last_review_date: Optional[str],
-    next_due: str,
-    calculation_basis: str,
-    policy_version: str,
+    next_due: Optional[str],
+    calculation_basis: Optional[str],
+    policy_version: Optional[str],
 ):
     db.execute(
         """
@@ -352,13 +370,13 @@ def _persist_review_baseline(
     review_id: int,
     *,
     status: str,
-    anchor_date: str,
-    frequency_months: int,
+    anchor_date: Optional[str],
+    frequency_months: Optional[int],
     note: Optional[str],
     stored_last_review_date: Optional[str],
-    next_due: str,
-    calculation_basis: str,
-    policy_version: str,
+    next_due: Optional[str],
+    calculation_basis: Optional[str],
+    policy_version: Optional[str],
     legacy_import: bool,
 ):
     db.execute(
@@ -690,29 +708,52 @@ def save_application_periodic_review_baseline(
     if entered_last_review:
         entered_last_review = parse_review_date(entered_last_review).isoformat()
 
-    anchor_date = (
-        entered_last_review
-        if legacy_choice == LEGACY_FILE_YES
-        else _baseline_anchor_for_application({}, app)
-    )
-    risk_level = normalize_risk_level(override_risk_level or app.get("final_risk_level") or app.get("risk_level"))
-    policy = policy_snapshot_for_application(
-        app,
-        anchor_date=anchor_date,
-        override_risk_level=risk_level,
-    )
-    status = (
-        BASELINE_STATUS_LAST_PERIODIC
-        if legacy_choice == LEGACY_FILE_YES
-        else BASELINE_STATUS_LAST_ONBOARDING
-    )
-    next_due = policy["next_review_date"]
-    frequency_months = policy["frequency_months"]
-    calculation_basis = policy["calculation_basis"]
-    policy_version = policy["policy_version"]
-    stored_last_review_date = entered_last_review if legacy_choice == LEGACY_FILE_YES else None
     before = _serialize_application_baseline_state(app)
     existing_next_due = before.get("next_review_due")
+    review = None
+    if preferred_review_id is not None:
+        candidate = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (preferred_review_id,)).fetchone()
+        if candidate is not None and _row_get(candidate, "application_id") == application_id:
+            review = candidate
+    if review is None:
+        review = _latest_active_review_for_application(db, application_id)
+    review_id = _row_get(review, "id") if review is not None else None
+    review_before = _serialize_baseline_state(review) if review is not None else None
+    approval_anchor = _application_approval_anchor(app)
+    if not approval_anchor and review_id is None:
+        raise InvalidPeriodicReviewInput("Periodic review baseline can be configured after onboarding approval.")
+
+    if legacy_choice == LEGACY_FILE_NA:
+        anchor_date = None
+        status = BASELINE_STATUS_NOT_APPLICABLE
+        next_due = None
+        frequency_months = None
+        calculation_basis = None
+        policy_version = None
+        stored_last_review_date = None
+    else:
+        anchor_date = (
+            entered_last_review
+            if legacy_choice == LEGACY_FILE_YES
+            else _baseline_anchor_for_application(review or {}, app)
+        )
+        risk_level = normalize_risk_level(override_risk_level or app.get("final_risk_level") or app.get("risk_level"))
+        policy = policy_snapshot_for_application(
+            app,
+            anchor_date=anchor_date,
+            override_risk_level=risk_level,
+        )
+        status = (
+            BASELINE_STATUS_LAST_PERIODIC
+            if legacy_choice == LEGACY_FILE_YES
+            else BASELINE_STATUS_LAST_ONBOARDING
+        )
+        next_due = policy["next_review_date"]
+        frequency_months = policy["frequency_months"]
+        calculation_basis = policy["calculation_basis"]
+        policy_version = policy["policy_version"]
+        stored_last_review_date = entered_last_review if legacy_choice == LEGACY_FILE_YES else None
+
     _persist_application_baseline(
         db,
         application_id,
@@ -726,16 +767,7 @@ def save_application_periodic_review_baseline(
         policy_version=policy_version,
     )
 
-    review = None
-    if preferred_review_id is not None:
-        candidate = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (preferred_review_id,)).fetchone()
-        if candidate is not None and _row_get(candidate, "application_id") == application_id:
-            review = candidate
-    if review is None:
-        review = _latest_active_review_for_application(db, application_id)
-    review_id = _row_get(review, "id") if review is not None else None
     if review_id is not None:
-        review_before = _serialize_baseline_state(review)
         if not existing_next_due:
             existing_next_due = review_before.get("next_review_date") or review_before.get("due_date")
         legacy_import = bool(_row_get(review, "legacy_import")) and legacy_choice == LEGACY_FILE_YES
@@ -752,8 +784,6 @@ def save_application_periodic_review_baseline(
             policy_version=policy_version,
             legacy_import=legacy_import,
         )
-    else:
-        review_before = None
 
     audit_detail = {
         "application_id": application_id,

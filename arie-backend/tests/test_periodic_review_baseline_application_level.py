@@ -73,12 +73,106 @@ class TestPeriodicReviewBaselineApplicationLevel(_PRReviewHandlerBase):
         assert detail["next_review_due"] == "2029-02-10"
 
     def test_legacy_file_requires_last_review_date_without_review_case(self):
+        self._conn.execute(
+            "UPDATE applications SET first_approved_at = ? WHERE id = ?",
+            ("2026-02-10T00:00:00Z", self._app_id),
+        )
+        self._conn.commit()
+
         resp = self._post(
             f"/api/applications/{self._app_id}/periodic-review-baseline",
             {"legacy_file": "yes", "officer_note": "Missing date should fail."},
         )
         self.assertEqual(resp.code, 400)
         assert "last_review_date is required" in resp.body.decode("utf-8")
+
+    def test_unapproved_application_cannot_save_application_level_baseline(self):
+        self._conn.execute(
+            """
+            UPDATE applications
+            SET status = ?, first_approved_at = NULL,
+                decided_at = NULL,
+                periodic_review_baseline_status = NULL,
+                periodic_review_baseline_date = NULL,
+                periodic_review_baseline_cadence_months = NULL,
+                periodic_review_baseline_note = NULL,
+                periodic_review_last_review_date = NULL,
+                periodic_review_next_review_due = NULL
+            WHERE id = ?
+            """,
+            ("compliance_review", self._app_id),
+        )
+        self._conn.commit()
+
+        resp = self._post(
+            f"/api/applications/{self._app_id}/periodic-review-baseline",
+            {"legacy_file": "no", "officer_note": "Should not persist before approval."},
+        )
+
+        self.assertEqual(resp.code, 400)
+        assert "after onboarding approval" in resp.body.decode("utf-8")
+        app_row = self._conn.execute(
+            """
+            SELECT periodic_review_baseline_status, periodic_review_next_review_due
+            FROM applications WHERE id = ?
+            """,
+            (self._app_id,),
+        ).fetchone()
+        assert app_row["periodic_review_baseline_status"] is None
+        assert app_row["periodic_review_next_review_due"] is None
+
+    def test_officer_can_save_not_applicable_baseline_without_review_case(self):
+        self._conn.execute(
+            "UPDATE applications SET first_approved_at = ?, risk_level = ?, final_risk_level = ? WHERE id = ?",
+            ("2026-02-10T00:00:00Z", "MEDIUM", "MEDIUM", self._app_id),
+        )
+        self._conn.commit()
+
+        resp = self._post(
+            f"/api/applications/{self._app_id}/periodic-review-baseline",
+            {
+                "legacy_file": "n/a",
+                "officer_note": "No manual baseline applies to this onboarding record.",
+            },
+        )
+
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        assert body["result"]["legacy_file"] == "n/a"
+        assert body["result"]["baseline_status"] == "not_applicable"
+        assert body["result"]["next_review_due"] is None
+
+        detail = json.loads(self._get(f"/api/applications/{self._app_id}").body)
+        baseline = detail["periodic_review_baseline"]
+        assert baseline["legacy_file"] == "n/a"
+        assert baseline["legacy_file_label"] == "N/A"
+        assert baseline["status_label"] == "Not applicable"
+        assert baseline["next_review_due"] is None
+
+        app_row = self._conn.execute(
+            """
+            SELECT periodic_review_baseline_status, periodic_review_baseline_date,
+                   periodic_review_baseline_cadence_months, periodic_review_next_review_due
+            FROM applications WHERE id = ?
+            """,
+            (self._app_id,),
+        ).fetchone()
+        assert app_row["periodic_review_baseline_status"] == "not_applicable"
+        assert app_row["periodic_review_baseline_date"] is None
+        assert app_row["periodic_review_baseline_cadence_months"] is None
+        assert app_row["periodic_review_next_review_due"] is None
+
+        audit = self._conn.execute(
+            """
+            SELECT action, before_state, after_state, detail
+            FROM audit_log
+            WHERE action = 'periodic_review_baseline_saved'
+            ORDER BY id DESC LIMIT 1
+            """
+        ).fetchone()
+        assert audit is not None
+        assert json.loads(audit["detail"])["legacy_file"] == "n/a"
+        assert json.loads(audit["after_state"])["application_baseline_status"] == "not_applicable"
 
     def test_review_detail_uses_application_level_baseline_when_review_exists(self):
         self._conn.execute(

@@ -17,6 +17,8 @@ def test_overview_contains_compact_periodic_review_baseline_box():
     assert "overview-periodic-review-baseline-next-due-" in html
     assert "Save baseline" in html
     assert "Is this a legacy file?" in html
+    assert "['n/a', 'N/A']" in html
+    assert "Not applicable - no periodic-review baseline will be scheduled" in html
     assert "Derived cadence" in html
     assert "Cadence is derived from the current officer-visible risk level." in html
     assert "/periodic-review-baseline" in html

@@ -19783,6 +19783,7 @@ def _application_periodic_review_baseline_source(application_row, fallback_revie
             "legacy_import": False,
             "risk_level": app.get("final_risk_level") or app.get("risk_level"),
             "application_id": app.get("id"),
+            "baseline_not_applicable_explicit": str(app.get("periodic_review_baseline_status") or "").strip().lower() == "not_applicable",
         }
     if any(
         review.get(key) not in (None, "")
@@ -19852,17 +19853,31 @@ def _periodic_review_baseline_snapshot(review_row) -> dict:
         note = note or review_row.get("legacy_source_note")
     if status in {"last_periodic_review_date", "imported_legacy_review"} and not review_row.get("last_review_date"):
         review_row["last_review_date"] = date_value
-    legacy_file = "yes" if status in {"last_periodic_review_date", "imported_legacy_review"} else "no"
+    legacy_file = (
+        "yes"
+        if status in {"last_periodic_review_date", "imported_legacy_review"}
+        else ("n/a" if status == "not_applicable" and review_row.get("baseline_not_applicable_explicit") else "no")
+    )
     if cadence_months in (None, "", 0, "0"):
         cadence_months = review_row.get("frequency_months")
     cadence_months = int(cadence_months) if cadence_months not in (None, "", 0, "0") else None
     next_due = review_row.get("next_review_date") or review_row.get("due_date")
-    anchor_label = "Last review date" if legacy_file == "yes" else "Onboarding approval/completion date"
+    anchor_label = (
+        "Last review date"
+        if legacy_file == "yes"
+        else ("Not applicable" if legacy_file == "n/a" else "Onboarding approval/completion date")
+    )
+    status_label = (
+        "Legacy file"
+        if legacy_file == "yes"
+        else ("Not applicable" if legacy_file == "n/a" else "Current onboarding file")
+    )
+    legacy_file_label = "Yes" if legacy_file == "yes" else ("N/A" if legacy_file == "n/a" else "No")
     return {
         "status": status,
-        "status_label": "Legacy file" if legacy_file == "yes" else "Current onboarding file",
+        "status_label": status_label,
         "legacy_file": legacy_file,
-        "legacy_file_label": "Yes" if legacy_file == "yes" else "No",
+        "legacy_file_label": legacy_file_label,
         "date": date_value,
         "anchor_date": date_value,
         "anchor_label": anchor_label,
