@@ -101,3 +101,14 @@ def test_periodic_review_decision_panel_has_required_fields_and_no_internal_copy
     assert "Completed reviews are read-only historical records." in section
     assert "Future actions will be added in later phases." not in html
     assert "backend" not in section.lower()
+
+
+def test_periodic_review_completion_refreshes_queue_from_canonical_api():
+    html = BACKOFFICE_HTML.read_text()
+    start = html.index("async function completePeriodicReviewDecision(reviewId)")
+    end = html.index("async function savePeriodicReviewWorkspaceFindings(reviewId)", start)
+    section = html[start:end]
+
+    assert "ensureMonitoringDataLoaded({ force: true })" in section
+    assert "renderPeriodicReviewQueue()" in section
+    assert "loadMonitoringReviews" not in section
