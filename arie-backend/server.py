@@ -62,6 +62,7 @@ import requests
 
 import html
 import asyncio
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 # Import database module
@@ -4195,6 +4196,106 @@ def _correction_log_audit(handler, user, action, target, detail, db=None, **kwar
     handler.log_audit(user, action, target, detail, db=db, **kwargs)
 
 
+CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS = {
+    "assigned_to",
+    "assigned_name",
+    "base_risk_level",
+    "decision_by",
+    "decision_by_name",
+    "decision_notes",
+    "decided_at",
+    "edd_trigger_flags",
+    "elevation_reason_text",
+    "enhanced_review_summary",
+    "final_risk_level",
+    "final_risk_level_label",
+    "first_approved_at",
+    "first_approver_id",
+    "first_approver_name",
+    "has_authoritative_risk",
+    "latest_memo",
+    "latest_memo_data",
+    "memo_is_stale",
+    "memo_requires_regeneration",
+    "memo_stale_reason",
+    "memo_stale_reasons",
+    "memo_stale_trigger",
+    "monitoring_alerts",
+    "officer_correction_display_metadata",
+    "officer_correction_display_values",
+    "officer_corrections",
+    "onboarding_lane",
+    "periodic_review",
+    "periodic_review_baseline",
+    "periodic_review_baseline_cadence_months",
+    "periodic_review_baseline_calculation_basis",
+    "periodic_review_baseline_date",
+    "periodic_review_baseline_eligibility",
+    "periodic_review_baseline_note",
+    "periodic_review_baseline_policy_version",
+    "periodic_review_baseline_status",
+    "periodic_review_last_review_date",
+    "periodic_review_next_review_due",
+    "periodic_reviews",
+    "pilot_evidence_summary",
+    "pre_approval_decision",
+    "pre_approval_notes",
+    "pre_approval_officer_id",
+    "pre_approval_timestamp",
+    "risk_computed_at",
+    "risk_config_version",
+    "risk_dimensions",
+    "risk_escalations",
+    "risk_integrity_warnings",
+    "risk_level",
+    "risk_level_label",
+    "risk_score",
+    "screening_mode",
+    "screening_reviews",
+    "screening_truth_summary",
+    "supervisor_requires_rerun",
+}
+
+CLIENT_PRESCREENING_PRICING_FORBIDDEN_KEYS = {
+    "base_risk_level",
+    "final_risk_level",
+    "risk_breakdown",
+    "risk_dimensions",
+    "risk_factors",
+    "risk_level",
+    "risk_level_label",
+    "risk_score",
+}
+
+
+def _client_safe_application_detail(result):
+    """Project application detail to the client portal's resume surface.
+
+    The shared detail endpoint is used by both Back Office and the portal. Back
+    Office needs officer-grade risk, memo, blocker, and correction metadata;
+    clients need only their onboarding state, documents, RMI tasks, and
+    client-safe pricing data. Keep this projection explicit so new internal
+    control fields fail closed for client-authenticated detail loads.
+    """
+    safe = {k: v for k, v in result.items() if k not in CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS}
+    safe["change_requests"] = []
+
+    prescreening = safe.get("prescreening_data")
+    if isinstance(prescreening, dict):
+        prescreening = deepcopy(prescreening)
+        pricing = prescreening.get("pricing")
+        if isinstance(pricing, dict):
+            pricing = {
+                k: v
+                for k, v in pricing.items()
+                if k not in CLIENT_PRESCREENING_PRICING_FORBIDDEN_KEYS
+            }
+            prescreening["pricing"] = pricing
+        safe["prescreening_data"] = prescreening
+
+    return safe
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -4391,6 +4492,8 @@ class ApplicationDetailHandler(BaseHandler):
         if user["type"] != "client":
             result["officer_corrections"] = _list_application_corrections(db, result["id"])
         result.setdefault("change_requests", [])
+        if user["type"] == "client":
+            result = _client_safe_application_detail(result)
         db.close()
 
         self.success(result)

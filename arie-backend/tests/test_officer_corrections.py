@@ -732,6 +732,93 @@ def test_pr410b_portal_does_not_expose_risk_correction_or_memo_stale_metadata(of
     assert "officer_correction" not in json.dumps(app).lower()
 
 
+def test_pr410b_client_application_detail_is_safe_for_portal_resume(officer_correction_api_server):
+    from auth import create_token
+
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    row = conn.execute(
+        "SELECT client_id, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    prescreening = json.loads(row["prescreening_data"])
+    prescreening["pricing"] = {
+        "monthly_fee": 250,
+        "setup_fee": 1000,
+        "risk_score": 45,
+        "risk_level": "MEDIUM",
+        "risk_dimensions": {"d4": 2.0},
+    }
+    conn.execute(
+        "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+        (json.dumps(prescreening), case["app_id"]),
+    )
+    conn.commit()
+    client_id = row["client_id"]
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {"sector": "Crypto Exchange"},
+            "correction_reason": "Officer verified corrected sector.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["downstream_state"]["risk_recomputed"] is True
+    assert resp.json()["downstream_state"]["memo_requires_regeneration"] is True
+
+    token = create_token(client_id, "client", "Portal Client", "client")
+    detail = requests.get(
+        f"{base_url}/api/applications/{case['app_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=5,
+    )
+    assert detail.status_code == 200, detail.text
+    app = detail.json()
+    forbidden_keys = {
+        "officer_corrections",
+        "officer_correction_display_values",
+        "officer_correction_display_metadata",
+        "risk_score",
+        "risk_level",
+        "final_risk_level",
+        "risk_dimensions",
+        "latest_memo",
+        "latest_memo_data",
+        "memo_is_stale",
+        "memo_stale_reason",
+        "memo_stale_reasons",
+        "memo_requires_regeneration",
+        "supervisor_requires_rerun",
+        "screening_truth_summary",
+        "enhanced_review_summary",
+        "periodic_review_baseline_status",
+    }
+    assert forbidden_keys.isdisjoint(app.keys())
+    pricing = (app.get("prescreening_data") or {}).get("pricing") or {}
+    assert {"risk_score", "risk_level", "risk_dimensions"}.isdisjoint(pricing.keys())
+
+    serialized = json.dumps(app).lower()
+    for term in (
+        "officer_correction",
+        "correction_reason",
+        "before_state",
+        "after_state",
+        "memo_stale",
+        "memo_requires_regeneration",
+        "risk_score",
+        "risk_level",
+        "risk_dimensions",
+        "audit_log",
+        "blockers",
+    ):
+        assert term not in serialized
+    assert app["sector"] == "Crypto Exchange"
+
+
 def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_correction_api_server):
     base_url, db_path = officer_correction_api_server
     conn = _fresh_db(db_path)
