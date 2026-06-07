@@ -1,9 +1,10 @@
 """
-Periodic Review Memo generator (PR-D).
+Periodic Review Memo / Addendum generator (PR-D + PRS-7).
 
-Lightweight, deterministic, template-driven artifact generated AFTER a
-periodic review's outcome is recorded. Explicitly NOT the onboarding
-memo (``compliance_memos``). NOT AI-backed -- the memo is assembled
+Lightweight, deterministic, template-driven artifact generated during
+or after a periodic review's outcome/risk reassessment workflow.
+Explicitly NOT the onboarding memo (``compliance_memos``). NOT AI-backed
+-- the memo/addendum is assembled
 mechanically from structured data already on the review row, the
 application, the linked monitoring alert (if any), and the linked EDD
 case (if any).
@@ -11,9 +12,9 @@ case (if any).
 Separation-of-concerns contract
 -------------------------------
 * Does not read, write, or otherwise consult ``compliance_memos``.
-* Does not modify ``periodic_reviews`` -- outcome recording is owned
-  by ``periodic_review_engine.record_review_outcome`` and has already
-  committed by the time this module runs.
+* The generator itself does not modify ``periodic_reviews`` -- outcome
+  recording is owned by ``periodic_review_engine.record_review_outcome``
+  and has already committed by the time this module runs.
 * Does not call ``edd_memo_integration``; the EDD summary section
   reads ``edd_cases`` / ``edd_findings`` directly and by soft-ref only.
 * Does not call Anthropic, OpenAI, or any other AI provider. The memo
@@ -76,6 +77,14 @@ def _coerce_json(raw, default):
         return default
 
 
+def _boolish(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 # ─────────────────────────────────────────────────────────────────
 # Data assembly
 # ─────────────────────────────────────────────────────────────────
@@ -91,7 +100,7 @@ def _fetch_application(db, application_id):
     try:
         return db.execute(
             "SELECT id, ref, company_name, country, sector, entity_type, "
-            "       risk_level "
+            "       risk_level, final_risk_level, risk_score "
             "FROM applications WHERE id = ?", (application_id,)
         ).fetchone()
     except Exception:  # pragma: no cover - defensive; some tables omit columns
@@ -139,13 +148,49 @@ def _fetch_edd_findings(db, edd_case_id):
         return None
 
 
+def _fetch_document_requests(db, review_id):
+    try:
+        rows = db.execute(
+            "SELECT id, requirement_key, requirement_label, requirement_type, "
+            "       status, mandatory, linked_document_id, uploaded_at, reviewed_at "
+            "FROM application_enhanced_requirements "
+            "WHERE linked_periodic_review_id = ? AND active = 1 "
+            "ORDER BY id ASC",
+            (review_id,),
+        ).fetchall()
+    except Exception:
+        return []
+    return [dict(row) for row in rows]
+
+
+def _fetch_recent_audit_refs(db, review_id, application_id):
+    targets = [f"periodic_review:{review_id}", f"Review {review_id}"]
+    if application_id:
+        targets.append(str(application_id))
+    placeholders = ",".join(["?"] * len(targets))
+    try:
+        rows = db.execute(
+            f"SELECT id, action, timestamp, user_id, user_role "
+            f"FROM audit_log WHERE target IN ({placeholders}) "
+            f"ORDER BY timestamp DESC, id DESC LIMIT 12",
+            tuple(targets),
+        ).fetchall()
+    except Exception:
+        return []
+    return [dict(row) for row in rows]
+
+
 # ─────────────────────────────────────────────────────────────────
 # Section builders (pure; no side effects)
 # ─────────────────────────────────────────────────────────────────
 def _build_header(review, application) -> Dict[str, Any]:
+    review_id = _row_get(review, "id")
     return {
+        "memo_type": "periodic_review_memo_addendum",
         "review_id": _row_get(review, "id"),
+        "review_reference": f"PR-{review_id}",
         "application_id": _row_get(review, "application_id"),
+        "application_ref": _row_get(application, "ref"),
         "application_name": (
             _row_get(application, "company_name")
             or _row_get(review, "client_name")
@@ -155,8 +200,16 @@ def _build_header(review, application) -> Dict[str, Any]:
         "trigger_source": _row_get(review, "trigger_source")
                           or _row_get(review, "trigger_type"),
         "reviewer": _row_get(review, "assigned_officer") or _row_get(review, "decided_by"),
-        "current_risk_level": _row_get(review, "new_risk_level")
-                              or _row_get(review, "risk_level"),
+        "current_risk_level": (
+            _row_get(application, "final_risk_level")
+            or _row_get(application, "risk_level")
+            or _row_get(review, "risk_level")
+        ),
+        "review_period": {
+            "started_at": _row_get(review, "started_at"),
+            "completed_at": _row_get(review, "completed_at"),
+            "outcome_recorded_at": _row_get(review, "outcome_recorded_at"),
+        },
     }
 
 
@@ -216,6 +269,82 @@ def _build_monitoring_summary(review, alert) -> Dict[str, Any]:
     }
 
 
+def _build_attestation_summary(review) -> Dict[str, Any]:
+    payload = _coerce_json(_row_get(review, "client_attestation_payload"), {})
+    answers = payload.get("answers") if isinstance(payload, dict) else {}
+    questions = payload.get("questions") if isinstance(payload, dict) else []
+    material_changes = []
+    comments = []
+    if isinstance(questions, list):
+        for item in questions:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key") or item.get("question_key")
+            answer = str(item.get("answer") or "").strip().lower()
+            comment = str(item.get("comment") or "").strip()
+            material = bool(item.get("is_material_change")) or (
+                answer == "yes" and key != "company_contact_details_correct"
+            ) or (
+                answer == "no" and key == "company_contact_details_correct"
+            )
+            if material and key:
+                material_changes.append(key)
+                if comment:
+                    comments.append({"key": key, "comment": comment})
+    if isinstance(answers, dict):
+        for key, value in answers.items():
+            if not isinstance(value, dict):
+                continue
+            answer = str(value.get("answer") or "").strip().lower()
+            comment = str(value.get("comment") or "").strip()
+            material = (
+                answer == "yes" and key != "company_contact_details_correct"
+            ) or (
+                answer == "no" and key == "company_contact_details_correct"
+            )
+            if material and key not in material_changes:
+                material_changes.append(key)
+                if comment:
+                    comments.append({"key": key, "comment": comment})
+    categories = _coerce_json(_row_get(review, "material_change_categories"), [])
+    if isinstance(categories, list):
+        for key in categories:
+            if key and str(key) not in material_changes:
+                material_changes.append(str(key))
+    return {
+        "status": _row_get(review, "client_attestation_status") or "not_started",
+        "submitted_at": _row_get(review, "client_attestation_submitted_at"),
+        "questionnaire_version": _row_get(review, "client_attestation_questionnaire_version"),
+        "material_changes_declared": material_changes,
+        "material_change_count": len(material_changes),
+        "material_change_comments": comments,
+    }
+
+
+def _build_documents_summary(document_requests) -> Dict[str, Any]:
+    requested = []
+    for item in document_requests:
+        requested.append({
+            "id": item.get("id"),
+            "requirement_key": item.get("requirement_key"),
+            "requirement_label": item.get("requirement_label"),
+            "status": item.get("status"),
+            "mandatory": bool(item.get("mandatory")),
+            "uploaded": bool(item.get("linked_document_id")),
+            "linked_document_id": item.get("linked_document_id"),
+        })
+    return {
+        "requested_count": len(requested),
+        "uploaded_count": len([item for item in requested if item["uploaded"]]),
+        "outstanding_count": len([
+            item for item in requested
+            if item["mandatory"] and not item["uploaded"]
+            and str(item.get("status") or "").lower() not in {"accepted", "waived", "cancelled"}
+        ]),
+        "items": requested,
+    }
+
+
 def _build_required_items(review) -> list:
     raw = _row_get(review, "required_items")
     items = _coerce_json(raw, [])
@@ -246,10 +375,32 @@ def _build_edd_summary(review, edd_case, edd_findings) -> Dict[str, Any]:
     }
 
 
-def _build_risk_reassessment(review) -> Dict[str, Any]:
+def _build_risk_reassessment(review, application, suggested) -> Dict[str, Any]:
+    current_risk = (
+        _row_get(application, "final_risk_level")
+        or _row_get(application, "risk_level")
+        or _row_get(review, "risk_level")
+    )
+    confirmed_risk = _row_get(review, "confirmed_risk_level") or current_risk
     return {
+        "current_risk_rating_before_review": current_risk,
+        "risk_score": _row_get(application, "risk_score"),
+        "suggested_risk_impact": suggested.get("suggested_risk_impact"),
+        "suggested_reason_summary": suggested.get("reason_summary", []),
+        "officer_confirmed_risk_decision": _row_get(review, "officer_risk_decision"),
+        "confirmed_risk_rating": confirmed_risk,
+        "new_risk_rating": _row_get(review, "new_risk_level") or (
+            confirmed_risk if confirmed_risk != current_risk else None
+        ),
+        "rationale": _row_get(review, "risk_reassessment_rationale")
+        or _row_get(review, "risk_rerate_reason")
+        or _row_get(review, "outcome_reason")
+        or "",
+        "senior_review_required": _boolish(_row_get(review, "senior_review_required")),
+        "senior_review_note": _row_get(review, "senior_review_reason")
+        or _row_get(review, "officer_internal_review_note"),
         "outcome": _row_get(review, "outcome"),
-        "rationale": _row_get(review, "outcome_reason") or "",
+        "final_review_outcome_rationale": _row_get(review, "outcome_reason") or "",
     }
 
 
@@ -269,6 +420,7 @@ def _build_conclusion(review) -> Dict[str, Any]:
         "outcome": outcome,
         "outcome_reason": _row_get(review, "outcome_reason") or "",
         "next_step": next_step,
+        "next_review_date": _row_get(review, "next_review_date"),
     }
 
 
@@ -287,11 +439,24 @@ def _build_artifact_references(review, alert) -> Dict[str, Any]:
     }
 
 
+def _build_officer_findings(review) -> Dict[str, Any]:
+    return {
+        "findings_summary": _row_get(review, "officer_findings_note") or "",
+        "follow_up_points": _row_get(review, "officer_deficiencies_note") or "",
+        "rationale": _row_get(review, "officer_rationale")
+        or _row_get(review, "outcome_reason")
+        or "",
+        "senior_review_note": _row_get(review, "officer_internal_review_note")
+        or _row_get(review, "senior_review_reason")
+        or "",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────
 def build_memo_data(db, review_id: int) -> Dict[str, Any]:
-    """Assemble the 9-section memo payload. Pure (no DB writes).
+    """Assemble the periodic-review memo addendum payload. Pure (no DB writes).
 
     Raises ValueError if the review does not exist.
     """
@@ -305,16 +470,28 @@ def build_memo_data(db, review_id: int) -> Dict[str, Any]:
     edd_case = _fetch_edd(db, linked_edd_id)
     edd_findings = _fetch_edd_findings(db, linked_edd_id)
 
+    import periodic_review_risk_reassessment as prr
+
+    document_requests = _fetch_document_requests(db, review_id)
+    suggested = prr.derive_suggested_risk_impact(db, review, application=application)
+    audit_refs = _fetch_recent_audit_refs(
+        db, review_id, _row_get(review, "application_id"),
+    )
+
     return {
         "header": _build_header(review, application),
         "review_purpose": _build_review_purpose(review),
         "current_profile_snapshot": _build_profile_snapshot(review, application),
+        "attestation_summary": _build_attestation_summary(review),
+        "documents_summary": _build_documents_summary(document_requests),
         "monitoring_screening_summary": _build_monitoring_summary(review, alert),
         "required_items": _build_required_items(review),
         "edd_summary": _build_edd_summary(review, edd_case, edd_findings),
-        "risk_reassessment": _build_risk_reassessment(review),
+        "officer_findings": _build_officer_findings(review),
+        "risk_reassessment": _build_risk_reassessment(review, application, suggested),
         "conclusion": _build_conclusion(review),
         "artifact_references": _build_artifact_references(review, alert),
+        "audit_references": audit_refs,
     }
 
 
@@ -393,6 +570,7 @@ def generate_periodic_review_memo(db, review_id: int) -> Dict[str, Any]:
             "version": persisted["version"],
             "memo_id": persisted["id"],
             "status": STATUS_GENERATED,
+            "memo_addendum_status": "draft_generated",
         }
     except Exception as exc:
         logger.error(
@@ -430,11 +608,16 @@ def fetch_latest_memo(db, review_id: int) -> Optional[Dict[str, Any]]:
     memo_context = _coerce_json(_row_get(row, "memo_context"),
                                 {"kind": MEMO_CONTEXT_KIND})
     return {
+        "memo_id": _row_get(row, "id"),
         "review_id": _row_get(row, "periodic_review_id"),
         "version": _row_get(row, "version"),
         "generated_at": _row_get(row, "generated_at"),
         "generated_by": _row_get(row, "generated_by"),
         "status": _row_get(row, "status"),
+        "memo_addendum_status": (
+            "finalized" if _row_get(row, "status") == "finalized"
+            else ("failed" if _row_get(row, "status") == STATUS_GENERATION_FAILED else "draft_generated")
+        ),
         "memo_context": memo_context,
         "memo_data": memo_data,
     }

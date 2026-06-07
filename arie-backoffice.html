@@ -15701,6 +15701,224 @@ async function completePeriodicReviewDecision(reviewId) {
   }
 }
 
+function periodicReviewRiskLevelOptions(selected) {
+  var levels = [['LOW', 'Low'], ['MEDIUM', 'Medium'], ['HIGH', 'High'], ['VERY_HIGH', 'Very High']];
+  return levels.map(function(pair) {
+    return '<option value="' + pair[0] + '"' + (String(selected || '').toUpperCase() === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>';
+  }).join('');
+}
+
+function periodicReviewRiskImpactOptions(selected) {
+  var options = [
+    ['no_risk_impact_identified', 'No risk impact identified'],
+    ['profile_update_only', 'Profile update only'],
+    ['potential_risk_increase', 'Potential risk increase'],
+    ['potential_risk_decrease', 'Potential risk decrease'],
+    ['senior_review_required', 'Senior review required'],
+    ['escalation_recommended', 'Escalation recommended']
+  ];
+  return options.map(function(pair) {
+    return '<option value="' + pair[0] + '"' + (String(selected || '') === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>';
+  }).join('');
+}
+
+function periodicReviewRiskDecisionOptions(selected) {
+  var options = [
+    ['', 'Select officer risk decision'],
+    ['keep_current_risk_rating', 'Keep current risk rating'],
+    ['increase_risk_rating', 'Increase risk rating'],
+    ['decrease_risk_rating', 'Decrease risk rating'],
+    ['senior_review_required_before_risk_change', 'Senior review required before risk change'],
+    ['escalate_for_separate_review', 'Escalate for separate review']
+  ];
+  return options.map(function(pair) {
+    return '<option value="' + escapeHtml(pair[0]) + '"' + (String(selected || '') === pair[0] ? ' selected' : '') + '>' + escapeHtml(pair[1]) + '</option>';
+  }).join('');
+}
+
+function periodicReviewRiskDraft(reviewId) {
+  var impactEl = document.getElementById('periodic-review-risk-impact-' + reviewId);
+  var decisionEl = document.getElementById('periodic-review-risk-decision-' + reviewId);
+  var levelEl = document.getElementById('periodic-review-risk-level-' + reviewId);
+  var rationaleEl = document.getElementById('periodic-review-risk-rationale-' + reviewId);
+  var seniorEl = document.getElementById('periodic-review-risk-senior-' + reviewId);
+  var seniorReasonEl = document.getElementById('periodic-review-risk-senior-reason-' + reviewId);
+  return {
+    risk_impact_category: impactEl ? impactEl.value : '',
+    officer_risk_decision: decisionEl ? decisionEl.value : '',
+    confirmed_risk_level: levelEl ? levelEl.value : '',
+    rationale: rationaleEl ? rationaleEl.value.trim() : '',
+    senior_review_required: !!(seniorEl && seniorEl.checked),
+    senior_review_reason: seniorReasonEl ? seniorReasonEl.value.trim() : ''
+  };
+}
+
+function refreshPeriodicReviewRiskActions(reviewId) {
+  var draft = periodicReviewRiskDraft(reviewId);
+  var saveBtn = document.getElementById('periodic-review-risk-save-btn-' + reviewId);
+  var warning = document.getElementById('periodic-review-risk-validation-' + reviewId);
+  var blockers = [];
+  if (!draft.officer_risk_decision) blockers.push('Select an officer risk decision');
+  if (!draft.rationale) blockers.push('Rationale is required');
+  if ((draft.officer_risk_decision === 'increase_risk_rating' || draft.officer_risk_decision === 'decrease_risk_rating') && !draft.confirmed_risk_level) {
+    blockers.push('Confirmed risk level is required for a risk change');
+  }
+  if (warning) {
+    warning.innerHTML = blockers.length
+      ? '<div style="font-size:12px;color:#92400e;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);border-radius:12px;padding:10px 12px;">' + blockers.map(escapeHtml).join(' · ') + '</div>'
+      : '<div style="font-size:12px;color:#047857;background:rgba(5,150,105,0.10);border:1px solid rgba(5,150,105,0.22);border-radius:12px;padding:10px 12px;">Risk reassessment fields are ready to save. Backend validation still applies.</div>';
+  }
+  if (saveBtn) saveBtn.disabled = blockers.length > 0;
+}
+
+function renderPeriodicReviewMemoAddendumPreview(memoData) {
+  if (!memoData || !memoData.memo_data) {
+    return '<div style="font-size:12px;color:var(--text2);">No memo addendum content available.</div>';
+  }
+  var data = memoData.memo_data || {};
+  var header = data.header || {};
+  var risk = data.risk_reassessment || {};
+  var attestation = data.attestation_summary || {};
+  var docs = data.documents_summary || {};
+  var findings = data.officer_findings || {};
+  var conclusion = data.conclusion || {};
+  return '<div style="display:grid;gap:10px;font-size:12px;color:var(--text2);line-height:1.55;">' +
+    '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
+      lifecycleDetailMeta('Review', header.review_reference || ('PR-' + String(memoData.review_id || ''))) +
+      lifecycleDetailMeta('Application', header.application_ref || header.application_id || '—') +
+      lifecycleDetailMeta('Company', header.application_name || '—') +
+      lifecycleDetailMeta('Status', memoData.memo_addendum_status || memoData.status || 'draft') +
+    '</div>' +
+    '<div><strong>Risk decision:</strong> ' + escapeHtml(risk.officer_confirmed_risk_decision || 'Not confirmed') + ' · ' + escapeHtml(risk.current_risk_rating_before_review || '—') + ' → ' + escapeHtml(risk.confirmed_risk_rating || risk.new_risk_rating || risk.current_risk_rating_before_review || '—') + '</div>' +
+    '<div><strong>Attestation:</strong> ' + escapeHtml(attestation.status || 'not recorded') + '; material changes: ' + escapeHtml(String(attestation.material_change_count || 0)) + '</div>' +
+    '<div><strong>Documents:</strong> requested ' + escapeHtml(String(docs.requested_count || 0)) + ', uploaded ' + escapeHtml(String(docs.uploaded_count || 0)) + ', outstanding ' + escapeHtml(String(docs.outstanding_count || 0)) + '</div>' +
+    '<div><strong>Officer findings:</strong> ' + escapeHtml(findings.findings_summary || 'Not recorded') + '</div>' +
+    '<div><strong>Final outcome:</strong> ' + escapeHtml(conclusion.outcome || 'Not recorded') + (conclusion.next_review_date ? ' · Next review: ' + escapeHtml(lifecycleFormatDate(conclusion.next_review_date)) : '') + '</div>' +
+  '</div>';
+}
+
+async function savePeriodicReviewRiskReassessment(reviewId) {
+  var draft = periodicReviewRiskDraft(reviewId);
+  refreshPeriodicReviewRiskActions(reviewId);
+  var btn = document.getElementById('periodic-review-risk-save-btn-' + reviewId);
+  if (btn && btn.disabled) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/risk-reassessment', draft);
+    showToast('Risk reassessment saved.');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to save risk reassessment: ' + (err.message || 'unknown error'), 'error');
+    if (btn) btn.textContent = 'Save risk reassessment';
+    refreshPeriodicReviewRiskActions(reviewId);
+  }
+}
+
+async function generatePeriodicReviewMemoAddendum(reviewId) {
+  var btn = document.getElementById('periodic-review-memo-generate-btn-' + reviewId);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+  }
+  try {
+    var resp = await boApiCall('POST', '/periodic-reviews/' + encodeURIComponent(reviewId) + '/memo', {});
+    var preview = document.getElementById('periodic-review-memo-preview-' + reviewId);
+    if (preview && resp && resp.memo) preview.innerHTML = renderPeriodicReviewMemoAddendumPreview(resp.memo);
+    showToast('Periodic review memo addendum generated.');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to generate memo addendum: ' + (err.message || 'unknown error'), 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Generate memo addendum';
+    }
+  }
+}
+
+async function viewPeriodicReviewMemoAddendum(reviewId) {
+  var preview = document.getElementById('periodic-review-memo-preview-' + reviewId);
+  if (preview) preview.innerHTML = '<div style="font-size:12px;color:var(--text2);">Loading memo addendum…</div>';
+  try {
+    var memo = await boApiCall('GET', '/periodic-reviews/' + encodeURIComponent(reviewId) + '/memo');
+    if (preview) preview.innerHTML = renderPeriodicReviewMemoAddendumPreview(memo);
+  } catch (err) {
+    if (preview) preview.innerHTML = '<div style="font-size:12px;color:var(--red);">Failed to load memo addendum: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+  }
+}
+
+async function finalizePeriodicReviewMemoAddendum(reviewId) {
+  var btn = document.getElementById('periodic-review-memo-finalize-btn-' + reviewId);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Finalizing…';
+  }
+  try {
+    await boApiCall('POST', '/periodic-reviews/' + encodeURIComponent(reviewId) + '/memo/finalize', {});
+    showToast('Memo addendum finalized.');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to finalize memo addendum: ' + (err.message || 'unknown error'), 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Finalize addendum';
+    }
+  }
+}
+
+function renderPeriodicReviewWorkspaceRiskReassessment(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var risk = workspace.risk_reassessment || reviewDetail.risk_reassessment || {};
+  var suggested = risk.suggested || {};
+  var reviewId = reviewDetail && reviewDetail.id;
+  if (!reviewId) {
+    return '<div style="font-size:12px;color:var(--text2);">No periodic review is available for risk reassessment.</div>';
+  }
+  var currentRisk = risk.current_risk_level || risk.confirmed_risk_level || reviewDetail.risk_level || 'MEDIUM';
+  var confirmedRisk = risk.confirmed_risk_level || currentRisk;
+  var impact = risk.risk_impact_category || suggested.suggested_risk_impact || 'no_risk_impact_identified';
+  var decision = risk.officer_risk_decision || '';
+  var memoStatus = risk.memo_addendum_status || 'not_generated';
+  var reasons = Array.isArray(suggested.reason_summary) ? suggested.reason_summary : [];
+  var evidenceCounts = suggested.evidence_counts || risk.document_summary || {};
+  var seniorSuggested = !!(suggested.senior_review_suggested || risk.senior_review_required);
+  return '<div style="display:grid;gap:14px;">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      lifecycleDetailBadge('Current risk: ' + String(currentRisk || '—'), 'slate') +
+      lifecycleDetailBadge('Suggested: ' + String((suggested.suggested_risk_impact_label || impact || '').replace(/_/g, ' ')), seniorSuggested ? 'amber' : 'blue') +
+      lifecycleDetailBadge('Memo addendum: ' + String(memoStatus).replace(/_/g, ' '), memoStatus === 'finalized' ? 'green' : (memoStatus === 'failed' ? 'red' : 'slate')) +
+      (seniorSuggested ? lifecycleDetailBadge('Senior review flag', 'amber') : lifecycleDetailBadge('No senior-review flag', 'green')) +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;">This section records officer-confirmed risk judgement for the periodic review. It does not automatically change the application risk rating.</div>' +
+    (reasons.length ? '<div style="font-size:12px;color:var(--text2);line-height:1.6;"><strong>Suggested impact basis:</strong> ' + reasons.map(escapeHtml).join(' ') + '</div>' : '') +
+    '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
+      lifecycleDetailMeta('Material changes', String(evidenceCounts.material_change_count || 0)) +
+      lifecycleDetailMeta('Document requests', String(evidenceCounts.document_request_count || 0)) +
+      lifecycleDetailMeta('Uploaded documents', String(evidenceCounts.uploaded_document_count || 0)) +
+      lifecycleDetailMeta('High / critical alerts', String(evidenceCounts.high_or_critical_alert_count || 0)) +
+      lifecycleDetailMeta('Saved', risk.saved_at ? lifecycleFormatDate(risk.saved_at) : 'Not saved') +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+      '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Suggested risk impact</label><select id="periodic-review-risk-impact-' + reviewId + '" onchange="refreshPeriodicReviewRiskActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' + periodicReviewRiskImpactOptions(impact) + '</select></div>' +
+      '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer-confirmed risk decision</label><select id="periodic-review-risk-decision-' + reviewId + '" onchange="refreshPeriodicReviewRiskActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' + periodicReviewRiskDecisionOptions(decision) + '</select></div>' +
+      '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Confirmed risk level</label><select id="periodic-review-risk-level-' + reviewId + '" onchange="refreshPeriodicReviewRiskActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' + periodicReviewRiskLevelOptions(confirmedRisk) + '</select></div>' +
+    '</div>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Risk reassessment rationale</label><textarea id="periodic-review-risk-rationale-' + reviewId + '" rows="4" oninput="refreshPeriodicReviewRiskActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(risk.risk_reassessment_rationale || '') + '</textarea></div>' +
+    '<label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text2);"><input type="checkbox" id="periodic-review-risk-senior-' + reviewId + '"' + (risk.senior_review_required || seniorSuggested ? ' checked' : '') + ' onchange="refreshPeriodicReviewRiskActions(\'' + reviewId + '\')" style="margin-top:2px;"> Senior review required for this risk reassessment.</label>' +
+    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Senior review reason / note</label><textarea id="periodic-review-risk-senior-reason-' + reviewId + '" rows="2" oninput="refreshPeriodicReviewRiskActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(risk.senior_review_reason || '') + '</textarea></div>' +
+    '<div id="periodic-review-risk-validation-' + reviewId + '"></div>' +
+    '<div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">' +
+      '<button class="btn btn-outline btn-sm" onclick="viewPeriodicReviewMemoAddendum(\'' + reviewId + '\')">View memo addendum</button>' +
+      '<button class="btn btn-outline btn-sm" id="periodic-review-memo-finalize-btn-' + reviewId + '" onclick="finalizePeriodicReviewMemoAddendum(\'' + reviewId + '\')">Finalize addendum</button>' +
+      '<button class="btn btn-outline btn-sm" id="periodic-review-memo-generate-btn-' + reviewId + '" onclick="generatePeriodicReviewMemoAddendum(\'' + reviewId + '\')">Generate memo addendum</button>' +
+      '<button class="btn btn-primary btn-sm" id="periodic-review-risk-save-btn-' + reviewId + '" onclick="savePeriodicReviewRiskReassessment(\'' + reviewId + '\')" disabled>Save risk reassessment</button>' +
+    '</div>' +
+    '<div id="periodic-review-memo-preview-' + reviewId + '" style="padding:12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">Memo addendum preview appears here after generation or view.</div>' +
+  '</div>';
+}
+
 function applicationAlertsSeverityTone(severity) {
   var value = String(severity || '').trim().toLowerCase();
   if (value === 'critical') return { bg: 'rgba(220, 38, 38, 0.12)', color: '#b91c1c' };
@@ -15845,6 +16063,9 @@ function renderLifecycleDetailTab(context) {
   var decisionCardHtml = activeReview
     ? lifecycleDetailCard('Periodic Review Decision', 'Officer-controlled closure with required completion gates.', renderPeriodicReviewWorkspaceDecision(activeReview), '#0f172a')
     : '';
+  var riskReassessmentCardHtml = activeReview
+    ? lifecycleDetailCard('Risk Reassessment & Memo Addendum', 'Officer-confirmed risk judgement and concise periodic-review memo addendum.', renderPeriodicReviewWorkspaceRiskReassessment(activeReview), '#7f1d1d')
+    : '';
 
   var historyBody = historyItems.length
     ? historyItems.slice(0, 5).map(function(item) {
@@ -15881,6 +16102,7 @@ function renderLifecycleDetailTab(context) {
       (activeReview ? lifecycleDetailCard('Notification Status', 'Client reminders and officer alert state for this review.', renderPeriodicReviewWorkspaceNotifications(activeReview), '#0f766e') : '') +
       lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
       decisionCardHtml +
+      riskReassessmentCardHtml +
       lifecycleDetailCard('Monitoring Alerts Considered In This Review', 'Compact monitoring context with a direct link back to the owner workflow.', monitoringBody, '#2557d6') +
       lifecycleDetailCard('Review Context', 'Compact current-review context without duplicating the top-line metrics.', reviewContextBody, '#7c3aed') +
       lifecycleDetailCard('Review History', 'Historical periodic reviews are kept separate from the current case context.', historyBody, '#475569') +
@@ -15901,6 +16123,7 @@ async function loadLifecycleDetailTab(force) {
     focusLifecycleDeepLinkTarget();
     if (window._detailLifecycleTabCache.data && window._detailLifecycleTabCache.data.reviewDetail) {
       try { refreshPeriodicReviewDecisionActions(window._detailLifecycleTabCache.data.reviewDetail.id); } catch (e) {}
+      try { refreshPeriodicReviewRiskActions(window._detailLifecycleTabCache.data.reviewDetail.id); } catch (e) {}
     }
     return;
   }
@@ -15936,6 +16159,7 @@ async function loadLifecycleDetailTab(force) {
     if (activeReviewItem && reviewDetail) {
       try { refreshLifecycleMemoActions(reviewDetail.id); } catch (e) {}
       try { refreshPeriodicReviewDecisionActions(reviewDetail.id); } catch (e) {}
+      try { refreshPeriodicReviewRiskActions(reviewDetail.id); } catch (e) {}
     }
   } catch (err) {
     console.warn('Lifecycle detail tab load failed:', err);

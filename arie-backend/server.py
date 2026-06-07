@@ -20301,6 +20301,39 @@ class PeriodicReviewRiskChangeHandler(BaseHandler):
             db.close()
 
 
+class PeriodicReviewRiskReassessmentHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/risk-reassessment — PRS-7 risk decision."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            import periodic_review_risk_reassessment as prr
+            try:
+                result = prr.save_risk_reassessment(
+                    db,
+                    review_id,
+                    payload=data,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except prr.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except prr.RiskReassessmentError as exc:
+                return self.error(str(exc), 400)
+            self.success({
+                "status": "risk_reassessment_saved",
+                "risk_reassessment": result,
+            })
+        finally:
+            db.close()
+
+
 class PeriodicReviewEvidenceLinksHandler(BaseHandler):
     """GET/POST /api/monitoring/reviews/:id/evidence-links."""
     def get(self, review_id):
@@ -20862,6 +20895,7 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
             "screening_status": review.get("screening_status") or "Pending review",
             "blockers": monitoring_screening_blockers,
         },
+        "risk_reassessment": review.get("risk_reassessment") or {},
         "findings_draft": {
             "officer_findings_note": review.get("officer_findings_note"),
             "officer_deficiencies_note": review.get("officer_deficiencies_note"),
@@ -21011,6 +21045,12 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["officer_internal_review_note"] = result.get("officer_internal_review_note")
     result["findings_updated_by"] = result.get("findings_updated_by")
     result["findings_updated_at"] = result.get("findings_updated_at")
+    try:
+        import periodic_review_risk_reassessment as prr
+        result["risk_reassessment"] = prr.build_reassessment_snapshot(db, result["id"])
+    except Exception:
+        logger.exception("Failed to build periodic review risk reassessment snapshot review_id=%s", result.get("id"))
+        result["risk_reassessment"] = {}
     result["review_reference"] = projection.get("review_reference")
     result["audit_reference"] = projection.get("audit_reference")
     result["created_at"] = projection.get("created_at", result.get("created_at"))
@@ -21423,6 +21463,20 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                 # here so the outcome commit is the authoritative result
                 # surfaced to the caller.
                 memo_result = {"status": "generation_failed"}
+            try:
+                import periodic_review_risk_reassessment as prr
+                prr.mark_memo_addendum_generated(
+                    db,
+                    review_id,
+                    memo_result=memo_result,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except Exception:
+                logger.exception(
+                    "Periodic review memo addendum status/audit update failed: review_id=%s",
+                    review_id,
+                )
 
             self.success({
                 "status": "periodic_review_completed",
@@ -21490,7 +21544,122 @@ class PeriodicReviewMemoHandler(BaseHandler):
                 memo["generated_on_demand"] = generated_on_demand
             else:
                 memo["generated_on_demand"] = False
+            try:
+                import periodic_review_risk_reassessment as prr
+                if memo.get("generated_on_demand"):
+                    prr.mark_memo_addendum_generated(
+                        db,
+                        review_id,
+                        memo_result={
+                            "status": memo.get("status"),
+                            "memo_id": memo.get("memo_id"),
+                            "version": memo.get("version"),
+                        },
+                        user=user,
+                        audit_writer=self.log_audit,
+                    )
+                    memo = prm.fetch_latest_memo(db, review_id) or memo
+                    memo["generated_on_demand"] = generated_on_demand
+                snapshot = prr.build_reassessment_snapshot(db, review_id)
+                memo["risk_reassessment"] = snapshot
+                memo["memo_addendum_status"] = snapshot.get("memo_addendum_status") or memo.get("memo_addendum_status")
+            except Exception:
+                logger.exception(
+                    "Failed to enrich periodic review memo response review_id=%s",
+                    review_id,
+                )
             self.success(memo)
+        finally:
+            db.close()
+
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            import periodic_review_memo as prm
+            import periodic_review_risk_reassessment as prr
+            review = db.execute(
+                "SELECT id FROM periodic_reviews WHERE id = ?",
+                (review_id,),
+            ).fetchone()
+            if review is None:
+                return self.error("Review not found", 404)
+            try:
+                memo_result = prm.generate_periodic_review_memo(db, review_id)
+            except Exception as exc:
+                memo_result = {
+                    "status": "generation_failed",
+                    "error": str(exc),
+                }
+                try:
+                    snapshot = prr.mark_memo_addendum_generated(
+                        db,
+                        review_id,
+                        memo_result=memo_result,
+                        user=user,
+                        audit_writer=self.log_audit,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Periodic review memo addendum failure audit failed review_id=%s",
+                        review_id,
+                    )
+                    snapshot = {}
+                self.set_status(500)
+                return self.finish({
+                    "error": "Memo addendum generation failed",
+                    "memo": memo_result,
+                    "risk_reassessment": snapshot,
+                })
+            snapshot = prr.mark_memo_addendum_generated(
+                db,
+                review_id,
+                memo_result=memo_result,
+                user=user,
+                audit_writer=self.log_audit,
+            )
+            memo = prm.fetch_latest_memo(db, review_id)
+            self.success({
+                "status": "memo_addendum_generated",
+                "memo": memo,
+                "risk_reassessment": snapshot,
+            })
+        finally:
+            db.close()
+
+
+class PeriodicReviewMemoFinalizeHandler(BaseHandler):
+    """POST /api/periodic-reviews/:id/memo/finalize — finalize PRS-7 addendum."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            import periodic_review_risk_reassessment as prr
+            try:
+                snapshot = prr.finalize_memo_addendum(
+                    db,
+                    review_id,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except prr.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except prr.RiskReassessmentError as exc:
+                return self.error(str(exc), 400)
+            self.success({
+                "status": "memo_addendum_finalized",
+                "risk_reassessment": snapshot,
+            })
         finally:
             db.close()
 
@@ -24372,6 +24541,8 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)/officer-rationale", PeriodicReviewRationaleHandler),
         (r"/api/monitoring/reviews/([^/]+)/material-change-attestation",
          PeriodicReviewMaterialChangeHandler),
+        (r"/api/monitoring/reviews/([^/]+)/risk-reassessment",
+         PeriodicReviewRiskReassessmentHandler),
         (r"/api/monitoring/reviews/([^/]+)/risk-change", PeriodicReviewRiskChangeHandler),
         (r"/api/monitoring/reviews/([^/]+)/evidence-links", PeriodicReviewEvidenceLinksHandler),
         (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),
@@ -24381,7 +24552,9 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
         (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
 
-        # PR-D: Lightweight periodic review memo artifact (read-only)
+        # PR-D / PRS-7: Lightweight periodic review memo addendum artifact
+        (r"/api/periodic-reviews/([^/]+)/memo/finalize",
+         PeriodicReviewMemoFinalizeHandler),
         (r"/api/periodic-reviews/([^/]+)/memo", PeriodicReviewMemoHandler),
 
         # SAR (Suspicious Activity Reports)
