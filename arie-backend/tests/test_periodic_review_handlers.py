@@ -591,6 +591,25 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         open_reviews = json.loads(open_queue.body)["reviews"]
         self.assertFalse(any(item["id"] == rid for item in open_reviews))
 
+    def test_completion_payload_rationale_satisfies_gate(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
+        rid = self._create_review(status="in_progress", officer_rationale="")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="Payload rationale supplied at closure"),
+        )
+        self.assertEqual(resp.code, 200)
+        row = self._conn.execute(
+            "SELECT status, officer_rationale FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(row["status"], "completed")
+        self.assertEqual(row["officer_rationale"], "Payload rationale supplied at closure")
+
     def test_replay_blocked(self):
         self._conn.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
