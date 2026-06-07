@@ -1279,7 +1279,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <summary>
             <div class="prescreen-collapsible-copy">
               <div class="prescreen-collapsible-title">Pre-Screening Summary</div>
-              <div class="prescreen-collapsible-subtitle">All data submitted by the client during pre-screening.</div>
+              <div class="prescreen-collapsible-subtitle">Client-submitted onboarding data with controlled officer corrections shown where recorded.</div>
             </div>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <button class="btn btn-outline btn-sm" id="btn-prescreen-correction-mode" onclick="enterPrescreenCorrectionMode(event)" style="font-size:11px;">Edit in Correction Mode</button>
@@ -7588,9 +7588,15 @@ async function fetchApplicationDetail(ref) {
 }
 
 var PRESCREEN_CORRECTION_ALLOWED_FIELDS = {
-  registered_entity_name: { label: 'Registered Entity Name' },
-  trading_name: { label: 'Trading Name' },
-  referrer_name: { label: 'Referrer' }
+  registered_entity_name: { label: 'Registered Entity Name', riskRelevant: false },
+  trading_name: { label: 'Trading Name', riskRelevant: false },
+  referrer_name: { label: 'Referrer', riskRelevant: false },
+  country_of_incorporation: { label: 'Country of Incorporation', riskRelevant: true },
+  sector: { label: 'Sector / Industry', riskRelevant: true },
+  entity_type: { label: 'Entity Type', riskRelevant: true },
+  ownership_structure: { label: 'Ownership Structure', riskRelevant: true },
+  introduction_method: { label: 'Introduction Method', riskRelevant: true },
+  monthly_volume: { label: 'Monthly Volume', riskRelevant: true }
 };
 var PRESCREEN_CORRECTION_MODE_ACTIVE = false;
 var LAST_PRESCREEN_FIELDS = [];
@@ -7679,7 +7685,7 @@ async function savePrescreenCorrectionMode(event) {
       errorEl.style.display = 'none';
       errorEl.textContent = '';
     }
-    await boApiCall('POST', '/applications/' + currentApp.id + '/officer-corrections', {
+    var result = await boApiCall('POST', '/applications/' + currentApp.id + '/officer-corrections', {
       field_changes: changes,
       correction_reason: reason,
       evidence_source: 'Officer Correction Mode',
@@ -7688,7 +7694,12 @@ async function savePrescreenCorrectionMode(event) {
     PRESCREEN_CORRECTION_MODE_ACTIVE = false;
     await refreshCurrentAppDetail();
     loadActivityLog(currentApp);
-    showToast('Officer correction recorded. No risk recomputation required for PR410A fields.');
+    var downstream = (result && result.downstream_state) || {};
+    if (downstream.risk_recomputed) {
+      showToast('Officer correction recorded. Risk recomputed and memo controls refreshed.');
+    } else {
+      showToast('Officer correction recorded. No risk recomputation required for non-risk fields.');
+    }
   } catch (err) {
     if (errorEl) {
       errorEl.style.display = 'block';
@@ -7736,9 +7747,9 @@ function renderPrescreenSummary(app, prescreenFields) {
         '</div>';
       }
       if (mode && field.riskRelevant) {
-        return '<div title="Risk-relevant corrections will be handled in the next controlled release." style="' + baseStyle + 'opacity:0.72;">' + label +
+        return '<div title="This correction type is deferred to a later controlled release." style="' + baseStyle + 'opacity:0.72;">' + label +
           '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(current) + '</div>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Locked: Risk-relevant corrections will be handled in the next controlled release.</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Locked: this risk-relevant correction type is deferred to a later controlled release.</div>' +
         '</div>';
       }
       return '<div style="' + baseStyle + '">' + label +
@@ -7824,8 +7835,8 @@ function renderAuthoritativeAppDetail(app, options) {
     // ── Entity Information ──
     { key: 'registered_entity_name', label: 'Registered Entity Name', value: detailValueFromAliases(psData, ['registered_entity_name', 'company_name', 'entity_name']) },
     { key: 'trading_name', label: 'Trading Name', value: detailValueFromAliases(psData, ['trading_name', 'trade_name']) },
-    { label: 'Entity Type', value: detailValueFromAliases(psData, ['entity_type']), riskRelevant: true },
-    { label: 'Ownership Structure', value: detailValueFromAliases(psData, ['ownership_structure']), riskRelevant: true },
+    { key: 'entity_type', label: 'Entity Type', value: firstMeaningfulDetailValue(app.entityType, detailValueFromAliases(psData, ['entity_type'])), riskRelevant: true },
+    { key: 'ownership_structure', label: 'Ownership Structure', value: firstMeaningfulDetailValue(app.ownershipStructure, detailValueFromAliases(psData, ['ownership_structure'])), riskRelevant: true },
     // ── Contact ──
     { label: 'Contact Name', value: firstMeaningfulDetailValue(
         [detailValueFromAliases(psData, ['entity_contact_first', 'contact_first']), detailValueFromAliases(psData, ['entity_contact_last', 'contact_last'])].filter(Boolean).join(' '),
@@ -7843,7 +7854,7 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
     // ── Incorporation Details ──
     { label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
-    { label: 'Country of Incorporation', value: detailValueFromAliases(psData, ['country_of_incorporation', 'country']), riskRelevant: true },
+    { key: 'country_of_incorporation', label: 'Country of Incorporation', value: firstMeaningfulDetailValue(app.country, detailValueFromAliases(psData, ['country_of_incorporation', 'country'])), riskRelevant: true },
     { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
     { label: 'Authorised Share Capital', value: (function() {
@@ -7861,8 +7872,9 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Licence Type', value: detailValueFromAliases(psData, ['licence_type']) },
     // ── Business Operations ──
     { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), ''), riskRelevant: true },
+    { key: 'sector', label: 'Sector / Industry', value: firstMeaningfulDetailValue(app.sector, detailValueFromAliases(psData, ['sector', 'industry'])), riskRelevant: true },
     { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },
-    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])), riskRelevant: true },
+    { key: 'monthly_volume', label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])), riskRelevant: true },
     { label: 'Transaction Complexity', value: detailValueFromAliases(psData, ['transaction_complexity']) },
     { label: 'Countries of Operation', value: detailValueFromAliases(psData, ['countries_of_operation']) },
     { label: 'Target Markets', value: detailValueFromAliases(psData, ['target_markets']) },
@@ -7891,7 +7903,7 @@ function renderAuthoritativeAppDetail(app, options) {
     // ── Management ──
     { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) },
     // ── Referral ──
-    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']), riskRelevant: true },
+    { key: 'introduction_method', label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']), riskRelevant: true },
     { key: 'referrer_name', label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) }
   ];
   renderPrescreenSummary(app, prescreenFields);
@@ -18656,6 +18668,7 @@ function renderOfficerCorrectionHistory(app) {
     var downstream = safeObject(item.downstream_state);
     var sourceSurface = downstream.source_surface || item.correction_source || 'officer_review';
     var riskImpact = downstream.risk_impact || (downstream.risk_recomputed ? 'Risk recomputed' : 'No risk recomputation required');
+    var memoImpact = downstream.memo_impact || (downstream.memo_requires_regeneration ? 'Memo marked stale' : 'No memo impact');
     return '<div style="padding:12px;margin-bottom:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Field corrected:</strong> ' + escapeHtml(fieldLabel) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Before:</strong> ' + escapeHtml(beforeText) + '</div>' +
@@ -18664,6 +18677,7 @@ function renderOfficerCorrectionHistory(app) {
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Date:</strong> ' + escapeHtml(normalizeDetailValue(item.corrected_at)) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Source surface:</strong> ' + escapeHtml(String(sourceSurface).replace(/_/g, ' ')) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Risk impact:</strong> ' + escapeHtml(riskImpact) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Memo impact:</strong> ' + escapeHtml(memoImpact) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);"><strong>Reason / Evidence:</strong> ' + escapeHtml(officerCorrectionHistoryReasonEvidence(item)) + '</div>' +
     '</div>';
   }).join('');

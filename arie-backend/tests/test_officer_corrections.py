@@ -146,6 +146,13 @@ def _insert_case(
         "registered_entity_name": "Officer Correction Test Ltd",
         "trading_name": "Original Trading Name",
         "referrer_name": "Original Referrer",
+        "country_of_incorporation": country,
+        "country": country,
+        "sector": sector,
+        "entity_type": "Limited Company",
+        "ownership_structure": "Simple",
+        "introduction_method": "Direct application — client initiated",
+        "monthly_volume": "Under USD 50,000 per month",
         "source_of_funds": "Salary income",
         "expected_volume": "Under 50,000",
     }
@@ -368,7 +375,7 @@ def test_pr410a_prescreening_correction_rejects_disallowed_field(officer_correct
         },
     )
     assert resp.status_code == 400
-    assert "Unsupported PR410A correction field" in resp.text
+    assert "Unsupported controlled correction field" in resp.text
 
 
 def test_pr410a_prescreening_correction_rejects_missing_reason(officer_correction_api_server):
@@ -458,6 +465,172 @@ def test_pr410a_prescreening_correction_persists_history_audit_and_overlay_witho
     assert json.loads(audit["after_state"])["trading_name"] == "Corrected Trading Name"
 
 
+def test_pr410b_controlled_sector_correction_recomputes_risk_marks_memo_stale_and_preserves_original_submission(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, sector="Technology")
+    before_app = conn.execute(
+        "SELECT risk_level, risk_score, risk_dimensions, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {"sector": "Crypto Exchange"},
+            "correction_reason": "Officer verified VASP activity from business model evidence.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["materiality"] == "tier1"
+    assert body["before_state"]["sector"] == "Technology"
+    assert body["after_state"]["sector"] == "Crypto Exchange"
+    assert body["before_state"]["risk_before"]["risk_score"] == before_app["risk_score"]
+    assert body["after_state"]["risk_after"]["risk_score"] != before_app["risk_score"]
+    assert body["downstream_state"]["risk_relevant"] is True
+    assert body["downstream_state"]["risk_recomputed"] is True
+    assert body["downstream_state"]["memo_requires_regeneration"] is True
+    assert body["downstream_state"]["memo_impact"] == "Memo marked stale"
+
+    detail = _detail(base_url, case["app_id"])
+    assert detail["sector"] == "Crypto Exchange"
+    assert detail["officer_correction_display_values"]["sector"] == "Crypto Exchange"
+    assert detail["officer_correction_display_metadata"]["sector"]["original_client_value"] == "Technology"
+    assert detail["memo_requires_regeneration"] is True
+    assert detail["memo_is_stale"] is True
+    assert detail["risk_score"] != before_app["risk_score"]
+
+    conn = _db_conn(db_path)
+    after_app = conn.execute(
+        "SELECT sector, risk_level, risk_score, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    memo = conn.execute(
+        "SELECT is_stale, stale_trigger, review_status, validation_status, supervisor_status FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+        (case["app_id"],),
+    ).fetchone()
+    correction = conn.execute(
+        """
+        SELECT before_state, after_state, downstream_state
+        FROM application_corrections
+        WHERE application_id = ? AND field_scope = 'sector'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (case["app_id"],),
+    ).fetchone()
+    audit = conn.execute(
+        """
+        SELECT detail, before_state, after_state
+        FROM audit_log
+        WHERE target = ? AND action = 'officer_correction_created'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (case["ref"],),
+    ).fetchone()
+    conn.close()
+    assert after_app["sector"] == "Crypto Exchange"
+    assert json.loads(after_app["prescreening_data"])["sector"] == "Technology"
+    assert memo["is_stale"] in (1, True)
+    assert memo["stale_trigger"] == "controlled_prescreening_officer_correction"
+    assert memo["review_status"] == "draft"
+    assert memo["validation_status"] == "pending"
+    assert memo["supervisor_status"] == "pending"
+    correction_after = json.loads(correction["after_state"])
+    correction_downstream = json.loads(correction["downstream_state"])
+    assert correction_after["risk_after"]["risk_score"] == after_app["risk_score"]
+    assert correction_downstream["risk_recomputed"] is True
+    assert "Risk recomputed" in correction_downstream["risk_impact"]
+    assert "memo impact: Memo marked stale" in audit["detail"]
+    assert json.loads(audit["before_state"])["risk_before"]["risk_score"] == before_app["risk_score"]
+    assert json.loads(audit["after_state"])["risk_after"]["risk_score"] == after_app["risk_score"]
+
+    approve = requests.patch(
+        f"{base_url}/api/applications/{case['app_id']}",
+        headers=_headers("admin"),
+        json={"status": "approved"},
+        timeout=5,
+    )
+    assert approve.status_code == 400, approve.text
+    assert "memo" in approve.text.lower() and "stale" in approve.text.lower()
+
+
+@pytest.mark.parametrize(
+    "field_path,new_value",
+    [
+        ("country_of_incorporation", "Iran"),
+        ("entity_type", "Trust"),
+        ("ownership_structure", "Complex multi-jurisdiction / opaque structure"),
+        ("introduction_method", "Introduced by high-risk third-party intermediary"),
+        ("monthly_volume", "Over USD 5,000,000 per month"),
+    ],
+)
+def test_pr410b_selected_risk_fields_trigger_backend_recompute(officer_correction_api_server, field_path, new_value):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, country="United Kingdom", sector="Technology")
+    before = conn.execute(
+        "SELECT risk_score, risk_level, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {field_path: new_value},
+            "correction_reason": f"Officer verified corrected {field_path}.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["downstream_state"]["risk_relevant"] is True
+    assert body["downstream_state"]["risk_recomputed"] is True
+    assert body["before_state"]["risk_before"]["risk_score"] == before["risk_score"]
+    assert "risk_after" in body["after_state"]
+
+    detail = _detail(base_url, case["app_id"])
+    assert detail["officer_correction_display_values"][field_path] == new_value
+    assert detail["memo_is_stale"] is True
+    assert detail["officer_correction_display_metadata"][field_path]["risk_relevant"] is True
+
+    conn = _db_conn(db_path)
+    stored = conn.execute(
+        "SELECT country, entity_type, ownership_structure, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    conn.close()
+    prescreening_after = json.loads(stored["prescreening_data"])
+    assert prescreening_after == json.loads(before["prescreening_data"])
+    if field_path == "country_of_incorporation":
+        assert stored["country"] == new_value
+    if field_path == "entity_type":
+        assert stored["entity_type"] == new_value
+    if field_path == "ownership_structure":
+        assert stored["ownership_structure"] == new_value
+
+
+def test_pr410b_controlled_endpoint_rejects_analyst_for_risk_relevant_correction(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {"sector": "Crypto Exchange"},
+            "correction_reason": "Analyst should not be allowed to mutate risk fields.",
+        },
+        role="analyst",
+    )
+    assert resp.status_code == 403
+
+
 def test_pr410a_prescreening_correction_endpoint_rejects_invalid_application(officer_correction_api_server):
     base_url, _ = officer_correction_api_server
     resp = _post_prescreening_correction(
@@ -509,6 +682,54 @@ def test_pr410a_portal_applications_do_not_expose_correction_history_or_internal
         "risk_level",
     }
     assert forbidden.isdisjoint(app.keys())
+
+
+def test_pr410b_portal_does_not_expose_risk_correction_or_memo_stale_metadata(officer_correction_api_server):
+    from auth import create_token
+
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    client_id = conn.execute("SELECT client_id FROM applications WHERE id = ?", (case["app_id"],)).fetchone()["client_id"]
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {"sector": "Crypto Exchange"},
+            "correction_reason": "Officer verified corrected sector.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["downstream_state"]["risk_recomputed"] is True
+
+    token = create_token(client_id, "client", "Portal Client", "client")
+    portal = requests.get(
+        f"{base_url}/api/portal/applications",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=5,
+    )
+    assert portal.status_code == 200, portal.text
+    app = next(item for item in portal.json()["applications"] if item["id"] == case["app_id"])
+    forbidden = {
+        "officer_corrections",
+        "officer_correction_display_values",
+        "officer_correction_display_metadata",
+        "audit_log",
+        "risk_score",
+        "risk_level",
+        "final_risk_level",
+        "risk_dimensions",
+        "memo_is_stale",
+        "memo_stale_reason",
+        "memo_requires_regeneration",
+        "internal_blockers",
+        "enhanced_review_summary",
+    }
+    assert forbidden.isdisjoint(app.keys())
+    assert "Crypto Exchange" not in json.dumps(app)
+    assert "officer_correction" not in json.dumps(app).lower()
 
 
 def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_correction_api_server):

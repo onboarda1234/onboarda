@@ -216,7 +216,7 @@ def test_unknown_pep_values_do_not_render_as_no():
     assert _run_node(_officer_runtime_js(html, scenario))["ok"] is True
 
 
-def test_pr410a_prescreening_correction_mode_static_contract():
+def test_pr410b_prescreening_correction_mode_static_contract():
     html = _read_backoffice()
     assert "btn-prescreen-correction-mode" in html
     assert "Edit in Correction Mode" in html
@@ -227,6 +227,8 @@ def test_pr410a_prescreening_correction_mode_static_contract():
     assert "Correction reason is required before saving." in html
     assert "/officer-corrections" in html
     assert "loadActivityLog(currentApp)" in html
+    assert "await refreshCurrentAppDetail()" in html
+    assert "Risk recomputed and memo controls refreshed" in html
 
     allowed_region = html[
         html.index("var PRESCREEN_CORRECTION_ALLOWED_FIELDS"):
@@ -236,16 +238,23 @@ def test_pr410a_prescreening_correction_mode_static_contract():
     assert "trading_name" in allowed_region
     assert "referrer_name" in allowed_region
     for risk_field in (
-        "country",
+        "country_of_incorporation",
         "sector",
         "entity_type",
         "ownership_structure",
-        "expected_volume",
+        "introduction_method",
+        "monthly_volume",
+    ):
+        assert risk_field in allowed_region
+    for deferred_field in (
         "source_of_funds",
         "source_of_wealth",
         "pep_status",
+        "ownership_pct",
+        "nationality",
     ):
-        assert risk_field not in allowed_region
+        assert deferred_field not in allowed_region
 
-    assert "Risk-relevant corrections will be handled in the next controlled release." in html
+    assert "this risk-relevant correction type is deferred to a later controlled release." in html
     assert "No risk recomputation required" in html
+    assert "Memo impact" in html
