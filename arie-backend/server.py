@@ -7039,6 +7039,13 @@ class DocumentUploadHandler(BaseHandler):
             )
             db.close()
             return self.error(doc_type_error, 400)
+        screening_evidence_upload = self.get_argument("screening_evidence", "false").lower() == "true"
+        screening_evidence_upload_allowed = (
+            screening_evidence_upload
+            and requested_doc_type == "supporting_document"
+            and user.get("type") != "client"
+            and user.get("role") in ("admin", "sco", "co", "analyst")
+        )
         rmi_item_id = self.get_argument("rmi_item_id", None)
         rmi_target = None
         if rmi_item_id:
@@ -7060,7 +7067,7 @@ class DocumentUploadHandler(BaseHandler):
                 return self.error("Uploaded document type does not match the requested document slot", 400)
 
         rmi_status_allowed = str(app.get("status") or "").lower() == "rmi_sent"
-        if not rmi_status_allowed:
+        if not rmi_status_allowed and not screening_evidence_upload_allowed:
             reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="upload")
             if prerequisite_error:
                 self._audit_upload_rejected(
@@ -12991,6 +12998,7 @@ _SCREENING_DISPOSITION_CODES = {
         "low_risk_context_accepted",
     },
     "escalated": {
+        "confirmed_match",
         "true_match",
         "material_concern",
         "escalated_to_edd",
@@ -13012,6 +13020,7 @@ _SCREENING_DISPOSITION_CODES = {
 
 _SCREENING_CANONICAL_DISPOSITION_STORAGE = {
     "false_positive_cleared": "cleared",
+    "confirmed_match": "escalated",
     "true_match": "escalated",
     "material_concern": "escalated",
     "needs_more_information": "follow_up_required",
@@ -13024,6 +13033,8 @@ _SCREENING_LEGACY_CODE_TO_CANONICAL = {
     "provider_no_relevant_match": "false_positive_cleared",
     "duplicate_or_irrelevant": "false_positive_cleared",
     "low_risk_context_accepted": "false_positive_cleared",
+    "confirmed_relevant_match": "confirmed_match",
+    "match_confirmed": "confirmed_match",
     "potential_sanctions_match": "true_match",
     "potential_pep_match": "true_match",
     "adverse_media_match": "material_concern",
@@ -13037,6 +13048,7 @@ _SCREENING_LEGACY_CODE_TO_CANONICAL = {
 }
 
 _SCREENING_WORKFLOW_EDD_DISPOSITIONS = {
+    "confirmed_match",
     "true_match",
     "material_concern",
     "needs_more_information",
@@ -13053,37 +13065,26 @@ _SCREENING_WORKFLOW_TERMINAL_STATUSES = {
 }
 
 _SCREENING_REVIEW_RATIONALE_MIN_CHARS = 12
-_SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40
-_SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8
 
 _SCREENING_SUBJECT_TYPES = {"entity", "director", "ubo", "applicant", "client"}
 _SCREENING_SUBJECT_ALIASES = {"company": "entity"}
 
 
-def _screening_rationale_word_count(value):
-    words = str(value or "").replace("-", " ").replace("/", " ").split()
-    return len([part for part in words if any(ch.isalnum() for ch in part)])
-
-
 def _screening_review_rationale_error(disposition, rationale):
     if len(rationale) < _SCREENING_REVIEW_RATIONALE_MIN_CHARS:
         return f"Screening review rationale must be at least {_SCREENING_REVIEW_RATIONALE_MIN_CHARS} characters"
-    if disposition == "cleared":
-        if (
-            len(rationale) < _SCREENING_CLEAR_RATIONALE_MIN_CHARS
-            or _screening_rationale_word_count(rationale) < _SCREENING_CLEAR_RATIONALE_MIN_WORDS
-        ):
-            return (
-                "Cleared screening rationale must be at least "
-                f"{_SCREENING_CLEAR_RATIONALE_MIN_CHARS} characters and "
-                f"{_SCREENING_CLEAR_RATIONALE_MIN_WORDS} words, citing the evidence reviewed"
-            )
     return None
 
 
 def _normalise_screening_review_disposition(disposition, disposition_code):
     disposition = (disposition or "").strip().lower()
     disposition_code = (disposition_code or "").strip().lower()
+    if disposition in ("no_match", "no-match", "false_positive", "false-positive"):
+        disposition = "cleared"
+        disposition_code = disposition_code or "false_positive_cleared"
+    elif disposition in ("match", "confirmed_match", "confirmed-relevant-match"):
+        disposition = "escalated"
+        disposition_code = disposition_code or "confirmed_match"
     if disposition in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
         canonical = disposition
         storage = _SCREENING_CANONICAL_DISPOSITION_STORAGE[canonical]
@@ -13133,7 +13134,6 @@ def _screening_review_false_positive_clearance_contract(review):
         and _screening_review_artifact_present(review, "reviewer_id", "reviewer_name")
         and _screening_review_artifact_present(review, "created_at", "updated_at", "reviewed_at", "review_updated_at")
         and _screening_review_artifact_present(review, "rationale")
-        and _screening_review_artifact_present(review, "evidence_reference", "review_evidence_reference")
         and _truthy_review_flag(review.get("audit_confirmed"))
         and (not requires_four_eyes or bool(second_reviewer))
     )
@@ -13195,6 +13195,19 @@ def _screening_review_evidence_from_audit_detail(detail):
         if value not in (None, "", [], {}):
             return value
     return None
+
+
+def _screening_review_evidence_documents_from_audit_detail(detail):
+    payload = _screening_review_audit_detail_payload(detail)
+    if not payload:
+        return []
+    document = payload.get("evidence_document")
+    if isinstance(document, dict) and document.get("id"):
+        return [document]
+    documents = payload.get("evidence_documents")
+    if isinstance(documents, list):
+        return [item for item in documents if isinstance(item, dict) and item.get("id")]
+    return []
 
 
 def _load_screening_review_audit_lookup(db, reviews, app_ref_by_id=None):
@@ -13279,6 +13292,10 @@ def _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_targ
         evidence_reference = _screening_review_evidence_from_audit_detail(audit_row.get("detail"))
         if evidence_reference:
             review["review_evidence_reference"] = evidence_reference
+    if audit_row:
+        documents = _screening_review_evidence_documents_from_audit_detail(audit_row.get("detail"))
+        if documents:
+            review["review_evidence_documents"] = documents
     return review
 
 
@@ -13362,6 +13379,7 @@ def _screening_review_payload_fields(review):
             "second_disposition_code": None,
             "second_rationale": None,
             "review_evidence_reference": None,
+            "review_evidence_documents": [],
         }
 
     requires_four_eyes = _truthy_review_flag(review.get("requires_four_eyes"))
@@ -13396,6 +13414,7 @@ def _screening_review_payload_fields(review):
         "second_disposition_code": review.get("second_disposition_code"),
         "second_rationale": review.get("second_rationale"),
         "review_evidence_reference": review.get("review_evidence_reference") or review.get("evidence_reference"),
+        "review_evidence_documents": review.get("review_evidence_documents") or [],
     }
 
 
@@ -13416,9 +13435,11 @@ def _screening_review_completed_status(review_fields):
     ).strip().lower()
 
     if canonical_disposition == "false_positive_cleared" or disposition == "cleared":
-        return "reviewed_false_positive_cleared", "False Positive Cleared"
+        return "reviewed_false_positive_cleared", "No Match"
     if canonical_disposition == "needs_more_information" or disposition == "follow_up_required":
         return "review_follow_up_required", "Follow-Up Required"
+    if canonical_disposition == "confirmed_match":
+        return "review_confirmed_match", "Match Confirmed"
     if canonical_disposition == "escalated_to_edd":
         return "review_escalated", "Escalated to EDD"
     if canonical_disposition in _SCREENING_WORKFLOW_EDD_DISPOSITIONS or disposition == "escalated":
@@ -13433,6 +13454,8 @@ def _screening_disposition_edd_trigger_flags(canonical_disposition):
     if code == "needs_more_information":
         return ["screening_needs_more_information"]
     if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        if code == "confirmed_match":
+            return ["confirmed_screening_match"]
         return ["material_screening_concern"]
     return []
 
@@ -14184,7 +14207,118 @@ def upsert_screening_review(
     )
 
 
-def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0):
+def _screening_queue_filter_value(value):
+    return str(value or "").strip().lower()
+
+
+def _screening_queue_search_blob(row):
+    parts = [
+        row.get("subject_name"),
+        row.get("subject_type"),
+        row.get("company_name"),
+        row.get("application_ref"),
+        row.get("watchlist_status"),
+        row.get("pep_declared_status"),
+        row.get("pep_screening_status"),
+        row.get("status_key"),
+        row.get("status_label"),
+        row.get("screening_mode"),
+        row.get("provider_mode"),
+        row.get("provider_availability"),
+        row.get("screening_result"),
+        row.get("screening_truth_reason"),
+        row.get("review_disposition"),
+        row.get("review_disposition_code"),
+        row.get("canonical_disposition"),
+    ]
+    parts.extend(row.get("entity_context") or [])
+    for evidence in row.get("provider_evidence") or []:
+        if isinstance(evidence, dict):
+            parts.extend(evidence.get(k) for k in ("source", "provider", "list_name", "name", "category", "status"))
+    return " ".join(str(part or "") for part in parts).lower()
+
+
+def _screening_queue_status_group(row):
+    status_key = _screening_queue_filter_value(row.get("status_key"))
+    canonical = _screening_queue_filter_value(row.get("canonical_disposition") or row.get("review_disposition_code"))
+    disposition = _screening_queue_filter_value(row.get("review_disposition"))
+    if status_key == "awaiting_screening":
+        return "awaiting"
+    if status_key in ("screening_pending", "screening_not_configured", "screening_unavailable", "screening_simulated", "screening_sandbox", "incomplete_record"):
+        return "pending_provider"
+    if canonical == "false_positive_cleared" or disposition == "cleared" or status_key in ("screened_no_match", "reviewed_false_positive_cleared"):
+        return "no_match"
+    if canonical == "confirmed_match":
+        return "match"
+    if status_key == "review_escalated" or disposition == "escalated":
+        return "escalated"
+    if status_key in ("review_required", "declared_pep_review"):
+        return "review_required"
+    return status_key or "other"
+
+
+def _screening_queue_type_group(row):
+    subject_type = _screening_queue_filter_value(row.get("subject_type"))
+    if subject_type in ("client", "applicant", "person"):
+        return "individual"
+    return subject_type
+
+
+def _screening_queue_provider_group(row):
+    blob = _screening_queue_search_blob(row)
+    if "complyadvantage" in blob or "comply advantage" in blob:
+        return "complyadvantage"
+    if "sumsub" in blob:
+        return "sumsub"
+    if "opencorporates" in blob or "open corporates" in blob:
+        return "opencorporates"
+    return "other"
+
+
+def _screening_queue_pep_group(row):
+    declared = _screening_queue_filter_value(row.get("pep_declared_status"))
+    screening = _screening_queue_filter_value(row.get("pep_screening_status"))
+    if declared == "declared":
+        return "declared"
+    if screening in ("match", "hit", "possible_match", "review"):
+        return "provider_pep_hit"
+    if declared == "not_declared":
+        return "not_declared"
+    return "na"
+
+
+def _filter_screening_queue_rows(rows, filters):
+    filters = filters or {}
+    search = _screening_queue_filter_value(filters.get("search"))
+    status_filter = _screening_queue_filter_value(filters.get("status"))
+    type_filter = _screening_queue_filter_value(filters.get("type"))
+    provider_filter = _screening_queue_filter_value(filters.get("provider"))
+    pep_filter = _screening_queue_filter_value(filters.get("pep"))
+    app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
+
+    filtered = []
+    for row in rows:
+        if search and search not in _screening_queue_search_blob(row):
+            continue
+        if (
+            app_ref_filter
+            and app_ref_filter not in _screening_queue_filter_value(row.get("application_ref"))
+            and app_ref_filter not in _screening_queue_filter_value(row.get("company_name"))
+        ):
+            continue
+        if status_filter and status_filter != "all" and _screening_queue_status_group(row) != status_filter:
+            continue
+        if type_filter and type_filter != "all" and _screening_queue_type_group(row) != type_filter:
+            continue
+        if provider_filter and provider_filter != "all" and _screening_queue_provider_group(row) != provider_filter:
+            continue
+        if pep_filter and pep_filter != "all" and _screening_queue_pep_group(row) != pep_filter:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None):
     query = "SELECT * FROM applications WHERE 1=1"
     params = []
     if user["type"] == "client":
@@ -14378,7 +14512,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 entity_status_label = "Review Required"
             else:
                 entity_status_key = "screened_no_match"
-                entity_status_label = "No Provider Match"
+                entity_status_label = "No Match"
 
             entity_screening_mode = _screening_queue_row_mode(
                 screening_mode,
@@ -14521,7 +14655,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 status_label = "Declared PEP Review"
             else:
                 status_key = "screened_no_match"
-                status_label = "No Provider Match"
+                status_label = "No Match"
 
             # Fail-closed review requirement: any non-terminal state, any
             # match, any declared PEP, any not_configured/failed.
@@ -14604,19 +14738,22 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         if application_requires_review:
             metrics["applications_requiring_review"] += 1
 
+    filtered_rows = _filter_screening_queue_rows(rows, filters)
     metrics["subject_rows"] = len(rows)
-    total_rows = len(rows)
+    metrics["filtered_subject_rows"] = len(filtered_rows)
+    total_rows = len(filtered_rows)
     if offset < 0:
         offset = 0
     if limit is None:
-        paginated_rows = rows
+        paginated_rows = filtered_rows
         page_limit = total_rows
     else:
         page_limit = max(1, int(limit))
-        paginated_rows = rows[offset:offset + page_limit]
+        paginated_rows = filtered_rows[offset:offset + page_limit]
     return {
         "metrics": metrics,
         "rows": paginated_rows,
+        "filters": filters or {},
         "show_fixtures": show_fixtures,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "pagination": {
@@ -14646,6 +14783,14 @@ class ScreeningQueueHandler(BaseHandler):
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         limit = _bounded_int(self.get_argument("limit", 50), 50, min_value=1, max_value=100)
         offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
+        filters = {
+            "search": self.get_argument("search", "").strip(),
+            "status": self.get_argument("status", "").strip(),
+            "type": self.get_argument("type", "").strip(),
+            "provider": self.get_argument("provider", "").strip(),
+            "pep": self.get_argument("pep", "").strip(),
+            "application_ref": self.get_argument("application_ref", "").strip(),
+        }
         db = get_db()
         payload = _build_screening_queue_payload(
             db,
@@ -14653,6 +14798,7 @@ class ScreeningQueueHandler(BaseHandler):
             show_fixtures=show_fx,
             limit=limit,
             offset=offset,
+            filters=filters,
         )
         db.close()
         self.success(payload)
@@ -14676,6 +14822,7 @@ class ScreeningReviewHandler(BaseHandler):
         notes = (data.get("notes") or "").strip()
         raw_disposition_code = (data.get("disposition_code") or "").strip().lower()
         source_surface = str(data.get("source_surface") or "").strip().lower()
+        evidence_document_id = str(data.get("evidence_document_id") or data.get("evidence_file_document_id") or "").strip()
         disposition, disposition_code, canonical_disposition = _normalise_screening_review_disposition(
             raw_disposition,
             raw_disposition_code,
@@ -14702,12 +14849,16 @@ class ScreeningReviewHandler(BaseHandler):
                 "rationale": rationale,
                 "notes": notes,
                 "evidence_reference": evidence_reference,
+                "evidence_reference_provided": bool(evidence_reference),
+                "evidence_document_id": evidence_document_id,
+                "evidence_file_uploaded": bool(evidence_document_id),
                 "source_surface": source_surface,
             },
             (
                 "application_id", "subject_type", "subject_name", "disposition",
                 "disposition_code", "canonical_disposition", "rationale", "notes",
-                "evidence_reference", "source_surface",
+                "evidence_reference_provided", "evidence_document_id", "evidence_file_uploaded",
+                "source_surface",
             ),
         )
 
@@ -14745,12 +14896,6 @@ class ScreeningReviewHandler(BaseHandler):
                 rationale_error, attempt_summary)
             return self.error(rationale_error, 400)
 
-        if canonical_disposition == "false_positive_cleared" and not evidence_reference:
-            self.log_governance_attempt(
-                user, "screening.review_disposition", app_id, "rejected", 400,
-                "False-positive clearance requires evidence_reference", attempt_summary)
-            return self.error("False-positive clearance requires evidence_reference", 400)
-
         if evidence_reference and evidence_reference not in notes:
             notes = (notes + "\n\nEvidence/reference: " + evidence_reference).strip()
 
@@ -14767,6 +14912,24 @@ class ScreeningReviewHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         app = dict(app)
+        evidence_document = None
+        if evidence_document_id:
+            evidence_document_row = db.execute(
+                """
+                SELECT id, doc_name, doc_type, file_size, mime_type, uploaded_at
+                FROM documents
+                WHERE id=? AND application_id=?
+                """,
+                (evidence_document_id, app["id"]),
+            ).fetchone()
+            if not evidence_document_row:
+                self.log_governance_attempt(
+                    user, "screening.review_disposition", app["ref"], "rejected", 400,
+                    "Evidence document was not found for this application",
+                    attempt_summary, db=db)
+                db.close()
+                return self.error("Evidence document was not found for this application", 400)
+            evidence_document = dict(evidence_document_row)
         workflow_before = dict(app)
         existing_review = db.execute(
             """
@@ -14850,10 +15013,10 @@ class ScreeningReviewHandler(BaseHandler):
         if canonical_disposition == "false_positive_cleared" and user.get("role") not in ("admin", "sco", "co"):
             self.log_governance_attempt(
                 user, "screening.review_disposition", app["ref"], "rejected", 403,
-                "False-positive screening clearance requires CO, SCO, or admin role",
+                "No Match screening disposition requires CO, SCO, or admin role",
                 attempt_summary, db=db)
             db.close()
-            return self.error("False-positive screening clearance requires CO, SCO, or admin role", 403)
+            return self.error("No Match screening disposition requires CO, SCO, or admin role", 403)
 
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         reviewer_name = user.get("name") or user.get("full_name") or user["sub"]
@@ -14970,16 +15133,24 @@ class ScreeningReviewHandler(BaseHandler):
         audit_detail = json.dumps({
             "subject_type": subject_type,
             "subject_name": subject_name,
+            "application_id": app["id"],
+            "application_ref": app["ref"],
             "disposition": disposition,
             "disposition_code": disposition_code,
             "canonical_disposition": canonical_disposition,
             "rationale": rationale[:1000],
             "evidence_reference": evidence_reference,
+            "evidence_reference_provided": bool(evidence_reference),
+            "evidence_file_uploaded": bool(evidence_document),
+            "evidence_document": evidence_document,
             "provider": (row_context or {}).get("provider"),
             "source": (row_context or {}).get("source"),
             "api_status": (row_context or {}).get("api_status"),
             "screening_state": (row_context or {}).get("screening_state"),
             "source_surface": source_surface or "screening_queue",
+            "actor": user.get("sub"),
+            "actor_role": user.get("role"),
+            "timestamp": now_utc,
             "requires_four_eyes": requires_four_eyes,
             "four_eyes_status": review_status,
             "sensitivity_flags": sensitivity_flags,
@@ -14994,6 +15165,8 @@ class ScreeningReviewHandler(BaseHandler):
         review["audit_confirmed"] = True
         if evidence_reference:
             review["review_evidence_reference"] = evidence_reference
+        if evidence_document:
+            review["review_evidence_documents"] = [evidence_document]
         status_code = 202 if (requires_four_eyes and not is_second_review) else 200
         self.log_governance_attempt(
             user, "screening.review_disposition", app["ref"], "accepted", status_code,

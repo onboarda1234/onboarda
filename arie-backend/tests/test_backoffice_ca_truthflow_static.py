@@ -112,7 +112,7 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     assert "function setScreeningReviewFocus" in html
     assert "function buildScreeningTriageSubjects" in html
     assert "Second Review Required" in triage_region
-    assert "No Provider Match" in html
+    assert "No Match" in html
     assert "Declared PEP · No provider matches" in triage_region
     assert "screeningSubjectRoleBadge(subject.subject_type)" in triage_region
     assert "screeningQueueStatusBadge(subject.status_key, subject.display_status_label)" in triage_region
@@ -158,8 +158,8 @@ def test_backoffice_pr_b_queue_and_detail_paths_stay_narrow():
     assert "ensureCMApplicationsLoaded" in show_alert_region
     assert "ensureCMApplicationsLoaded" in show_request_region
     assert "/screening/queue?" in screening_region
-    assert "limit=" in screening_region
-    assert "offset=" in screening_region
+    assert "screeningQueueQueryParams(offset)" in screening_region
+    assert "refresh=" in screening_region
     assert "/lifecycle/queue?include=" in lifecycle_region
     assert "&limit=" in lifecycle_region
     assert "&offset=" in lifecycle_region
@@ -360,16 +360,18 @@ def test_backoffice_screening_disposition_modal_matches_api_contract():
 
     assert "screening-disposition-evidence" in modal_region
     assert "Evidence / Provider Reference" in modal_region
+    assert "Upload supporting evidence (optional)" in modal_region
     assert "false_positive_cleared" in options_region
-    assert "true_match" in options_region
+    assert "confirmed_match" in options_region
     assert "material_concern" in options_region
-    assert "needs_more_information" in options_region
     assert "escalated_to_edd" in options_region
     assert "provider_no_relevant_match" not in options_region
     assert "potential_sanctions_match" not in options_region
+    assert "screening_evidence=true" in html
     assert "evidence_reference: evidenceReference" in submit_region
-    assert "False-positive clearance requires Compliance Officer, SCO, or Admin role" in submit_region
-    assert "False-positive clearance requires an evidence / provider reference" in submit_region
+    assert "evidence_document_id: uploadedEvidence ? uploadedEvidence.id : ''" in submit_region
+    assert "No Match disposition requires Compliance Officer, SCO, or Admin role" in submit_region
+    assert "False-positive clearance requires an evidence / provider reference" not in submit_region
 
 
 def test_backoffice_screening_disposition_history_surfaces_evidence_reference():
@@ -386,7 +388,7 @@ def test_backoffice_screening_disposition_history_surfaces_evidence_reference():
     assert "review_evidence_reference" in history_region
     assert "Evidence/reference:" in history_region
     assert "canClearScreeningDisposition()" in queue_region
-    assert "False-positive clearance requires Compliance Officer, SCO, or Admin role." in queue_region
+    assert "No Match requires Compliance Officer, SCO, or Admin role." in queue_region
 
 
 def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_clear():
