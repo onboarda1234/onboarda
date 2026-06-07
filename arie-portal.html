@@ -5337,6 +5337,17 @@ function periodicReviewTaskStatusTone(statusLabel) {
   return { bg: 'var(--blue-dim)', color: 'var(--blue)' };
 }
 
+function periodicReviewNotificationHint(summary) {
+  summary = summary || {};
+  var label = summary.client_notification_status_label || '';
+  var reminders = Number(summary.reminder_count || 0);
+  if (!label && !reminders) return '';
+  var parts = [];
+  if (label) parts.push('Notification: ' + label);
+  if (reminders) parts.push('Reminders sent: ' + reminders);
+  return parts.join(' · ');
+}
+
 function renderPeriodicReviewTasks(tasks) {
   var title = document.getElementById('periodic-review-tasks-title');
   var container = document.getElementById('periodic-review-tasks-container');
@@ -5352,6 +5363,7 @@ function renderPeriodicReviewTasks(tasks) {
   container.style.display = 'grid';
   container.innerHTML = portalPeriodicReviewTasks.map(function(task) {
     var tone = periodicReviewTaskStatusTone(task.task_status_label);
+    var notificationHint = periodicReviewNotificationHint(task.notification_summary || {});
     var appIdJs = JSON.stringify(task.application_id || '').replace(/"/g, '&quot;');
     return '<div class="periodic-review-task-card">' +
       '<div class="periodic-review-task-header">' +
@@ -5364,6 +5376,7 @@ function renderPeriodicReviewTasks(tasks) {
       '<div class="periodic-review-task-meta">' +
         '<div class="periodic-review-task-meta-item"><div class="periodic-review-task-meta-label">Due date</div><div class="periodic-review-task-meta-value">' + escapeHtml(task.due_date ? new Date(task.due_date).toLocaleDateString() : 'Not set') + '</div></div>' +
         '<div class="periodic-review-task-meta-item"><div class="periodic-review-task-meta-label">What you need to do</div><div class="periodic-review-task-meta-value">Answer 8 short questions</div></div>' +
+        (notificationHint ? '<div class="periodic-review-task-meta-item"><div class="periodic-review-task-meta-label">Reminder status</div><div class="periodic-review-task-meta-value">' + escapeHtml(notificationHint) + '</div></div>' : '') +
       '</div>' +
       '<div class="periodic-review-task-footer">' +
         '<div class="periodic-review-task-hint">This step is a short review attestation only. Supporting documents may be requested separately if needed.</div>' +
@@ -5584,6 +5597,7 @@ function renderPeriodicReviewModal(task) {
   var answersByKey = {};
   (attestation.questions || []).forEach(function(entry) { answersByKey[entry.key] = entry; });
   var readOnly = !!task.read_only;
+  var notificationHint = periodicReviewNotificationHint(task.notification_summary || {});
   var questionHtml = (task.questions || []).map(function(question, index) {
     var saved = answersByKey[question.key] || {};
     var answer = saved.answer || 'unanswered';
@@ -5623,6 +5637,7 @@ function renderPeriodicReviewModal(task) {
     '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
       '<span class="periodic-review-readonly-answer">' + escapeHtml(task.task_status_label || '') + '</span>' +
       '<span class="periodic-review-readonly-answer">Due: ' + escapeHtml(task.due_date ? new Date(task.due_date).toLocaleDateString() : 'Not set') + '</span>' +
+      (notificationHint ? '<span class="periodic-review-readonly-answer">' + escapeHtml(notificationHint) + '</span>' : '') +
       (attestation.submitted_at ? '<span class="periodic-review-readonly-answer">Submitted: ' + escapeHtml(new Date(attestation.submitted_at).toLocaleString()) + '</span>' : '') +
     '</div>' +
     '<div style="display:grid;gap:14px;">' + questionHtml + '</div>' +
@@ -9899,6 +9914,10 @@ function renderClientNotifications(notifications) {
     rejected: { bg: 'var(--red-dim)', border: 'var(--red)', color: 'var(--red)', icon: '✗' },
     request_documents: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
     documents_required: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
+    periodic_review_required: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
+    periodic_review_documents_required: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
+    periodic_review_reminder: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⏰' },
+    periodic_review_overdue: { bg: 'var(--red-dim)', border: 'var(--red)', color: 'var(--red)', icon: '!' },
     pre_approval: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
     pre_approved: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
     default: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: 'ℹ️' }
