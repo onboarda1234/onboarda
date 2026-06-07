@@ -214,3 +214,38 @@ def test_unknown_pep_values_do_not_render_as_no():
         """
     )
     assert _run_node(_officer_runtime_js(html, scenario))["ok"] is True
+
+
+def test_pr410a_prescreening_correction_mode_static_contract():
+    html = _read_backoffice()
+    assert "btn-prescreen-correction-mode" in html
+    assert "Edit in Correction Mode" in html
+    assert "Officer Correction Mode" in html
+    assert "savePrescreenCorrectionMode" in html
+    assert "cancelPrescreenCorrectionMode" in html
+    assert "Save Correction" in html
+    assert "Correction reason is required before saving." in html
+    assert "/officer-corrections" in html
+    assert "loadActivityLog(currentApp)" in html
+
+    allowed_region = html[
+        html.index("var PRESCREEN_CORRECTION_ALLOWED_FIELDS"):
+        html.index("var PRESCREEN_CORRECTION_MODE_ACTIVE")
+    ]
+    assert "registered_entity_name" in allowed_region
+    assert "trading_name" in allowed_region
+    assert "referrer_name" in allowed_region
+    for risk_field in (
+        "country",
+        "sector",
+        "entity_type",
+        "ownership_structure",
+        "expected_volume",
+        "source_of_funds",
+        "source_of_wealth",
+        "pep_status",
+    ):
+        assert risk_field not in allowed_region
+
+    assert "Risk-relevant corrections will be handled in the next controlled release." in html
+    assert "No risk recomputation required" in html
