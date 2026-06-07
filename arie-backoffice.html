@@ -7339,6 +7339,19 @@ function renderStoredRiskComputationHtml(app) {
   '</div>';
 }
 
+function setMemoDownloadState(enabled, reason) {
+  var buttons = [];
+  var headerBtn = document.getElementById('btn-download-memo');
+  if (headerBtn) buttons.push(headerBtn);
+  document.querySelectorAll('.memo-action-btn.download').forEach(function(btn) { buttons.push(btn); });
+  buttons.forEach(function(btn) {
+    btn.disabled = !enabled;
+    btn.title = enabled ? 'Download the latest generated compliance memo PDF.' : (reason || 'Generate a compliance memo before downloading the PDF.');
+    btn.style.opacity = enabled ? '' : '0.55';
+    btn.style.cursor = enabled ? '' : 'not-allowed';
+  });
+}
+
 function renderExplainabilityPanel(app, screeningSummary) {
   var modelSource = document.getElementById('explain-model-source');
   var trailEl = document.getElementById('explain-decision-trail');
@@ -7820,6 +7833,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var memoEl = document.getElementById('detail-memo');
   if (app.latestMemo && app.latestMemo.sections) {
     window._currentMemoData = app.latestMemo;
+    setMemoDownloadState(true);
     var staleBanner = '';
     if (app.memoIsStale) {
       var staleReason = escapeHtml(app.memoStaleReason || 'Application data changed after this memo was generated.');
@@ -7843,6 +7857,7 @@ function renderAuthoritativeAppDetail(app, options) {
     }
   } else {
     window._currentMemoData = null;
+    setMemoDownloadState(false, 'No compliance memo exists yet. Generate the memo before downloading a PDF.');
     document.getElementById('memo-validation-panel').style.display = 'none';
     setMemoStatusBadge('Not Generated', 'pending');
     memoEl.innerHTML = '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No compliance memo has been generated for this application yet.</div>';
@@ -13391,7 +13406,8 @@ function renderLifecycleApplicationSummary(resp) {
 function periodicReviewBaselineLegacyOptions(selected) {
   return [
     ['no', 'No'],
-    ['yes', 'Yes']
+    ['yes', 'Yes'],
+    ['n/a', 'N/A']
   ].map(function(option) {
     return '<option value="' + option[0] + '"' + (selected === option[0] ? ' selected' : '') + '>' + escapeHtml(option[1]) + '</option>';
   }).join('');
@@ -13425,6 +13441,7 @@ function periodicReviewBaselinePreview(reviewId) {
   var eligibility = (reviewDetail && reviewDetail.periodic_review_baseline_eligibility) || {};
   var legacyFile = legacyEl ? legacyEl.value : 'no';
   var dateValue = dateEl ? dateEl.value : '';
+  if (legacyFile === 'n/a') return { value: '', placeholder: 'Not applicable - no periodic-review baseline will be scheduled' };
   if (legacyFile === 'yes' && !dateValue) return { value: '', placeholder: 'Last review date required' };
   var anchorDate = legacyFile === 'yes'
     ? dateValue
@@ -13494,7 +13511,7 @@ function renderOverviewPeriodicReviewBaseline(detail) {
       '</div>' +
       '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Officer note</div><input id="overview-periodic-review-baseline-note-' + detail.id + '" class="form-input" type="text" maxlength="500" placeholder="Optional short note" value="' + escapeHtml(String(note || '')) + '"' + disabled + ' /></div>' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
-        '<div style="font-size:11px;color:var(--text3);max-width:560px;">Cadence is derived from the current officer-visible risk level. Legacy files must provide the last review date; current files derive next due from onboarding approval/completion.</div>' +
+        '<div style="font-size:11px;color:var(--text3);max-width:560px;">Cadence is derived from the current officer-visible risk level. Legacy files must provide the last review date; current files derive next due from onboarding approval/completion. Use N/A only when no manual baseline applies.</div>' +
         '<button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')"' + disabled + '>Save baseline</button>' +
       '</div>' +
     '</div>';
@@ -13522,6 +13539,10 @@ async function saveOverviewPeriodicReviewBaseline(applicationId) {
   var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + applicationId);
   var noteEl = document.getElementById('overview-periodic-review-baseline-note-' + applicationId);
   if (!legacyEl) return;
+  if (legacyEl.disabled) {
+    showToast('Periodic review baseline can be configured after onboarding approval.', 'warn');
+    return;
+  }
   if (legacyEl.value === 'yes' && (!dateEl || !dateEl.value)) {
     showToast('Last review date is required for a legacy file.', 'error');
     return;
@@ -13529,7 +13550,7 @@ async function saveOverviewPeriodicReviewBaseline(applicationId) {
   try {
     await boApiCall('POST', '/applications/' + encodeURIComponent(applicationId) + '/periodic-review-baseline', {
       legacy_file: legacyEl.value,
-      last_review_date: dateEl && !dateEl.disabled ? dateEl.value : '',
+      last_review_date: legacyEl.value === 'yes' && dateEl && !dateEl.disabled ? dateEl.value : '',
       officer_note: noteEl ? noteEl.value.trim() : ''
     });
     showToast('Periodic review baseline saved');
@@ -18847,7 +18868,7 @@ function addNote() {
       showToast('Note added successfully.');
       if (noteInput) noteInput.value = '';
       loadNotes();
-      loadActivityLog();
+      loadActivityLog(currentApp);
     })
     .catch(function(err) {
       showToast('Failed to add note: ' + (err.message || 'Unknown error'), 'error');
@@ -22342,6 +22363,7 @@ async function generateComplianceMemo() {
     var memoData = (data.data && data.data.sections) ? data.data : (data.sections ? data : null);
     if (memoData) {
       window._currentMemoData = memoData;
+      setMemoDownloadState(true);
       document.getElementById('detail-memo').innerHTML = renderMemoSections(memoData);
       document.getElementById('memo-status-badge').textContent = 'Generated';
       document.getElementById('memo-status-badge').className = 'badge pending';
@@ -22368,6 +22390,11 @@ async function generateComplianceMemo() {
 async function downloadMemoPDF() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
+  if (!window._currentMemoData && !(app.latestMemo && app.latestMemo.sections)) {
+    showToast('Generate a compliance memo before downloading the PDF.', 'warn');
+    setMemoDownloadState(false, 'No compliance memo exists yet. Generate the memo before downloading a PDF.');
+    return;
+  }
   var btn = document.getElementById('btn-download-memo');
   var originalLabel = btn ? btn.innerHTML : '';
   if (btn) {
