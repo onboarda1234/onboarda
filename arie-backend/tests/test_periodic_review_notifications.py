@@ -13,6 +13,7 @@ os.environ.setdefault("ENVIRONMENT", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
 
 from periodic_review_notifications import (  # noqa: E402
+    _table_columns,
     process_periodic_review_notification,
     run_periodic_review_notification_sweep,
 )
@@ -123,6 +124,29 @@ def _notification_count(conn, review_ref=None):
             (f"%{review_ref}%",),
         ).fetchone()["c"]
     return conn.execute("SELECT COUNT(*) AS c FROM client_notifications").fetchone()["c"]
+
+
+def test_postgres_column_discovery_does_not_probe_sqlite_pragma():
+    class FakePostgresDb:
+        is_postgres = True
+
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, sql, params=()):
+            self.queries.append((sql, params))
+            if "PRAGMA" in sql.upper():
+                raise AssertionError("Postgres column discovery must not issue SQLite PRAGMA")
+            return self
+
+        def fetchall(self):
+            return [{"column_name": "before_state"}, {"column_name": "after_state"}]
+
+    db = FakePostgresDb()
+
+    assert _table_columns(db, "audit_log") == {"before_state", "after_state"}
+    assert len(db.queries) == 1
+    assert "information_schema.columns" in db.queries[0][0]
 
 
 def _add_missing_periodic_review_doc(conn, review_id):
