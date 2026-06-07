@@ -149,17 +149,20 @@ class _PRDBase(AsyncHTTPTestCase):
     def _create_review(self, *, status="in_progress", risk_level="MEDIUM",
                        trigger_source=None, linked_alert_id=None,
                        linked_edd_id=None, required_items=None,
-                       review_reason=None, officer_rationale="Fixture rationale"):
+                       review_reason=None, officer_rationale="Fixture rationale",
+                       client_attestation_status="submitted",
+                       baseline_status="not_applicable"):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
             "(application_id, client_name, risk_level, status, "
             " trigger_source, linked_monitoring_alert_id, "
-            " linked_edd_case_id, required_items, review_reason, officer_rationale) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " linked_edd_case_id, required_items, review_reason, officer_rationale, "
+            " client_attestation_status, baseline_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (self._app_id, "PRD Test Co", risk_level, status,
              trigger_source, linked_alert_id, linked_edd_id,
              json.dumps(required_items) if required_items is not None else None,
-             review_reason, officer_rationale),
+             review_reason, officer_rationale, client_attestation_status, baseline_status),
         )
         self._conn.commit()
         return self._conn.execute(
@@ -201,6 +204,15 @@ class _PRDBase(AsyncHTTPTestCase):
                 "Content-Type": "application/json",
             },
         )
+
+    def _completion_payload(self, outcome="no_change", reason="baseline pass", **overrides):
+        payload = {
+            "outcome": outcome,
+            "outcome_reason": reason,
+            "officer_acknowledgement": True,
+        }
+        payload.update(overrides)
+        return payload
 
     def _get(self, path, token=None, anonymous=False):
         headers = {"Content-Type": "application/json"}
@@ -450,20 +462,11 @@ class TestGenerator(_PRDBase):
 # ─────────────────────────────────────────────────────────────────
 class TestCompleteHandlerHook(_PRDBase):
     def test_outcome_recorded_generates_memo_row(self):
-        self._conn.execute(
-            "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status, officer_rationale) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
-        )
-        self._conn.commit()
-        rid = self._conn.execute(
-            "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
-        ).fetchone()["id"]
+        rid = self._create_review()
 
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "baseline pass"},
+            self._completion_payload(),
         )
         self.assertEqual(resp.code, 200)
         body = json.loads(resp.body.decode())
@@ -480,23 +483,14 @@ class TestCompleteHandlerHook(_PRDBase):
         self.assertEqual(row["status"], "generated")
 
     def test_generator_failure_does_not_rollback_outcome(self):
-        self._conn.execute(
-            "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status, officer_rationale) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
-        )
-        self._conn.commit()
-        rid = self._conn.execute(
-            "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
-        ).fetchone()["id"]
+        rid = self._create_review()
 
         import periodic_review_memo as prm
         with mock.patch.object(prm, "build_memo_data",
                                side_effect=RuntimeError("injected")):
             resp = self._post(
                 f"/api/monitoring/reviews/{rid}/complete",
-                {"outcome": "no_change", "outcome_reason": "baseline pass"},
+                self._completion_payload(),
             )
         self.assertEqual(resp.code, 200)
         # Outcome is committed.
@@ -521,16 +515,7 @@ class TestCompleteHandlerHook(_PRDBase):
 # ─────────────────────────────────────────────────────────────────
 class TestMemoReadEndpoint(_PRDBase):
     def test_generates_on_demand_when_review_has_no_memo(self):
-        self._conn.execute(
-            "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status, officer_rationale) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
-        )
-        self._conn.commit()
-        rid = self._conn.execute(
-            "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
-        ).fetchone()["id"]
+        rid = self._create_review()
 
         resp = self._get(f"/api/periodic-reviews/{rid}/memo")
         self.assertEqual(resp.code, 200)
@@ -549,19 +534,10 @@ class TestMemoReadEndpoint(_PRDBase):
         self.assertEqual(resp.code, 404)
 
     def test_200_with_generated_status(self):
-        self._conn.execute(
-            "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status, officer_rationale) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
-        )
-        self._conn.commit()
-        rid = self._conn.execute(
-            "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
-        ).fetchone()["id"]
+        rid = self._create_review()
         complete = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "ok"},
+            self._completion_payload(reason="ok"),
         )
         self.assertEqual(complete.code, 200)
 

@@ -73,6 +73,8 @@ def _insert_review(conn, **overrides):
         "status": "pending",
         "trigger_type": "time_based",
         "review_cycle_number": 1,
+        "client_attestation_status": "submitted",
+        "baseline_status": "not_applicable",
     }
     payload.update(overrides)
     cols = ",".join(payload.keys())
@@ -232,12 +234,19 @@ def test_reassignment_requires_reason_and_audits_before_after(phase1_db, audit_s
 def test_projection_due_without_completion_fields_blocker(phase1_db):
     from periodic_review_projection_service import get_review_projection
 
-    review_id = _insert_review(phase1_db, status="pending")
+    review_id = _insert_review(
+        phase1_db,
+        status="pending",
+        client_attestation_status="not_started",
+        baseline_status="not_set",
+    )
     projection = get_review_projection(phase1_db, review_id)
 
     assert projection["status"] == "pending"
     assert projection["status_label"] == "Awaiting client attestation"
-    assert projection["blocker_count"] == 0
+    assert projection["blocker_count"] == 2
+    assert "Client attestation has not been submitted" in projection["blocker_summary"]
+    assert "Periodic review baseline is missing or not marked N/A" in projection["blocker_summary"]
     assert projection["completion_blocker_count"] == 2
     assert projection["completion_ready"] is False
     assert "Officer rationale is required" in projection["completion_blocker_summary"]
@@ -247,12 +256,37 @@ def test_projection_due_without_completion_fields_blocker(phase1_db):
 def test_in_progress_projection_not_blocked_by_completion_only_gaps(phase1_db):
     from periodic_review_projection_service import get_review_projection
 
-    review_id = _insert_review(phase1_db, status="in_progress")
+    review_id = _insert_review(
+        phase1_db,
+        status="in_progress",
+        client_attestation_status="not_started",
+        baseline_status="not_set",
+    )
     projection = get_review_projection(phase1_db, review_id)
 
     assert projection["status_label"] == "Awaiting client attestation"
-    assert projection["blocker_count"] == 0
+    assert projection["blocker_count"] == 2
+    assert "Client attestation has not been submitted" in projection["blocker_summary"]
+    assert "Periodic review baseline is missing or not marked N/A" in projection["blocker_summary"]
     assert projection["completion_ready"] is False
+
+
+def test_projection_completion_ready_when_prs5_closure_gates_are_clear(phase1_db):
+    from periodic_review_projection_service import get_review_projection
+
+    review_id = _insert_review(
+        phase1_db,
+        status="in_progress",
+        client_attestation_status="submitted",
+        baseline_status="not_applicable",
+        officer_rationale="Officer reviewed attestation, documents, baseline, and monitoring context.",
+        outcome="no_material_change",
+    )
+    projection = get_review_projection(phase1_db, review_id)
+
+    assert projection["blocker_count"] == 0
+    assert projection["completion_blocker_count"] == 0
+    assert projection["completion_ready"] is True
 
 
 
@@ -281,7 +315,7 @@ def test_projection_exposes_queue_case_shell_fields_and_owner_display(phase1_db)
     assert projection["client_name"] == "Phase1 Test Co"
     assert projection["risk_level"] == "MEDIUM"
     assert projection["queue_status"] == "due"
-    assert projection["queue_status_label"] == "Awaiting client attestation"
+    assert projection["queue_status_label"] == "Due"
     assert projection["due_state"] == "due"
     assert projection["is_overdue"] is False
     assert projection["assigned_officer"] == "co001"
@@ -329,12 +363,12 @@ def test_projection_maps_queue_statuses_and_missing_due_dates_safely(phase1_db):
     completed = get_review_projection(phase1_db, completed_id)
 
     assert overdue["queue_status"] == "overdue"
-    assert overdue["queue_status_label"] == "Awaiting client attestation"
+    assert overdue["queue_status_label"] == "Due"
     assert overdue["is_overdue"] is True
     assert future["queue_status"] == "open"
     assert future["due_state"] == "scheduled"
     assert awaiting["queue_status"] == "awaiting_client"
-    assert awaiting["queue_status_label"] == "Awaiting client attestation"
+    assert awaiting["queue_status_label"] == "Officer review required"
     assert awaiting["is_due_date_missing"] is True
     assert awaiting["due_state"] == "missing_due_date"
     assert completed["queue_status"] == "completed"

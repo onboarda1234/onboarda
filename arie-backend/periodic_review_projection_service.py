@@ -161,15 +161,17 @@ def derive_operational_review_status(
         key = "completed"
     elif status == CANCELLED_REVIEW_STATE:
         key = "historical_superseded"
-    elif blocker_count or linked_edd_case_id:
-        key = "blocked"
     elif attestation and attestation != "submitted":
         key = "awaiting_client_attestation"
     elif has_missing_documents:
         key = "awaiting_documents"
+    elif has_documents_pending_review:
+        key = "officer_review_required"
+    elif blocker_count or linked_edd_case_id:
+        key = "blocked"
     elif findings_present:
         key = "ready_for_decision"
-    elif has_documents_pending_review or status in {"in_progress", "pending_senior_review", "awaiting_information"}:
+    elif status in {"in_progress", "pending_senior_review", "awaiting_information"}:
         key = "officer_review_required"
     elif status == "pending" or due_state in {"due", "overdue", "scheduled", "missing_due_date"}:
         key = "due"

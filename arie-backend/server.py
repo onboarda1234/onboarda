@@ -19937,6 +19937,13 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
     else:
         readiness_state = "ready_for_officer_findings"
         readiness_label = "Ready for officer findings"
+    projection_blockers = []
+    for label in (projection.get("blocker_summary") or []):
+        if str(label or "").strip():
+            projection_blockers.append(str(label).strip())
+    for label in (projection.get("completion_blocker_summary") or []):
+        if str(label or "").strip():
+            projection_blockers.append(str(label).strip())
     blockers = []
     if not attestation_submitted:
         blockers.append("Client attestation has not been submitted")
@@ -19949,13 +19956,15 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
         for item in review_pending_requests
     )
     blockers.extend(monitoring_screening_blockers)
+    blockers.extend(projection_blockers)
+    blockers = list(dict.fromkeys(blockers))
     next_step = {
         "awaiting_client_attestation": "Wait for the client to submit the periodic review attestation.",
         "awaiting_documents": "Chase the requested periodic review documents from the client.",
         "documents_uploaded_review_required": "Review uploaded documents and verify or accept them.",
         "not_ready": "Resolve the linked monitoring or screening blockers.",
         "ready_for_officer_findings": "Draft officer findings and follow-up notes.",
-        "ready_for_outcome_decision": "Prepare for PRS-5 outcome decision.",
+        "ready_for_outcome_decision": "Record the officer outcome decision.",
     }.get(readiness_state, "Review the periodic review workspace.")
     return {
         "overview": {
@@ -19989,6 +19998,37 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
             "blocker_count": len(blockers),
             "blockers": blockers,
         },
+        "decision": {
+            "periodic_review_id": review.get("id"),
+            "review_reference": review.get("review_reference") or projection.get("review_reference"),
+            "status": projection.get("status") or review.get("status"),
+            "status_label": projection.get("status_label") or review.get("status_label"),
+            "readiness_label": readiness_label,
+            "readiness_blockers": blockers,
+            "owner": projection.get("owner_display_name") or review.get("owner_display_name") or review.get("assigned_officer_name") or review.get("assigned_officer") or "Unassigned",
+            "risk_level": projection.get("risk_level") or review.get("risk_level"),
+            "attestation_status": attestation.get("status") or review.get("client_attestation_status"),
+            "conditional_document_status": {
+                "required_count": len(required_requests),
+                "missing_count": len(missing_requests),
+                "review_required_count": len(review_pending_requests),
+            },
+            "monitoring_alert_status_summary": {
+                "open_alerts_count": int(review.get("open_alerts_count") or 0),
+                "blockers": monitoring_screening_blockers,
+            },
+            "baseline_summary": baseline,
+            "outcome": review.get("outcome"),
+            "findings_summary": review.get("officer_findings_note"),
+            "rationale": review.get("officer_rationale") or review.get("outcome_reason"),
+            "risk_impact": review.get("risk_rerate_reason"),
+            "new_risk_level": review.get("new_risk_level"),
+            "follow_up_notes": review.get("officer_deficiencies_note"),
+            "senior_review_note": review.get("officer_internal_review_note"),
+            "completed_at": review.get("completed_at"),
+            "completed_by": review.get("decided_by"),
+            "next_review_date": review.get("next_review_date"),
+        },
         "monitoring_screening_context": {
             "linked_monitoring_alert_id": review.get("linked_monitoring_alert_id"),
             "linked_edd_case_id": review.get("linked_edd_case_id"),
@@ -20003,11 +20043,7 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
             "updated_by": review.get("findings_updated_by"),
             "updated_at": review.get("findings_updated_at"),
         },
-        "future_actions": [
-            "Outcome decision will be handled in PRS-5.",
-            "Risk reassessment and memo addendum will be handled later.",
-            "Change Management and Investigation linkage will be handled later.",
-        ],
+        "future_actions": [],
     }
 
 
@@ -20475,9 +20511,10 @@ class PeriodicReviewEscalateHandler(BaseHandler):
 class PeriodicReviewCompleteHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/complete -- record outcome and close.
 
-    Body: {"outcome": "<one of no_change|enhanced_monitoring|"
-                       "edd_required|exit_recommended>",
-           "outcome_reason": "<rationale>"}
+    Body: {"outcome": "<periodic review outcome>",
+           "rationale": "<officer rationale>",
+           "officer_acknowledgement": true,
+           ...optional PRS-5 decision fields...}
     """
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
@@ -20488,18 +20525,31 @@ class PeriodicReviewCompleteHandler(BaseHandler):
             return
         data = self.get_json() or {}
         outcome = data.get("outcome")
-        outcome_reason = data.get("outcome_reason")
+        outcome_reason = data.get("rationale") or data.get("outcome_reason")
         if not outcome:
             return self.error("outcome is required", 400)
         if not outcome_reason:
-            return self.error("outcome_reason is required", 400)
+            return self.error("rationale is required", 400)
         import periodic_review_engine as pre
         db = get_db()
         try:
             try:
                 result = pre.record_review_outcome(
                     db, review_id,
-                    outcome=outcome, outcome_reason=outcome_reason,
+                    outcome=outcome,
+                    outcome_reason=outcome_reason,
+                    findings_summary=data.get("findings_summary"),
+                    rationale=outcome_reason,
+                    risk_impact=data.get("risk_impact"),
+                    risk_changed=data.get("risk_changed", False),
+                    new_risk_level=data.get("new_risk_level"),
+                    edd_required=data.get("edd_required", False),
+                    follow_up_required=data.get("follow_up_required", False),
+                    exit_recommended=data.get("exit_recommended", False),
+                    follow_up_notes=data.get("follow_up_notes"),
+                    senior_review_note=data.get("senior_review_note"),
+                    officer_acknowledgement=data.get("officer_acknowledgement", False),
+                    enforce_prs5_gates=True,
                     user=user, audit_writer=self.log_audit,
                 )
             except pre.ReviewNotFound:
@@ -20536,7 +20586,7 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                 memo_result = {"status": "generation_failed"}
 
             self.success({
-                "status": "outcome_recorded",
+                "status": "periodic_review_completed",
                 "result": result,
                 "memo": memo_result,
             })

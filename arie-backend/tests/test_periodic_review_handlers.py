@@ -148,20 +148,33 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
     def _create_review(self, *, status="pending", risk_level="MEDIUM",
                        trigger_source=None, linked_alert_id=None,
                        review_reason=None, application_id=None,
-                       officer_rationale="Fixture rationale"):
+                       officer_rationale="Fixture rationale",
+                       client_attestation_status="submitted",
+                       baseline_status="not_applicable"):
         application_id = application_id or self._app_id
         self._conn.execute(
             "INSERT INTO periodic_reviews "
             "(application_id, client_name, risk_level, status, "
-            " trigger_source, linked_monitoring_alert_id, review_reason, officer_rationale) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " trigger_source, linked_monitoring_alert_id, review_reason, officer_rationale, "
+            " client_attestation_status, baseline_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (application_id, "PR03 Test Co", risk_level, status,
-             trigger_source, linked_alert_id, review_reason, officer_rationale),
+             trigger_source, linked_alert_id, review_reason, officer_rationale,
+             client_attestation_status, baseline_status),
         )
         self._conn.commit()
         return self._conn.execute(
             "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
         ).fetchone()["id"]
+
+    def _completion_payload(self, outcome="no_change", reason="all checks pass", **overrides):
+        payload = {
+            "outcome": outcome,
+            "outcome_reason": reason,
+            "officer_acknowledgement": True,
+        }
+        payload.update(overrides)
+        return payload
 
     def _create_document(self, *, doc_id="doc-1", doc_type="passport", expiry_date=None):
         self._conn.execute(
@@ -516,6 +529,32 @@ class TestEscalateHandler(_PRReviewHandlerBase):
 # Complete endpoint
 # ─────────────────────────────────────────────────────────────────
 class TestCompleteHandler(_PRReviewHandlerBase):
+    def test_requires_auth(self):
+        rid = self._create_review(status="in_progress")
+        resp = self.fetch(
+            f"/api/monitoring/reviews/{rid}/complete",
+            method="POST",
+            body=json.dumps(self._completion_payload(reason="x")),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(resp.code, 401)
+
+    def test_client_role_forbidden(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="x"),
+            token=self.client_token,
+        )
+        self.assertEqual(resp.code, 403)
+
+    def test_unknown_review_returns_404(self):
+        resp = self._post(
+            "/api/monitoring/reviews/99999/complete",
+            self._completion_payload(reason="x"),
+        )
+        self.assertEqual(resp.code, 404)
+
     def test_records_outcome_and_closes(self):
         self._conn.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
@@ -525,16 +564,32 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         rid = self._create_review(status="in_progress")
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "all checks pass"},
+            self._completion_payload(reason="all checks pass"),
         )
         self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "periodic_review_completed")
+        self.assertIsNotNone(body["result"]["next_review_date"])
         row = self._conn.execute(
-            "SELECT status, outcome, outcome_reason, closed_at "
+            "SELECT status, outcome, outcome_reason, officer_rationale, completed_at, decided_by, next_review_date, closed_at "
             "FROM periodic_reviews WHERE id = ?", (rid,)
         ).fetchone()
         self.assertEqual(row["status"], "completed")
         self.assertEqual(row["outcome"], "no_change")
+        self.assertEqual(row["officer_rationale"], "all checks pass")
+        self.assertIsNotNone(row["completed_at"])
+        self.assertEqual(row["decided_by"], "admin001")
+        self.assertIsNotNone(row["next_review_date"])
         self.assertIsNotNone(row["closed_at"])
+        audit = self._conn.execute(
+            "SELECT action, before_state, after_state FROM audit_log WHERE action = 'periodic_review_completed' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertIn("completed", audit["after_state"])
+        open_queue = self._get("/api/monitoring/reviews?queue=open")
+        self.assertEqual(open_queue.code, 200)
+        open_reviews = json.loads(open_queue.body)["reviews"]
+        self.assertFalse(any(item["id"] == rid for item in open_reviews))
 
     def test_replay_blocked(self):
         self._conn.execute(
@@ -545,12 +600,12 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         rid = self._create_review(status="in_progress")
         first = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "x"},
+            self._completion_payload(reason="x"),
         )
         self.assertEqual(first.code, 200)
         second = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "y"},
+            self._completion_payload(reason="y"),
         )
         self.assertEqual(second.code, 409)
 
@@ -578,6 +633,128 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         )
         self.assertEqual(resp.code, 400)
 
+    def test_missing_acknowledgement_blocks_completion(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            {"outcome": "no_change", "outcome_reason": "x"},
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("Officer acknowledgement is required", labels)
+
+    def test_missing_attestation_blocks_completion(self):
+        rid = self._create_review(status="in_progress", client_attestation_status="not_started")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="x"),
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("Client attestation has not been submitted", labels)
+
+    def test_missing_baseline_blocks_completion(self):
+        rid = self._create_review(status="in_progress", baseline_status="not_set")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="x"),
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("Periodic review baseline is missing or not marked N/A", labels)
+
+    def test_required_periodic_review_document_request_blocks_until_resolved(self):
+        rid = self._create_review(status="in_progress")
+        self._conn.execute(
+            """
+            INSERT INTO application_enhanced_requirements
+            (application_id, trigger_key, trigger_label, trigger_category,
+             requirement_key, requirement_label, requirement_type, mandatory,
+             status, linked_periodic_review_id, active)
+            VALUES (?, ?, ?, ?, ?, ?, 'document', 1, 'requested', ?, 1)
+            """,
+            (
+                self._app_id,
+                f"periodic_review_{rid}_directors_changed",
+                "Directors changed",
+                "periodic_review_attestation",
+                "updated_register_of_directors",
+                "Updated Register of Directors",
+                rid,
+            ),
+        )
+        self._conn.commit()
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="x"),
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("Updated Register of Directors is still missing", labels)
+
+    def test_risk_change_does_not_mutate_application_risk(self):
+        rid = self._create_review(status="in_progress", risk_level="MEDIUM")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(
+                outcome="risk_rating_changed",
+                reason="Risk profile changed during review",
+                risk_changed=True,
+                new_risk_level="HIGH",
+                risk_impact="New adverse media requires higher periodic-review risk.",
+            ),
+        )
+        self.assertEqual(resp.code, 200)
+        review = self._conn.execute(
+            "SELECT status, outcome, new_risk_level, risk_change_attestation, risk_rerate_reason FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        app = self._conn.execute(
+            "SELECT risk_level FROM applications WHERE id = ?",
+            (self._app_id,),
+        ).fetchone()
+        self.assertEqual(review["status"], "completed")
+        self.assertEqual(review["outcome"], "risk_rating_changed")
+        self.assertEqual(review["new_risk_level"], "HIGH")
+        self.assertEqual(review["risk_change_attestation"], "risk_change_required")
+        self.assertEqual(app["risk_level"], "MEDIUM")
+
+    def test_edd_required_blocks_without_linked_edd_case(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(
+                outcome="edd_required",
+                reason="EDD is required",
+                edd_required=True,
+                risk_impact="EDD rationale recorded.",
+            ),
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("EDD outcome selected but no linked EDD case exists", labels)
+
+    def test_client_follow_up_required_blocks_clean_closure(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(
+                outcome="client_follow_up_required",
+                reason="Client must clarify ownership changes",
+                follow_up_required=True,
+                follow_up_notes="Ask client for updated ownership chart.",
+            ),
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("Client follow-up required must be resolved before closure", labels)
+
     def test_blocks_completion_for_expired_document(self):
         self._conn.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
@@ -593,7 +770,7 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "try"},
+            self._completion_payload(reason="try"),
         )
         self.assertEqual(resp.code, 409)
         body = json.loads(resp.body)
@@ -613,7 +790,7 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "terminal alerts only"},
+            self._completion_payload(reason="terminal alerts only"),
         )
         self.assertEqual(resp.code, 200)
 
@@ -632,7 +809,7 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            {"outcome": "no_change", "outcome_reason": "resolved alert"},
+            self._completion_payload(reason="resolved alert"),
         )
         self.assertEqual(resp.code, 200)
 

@@ -42,11 +42,12 @@ def test_lifecycle_tab_shell_sections_match_prs4_workspace():
         "Documents & Evidence",
         "Monitoring Alerts Considered In This Review",
         "Officer Findings Draft",
-        "Future Actions",
+        "Periodic Review Decision",
         "Review Context",
         "Review History",
     ):
         assert title in html
+    assert "Future Actions" not in html
     assert "Completion Gate" not in html
     assert "Periodic Reviews owns the review cockpit." not in html
     assert "Review Setup Summary" not in html
@@ -91,9 +92,14 @@ def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_fi
     assert "function renderPeriodicReviewWorkspaceMonitoring(reviewDetail)" in html
     assert "function renderPeriodicReviewWorkspaceFindingsDraft(reviewDetail)" in html
     assert "async function savePeriodicReviewWorkspaceFindings(reviewId)" in html
+    assert "function renderPeriodicReviewWorkspaceDecision(reviewDetail)" in html
+    assert "async function completePeriodicReviewDecision(reviewId)" in html
+    assert "periodic-review-decision-complete-btn-" in html
     assert "/findings" in html
+    assert "/complete" in html
     assert "Save draft findings" in html
-    assert "Final outcome controls arrive in PRS-5." in html
+    assert "Complete periodic review" in html
+    assert "Final outcome controls arrive in PRS-5." not in html
 
 
 def test_overview_periodic_review_baseline_box_is_simplified_backoffice_only_and_auditable():
