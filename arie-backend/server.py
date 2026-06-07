@@ -3725,6 +3725,85 @@ OFFICER_CORRECTION_MATERIALITY_ORDER = {
     "tier2": 2,
     "tier1": 3,
 }
+PRESCREENING_CORRECTION_SOURCE_SURFACE = "application_overview_prescreening_correction_mode"
+PRESCREENING_CORRECTION_ALLOWED_FIELDS = {
+    "registered_entity_name": {
+        "label": "Registered Entity Name",
+        "aliases": ("registered_entity_name", "company_name", "entity_name"),
+        "max_length": 240,
+    },
+    "trading_name": {
+        "label": "Trading Name",
+        "aliases": ("trading_name", "trade_name"),
+        "max_length": 240,
+    },
+    "referrer_name": {
+        "label": "Referrer",
+        "aliases": ("referrer_name", "referrer"),
+        "max_length": 240,
+    },
+}
+
+
+def _prescreening_correction_field_label(field_path):
+    cfg = PRESCREENING_CORRECTION_ALLOWED_FIELDS.get(str(field_path or "").strip())
+    return (cfg or {}).get("label") or str(field_path or "").replace("_", " ").title()
+
+
+def _prescreening_original_value(prescreening, app, field_path):
+    cfg = PRESCREENING_CORRECTION_ALLOWED_FIELDS.get(str(field_path or "").strip()) or {}
+    for alias in cfg.get("aliases", (field_path,)):
+        if isinstance(prescreening, dict):
+            value = prescreening.get(alias)
+            if value not in (None, ""):
+                return value
+    if field_path == "registered_entity_name":
+        return (app or {}).get("company_name")
+    return None
+
+
+def _latest_prescreening_correction_overrides(db, application_id, app=None, prescreening=None):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM application_corrections
+        WHERE application_id = ?
+          AND target_type = 'prescreening_field'
+          AND correction_source = ?
+        ORDER BY corrected_at ASC, id ASC
+        """,
+        (application_id, PRESCREENING_CORRECTION_SOURCE_SURFACE),
+    ).fetchall()
+    values = {}
+    metadata = {}
+    source_prescreening = prescreening if isinstance(prescreening, dict) else {}
+    app_dict = dict(app or {})
+    for row in rows:
+        item = dict(row)
+        after_state = _parse_officer_correction_json(item.get("after_state"), {})
+        before_state = _parse_officer_correction_json(item.get("before_state"), {})
+        for field_path in PRESCREENING_CORRECTION_ALLOWED_FIELDS:
+            if field_path not in after_state:
+                continue
+            original = before_state.get("original_client_value")
+            if original is None:
+                original = _prescreening_original_value(source_prescreening, app_dict, field_path)
+            values[field_path] = after_state.get(field_path)
+            metadata[field_path] = {
+                "field_path": field_path,
+                "field_label": _prescreening_correction_field_label(field_path),
+                "corrected_value": after_state.get(field_path),
+                "original_client_value": original,
+                "reason": item.get("correction_reason"),
+                "corrected_by": item.get("corrected_by"),
+                "corrected_by_name": item.get("corrected_by_name"),
+                "corrected_by_role": item.get("corrected_by_role"),
+                "corrected_at": item.get("corrected_at"),
+                "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
+                "risk_relevant": False,
+                "portal_visible": False,
+            }
+    return {"values": values, "metadata": metadata}
 
 
 def _officer_correction_now():
@@ -4150,6 +4229,15 @@ class ApplicationDetailHandler(BaseHandler):
         stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
         saved_session_prescreening = load_saved_session_prescreening(db, result)
         result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
+        if user["type"] != "client":
+            correction_display = _latest_prescreening_correction_overrides(
+                db,
+                result["id"],
+                app=result,
+                prescreening=result["prescreening_data"],
+            )
+            result["officer_correction_display_values"] = correction_display["values"]
+            result["officer_correction_display_metadata"] = correction_display["metadata"]
         screening_report = result["prescreening_data"].get("screening_report") if isinstance(result["prescreening_data"], dict) else None
         screening_reviews = _load_screening_reviews_for_truth(db, result["id"], result.get("ref"))
         if user["type"] != "client":
@@ -5184,6 +5272,196 @@ class ApplicationCorrectionHandler(BaseHandler):
         )
         downstream["target_application_ref"] = app_ref
         return downstream
+
+
+class ControlledPrescreeningCorrectionHandler(BaseHandler):
+    """Narrow PR410A correction path for safe pre-screening display fields."""
+
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            self.success({
+                "application_id": app["id"],
+                "corrections": [
+                    item for item in _list_application_corrections(db, app["id"])
+                    if item.get("target_type") == "prescreening_field"
+                ],
+            })
+        finally:
+            db.close()
+
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        payload = self.get_json() or {}
+        field_changes = payload.get("field_changes") or {}
+        if not isinstance(field_changes, dict):
+            return self.error("field_changes must be an object", 400)
+        field_changes = {
+            str(key).strip(): value
+            for key, value in field_changes.items()
+            if str(key).strip()
+        }
+        if not field_changes:
+            return self.error("At least one field change is required", 400)
+
+        unsupported = sorted(set(field_changes) - set(PRESCREENING_CORRECTION_ALLOWED_FIELDS))
+        if unsupported:
+            return self.error(
+                "Unsupported PR410A correction field(s): " + ", ".join(unsupported),
+                400,
+            )
+
+        correction_reason = str(payload.get("correction_reason") or payload.get("reason") or "").strip()
+        if not correction_reason:
+            return self.error("correction_reason is required", 400)
+
+        normalized_changes = {}
+        for field_path, raw_value in field_changes.items():
+            value = "" if raw_value is None else str(raw_value).strip()
+            if not value:
+                return self.error(f"{field_path} requires a non-empty corrected value", 400)
+            max_length = PRESCREENING_CORRECTION_ALLOWED_FIELDS[field_path].get("max_length", 240)
+            if len(value) > max_length:
+                return self.error(f"{field_path} exceeds maximum length {max_length}", 400)
+            normalized_changes[field_path] = value
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+
+            app_dict = dict(app)
+            correction_ts = _officer_correction_now()
+            prescreening = merge_prescreening_sources(
+                parse_json_field(app_dict.get("prescreening_data"), {}),
+                load_saved_session_prescreening(db, app_dict),
+            )
+            existing_display = _latest_prescreening_correction_overrides(
+                db,
+                app_dict["id"],
+                app=app_dict,
+                prescreening=prescreening,
+            )
+            before_state = {
+                "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
+                "risk_relevant": False,
+                "portal_visible": False,
+            }
+            after_state = {
+                "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
+                "risk_relevant": False,
+                "portal_visible": False,
+            }
+            field_labels = {}
+            original_values = {}
+            for field_path, value in normalized_changes.items():
+                original_value = _prescreening_original_value(prescreening, app_dict, field_path)
+                current_value = existing_display["values"].get(field_path, original_value)
+                before_state[field_path] = current_value
+                after_state[field_path] = value
+                original_values[field_path] = original_value
+                field_labels[field_path] = _prescreening_correction_field_label(field_path)
+            before_state["original_client_values"] = original_values
+            after_state["field_labels"] = field_labels
+            downstream_state = {
+                "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
+                "risk_relevant": False,
+                "risk_recomputed": False,
+                "memo_visible": False,
+                "memo_requires_regeneration": False,
+                "supervisor_requires_rerun": False,
+                "portal_visible": False,
+                "risk_impact": "No risk recomputation required",
+            }
+
+            db.execute(
+                """
+                INSERT INTO application_corrections
+                (application_id, target_type, target_id, subject_type, field_scope,
+                 materiality, correction_reason, evidence_source, correction_note,
+                 correction_source, before_state, after_state, downstream_state,
+                 corrected_by, corrected_by_name, corrected_by_role, corrected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_dict["id"],
+                    "prescreening_field",
+                    app_dict["id"],
+                    "application",
+                    ",".join(sorted(normalized_changes.keys())),
+                    "tier3",
+                    correction_reason,
+                    str(payload.get("evidence_source") or "Officer Correction Mode").strip(),
+                    str(payload.get("correction_note") or correction_reason).strip(),
+                    PRESCREENING_CORRECTION_SOURCE_SURFACE,
+                    json.dumps(before_state, default=str, sort_keys=True),
+                    json.dumps(after_state, default=str, sort_keys=True),
+                    json.dumps(downstream_state, default=str, sort_keys=True),
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    correction_ts,
+                ),
+            )
+            self.log_audit(
+                user,
+                "officer_correction_created",
+                app_dict["ref"],
+                (
+                    "Officer correction recorded from Officer Correction Mode; "
+                    f"fields={','.join(sorted(normalized_changes.keys()))}; "
+                    "risk impact: No risk recomputation required; "
+                    f"reason={correction_reason}"
+                )[:4000],
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
+            db.execute(
+                "UPDATE applications SET updated_at = ? WHERE id = ?",
+                (correction_ts, app_dict["id"]),
+            )
+            db.commit()
+            self.success({
+                "status": "corrected",
+                "application_id": app_dict["id"],
+                "target_type": "prescreening_field",
+                "field_changes": normalized_changes,
+                "materiality": "tier3",
+                "before_state": before_state,
+                "after_state": after_state,
+                "downstream_state": downstream_state,
+            }, 201)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("controlled prescreening correction failed for app_id=%s", app_id)
+            return self.error("Failed to record officer correction", 500)
+        finally:
+            db.close()
 
 
 class SubmitApplicationHandler(BaseHandler):
@@ -23406,6 +23684,7 @@ def make_app():
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
         (r"/api/applications/([^/]+)/evidence-pack", ApplicationEvidencePackHandler),
         (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
+        (r"/api/applications/([^/]+)/officer-corrections", ControlledPrescreeningCorrectionHandler),
         (r"/api/applications/([^/]+)/corrections", ApplicationCorrectionHandler),
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),

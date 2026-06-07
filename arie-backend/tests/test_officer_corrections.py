@@ -143,6 +143,9 @@ def _insert_case(
             "sanctions": {"api_status": "live", "matched": False},
             "kyc": {"api_status": "live"},
         },
+        "registered_entity_name": "Officer Correction Test Ltd",
+        "trading_name": "Original Trading Name",
+        "referrer_name": "Original Referrer",
         "source_of_funds": "Salary income",
         "expected_volume": "Under 50,000",
     }
@@ -284,6 +287,15 @@ def _post_correction(base_url, app_id, payload):
     return resp.json()
 
 
+def _post_prescreening_correction(base_url, app_id, payload, role="admin"):
+    return requests.post(
+        f"{base_url}/api/applications/{app_id}/officer-corrections",
+        headers=_headers(role),
+        json=payload,
+        timeout=5,
+    )
+
+
 def _active_edd_cases(db, app_id):
     return db.execute(
         """
@@ -301,6 +313,202 @@ def _db_conn(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def test_pr410a_prescreening_correction_rejects_unauthenticated(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    resp = requests.post(
+        f"{base_url}/api/applications/{case['app_id']}/officer-corrections",
+        json={
+            "field_changes": {"trading_name": "Corrected Trading Name"},
+            "correction_reason": "Registry evidence confirms updated trading name.",
+        },
+        timeout=5,
+    )
+    assert resp.status_code in (401, 403)
+
+
+def test_pr410a_prescreening_correction_rejects_client_user(officer_correction_api_server):
+    from auth import create_token
+
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    token = create_token("client-test", "client", "Portal Client", "client")
+    resp = requests.post(
+        f"{base_url}/api/applications/{case['app_id']}/officer-corrections",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "field_changes": {"trading_name": "Corrected Trading Name"},
+            "correction_reason": "Registry evidence confirms updated trading name.",
+        },
+        timeout=5,
+    )
+    assert resp.status_code == 403
+
+
+def test_pr410a_prescreening_correction_rejects_disallowed_field(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {"country": "Iran"},
+            "correction_reason": "Attempt to edit risk-relevant jurisdiction.",
+        },
+    )
+    assert resp.status_code == 400
+    assert "Unsupported PR410A correction field" in resp.text
+
+
+def test_pr410a_prescreening_correction_rejects_missing_reason(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {"field_changes": {"trading_name": "Corrected Trading Name"}},
+    )
+    assert resp.status_code == 400
+    assert "correction_reason is required" in resp.text
+
+
+def test_pr410a_prescreening_correction_persists_history_audit_and_overlay_without_downstream_side_effects(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    before_app = conn.execute(
+        "SELECT risk_level, risk_score, risk_computed_at, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {
+                "trading_name": "Corrected Trading Name",
+                "referrer_name": "Corrected Referrer",
+            },
+            "correction_reason": "Officer verified factual display fields from registry evidence.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["target_type"] == "prescreening_field"
+    assert body["materiality"] == "tier3"
+    assert body["before_state"]["trading_name"] == "Original Trading Name"
+    assert body["after_state"]["trading_name"] == "Corrected Trading Name"
+    assert body["downstream_state"]["risk_relevant"] is False
+    assert body["downstream_state"]["risk_recomputed"] is False
+    assert body["downstream_state"]["memo_requires_regeneration"] is False
+
+    detail = _detail(base_url, case["app_id"])
+    assert detail["prescreening_data"]["trading_name"] == "Original Trading Name"
+    assert detail["officer_correction_display_values"]["trading_name"] == "Corrected Trading Name"
+    assert detail["officer_correction_display_metadata"]["trading_name"]["original_client_value"] == "Original Trading Name"
+
+    corrections = _corrections(base_url, case["app_id"])
+    latest = corrections[0]
+    assert latest["target_type"] == "prescreening_field"
+    assert latest["field_scope"] == "referrer_name,trading_name"
+    assert latest["downstream_state"]["risk_impact"] == "No risk recomputation required"
+
+    conn = _db_conn(db_path)
+    after_app = conn.execute(
+        "SELECT risk_level, risk_score, risk_computed_at, prescreening_data FROM applications WHERE id = ?",
+        (case["app_id"],),
+    ).fetchone()
+    memo = conn.execute(
+        "SELECT is_stale FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+        (case["app_id"],),
+    ).fetchone()
+    audit = conn.execute(
+        """
+        SELECT action, detail, before_state, after_state
+        FROM audit_log
+        WHERE target = ? AND action = 'officer_correction_created'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (case["ref"],),
+    ).fetchone()
+    conn.close()
+    assert after_app["risk_level"] == before_app["risk_level"]
+    assert after_app["risk_score"] == before_app["risk_score"]
+    assert after_app["risk_computed_at"] == before_app["risk_computed_at"]
+    assert json.loads(after_app["prescreening_data"])["trading_name"] == "Original Trading Name"
+    assert memo["is_stale"] in (None, 0, False)
+    assert audit is not None
+    assert "Officer Correction Mode" in audit["detail"]
+    assert json.loads(audit["before_state"])["trading_name"] == "Original Trading Name"
+    assert json.loads(audit["after_state"])["trading_name"] == "Corrected Trading Name"
+
+
+def test_pr410a_prescreening_correction_endpoint_rejects_invalid_application(officer_correction_api_server):
+    base_url, _ = officer_correction_api_server
+    resp = _post_prescreening_correction(
+        base_url,
+        "missing-application",
+        {
+            "field_changes": {"trading_name": "Corrected Trading Name"},
+            "correction_reason": "No such application.",
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_pr410a_portal_applications_do_not_expose_correction_history_or_internal_metadata(officer_correction_api_server):
+    from auth import create_token
+
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    client_id = conn.execute("SELECT client_id FROM applications WHERE id = ?", (case["app_id"],)).fetchone()["client_id"]
+    conn.close()
+
+    resp = _post_prescreening_correction(
+        base_url,
+        case["app_id"],
+        {
+            "field_changes": {"trading_name": "Corrected Trading Name"},
+            "correction_reason": "Officer verified factual display field.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+    token = create_token(client_id, "client", "Portal Client", "client")
+    portal = requests.get(
+        f"{base_url}/api/portal/applications",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=5,
+    )
+    assert portal.status_code == 200, portal.text
+    apps = portal.json()["applications"]
+    app = next(item for item in apps if item["id"] == case["app_id"])
+    forbidden = {
+        "officer_corrections",
+        "officer_correction_display_values",
+        "officer_correction_display_metadata",
+        "audit_log",
+        "internal_blockers",
+        "risk_score",
+        "risk_level",
+    }
+    assert forbidden.isdisjoint(app.keys())
 
 
 def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_correction_api_server):
