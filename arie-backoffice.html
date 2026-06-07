@@ -15120,8 +15120,11 @@ async function completePeriodicReviewDecision(reviewId) {
     var resp = await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/complete', draft);
     var nextDate = resp && resp.result && resp.result.next_review_date ? (' Next review: ' + resp.result.next_review_date) : '';
     showToast('Periodic review completed.' + nextDate);
-    if (typeof loadMonitoringReviews === 'function') {
-      try { await loadMonitoringReviews(); } catch (e) {}
+    if (typeof ensureMonitoringDataLoaded === 'function') {
+      try {
+        await ensureMonitoringDataLoaded({ force: true });
+        if (typeof renderPeriodicReviewQueue === 'function') renderPeriodicReviewQueue();
+      } catch (e) {}
     }
     await refreshLifecycleWorkspaceTab();
   } catch (err) {
