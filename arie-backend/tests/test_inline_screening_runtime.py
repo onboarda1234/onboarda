@@ -552,6 +552,9 @@ def _queue_runtime_js(html):
                 """
                 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
                 var SCREENING_QUEUE_DIRTY = false;
+                var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', provider:'', pep:'', application_ref:'' };
+                var SCREENING_QUEUE_SEARCH_TIMER = null;
+                var SCREENING_QUEUE_ACTIVE_REQUEST_ID = 0;
                 var SCREENING_REVIEW_ROWS = {};
                 var currentUser = { role: 'co', name: 'Officer Test' };
                 var BO_AUTH_TOKEN = 'token';
@@ -616,12 +619,40 @@ def _queue_runtime_js(html):
                 (async () => {
                   markScreeningQueueDirty();
                   await renderScreening({ force: SCREENING_QUEUE_DIRTY });
+                  const firstRenderedLabel = SCREENING_QUEUE.rows[0].status_label;
+                  const firstRenderedHtml = tbody.rows[0] ? tbody.rows[0].innerHTML : '';
+                  const firstCalledPaths = calledPaths.slice();
+                  const deferred = [];
+                  calledPaths = [];
+                  boApiCall = function(method, path) {
+                    calledPaths.push(path);
+                    return new Promise(function(resolve) {
+                      deferred.push({ path: path, resolve: resolve });
+                    });
+                  };
+                  const slowRequest = loadScreeningQueue({ force: true, offset: 0 });
+                  const fastRequest = loadScreeningQueue({ force: true, offset: 50 });
+                  deferred[1].resolve({
+                    metrics: { applications_awaiting_screening: 0, applications_screened: 1, applications_requiring_review: 1 },
+                    rows: [{ subject_name: 'Newest Row', subject_type: 'director', company_name: 'Fast Co', status_key: 'review_required', status_label: 'Newest Result' }],
+                    pagination: { limit: 50, offset: 50, returned: 1, total_rows: 51, has_next: false, has_prev: true }
+                  });
+                  await fastRequest;
+                  deferred[0].resolve({
+                    metrics: { applications_awaiting_screening: 0, applications_screened: 1, applications_requiring_review: 1 },
+                    rows: [{ subject_name: 'Stale Row', subject_type: 'director', company_name: 'Slow Co', status_key: 'review_required', status_label: 'Stale Result' }],
+                    pagination: { limit: 50, offset: 0, returned: 1, total_rows: 51, has_next: true, has_prev: false }
+                  });
+                  await slowRequest;
                   console.log(JSON.stringify({
                   dirtyAfterRender: SCREENING_QUEUE_DIRTY,
-                  calledPaths,
+                  calledPaths: firstCalledPaths,
                   renderedRows: tbody.rows.length,
-                  queueRowLabel: SCREENING_QUEUE.rows[0].status_label,
-                  renderedHtml: tbody.rows[0] ? tbody.rows[0].innerHTML : ''
+                  queueRowLabel: firstRenderedLabel,
+                  renderedHtml: firstRenderedHtml,
+                  staleGuardPaths: calledPaths,
+                  staleGuardQueueRowLabel: SCREENING_QUEUE.rows[0].status_label,
+                  staleGuardOffset: SCREENING_QUEUE.pagination.offset
                 }));
                 })().catch((err) => {
                   console.error(err);
@@ -976,6 +1007,9 @@ class TestInlineScreeningRuntime:
         assert "Pending" not in result["renderedHtml"]
         assert "Loading screening queue" not in result["renderedHtml"]
         assert "No Match" in result["renderedHtml"]
+        assert len(result["staleGuardPaths"]) == 2
+        assert result["staleGuardQueueRowLabel"] == "Newest Result"
+        assert result["staleGuardOffset"] == 50
 
     def test_screening_queue_sidebar_alias_routes_to_screening_renderer(self):
         html = _read_backoffice()
