@@ -41,12 +41,13 @@ def test_lifecycle_tab_shell_sections_match_prs4_workspace():
         "Client Attestation Summary",
         "Documents & Evidence",
         "Monitoring Alerts Considered In This Review",
-        "Officer Findings Draft",
         "Periodic Review Decision",
         "Review Context",
         "Review History",
     ):
         assert title in html
+    assert "Officer Findings Draft" not in html
+    assert "Save draft findings" not in html
     assert "Future Actions" not in html
     assert "Completion Gate" not in html
     assert "Periodic Reviews owns the review cockpit." not in html
@@ -84,20 +85,20 @@ def test_alerts_tab_shell_uses_existing_application_monitoring_alert_data():
     assert "showView('monitoring')" in html
 
 
-def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_findings_helpers():
+def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_decision_helpers():
     html = _read_backoffice()
     assert "function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection)" in html
     assert "function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail)" in html
     assert "function renderPeriodicReviewWorkspaceReadiness(reviewDetail)" in html
     assert "function renderPeriodicReviewWorkspaceMonitoring(reviewDetail)" in html
-    assert "function renderPeriodicReviewWorkspaceFindingsDraft(reviewDetail)" in html
-    assert "async function savePeriodicReviewWorkspaceFindings(reviewId)" in html
     assert "function renderPeriodicReviewWorkspaceDecision(reviewDetail)" in html
     assert "async function completePeriodicReviewDecision(reviewId)" in html
     assert "periodic-review-decision-complete-btn-" in html
-    assert "/findings" in html
     assert "/complete" in html
-    assert "Save draft findings" in html
+    assert "renderPeriodicReviewWorkspaceFindingsDraft" not in html
+    assert "savePeriodicReviewWorkspaceFindings" not in html
+    assert "Officer Findings Draft" not in html
+    assert "Save draft findings" not in html
     assert "Complete periodic review" in html
     assert "Final outcome controls arrive in PRS-5." not in html
 
