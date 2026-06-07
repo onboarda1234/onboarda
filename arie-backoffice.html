@@ -5032,6 +5032,7 @@ var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:nul
 var SCREENING_QUEUE_DIRTY = false;
 var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', provider:'', pep:'', application_ref:'' };
 var SCREENING_QUEUE_SEARCH_TIMER = null;
+var SCREENING_QUEUE_ACTIVE_REQUEST_ID = 0;
 var SCREENING_REVIEW_ROWS = {};
 var SCREENING_EVIDENCE_DETAILS = {};
 var pendingScreeningDisposition = null;
@@ -9742,6 +9743,7 @@ async function loadScreeningQueue(options) {
   }
   var force = !!options.force || SCREENING_QUEUE_DIRTY;
   var offset = typeof options.offset === 'number' ? Math.max(0, options.offset) : screeningQueueOffset();
+  var requestId = ++SCREENING_QUEUE_ACTIVE_REQUEST_ID;
   SCREENING_QUEUE.is_loading = true;
   if (!SCREENING_QUEUE.pagination) {
     SCREENING_QUEUE.pagination = { limit: screeningQueuePageSize(), offset: offset, returned: 0, total_rows: 0, has_next: false, has_prev: false };
@@ -9754,6 +9756,7 @@ async function loadScreeningQueue(options) {
     if (force) params.push('refresh=' + Date.now());
     var path = '/screening/queue?' + params.join('&');
     var payload = await boApiCall('GET', path, null, options);
+    if (requestId !== SCREENING_QUEUE_ACTIVE_REQUEST_ID) return false;
     SCREENING_QUEUE = {
       metrics: payload.metrics || null,
       rows: payload.rows || [],
@@ -9766,6 +9769,7 @@ async function loadScreeningQueue(options) {
     renderScreeningQueueMeta();
     return true;
   } catch(e) {
+    if (requestId !== SCREENING_QUEUE_ACTIVE_REQUEST_ID) return false;
     console.warn('Failed to load screening queue:', e);
     SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable', pagination: SCREENING_QUEUE.pagination, is_loading:false };
     renderScreeningQueueMeta();
