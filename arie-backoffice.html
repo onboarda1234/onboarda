@@ -15515,21 +15515,6 @@ function renderPeriodicReviewWorkspaceMonitoring(reviewDetail) {
     '</div>';
 }
 
-function renderPeriodicReviewWorkspaceFindingsDraft(reviewDetail) {
-  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
-  var draft = workspace.findings_draft || {};
-  var reviewId = reviewDetail && reviewDetail.id;
-  return '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
-    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer findings note</label><textarea id="periodic-review-findings-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_findings_note || '') + '</textarea></div>' +
-    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Deficiencies / follow-up points</label><textarea id="periodic-review-deficiencies-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_deficiencies_note || '') + '</textarea></div>' +
-    '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Internal review note</label><textarea id="periodic-review-internal-note-' + reviewId + '" rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;">' + escapeHtml(draft.officer_internal_review_note || '') + '</textarea></div>' +
-    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
-      '<div style="font-size:11px;color:var(--text3);">Draft findings are internal only and do not close the review.' + (draft.updated_at ? ' Last saved ' + escapeHtml(String(draft.updated_at).slice(0, 19).replace('T', ' ')) : '') + '</div>' +
-      '<button class="btn btn-primary btn-sm" onclick="savePeriodicReviewWorkspaceFindings(\'' + reviewId + '\')">Save draft findings</button>' +
-    '</div>' +
-  '</div>';
-}
-
 function periodicReviewDecisionDraft(reviewId) {
   var outcomeEl = document.getElementById('periodic-review-decision-outcome-' + reviewId);
   var findingsEl = document.getElementById('periodic-review-decision-findings-' + reviewId);
@@ -15716,30 +15701,6 @@ async function completePeriodicReviewDecision(reviewId) {
   }
 }
 
-async function savePeriodicReviewWorkspaceFindings(reviewId) {
-  var findingsEl = document.getElementById('periodic-review-findings-note-' + reviewId);
-  var deficienciesEl = document.getElementById('periodic-review-deficiencies-note-' + reviewId);
-  var internalEl = document.getElementById('periodic-review-internal-note-' + reviewId);
-  var findings = findingsEl ? findingsEl.value.trim() : '';
-  var deficiencies = deficienciesEl ? deficienciesEl.value.trim() : '';
-  var internalNote = internalEl ? internalEl.value.trim() : '';
-  if (!findings && !deficiencies && !internalNote) {
-    showToast('Enter at least one findings field before saving.', 'error');
-    return;
-  }
-  try {
-    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/findings', {
-      officer_findings_note: findings,
-      officer_deficiencies_note: deficiencies,
-      officer_internal_review_note: internalNote
-    });
-    showToast('Periodic review findings saved');
-    await refreshLifecycleWorkspaceTab();
-  } catch (err) {
-    showToast('Failed to save periodic review findings: ' + (err.message || 'unknown error'), 'error');
-  }
-}
-
 function applicationAlertsSeverityTone(severity) {
   var value = String(severity || '').trim().toLowerCase();
   if (value === 'critical') return { bg: 'rgba(220, 38, 38, 0.12)', color: '#b91c1c' };
@@ -15881,9 +15842,6 @@ function renderLifecycleDetailTab(context) {
   var monitoringBody = activeReview
     ? renderPeriodicReviewWorkspaceMonitoring(activeReview)
     : '<div style="font-size:12px;color:var(--text2);">Monitoring and screening context appears here when a periodic review is active.</div>';
-  var findingsBody = activeReview
-    ? renderPeriodicReviewWorkspaceFindingsDraft(activeReview)
-    : '<div style="font-size:12px;color:var(--text2);">Officer findings draft becomes available once a periodic review is active.</div>';
   var decisionCardHtml = activeReview
     ? lifecycleDetailCard('Periodic Review Decision', 'Officer-controlled closure with required completion gates.', renderPeriodicReviewWorkspaceDecision(activeReview), '#0f172a')
     : '';
@@ -15922,9 +15880,8 @@ function renderLifecycleDetailTab(context) {
       lifecycleDetailCard('Client Attestation Summary', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
       (activeReview ? lifecycleDetailCard('Notification Status', 'Client reminders and officer alert state for this review.', renderPeriodicReviewWorkspaceNotifications(activeReview), '#0f766e') : '') +
       lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
-      lifecycleDetailCard('Monitoring Alerts Considered In This Review', 'Compact monitoring context with a direct link back to the owner workflow.', monitoringBody, '#2557d6') +
-      lifecycleDetailCard('Officer Findings Draft', 'Internal notes that can feed the final decision.', findingsBody, '#7c3aed') +
       decisionCardHtml +
+      lifecycleDetailCard('Monitoring Alerts Considered In This Review', 'Compact monitoring context with a direct link back to the owner workflow.', monitoringBody, '#2557d6') +
       lifecycleDetailCard('Review Context', 'Compact current-review context without duplicating the top-line metrics.', reviewContextBody, '#7c3aed') +
       lifecycleDetailCard('Review History', 'Historical periodic reviews are kept separate from the current case context.', historyBody, '#475569') +
     '</div>' +

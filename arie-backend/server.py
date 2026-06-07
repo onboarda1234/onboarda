@@ -20747,10 +20747,6 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
         if "screening" in str(label or "").lower() or "alert" in str(label or "").lower()
     ]
     attestation_submitted = str(attestation.get("status") or "not_started") == "submitted"
-    findings_present = any(
-        str(review.get(field) or "").strip()
-        for field in ("officer_findings_note", "officer_deficiencies_note", "officer_internal_review_note")
-    )
     if not attestation_submitted:
         readiness_state = "awaiting_client_attestation"
         readiness_label = "Awaiting client attestation"
@@ -20763,12 +20759,9 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
     elif monitoring_screening_blockers:
         readiness_state = "not_ready"
         readiness_label = "Not ready"
-    elif findings_present:
+    else:
         readiness_state = "ready_for_outcome_decision"
         readiness_label = "Ready for outcome decision"
-    else:
-        readiness_state = "ready_for_officer_findings"
-        readiness_label = "Ready for officer findings"
     projection_blockers = []
     for label in (projection.get("blocker_summary") or []):
         if str(label or "").strip():
@@ -20795,7 +20788,6 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
         "awaiting_documents": "Chase the requested periodic review documents from the client.",
         "documents_uploaded_review_required": "Review uploaded documents and verify or accept them.",
         "not_ready": "Resolve the linked monitoring or screening blockers.",
-        "ready_for_officer_findings": "Draft officer findings and follow-up notes.",
         "ready_for_outcome_decision": "Record the officer outcome decision.",
     }.get(readiness_state, "Review the periodic review workspace.")
     return {

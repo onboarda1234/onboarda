@@ -112,7 +112,7 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         assert review_item["status_label"] == "Awaiting documents"
         assert lifecycle_body["review_setup"]["status_label"] == "Awaiting documents"
 
-    def test_workspace_readiness_becomes_ready_for_officer_findings_when_docs_are_uploaded(self):
+    def test_workspace_readiness_becomes_ready_for_outcome_decision_when_docs_are_uploaded(self):
         submit = self._post(
             "/api/portal/applications/app-owned/periodic-review/submit",
             self._submit_payload({
@@ -148,7 +148,7 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         assert body["status_label"] == "Officer review required"
         assert body["projection"]["status_label"] == "Officer review required"
         readiness = body["periodic_review_workspace"]["readiness"]
-        assert readiness["state"] == "ready_for_officer_findings"
+        assert readiness["state"] == "ready_for_outcome_decision"
 
     def test_workspace_status_becomes_ready_for_decision_when_findings_exist(self):
         submit = self._post(
@@ -194,6 +194,34 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         assert body["status_label"] == "Ready for decision"
         assert body["projection"]["status_label"] == "Ready for decision"
         assert body["periodic_review_workspace"]["readiness"]["state"] == "ready_for_outcome_decision"
+
+    def test_legacy_draft_findings_are_surfaced_in_decision_payload(self):
+        self._conn.execute(
+            """
+            UPDATE periodic_reviews
+            SET officer_findings_note = ?,
+                officer_deficiencies_note = ?,
+                officer_internal_review_note = ?
+            WHERE id = ?
+            """,
+            (
+                "Legacy PRS-4 findings retained.",
+                "Legacy follow-up point retained.",
+                "Legacy senior note retained.",
+                self._owned_review_id,
+            ),
+        )
+        self._conn.commit()
+
+        resp = self._get(f"/api/monitoring/reviews/{self._owned_review_id}", self.admin_token)
+        assert resp.code == 200
+        body = json.loads(resp.body)
+        decision = body["periodic_review_workspace"]["decision"]
+        draft = body["periodic_review_workspace"]["findings_draft"]
+        assert decision["findings_summary"] == "Legacy PRS-4 findings retained."
+        assert decision["follow_up_notes"] == "Legacy follow-up point retained."
+        assert decision["senior_review_note"] == "Legacy senior note retained."
+        assert draft["officer_findings_note"] == "Legacy PRS-4 findings retained."
 
     def test_completed_historical_review_does_not_override_new_active_review(self):
         self._conn.execute(

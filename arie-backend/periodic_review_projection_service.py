@@ -170,7 +170,9 @@ def derive_operational_review_status(
         key = "officer_review_required"
     elif blocker_count or linked_edd_case_id:
         key = "blocked"
-    elif findings_present:
+    elif findings_present or (
+        status in {"in_progress", "pending_senior_review"} and attestation == "submitted"
+    ):
         key = "ready_for_decision"
     elif status in {"in_progress", "pending_senior_review", "awaiting_information"}:
         key = "officer_review_required"
