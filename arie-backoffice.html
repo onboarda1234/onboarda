@@ -1282,6 +1282,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
               <div class="prescreen-collapsible-subtitle">All data submitted by the client during pre-screening.</div>
             </div>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-outline btn-sm" id="btn-prescreen-correction-mode" onclick="enterPrescreenCorrectionMode(event)" style="font-size:11px;">Edit in Correction Mode</button>
               <span class="prescreen-collapsible-meta">Client-submitted onboarding data</span>
               <span class="prescreen-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
             </div>
@@ -7601,6 +7602,8 @@ async function fetchApplicationDetail(ref) {
     screeningReviews: detail.screening_reviews || [],
     _raw_prescreening: psData,
     prescreeningData: psData,
+    officerCorrectionDisplayValues: detail.officer_correction_display_values || {},
+    officerCorrectionDisplayMetadata: detail.officer_correction_display_metadata || {},
     latestMemoMeta: detail.latest_memo || null,
     latestMemo: detail.latest_memo_data || null,
     memoIsStale: detail.memo_is_stale || false,
@@ -7616,9 +7619,175 @@ async function fetchApplicationDetail(ref) {
   };
 }
 
+var PRESCREEN_CORRECTION_ALLOWED_FIELDS = {
+  registered_entity_name: { label: 'Registered Entity Name' },
+  trading_name: { label: 'Trading Name' },
+  referrer_name: { label: 'Referrer' }
+};
+var PRESCREEN_CORRECTION_MODE_ACTIVE = false;
+var LAST_PRESCREEN_FIELDS = [];
+
+function prescreenCorrectionDisplayValue(app, field) {
+  app = app || currentApp || {};
+  field = field || {};
+  if (field.key && app.officerCorrectionDisplayValues && app.officerCorrectionDisplayValues[field.key] != null) {
+    return app.officerCorrectionDisplayValues[field.key];
+  }
+  return field.value;
+}
+
+function prescreenCorrectionOriginalValue(app, field) {
+  app = app || currentApp || {};
+  field = field || {};
+  var meta = field.key && app.officerCorrectionDisplayMetadata ? app.officerCorrectionDisplayMetadata[field.key] : null;
+  if (meta && meta.original_client_value != null) return meta.original_client_value;
+  return field.value;
+}
+
+function enterPrescreenCorrectionMode(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if (!currentApp || !currentApp.id) {
+    showToast('Open an application first.', 'warn');
+    return;
+  }
+  PRESCREEN_CORRECTION_MODE_ACTIVE = true;
+  renderPrescreenSummary(currentApp, LAST_PRESCREEN_FIELDS);
+}
+
+function cancelPrescreenCorrectionMode(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  PRESCREEN_CORRECTION_MODE_ACTIVE = false;
+  renderPrescreenSummary(currentApp, LAST_PRESCREEN_FIELDS);
+}
+
+function updatePrescreenCorrectionHighlight(input) {
+  if (!input) return;
+  var currentValue = input.getAttribute('data-current-value') || '';
+  var changed = String(input.value || '').trim() !== String(currentValue || '').trim();
+  input.style.borderColor = changed ? '#f59e0b' : 'var(--border1)';
+  input.style.background = changed ? '#fffbeb' : 'var(--surface1)';
+}
+
+async function savePrescreenCorrectionMode(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if (!currentApp || !currentApp.id) return;
+  var reasonEl = document.getElementById('prescreen-correction-reason');
+  var errorEl = document.getElementById('prescreen-correction-error');
+  var reason = (reasonEl && reasonEl.value || '').trim();
+  var changes = {};
+  document.querySelectorAll('.prescreen-correction-input').forEach(function(input) {
+    var field = input.getAttribute('data-field') || '';
+    var currentValue = input.getAttribute('data-current-value') || '';
+    var newValue = String(input.value || '').trim();
+    if (field && newValue && newValue !== String(currentValue || '').trim()) {
+      changes[field] = newValue;
+    }
+  });
+  if (!reason) {
+    if (errorEl) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = 'Correction reason is required before saving.';
+    }
+    return;
+  }
+  if (!Object.keys(changes).length) {
+    if (errorEl) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = 'Change at least one allowlisted field before saving.';
+    }
+    return;
+  }
+  try {
+    if (errorEl) {
+      errorEl.style.display = 'none';
+      errorEl.textContent = '';
+    }
+    await boApiCall('POST', '/applications/' + currentApp.id + '/officer-corrections', {
+      field_changes: changes,
+      correction_reason: reason,
+      evidence_source: 'Officer Correction Mode',
+      correction_note: reason
+    });
+    PRESCREEN_CORRECTION_MODE_ACTIVE = false;
+    await refreshCurrentAppDetail();
+    loadActivityLog(currentApp);
+    showToast('Officer correction recorded. No risk recomputation required for PR410A fields.');
+  } catch (err) {
+    if (errorEl) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = err.message || 'Failed to save officer correction.';
+    }
+  }
+}
+
+function renderPrescreenSummary(app, prescreenFields) {
+  LAST_PRESCREEN_FIELDS = prescreenFields || [];
+  var container = document.getElementById('detail-prescreen-summary');
+  if (!container) return;
+  var mode = !!PRESCREEN_CORRECTION_MODE_ACTIVE;
+  var header = mode
+    ? '<div style="margin-bottom:12px;padding:12px;border:1px solid #f59e0b;background:#fffbeb;border-radius:8px;">' +
+        '<div style="font-size:13px;font-weight:700;color:#92400e;">Officer Correction Mode</div>' +
+        '<div style="font-size:12px;color:#92400e;margin-top:4px;">Edit only the allowlisted factual fields below. Original client values remain visible and corrections are recorded as officer events.</div>' +
+        '<div id="prescreen-correction-error" style="display:none;margin-top:8px;font-size:12px;color:#991b1b;"></div>' +
+      '</div>'
+    : '';
+  var footer = mode
+    ? '<div style="margin-top:12px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+        '<label style="display:block;font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Correction reason</label>' +
+        '<textarea class="form-input" id="prescreen-correction-reason" rows="3" placeholder="Explain the correction and evidence relied on."></textarea>' +
+        '<div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end;">' +
+          '<button class="btn btn-outline btn-sm" onclick="cancelPrescreenCorrectionMode(event)">Cancel</button>' +
+          '<button class="btn btn-primary btn-sm" onclick="savePrescreenCorrectionMode(event)">Save Correction</button>' +
+        '</div>' +
+      '</div>'
+    : '';
+  var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+    (prescreenFields || []).map(function(field) {
+      var currentRaw = prescreenCorrectionDisplayValue(app, field);
+      var current = normalizeDetailValue(currentRaw);
+      var original = normalizeDetailValue(prescreenCorrectionOriginalValue(app, field));
+      var isCorrected = field.key && app && app.officerCorrectionDisplayMetadata && app.officerCorrectionDisplayMetadata[field.key];
+      var isAllowed = !!(field.key && PRESCREEN_CORRECTION_ALLOWED_FIELDS[field.key]);
+      var isLong = current.length > 60;
+      var baseStyle = (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid ' + (isCorrected ? '#f59e0b' : 'var(--border1)') + ';';
+      var label = '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(field.label) + '</div>';
+      if (mode && isAllowed) {
+        return '<div style="' + baseStyle + '">' + label +
+          '<input class="form-input prescreen-correction-input" data-field="' + escapeHtml(field.key) + '" data-current-value="' + escapeHtml(currentRaw == null ? '' : String(currentRaw)) + '" value="' + escapeHtml(currentRaw == null ? '' : String(currentRaw)) + '" oninput="updatePrescreenCorrectionHighlight(this)" />' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Original client value: ' + escapeHtml(original) + '</div>' +
+        '</div>';
+      }
+      if (mode && field.riskRelevant) {
+        return '<div title="Risk-relevant corrections will be handled in the next controlled release." style="' + baseStyle + 'opacity:0.72;">' + label +
+          '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(current) + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Locked: Risk-relevant corrections will be handled in the next controlled release.</div>' +
+        '</div>';
+      }
+      return '<div style="' + baseStyle + '">' + label +
+        '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(current) + '</div>' +
+        (isCorrected ? '<div style="font-size:11px;color:#92400e;margin-top:6px;">Officer-corrected. Original client value: ' + escapeHtml(original) + '</div>' : '') +
+      '</div>';
+    }).join('') +
+    '</div>';
+  container.innerHTML = header + body + footer;
+}
+
 function renderAuthoritativeAppDetail(app, options) {
   var psData = app.prescreeningData || {};
   var documentReadiness = computeDocumentReadinessSummary(app);
+  if (currentApp && currentApp.id && currentApp.id !== app.id) {
+    PRESCREEN_CORRECTION_MODE_ACTIVE = false;
+  }
   currentApp = app;
   decisionRecordsLoadedFor = null;
   window._currentDetailApp = app;
@@ -7685,10 +7854,10 @@ function renderAuthoritativeAppDetail(app, options) {
   // Pre-screening summary fields — ordered to match the portal form flow
   var prescreenFields = [
     // ── Entity Information ──
-    { label: 'Registered Entity Name', value: detailValueFromAliases(psData, ['registered_entity_name', 'company_name', 'entity_name']) },
-    { label: 'Trading Name', value: detailValueFromAliases(psData, ['trading_name', 'trade_name']) },
-    { label: 'Entity Type', value: detailValueFromAliases(psData, ['entity_type']) },
-    { label: 'Ownership Structure', value: detailValueFromAliases(psData, ['ownership_structure']) },
+    { key: 'registered_entity_name', label: 'Registered Entity Name', value: detailValueFromAliases(psData, ['registered_entity_name', 'company_name', 'entity_name']) },
+    { key: 'trading_name', label: 'Trading Name', value: detailValueFromAliases(psData, ['trading_name', 'trade_name']) },
+    { label: 'Entity Type', value: detailValueFromAliases(psData, ['entity_type']), riskRelevant: true },
+    { label: 'Ownership Structure', value: detailValueFromAliases(psData, ['ownership_structure']), riskRelevant: true },
     // ── Contact ──
     { label: 'Contact Name', value: firstMeaningfulDetailValue(
         [detailValueFromAliases(psData, ['entity_contact_first', 'contact_first']), detailValueFromAliases(psData, ['entity_contact_last', 'contact_last'])].filter(Boolean).join(' '),
@@ -7706,7 +7875,7 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
     // ── Incorporation Details ──
     { label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
-    { label: 'Country of Incorporation', value: detailValueFromAliases(psData, ['country_of_incorporation', 'country']) },
+    { label: 'Country of Incorporation', value: detailValueFromAliases(psData, ['country_of_incorporation', 'country']), riskRelevant: true },
     { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
     { label: 'Authorised Share Capital', value: (function() {
@@ -7723,9 +7892,9 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Licence Authority', value: detailValueFromAliases(psData, ['licence_authority']) },
     { label: 'Licence Type', value: detailValueFromAliases(psData, ['licence_type']) },
     // ── Business Operations ──
-    { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), '') },
+    { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), ''), riskRelevant: true },
     { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },
-    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])) },
+    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])), riskRelevant: true },
     { label: 'Transaction Complexity', value: detailValueFromAliases(psData, ['transaction_complexity']) },
     { label: 'Countries of Operation', value: detailValueFromAliases(psData, ['countries_of_operation']) },
     { label: 'Target Markets', value: detailValueFromAliases(psData, ['target_markets']) },
@@ -7735,39 +7904,29 @@ function renderAuthoritativeAppDetail(app, options) {
     // ── Currencies ──
     { label: 'Currencies', value: detailValueFromAliases(psData, ['currencies', 'currency']) },
     // ── Source of Funds & Wealth ──
-    { label: 'Source of Wealth', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_type']), detailValueFromAliases(psData, ['source_of_wealth'])) },
+    { label: 'Source of Wealth', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_type']), detailValueFromAliases(psData, ['source_of_wealth'])), riskRelevant: true },
     { label: 'Source of Wealth Detail', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_detail']), '') },
     { label: 'Source of Funds (Initial)', value: firstMeaningfulDetailValue(
         [detailValueFromAliases(psData, ['source_of_funds_initial_type']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])].filter(Boolean).join(' — '),
         ''
-      )
+      ), riskRelevant: true
     },
     { label: 'Source of Funds (Ongoing)', value: firstMeaningfulDetailValue(
         [detailValueFromAliases(psData, ['source_of_funds_ongoing_type']), detailValueFromAliases(psData, ['source_of_funds_ongoing_detail'])].filter(Boolean).join(' — '),
         ''
-      )
+      ), riskRelevant: true
     },
     // ── Estimated Monthly Activity (formatted from nested object) ──
-    { label: 'Estimated Monthly Activity', value: formatMonthlyActivity(psData.estimated_monthly_activity) },
+    { label: 'Estimated Monthly Activity', value: formatMonthlyActivity(psData.estimated_monthly_activity), riskRelevant: true },
     // ── Financial Forecast (formatted from nested object) ──
     { label: 'Financial Forecast', value: formatFinancialForecast(psData.financial_forecast) },
     // ── Management ──
     { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) },
     // ── Referral ──
-    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']) },
-    { label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) }
+    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']), riskRelevant: true },
+    { key: 'referrer_name', label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) }
   ];
-  document.getElementById('detail-prescreen-summary').innerHTML =
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
-    prescreenFields.map(function(field) {
-      var value = normalizeDetailValue(field.value);
-      var isLong = value.length > 60;
-      return '<div style="' + (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border1);">' +
-        '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(field.label) + '</div>' +
-        '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(value) + '</div>' +
-      '</div>';
-    }).join('') +
-    '</div>';
+  renderPrescreenSummary(app, prescreenFields);
 
   var personsHtml = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Directors</div>';
   personsHtml += app.directors.length ? app.directors.map(function(d) {
@@ -18352,8 +18511,11 @@ function officerCorrectionHistoryFieldName(item) {
     return key && key !== 'pep_status';
   })[0];
   if (fieldName) return fieldName;
+  var scope = String(item.field_scope || '').split(',').map(function(part) { return part.trim(); }).filter(Boolean);
+  if (scope.length === 1) return scope[0];
   var afterState = safeObject(item.after_state);
   return Object.keys(afterState).filter(function(key) {
+    if (['source_surface', 'risk_relevant', 'portal_visible', 'field_labels', 'original_client_values'].indexOf(key) >= 0) return false;
     return afterState[key] != null && typeof afterState[key] !== 'object';
   })[0] || '';
 }
@@ -18378,6 +18540,16 @@ function officerCorrectionHistorySubject(item, app) {
 }
 
 function officerCorrectionHistoryField(item, app) {
+  item = item || {};
+  var afterState = safeObject(item.after_state);
+  var labels = safeObject(afterState.field_labels);
+  var scope = String(item.field_scope || '').split(',').map(function(part) { return part.trim(); }).filter(Boolean);
+  if (scope.length > 1) {
+    return scope.map(function(field) {
+      return labels[field] || officerCorrectionFieldLabel(field, item.target_type);
+    }).join(', ');
+  }
+  if (scope.length === 1 && labels[scope[0]]) return labels[scope[0]];
   var label = officerCorrectionFieldLabel(officerCorrectionHistoryFieldName(item), item && item.target_type);
   var subject = officerCorrectionHistorySubject(item, app);
   return subject ? (subject + ' - ' + label) : label;
@@ -18438,9 +18610,17 @@ function officerCorrectionHistoryValue(state, item) {
   state = safeObject(state);
   item = item || {};
   if ((item.target_type || '') === 'pep_status') return officerCorrectionHistoryPepValue(state);
-  var fieldName = officerCorrectionHistoryFieldName(item);
+  var scope = String(item.field_scope || '').split(',').map(function(part) { return part.trim(); }).filter(Boolean);
+  if (scope.length > 1) {
+    return scope.map(function(field) {
+      return officerCorrectionFieldLabel(field, item.target_type) + ': ' + officerCorrectionReadableValue(state[field], field);
+    }).join(' | ');
+  }
+  var fieldName = scope[0] || officerCorrectionHistoryFieldName(item);
   if (!fieldName) {
-    fieldName = Object.keys(state).filter(function(key) { return typeof state[key] !== 'object'; })[0];
+    fieldName = Object.keys(state).filter(function(key) {
+      return ['source_surface', 'risk_relevant', 'portal_visible', 'field_labels', 'original_client_values'].indexOf(key) < 0 && typeof state[key] !== 'object';
+    })[0];
   }
   return officerCorrectionReadableValue(state[fieldName], fieldName);
 }
@@ -18536,12 +18716,17 @@ function renderOfficerCorrectionHistory(app) {
     var beforeText = officerCorrectionHistoryValue(item.before_state, item);
     var afterText = officerCorrectionHistoryValue(item.after_state, item);
     var fieldLabel = officerCorrectionHistoryField(item, app);
+    var downstream = safeObject(item.downstream_state);
+    var sourceSurface = downstream.source_surface || item.correction_source || 'officer_review';
+    var riskImpact = downstream.risk_impact || (downstream.risk_recomputed ? 'Risk recomputed' : 'No risk recomputation required');
     return '<div style="padding:12px;margin-bottom:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Field corrected:</strong> ' + escapeHtml(fieldLabel) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Before:</strong> ' + escapeHtml(beforeText) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>After:</strong> ' + escapeHtml(afterText) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Officer:</strong> ' + escapeHtml(item.corrected_by_name || item.corrected_by || 'Officer') + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Date:</strong> ' + escapeHtml(normalizeDetailValue(item.corrected_at)) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Source surface:</strong> ' + escapeHtml(String(sourceSurface).replace(/_/g, ' ')) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Risk impact:</strong> ' + escapeHtml(riskImpact) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);"><strong>Reason / Evidence:</strong> ' + escapeHtml(officerCorrectionHistoryReasonEvidence(item)) + '</div>' +
     '</div>';
   }).join('');
