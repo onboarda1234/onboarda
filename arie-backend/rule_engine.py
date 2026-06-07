@@ -16,6 +16,32 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("arie")
 
+CONTROLLED_PRESCREENING_CORRECTION_SOURCE = "application_overview_prescreening_correction_mode"
+CONTROLLED_PRESCREENING_CORRECTION_OVERLAY_MAP = {
+    "country_of_incorporation": {
+        "app_column": "country",
+        "prescreening_keys": ("country_of_incorporation", "country"),
+    },
+    "sector": {
+        "app_column": "sector",
+        "prescreening_keys": ("sector",),
+    },
+    "entity_type": {
+        "app_column": "entity_type",
+        "prescreening_keys": ("entity_type",),
+    },
+    "ownership_structure": {
+        "app_column": "ownership_structure",
+        "prescreening_keys": ("ownership_structure",),
+    },
+    "introduction_method": {
+        "prescreening_keys": ("introduction_method",),
+    },
+    "monthly_volume": {
+        "prescreening_keys": ("monthly_volume", "expected_volume"),
+    },
+}
+
 
 def safe_json_loads(val):
     """Safely parse JSON — handles PostgreSQL JSONB (already dict) and SQLite TEXT (string)."""
@@ -29,6 +55,48 @@ def safe_json_loads(val):
         except (json.JSONDecodeError, TypeError):
             return {}
     return {}
+
+
+def _apply_controlled_prescreening_correction_overlays(db, app_id, application, prescreening_data):
+    """Apply officer working-value overlays without mutating original submission JSON."""
+    app_overlay = dict(application or {})
+    prescreening_overlay = dict(prescreening_data or {})
+    try:
+        rows = db.execute(
+            """
+            SELECT after_state
+            FROM application_corrections
+            WHERE application_id = ?
+              AND target_type = 'prescreening_field'
+              AND correction_source = ?
+            ORDER BY corrected_at ASC, id ASC
+            """,
+            (app_id, CONTROLLED_PRESCREENING_CORRECTION_SOURCE),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "controlled_prescreening_overlay_unavailable app_id=%s error=%s",
+            app_id,
+            exc,
+        )
+        return app_overlay, prescreening_overlay
+
+    for row in rows:
+        state = safe_json_loads((row or {}).get("after_state"))
+        if not isinstance(state, dict):
+            continue
+        for field_path, cfg in CONTROLLED_PRESCREENING_CORRECTION_OVERLAY_MAP.items():
+            if field_path not in state:
+                continue
+            value = state.get(field_path)
+            if value in (None, ""):
+                continue
+            app_column = cfg.get("app_column")
+            if app_column:
+                app_overlay[app_column] = value
+            for key in cfg.get("prescreening_keys", ()):
+                prescreening_overlay[key] = value
+    return app_overlay, prescreening_overlay
 
 
 # ══════════════════════════════════════════════════════════
@@ -1491,16 +1559,25 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         result["old_score"] = old_score
         result["old_level"] = old_level
 
-        # Build scorer input from current app data
+        # Build scorer input from current app data plus controlled officer
+        # working-value overlays. The original prescreening_data JSON remains
+        # the immutable client submission.
+        app_for_scoring = dict(app)
         prescreening = safe_json_loads(app["prescreening_data"])
 
         # Import from neutral shared module to avoid circular dependency
         # (importing from server.py would re-trigger Prometheus registration)
         from party_utils import get_application_parties
         directors, ubos, intermediaries = get_application_parties(db, app_id)
+        app_for_scoring, prescreening = _apply_controlled_prescreening_correction_overlays(
+            db,
+            app_id,
+            app_for_scoring,
+            prescreening,
+        )
 
         scoring_input = build_prescreening_risk_input(
-            application=app,
+            application=app_for_scoring,
             prescreening_data=prescreening,
             directors=directors,
             ubos=ubos,

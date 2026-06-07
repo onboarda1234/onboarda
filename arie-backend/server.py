@@ -62,6 +62,7 @@ import requests
 
 import html
 import asyncio
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 # Import database module
@@ -3735,16 +3736,59 @@ PRESCREENING_CORRECTION_ALLOWED_FIELDS = {
         "label": "Registered Entity Name",
         "aliases": ("registered_entity_name", "company_name", "entity_name"),
         "max_length": 240,
+        "risk_relevant": False,
     },
     "trading_name": {
         "label": "Trading Name",
         "aliases": ("trading_name", "trade_name"),
         "max_length": 240,
+        "risk_relevant": False,
     },
     "referrer_name": {
         "label": "Referrer",
         "aliases": ("referrer_name", "referrer"),
         "max_length": 240,
+        "risk_relevant": False,
+    },
+    "country_of_incorporation": {
+        "label": "Country of Incorporation",
+        "aliases": ("country_of_incorporation", "country"),
+        "app_column": "country",
+        "max_length": 120,
+        "risk_relevant": True,
+    },
+    "sector": {
+        "label": "Sector / Industry",
+        "aliases": ("sector", "industry"),
+        "app_column": "sector",
+        "max_length": 180,
+        "risk_relevant": True,
+    },
+    "entity_type": {
+        "label": "Entity Type",
+        "aliases": ("entity_type",),
+        "app_column": "entity_type",
+        "max_length": 160,
+        "risk_relevant": True,
+    },
+    "ownership_structure": {
+        "label": "Ownership Structure",
+        "aliases": ("ownership_structure",),
+        "app_column": "ownership_structure",
+        "max_length": 240,
+        "risk_relevant": True,
+    },
+    "introduction_method": {
+        "label": "Introduction Method",
+        "aliases": ("introduction_method",),
+        "max_length": 240,
+        "risk_relevant": True,
+    },
+    "monthly_volume": {
+        "label": "Monthly Volume",
+        "aliases": ("monthly_volume", "expected_monthly_volume", "expected_volume"),
+        "max_length": 180,
+        "risk_relevant": True,
     },
 }
 
@@ -3763,7 +3807,28 @@ def _prescreening_original_value(prescreening, app, field_path):
                 return value
     if field_path == "registered_entity_name":
         return (app or {}).get("company_name")
+    app_column = cfg.get("app_column")
+    if app_column:
+        return (app or {}).get(app_column)
     return None
+
+
+def _prescreening_correction_is_risk_relevant(field_path):
+    cfg = PRESCREENING_CORRECTION_ALLOWED_FIELDS.get(str(field_path or "").strip()) or {}
+    return bool(cfg.get("risk_relevant"))
+
+
+def _application_risk_state_for_correction(app):
+    row = dict(app or {})
+    return {
+        "risk_score": row.get("risk_score"),
+        "risk_level": row.get("risk_level"),
+        "base_risk_level": row.get("base_risk_level"),
+        "final_risk_level": row.get("final_risk_level"),
+        "risk_dimensions": parse_json_field(row.get("risk_dimensions"), {}),
+        "risk_computed_at": row.get("risk_computed_at"),
+        "risk_config_version": row.get("risk_config_version"),
+    }
 
 
 def _latest_prescreening_correction_overrides(db, application_id, app=None, prescreening=None):
@@ -3804,10 +3869,26 @@ def _latest_prescreening_correction_overrides(db, application_id, app=None, pres
                 "corrected_by_role": item.get("corrected_by_role"),
                 "corrected_at": item.get("corrected_at"),
                 "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
-                "risk_relevant": False,
+                "risk_relevant": _prescreening_correction_is_risk_relevant(field_path),
                 "portal_visible": False,
             }
     return {"values": values, "metadata": metadata}
+
+
+def _apply_prescreening_correction_overrides_to_working_copy(app, prescreening, correction_display):
+    app_working = dict(app or {})
+    prescreening_working = dict(prescreening or {})
+    values = (correction_display or {}).get("values") or {}
+    for field_path, value in values.items():
+        cfg = PRESCREENING_CORRECTION_ALLOWED_FIELDS.get(str(field_path or "").strip())
+        if not cfg or value in (None, ""):
+            continue
+        app_column = cfg.get("app_column")
+        if app_column:
+            app_working[app_column] = value
+        for alias in cfg.get("aliases", (field_path,)):
+            prescreening_working[alias] = value
+    return app_working, prescreening_working
 
 
 def _officer_correction_now():
@@ -4119,6 +4200,106 @@ def _correction_log_audit(handler, user, action, target, detail, db=None, **kwar
     handler.log_audit(user, action, target, detail, db=db, **kwargs)
 
 
+CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS = {
+    "assigned_to",
+    "assigned_name",
+    "base_risk_level",
+    "decision_by",
+    "decision_by_name",
+    "decision_notes",
+    "decided_at",
+    "edd_trigger_flags",
+    "elevation_reason_text",
+    "enhanced_review_summary",
+    "final_risk_level",
+    "final_risk_level_label",
+    "first_approved_at",
+    "first_approver_id",
+    "first_approver_name",
+    "has_authoritative_risk",
+    "latest_memo",
+    "latest_memo_data",
+    "memo_is_stale",
+    "memo_requires_regeneration",
+    "memo_stale_reason",
+    "memo_stale_reasons",
+    "memo_stale_trigger",
+    "monitoring_alerts",
+    "officer_correction_display_metadata",
+    "officer_correction_display_values",
+    "officer_corrections",
+    "onboarding_lane",
+    "periodic_review",
+    "periodic_review_baseline",
+    "periodic_review_baseline_cadence_months",
+    "periodic_review_baseline_calculation_basis",
+    "periodic_review_baseline_date",
+    "periodic_review_baseline_eligibility",
+    "periodic_review_baseline_note",
+    "periodic_review_baseline_policy_version",
+    "periodic_review_baseline_status",
+    "periodic_review_last_review_date",
+    "periodic_review_next_review_due",
+    "periodic_reviews",
+    "pilot_evidence_summary",
+    "pre_approval_decision",
+    "pre_approval_notes",
+    "pre_approval_officer_id",
+    "pre_approval_timestamp",
+    "risk_computed_at",
+    "risk_config_version",
+    "risk_dimensions",
+    "risk_escalations",
+    "risk_integrity_warnings",
+    "risk_level",
+    "risk_level_label",
+    "risk_score",
+    "screening_mode",
+    "screening_reviews",
+    "screening_truth_summary",
+    "supervisor_requires_rerun",
+}
+
+CLIENT_PRESCREENING_PRICING_FORBIDDEN_KEYS = {
+    "base_risk_level",
+    "final_risk_level",
+    "risk_breakdown",
+    "risk_dimensions",
+    "risk_factors",
+    "risk_level",
+    "risk_level_label",
+    "risk_score",
+}
+
+
+def _client_safe_application_detail(result):
+    """Project application detail to the client portal's resume surface.
+
+    The shared detail endpoint is used by both Back Office and the portal. Back
+    Office needs officer-grade risk, memo, blocker, and correction metadata;
+    clients need only their onboarding state, documents, RMI tasks, and
+    client-safe pricing data. Keep this projection explicit so new internal
+    control fields fail closed for client-authenticated detail loads.
+    """
+    safe = {k: v for k, v in result.items() if k not in CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS}
+    safe["change_requests"] = []
+
+    prescreening = safe.get("prescreening_data")
+    if isinstance(prescreening, dict):
+        prescreening = deepcopy(prescreening)
+        pricing = prescreening.get("pricing")
+        if isinstance(pricing, dict):
+            pricing = {
+                k: v
+                for k, v in pricing.items()
+                if k not in CLIENT_PRESCREENING_PRICING_FORBIDDEN_KEYS
+            }
+            prescreening["pricing"] = pricing
+        safe["prescreening_data"] = prescreening
+
+    return safe
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -4315,6 +4496,8 @@ class ApplicationDetailHandler(BaseHandler):
         if user["type"] != "client":
             result["officer_corrections"] = _list_application_corrections(db, result["id"])
         result.setdefault("change_requests", [])
+        if user["type"] == "client":
+            result = _client_safe_application_detail(result)
         db.close()
 
         self.success(result)
@@ -5325,7 +5508,7 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
         unsupported = sorted(set(field_changes) - set(PRESCREENING_CORRECTION_ALLOWED_FIELDS))
         if unsupported:
             return self.error(
-                "Unsupported PR410A correction field(s): " + ", ".join(unsupported),
+                "Unsupported controlled correction field(s): " + ", ".join(unsupported),
                 400,
             )
 
@@ -5366,37 +5549,80 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
                 app=app_dict,
                 prescreening=prescreening,
             )
+            risk_relevant = any(
+                _prescreening_correction_is_risk_relevant(field_path)
+                for field_path in normalized_changes
+            )
+            materiality = "tier1" if risk_relevant else "tier3"
+            risk_before = _application_risk_state_for_correction(app_dict)
             before_state = {
                 "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
-                "risk_relevant": False,
+                "risk_relevant": risk_relevant,
                 "portal_visible": False,
             }
             after_state = {
                 "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
-                "risk_relevant": False,
+                "risk_relevant": risk_relevant,
                 "portal_visible": False,
             }
             field_labels = {}
             original_values = {}
+            working_application_before = {}
+            working_application_after = {}
+            application_updates = {}
             for field_path, value in normalized_changes.items():
+                field_cfg = PRESCREENING_CORRECTION_ALLOWED_FIELDS[field_path]
                 original_value = _prescreening_original_value(prescreening, app_dict, field_path)
                 current_value = existing_display["values"].get(field_path, original_value)
                 before_state[field_path] = current_value
                 after_state[field_path] = value
                 original_values[field_path] = original_value
                 field_labels[field_path] = _prescreening_correction_field_label(field_path)
+                app_column = field_cfg.get("app_column")
+                if app_column:
+                    working_application_before[app_column] = app_dict.get(app_column)
+                    working_application_after[app_column] = value
+                    application_updates[app_column] = value
             before_state["original_client_values"] = original_values
             after_state["field_labels"] = field_labels
+            if risk_relevant:
+                before_state["risk_before"] = risk_before
+            if working_application_before:
+                before_state["working_application_values"] = working_application_before
+                after_state["working_application_values"] = working_application_after
             downstream_state = {
                 "source_surface": PRESCREENING_CORRECTION_SOURCE_SURFACE,
-                "risk_relevant": False,
+                "risk_relevant": risk_relevant,
                 "risk_recomputed": False,
-                "memo_visible": False,
+                "memo_visible": risk_relevant,
                 "memo_requires_regeneration": False,
                 "supervisor_requires_rerun": False,
                 "portal_visible": False,
-                "risk_impact": "No risk recomputation required",
+                "risk_impact": (
+                    "Risk recomputation pending" if risk_relevant
+                    else "No risk recomputation required"
+                ),
+                "memo_impact": "No memo impact",
             }
+
+            if application_updates:
+                assignments = ", ".join(f"{column} = ?" for column in application_updates)
+                params = [application_updates[column] for column in application_updates]
+                params.extend([correction_ts, correction_ts, app_dict["id"]])
+                db.execute(
+                    f"UPDATE applications SET {assignments}, updated_at = ?, inputs_updated_at = ? WHERE id = ?",
+                    tuple(params),
+                )
+            else:
+                db.execute(
+                    "UPDATE applications SET updated_at = ?, inputs_updated_at = CASE WHEN ? THEN ? ELSE inputs_updated_at END WHERE id = ?",
+                    (
+                        correction_ts,
+                        True if risk_relevant else False,
+                        correction_ts,
+                        app_dict["id"],
+                    ),
+                )
 
             db.execute(
                 """
@@ -5413,7 +5639,7 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
                     app_dict["id"],
                     "application",
                     ",".join(sorted(normalized_changes.keys())),
-                    "tier3",
+                    materiality,
                     correction_reason,
                     str(payload.get("evidence_source") or "Officer Correction Mode").strip(),
                     str(payload.get("correction_note") or correction_reason).strip(),
@@ -5427,6 +5653,82 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
                     correction_ts,
                 ),
             )
+            if risk_relevant:
+                def audit_fn(*args, **kwargs):
+                    return _correction_log_audit(self, *args, **kwargs)
+
+                risk_result = recompute_risk(
+                    db,
+                    app_dict["id"],
+                    "controlled_prescreening_officer_correction",
+                    user=user,
+                    log_audit_fn=audit_fn,
+                )
+                refreshed_app = db.execute(
+                    "SELECT * FROM applications WHERE id = ?",
+                    (app_dict["id"],),
+                ).fetchone()
+                risk_after = _application_risk_state_for_correction(refreshed_app)
+                after_state["risk_after"] = risk_after
+                downstream_state["risk_recomputed"] = bool(risk_result.get("recomputed"))
+                downstream_state["risk_result"] = risk_result
+                if risk_result.get("recomputed"):
+                    old_score = risk_result.get("old_score")
+                    new_score = risk_result.get("new_score")
+                    old_level = risk_result.get("old_level")
+                    new_level = risk_result.get("new_level")
+                    downstream_state["risk_impact"] = (
+                        f"Risk recomputed: {old_score} / {old_level} -> {new_score} / {new_level}"
+                        if risk_result.get("changed")
+                        else f"Risk recomputed: no change ({new_score} / {new_level})"
+                    )
+                else:
+                    downstream_state["risk_impact"] = "Risk recomputation not run because no stored score exists"
+
+                stale_result = _mark_latest_memo_stale(
+                    db,
+                    app_dict["id"],
+                    trigger="controlled_prescreening_officer_correction",
+                    reason=(
+                        "Officer correction changed risk-relevant pre-screening fields "
+                        f"({','.join(sorted(normalized_changes.keys()))}). Regenerate the memo before approval."
+                    ),
+                    actor=user,
+                    app_ref=app_dict["ref"],
+                    ip_address=self.get_client_ip(),
+                    before_state=before_state,
+                    after_state=after_state,
+                )
+                downstream_state["memo_stale"] = stale_result
+                downstream_state["memo_requires_regeneration"] = bool(stale_result.get("marked"))
+                downstream_state["supervisor_requires_rerun"] = bool(stale_result.get("marked"))
+                downstream_state["memo_impact"] = (
+                    "Memo marked stale" if stale_result.get("marked") else "No memo existed"
+                )
+                downstream_state["approval_blocked_until_refresh"] = bool(stale_result.get("marked"))
+                after_state["memo_after"] = stale_result
+
+                db.execute(
+                    """
+                    UPDATE application_corrections
+                    SET after_state = ?, downstream_state = ?
+                    WHERE application_id = ?
+                      AND target_type = 'prescreening_field'
+                      AND correction_source = ?
+                      AND corrected_at = ?
+                      AND corrected_by = ?
+                      AND field_scope = ?
+                    """,
+                    (
+                        json.dumps(after_state, default=str, sort_keys=True),
+                        json.dumps(downstream_state, default=str, sort_keys=True),
+                        app_dict["id"],
+                        PRESCREENING_CORRECTION_SOURCE_SURFACE,
+                        correction_ts,
+                        user.get("sub", ""),
+                        ",".join(sorted(normalized_changes.keys())),
+                    ),
+                )
             self.log_audit(
                 user,
                 "officer_correction_created",
@@ -5434,7 +5736,8 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
                 (
                     "Officer correction recorded from Officer Correction Mode; "
                     f"fields={','.join(sorted(normalized_changes.keys()))}; "
-                    "risk impact: No risk recomputation required; "
+                    f"risk impact: {downstream_state['risk_impact']}; "
+                    f"memo impact: {downstream_state['memo_impact']}; "
                     f"reason={correction_reason}"
                 )[:4000],
                 db=db,
@@ -5442,17 +5745,13 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
                 after_state=after_state,
                 commit=False,
             )
-            db.execute(
-                "UPDATE applications SET updated_at = ? WHERE id = ?",
-                (correction_ts, app_dict["id"]),
-            )
             db.commit()
             self.success({
                 "status": "corrected",
                 "application_id": app_dict["id"],
                 "target_type": "prescreening_field",
                 "field_changes": normalized_changes,
-                "materiality": "tier3",
+                "materiality": materiality,
                 "before_state": before_state,
                 "after_state": after_state,
                 "downstream_state": downstream_state,
@@ -16409,6 +16708,17 @@ def _memo_fingerprint_source(db, app_row):
     screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref"))
     ps = parse_json_field(app.get("prescreening_data"), {})
     ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
+    correction_display = _latest_prescreening_correction_overrides(
+        db,
+        app_id,
+        app=app,
+        prescreening=ps,
+    )
+    app, ps = _apply_prescreening_correction_overrides_to_working_copy(
+        app,
+        ps,
+        correction_display,
+    )
     app["prescreening_data"] = ps
     app["screening_reviews"] = screening_reviews
     app["source_of_funds"] = ps.get("source_of_funds", "")
@@ -16776,6 +17086,17 @@ class ComplianceMemoHandler(BaseHandler):
         ps_raw = app.get("prescreening_data") or "{}"
         ps = ps_raw if isinstance(ps_raw, dict) else json.loads(ps_raw)
         ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
+        correction_display = _latest_prescreening_correction_overrides(
+            db,
+            real_id,
+            app=app,
+            prescreening=ps,
+        )
+        app, ps = _apply_prescreening_correction_overrides_to_working_copy(
+            app,
+            ps,
+            correction_display,
+        )
         app["prescreening_data"] = ps
         sof = ps.get("source_of_funds", "")
         if not sof:
