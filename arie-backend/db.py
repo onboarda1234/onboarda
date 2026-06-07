@@ -877,6 +877,19 @@ def _get_postgres_schema() -> str:
         findings_updated_at TIMESTAMP,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
+        risk_reassessment_status TEXT DEFAULT 'not_started',
+        risk_impact_category TEXT,
+        officer_risk_decision TEXT,
+        confirmed_risk_level TEXT CHECK(confirmed_risk_level IS NULL OR confirmed_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
+        risk_reassessment_rationale TEXT,
+        risk_reassessment_saved_by TEXT REFERENCES users(id),
+        risk_reassessment_saved_at TIMESTAMP,
+        senior_review_required BOOLEAN DEFAULT FALSE,
+        senior_review_reason TEXT,
+        memo_addendum_status TEXT DEFAULT 'not_generated',
+        memo_addendum_generated_at TIMESTAMP,
+        memo_addendum_finalized_at TIMESTAMP,
+        memo_addendum_finalized_by TEXT REFERENCES users(id),
         client_notification_status TEXT DEFAULT 'not_sent',
         initial_notification_sent_at TIMESTAMP,
         last_reminder_sent_at TIMESTAMP,
@@ -3173,6 +3186,45 @@ def _ensure_periodic_review_notification_schema(db: DBConnection):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_next_reminder_due_at "
         "ON periodic_reviews(next_reminder_due_at)"
+    )
+
+
+def _ensure_periodic_review_risk_reassessment_schema(db: DBConnection):
+    """Add PRS-7 risk reassessment and memo addendum metadata."""
+    if not _safe_table_exists(db, "periodic_reviews"):
+        return
+
+    ts_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    bool_default = "FALSE" if db.is_postgres else "0"
+    review_columns = {
+        "risk_reassessment_status": "TEXT DEFAULT 'not_started'",
+        "risk_impact_category": "TEXT",
+        "officer_risk_decision": "TEXT",
+        "confirmed_risk_level": (
+            "TEXT CHECK(confirmed_risk_level IS NULL OR "
+            "confirmed_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))"
+        ),
+        "risk_reassessment_rationale": "TEXT",
+        "risk_reassessment_saved_by": "TEXT REFERENCES users(id)",
+        "risk_reassessment_saved_at": ts_type,
+        "senior_review_required": f"{'BOOLEAN' if db.is_postgres else 'INTEGER'} DEFAULT {bool_default}",
+        "senior_review_reason": "TEXT",
+        "memo_addendum_status": "TEXT DEFAULT 'not_generated'",
+        "memo_addendum_generated_at": ts_type,
+        "memo_addendum_finalized_at": ts_type,
+        "memo_addendum_finalized_by": "TEXT REFERENCES users(id)",
+    }
+    for column, definition in review_columns.items():
+        if not _safe_column_exists(db, "periodic_reviews", column):
+            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_risk_reassessment_status "
+        "ON periodic_reviews(risk_reassessment_status)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_memo_addendum_status "
+        "ON periodic_reviews(memo_addendum_status)"
     )
 
 
@@ -5992,6 +6044,19 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.38d: Ensured periodic review notification schema")
     except Exception as e:
         logger.error("Migration v2.38d failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.38e: PRS-7 risk reassessment and memo addendum
+    # metadata on the canonical periodic review shell.
+    try:
+        _ensure_periodic_review_risk_reassessment_schema(db)
+        db.commit()
+        logger.info("Migration v2.38e: Ensured periodic review risk reassessment schema")
+    except Exception as e:
+        logger.error("Migration v2.38e failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

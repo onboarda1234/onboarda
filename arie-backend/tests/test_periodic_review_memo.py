@@ -339,8 +339,10 @@ class TestMigration013(_PRDBase):
 class TestGenerator(_PRDBase):
     EXPECTED_SECTIONS = {
         "header", "review_purpose", "current_profile_snapshot",
+        "attestation_summary", "documents_summary",
         "monitoring_screening_summary", "required_items", "edd_summary",
-        "risk_reassessment", "conclusion", "artifact_references",
+        "officer_findings", "risk_reassessment", "conclusion",
+        "artifact_references", "audit_references",
     }
 
     def _complete_review(self, rid, outcome="no_change",
@@ -356,7 +358,7 @@ class TestGenerator(_PRDBase):
         )
         self._conn.commit()
 
-    def test_build_memo_data_has_all_9_sections(self):
+    def test_build_memo_data_has_all_addendum_sections(self):
         rid = self._create_review()
         self._complete_review(rid)
         import periodic_review_memo as prm
@@ -397,6 +399,12 @@ class TestGenerator(_PRDBase):
         self.assertEqual(
             data["header"]["application_id"], self._app_id
         )
+        self.assertEqual(
+            data["header"]["memo_type"], "periodic_review_memo_addendum"
+        )
+        self.assertIn("attestation_summary", data)
+        self.assertIn("documents_summary", data)
+        self.assertIn("officer_findings", data)
         self.assertEqual(
             data["risk_reassessment"]["outcome"], "enhanced_monitoring"
         )
