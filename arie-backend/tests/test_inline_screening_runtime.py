@@ -478,6 +478,24 @@ def _runtime_js(html, config):
                 currentScreeningReviewFocus = { subject_type: 'entity', subject_name: 'Triage Holdings Ltd' };
                 renderScreeningReviewPanel(triageApp, currentScreeningReviewFocus);
                 const resolvedCockpitHtml = renderHost.innerHTML;
+                SCREENING_QUEUE = { rows: [] };
+                currentScreeningReviewFocus = { subject_type: 'director', subject_name: 'Jane Director' };
+                renderScreeningReviewPanel(triageApp, currentScreeningReviewFocus);
+                const directDetailWithoutQueueHtml = renderHost.innerHTML;
+                const directDetailWithoutQueueSubjects = buildScreeningTriageSubjects(
+                  triageApp,
+                  getApplicationScreeningSummary(triageApp),
+                  {},
+                  {}
+                ).map(function(subject) {
+                  return {
+                    name: subject.subject_name,
+                    type: subject.subject_type,
+                    status: subject.display_status_label,
+                    reviewRequired: subject.review_required,
+                    reviewActionable: subject.review_actionable
+                  };
+                });
                 console.log(JSON.stringify({
                   rationaleEmpty,
                   clearCounter,
@@ -512,7 +530,9 @@ def _runtime_js(html, config):
                   capturedFocus,
                   boCallsAfterFocus,
                   triageCockpitHtml,
-                  resolvedCockpitHtml
+                  resolvedCockpitHtml,
+                  directDetailWithoutQueueHtml,
+                  directDetailWithoutQueueSubjects
                 }));
                 """
             ),
@@ -1030,6 +1050,32 @@ class TestInlineScreeningRuntime:
         assert "read-only" in result["resolvedCockpitHtml"]
         assert "Save disposition" not in result["resolvedCockpitHtml"]
         assert result["declaredPepZeroHitSummary"] == "Declared PEP · No provider matches"
+
+    def test_application_detail_screening_review_does_not_depend_on_queue_cache(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "currentUser": {"role": "co", "name": "Officer Test"},
+                    "currentApp": _app(),
+                    "row": _row(),
+                },
+            )
+        )
+        director_subject = next(
+            subject for subject in result["directDetailWithoutQueueSubjects"]
+            if subject["type"] == "director" and subject["name"] == "Jane Director"
+        )
+        assert director_subject["status"] == "Review Required"
+        assert director_subject["reviewRequired"] is True
+        assert director_subject["reviewActionable"] is True
+        assert "Focused subject: <strong>Jane Director</strong> (director)" in result["directDetailWithoutQueueHtml"]
+        assert "No Match" in result["directDetailWithoutQueueHtml"]
+        assert "Match" in result["directDetailWithoutQueueHtml"]
+        assert "Escalate" in result["directDetailWithoutQueueHtml"]
+        assert "Save disposition" in result["directDetailWithoutQueueHtml"]
+        assert "Follow-Up Required</button>" not in result["directDetailWithoutQueueHtml"]
 
     def test_activity_log_formats_screening_reviews_for_officers(self):
         html = _read_backoffice()

@@ -61,6 +61,18 @@ def _row_dict(row) -> Dict[str, Any]:
 
 
 def _table_columns(db, table: str) -> set:
+    # DBConnection rolls back the active transaction after any Postgres
+    # statement error. Avoid SQLite PRAGMA probes on Postgres connections so
+    # audit column discovery cannot undo notification state updates.
+    if getattr(db, "is_postgres", False):
+        try:
+            rows = db.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                (table,),
+            ).fetchall()
+            return {str(row["column_name"]) for row in rows}
+        except Exception:
+            return set()
     try:
         rows = db.execute(f"PRAGMA table_info({table})").fetchall()
         if rows:
