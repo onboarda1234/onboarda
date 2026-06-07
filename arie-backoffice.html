@@ -9958,6 +9958,29 @@ function getMergedScreeningReviewRow(app, queueRow, reviewRow, subjectType, subj
   return merged;
 }
 
+function getInlineScreeningReviewRow(applicationRef, subjectType, subjectName) {
+  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  if (row) return row;
+  if (!currentApp || currentApp.ref !== applicationRef) return null;
+  var screeningSummary = getApplicationScreeningSummary(currentApp);
+  var triageSubjects = buildScreeningTriageSubjects(currentApp, screeningSummary, {}, {});
+  var subject = triageSubjects.find(function(item) {
+    return screeningFocusMatches(
+      { subject_type: subjectType || '', subject_name: subjectName || '' },
+      item.subject_type,
+      item.subject_name
+    );
+  });
+  if (!subject || !subject.reviewRow) return null;
+  return getMergedScreeningReviewRow(
+    currentApp,
+    subject.reviewRow,
+    subject.reviewRow,
+    subjectType,
+    subjectName
+  ) || subject.reviewRow;
+}
+
 function getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row) {
   var key = screeningReviewSubjectKey(applicationRef, subjectType, subjectName);
   if (!INLINE_SCREENING_DISPOSITION_STATE[key]) {
@@ -9975,7 +9998,7 @@ function getInlineScreeningDispositionState(applicationRef, subjectType, subject
 }
 
 function setInlineScreeningDispositionChoice(applicationRef, subjectType, subjectName, disposition) {
-  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  var row = getInlineScreeningReviewRow(applicationRef, subjectType, subjectName);
   var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
   var options = screeningReviewOptionsForInline(disposition);
   state.disposition = disposition;
@@ -9985,7 +10008,7 @@ function setInlineScreeningDispositionChoice(applicationRef, subjectType, subjec
 }
 
 function updateInlineScreeningDispositionField(applicationRef, subjectType, subjectName, field, value) {
-  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  var row = getInlineScreeningReviewRow(applicationRef, subjectType, subjectName);
   var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
   state[field] = value;
   if (field === 'rationale' || field === 'evidenceReference' || field === 'dispositionCode') state.error = '';
@@ -9999,7 +10022,7 @@ function updateInlineScreeningDispositionField(applicationRef, subjectType, subj
 }
 
 function refreshInlineScreeningDispositionValidation(applicationRef, subjectType, subjectName) {
-  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  var row = getInlineScreeningReviewRow(applicationRef, subjectType, subjectName);
   var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
   var disposition = state.disposition || '';
   var dispositionOptions = screeningReviewOptionsForInline(disposition);
@@ -10082,9 +10105,13 @@ async function refreshApplicationDetailScreening(subjectType, subjectName) {
 }
 
 async function submitInlineScreeningDisposition(applicationRef, subjectType, subjectName) {
-  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
-  if (!row) return;
+  var row = getInlineScreeningReviewRow(applicationRef, subjectType, subjectName);
   var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
+  if (!row) {
+    state.error = 'Screening row is no longer available. Refresh the application and try again.';
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    return;
+  }
   if (!canDispositionScreeningDisposition()) {
     state.error = 'You do not have permission to disposition screening results.';
     renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
