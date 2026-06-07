@@ -790,6 +790,8 @@ def save_application_periodic_review_baseline(
     prior_status = str(
         before.get("application_baseline_status") or (review_before or {}).get("baseline_status") or ""
     ).strip().lower()
+    if prior_status in {BASELINE_STATUS_NOT_SET, BASELINE_STATUS_NOT_APPLICABLE}:
+        prior_status = ""
     action = "periodic_review_baseline_saved" if not prior_status else "periodic_review_baseline_updated"
     audit_target = f"periodic_review:{int(review_id)}" if review_id is not None else f"application:{application_id}"
     audit_writer(
