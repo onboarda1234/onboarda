@@ -6,7 +6,7 @@ Audit-evidence regression tests for the canonical screening state model.
 These tests lock in the controls-truthfulness fix:
 
 * Sumsub subjects in init / pending / created / error / not_configured
-  states must NOT render as "Clear" or "No Provider Match".
+  states must NOT render as "Clear" or "No Match".
 * Non-terminal provider states must NOT be consumed downstream as if
   screening is complete.
 * Self-declared PEP signals must remain visible as a separate case
@@ -151,6 +151,24 @@ class TestCanonicalStateModel:
         assert cleared_match["formally_cleared_match"] is True
         assert cleared_match["approval_blocking"] is False
 
+        no_evidence_reference_clear = derive_screening_truth(
+            {
+                "matched": True,
+                "results": [{"name": "False Positive", "is_sanctioned": True}],
+                "source": "sumsub",
+                "api_status": "live",
+                "review_disposition": "false_positive_cleared",
+                "review_disposition_code": "false_positive_cleared",
+                "review_rationale": "Officer confirmed this provider hit is not the subject.",
+                "reviewer_id": "co001",
+                "reviewed_at": "2026-04-22T10:00:00Z",
+                "audit_confirmed": True,
+            },
+            required=True,
+        )
+        assert no_evidence_reference_clear["formally_cleared_match"] is True
+        assert no_evidence_reference_clear["approval_blocking"] is False
+
     def test_legacy_status_value_never_clear_for_pending(self):
         from screening_state import legacy_status_value
         assert legacy_status_value("pending_provider", False) == "pending"
@@ -168,7 +186,7 @@ class TestCanonicalStateModel:
         # Declared PEP must remain visible even when provider is clear.
         assert "Declared PEP" in state_label("completed_clear", declared_pep=True)
         # Without declared PEP, label is plain.
-        assert state_label("completed_clear", declared_pep=False) == "No Provider Match"
+        assert state_label("completed_clear", declared_pep=False) == "No Match"
 
 
 class TestScreeningTerminalitySummary:
@@ -600,7 +618,7 @@ class TestScreeningQueueSerializer:
         payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
         person = next(r for r in payload["rows"]
                       if r["application_ref"] == "ARF-PEND-1" and r["subject_name"] == "Pending Person")
-        # Critical: must NOT collapse pending into clear / No Provider Match.
+        # Critical: must NOT collapse pending into clear / No Match.
         assert person["watchlist_status"] == "pending"
         assert person["pep_screening_status"] == "pending"
         assert person["screening_state"] == "pending_provider"
@@ -804,7 +822,7 @@ class TestScreeningQueueSerializer:
         assert person["pep_screening_status"] == "clear"
         assert person["screening_state"] == "completed_clear"
         assert person["status_key"] == "screened_no_match"
-        assert person["status_label"] == "No Provider Match"
+        assert person["status_label"] == "No Match"
         assert person["review_required"] is False
 
         entity = next(r for r in payload["rows"]

@@ -621,13 +621,12 @@ class TestScreeningDispositionUX:
         assert "notes: rationale" in fn_region
         assert "screeningDispositionRationaleError(disposition, rationale)" in fn_region
 
-    def test_screening_disposition_clear_rationale_floor_is_visible_and_enforced(self):
+    def test_screening_disposition_no_match_rationale_floor_is_visible_and_enforced(self):
         html = self._read_backoffice()
         assert 'id="screening-disposition-rationale-help"' in html
-        assert "SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40" in html
-        assert "SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8" in html
-        assert "screeningRationaleWordCount(rationale)" in html
-        assert "Cleared screening rationale must be at least" in html
+        assert "SCREENING_RATIONALE_MIN_CHARS = 12" in html
+        assert "No Match rationale must briefly state why this provider hit does not appear to relate to the subject" in html
+        assert "Cleared screening rationale must be at least" not in html
 
     def test_screening_review_no_longer_uses_prompt_notes(self):
         html = self._read_backoffice()

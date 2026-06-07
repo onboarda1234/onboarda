@@ -1691,9 +1691,59 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <!-- ═══════════════ SCREENING QUEUE ═══════════════ -->
 <div class="view" id="view-screening">
   <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
-    <div class="stat-card"><div class="stat-card-label">Applications Awaiting Screening</div><div class="stat-card-value" style="color:var(--amber);" id="screening-stat-awaiting">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Applications Screened</div><div class="stat-card-value" style="color:var(--green);" id="screening-stat-screened">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Review Required</div><div class="stat-card-value" style="color:var(--red);" id="screening-stat-hits">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Global Applications Awaiting Screening</div><div class="stat-card-value" style="color:var(--amber);" id="screening-stat-awaiting">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Global Applications Screened</div><div class="stat-card-value" style="color:var(--green);" id="screening-stat-screened">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Global Review Required</div><div class="stat-card-value" style="color:var(--red);" id="screening-stat-hits">0</div></div>
+  </div>
+  <div class="card" style="margin:12px 0;padding:14px 16px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end;">
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">Queue search
+        <input class="form-input" id="screening-queue-search" placeholder="Search screening rows..." oninput="queueScreeningQueueSearch()" style="margin-top:6px;" />
+      </label>
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">Status
+        <select class="form-select" id="screening-filter-status" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
+          <option value="">All</option>
+          <option value="awaiting">Awaiting Screening</option>
+          <option value="review_required">Review Required</option>
+          <option value="no_match">No Match/Cleared</option>
+          <option value="match">Match/Confirmed</option>
+          <option value="escalated">Escalated</option>
+          <option value="pending_provider">Pending Provider</option>
+        </select>
+      </label>
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">Type
+        <select class="form-select" id="screening-filter-type" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
+          <option value="">All</option>
+          <option value="entity">Entity</option>
+          <option value="director">Director</option>
+          <option value="ubo">UBO</option>
+          <option value="intermediary">Intermediary</option>
+          <option value="individual">Individual</option>
+        </select>
+      </label>
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">Provider/source
+        <select class="form-select" id="screening-filter-provider" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
+          <option value="">All</option>
+          <option value="complyadvantage">ComplyAdvantage</option>
+          <option value="sumsub">Sumsub</option>
+          <option value="opencorporates">OpenCorporates</option>
+          <option value="other">Other available values</option>
+        </select>
+      </label>
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">PEP declared/screening
+        <select class="form-select" id="screening-filter-pep" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
+          <option value="">All</option>
+          <option value="declared">Declared</option>
+          <option value="not_declared">Not Declared</option>
+          <option value="provider_pep_hit">Provider PEP hit</option>
+          <option value="na">N/A</option>
+        </select>
+      </label>
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">Application reference
+        <input class="form-input" id="screening-filter-application-ref" placeholder="ARF / company" oninput="queueScreeningQueueSearch()" style="margin-top:6px;" />
+      </label>
+      <button type="button" class="btn btn-outline btn-sm" onclick="resetScreeningQueueFilters()">Reset filters</button>
+    </div>
   </div>
   <div id="screening-queue-meta" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin:12px 0;">
     <span id="screening-queue-status" style="font-size:12px;color:var(--text3);">Loading screening queue…</span>
@@ -3096,8 +3146,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="form-group"><div class="form-label">Subject</div><div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="screening-disposition-subject">-</div></div>
       <div id="screening-four-eyes-panel" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;color:var(--text2);"></div>
       <div id="screening-disposition-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;"></div>
-      <div class="form-group"><div class="form-label">Disposition Code</div><select class="form-select" id="screening-disposition-code"></select></div>
-      <div class="form-group"><div class="form-label">Evidence / Provider Reference <span id="screening-disposition-evidence-required">(Required for false-positive clearance)</span></div><input class="form-input" id="screening-disposition-evidence" placeholder="Provider case ID, registry extract, document reference, or review pack..." /><div id="screening-disposition-evidence-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Required when clearing a match. Stored in audit evidence; do not paste raw PII.</div></div>
+      <div class="form-group"><div class="form-label">Disposition outcome</div><select class="form-select" id="screening-disposition-code"></select></div>
+      <div class="form-group"><div class="form-label">Evidence / Provider Reference (optional)</div><input class="form-input" id="screening-disposition-evidence" placeholder="Provider case ID, registry extract, document reference, or review pack..." /><div id="screening-disposition-evidence-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Optional. Stored with the audit event; do not paste raw PII.</div></div>
+      <div class="form-group"><div class="form-label">Upload supporting evidence (optional)</div><input class="form-input" type="file" id="screening-disposition-evidence-file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="setScreeningDispositionEvidenceFile(this)" /><div id="screening-disposition-evidence-file-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Accepted file types follow the secure document upload policy.</div></div>
       <div class="form-group"><div class="form-label">Rationale (Required)</div><textarea class="form-input" rows="5" id="screening-disposition-rationale" oninput="updateScreeningDispositionRationaleCounter(pendingScreeningDisposition ? pendingScreeningDisposition.disposition : 'escalated', this.value)" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;"></textarea><div id="screening-disposition-rationale-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Rationale must be at least 12 characters.</div><div id="screening-disposition-rationale-counter" style="font-size:11px;color:var(--text2);margin-top:4px;">0 / 12 characters required for escalation</div></div>
       <div id="screening-disposition-submit-help" style="font-size:11px;color:#92400e;margin-top:-2px;">Select a screening action to enable save.</div>
     </div>
@@ -4947,6 +4998,8 @@ var APPLICATIONS_SEARCH_DEBOUNCE = null;
 var SCREENING_QUEUE_PAGE_SIZE = 50;
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
 var SCREENING_QUEUE_DIRTY = false;
+var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', provider:'', pep:'', application_ref:'' };
+var SCREENING_QUEUE_SEARCH_TIMER = null;
 var SCREENING_REVIEW_ROWS = {};
 var SCREENING_EVIDENCE_DETAILS = {};
 var pendingScreeningDisposition = null;
@@ -5295,6 +5348,8 @@ function showView(name, navItem) {
 
   var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
+  var globalSearch = document.getElementById('global-search');
+  if (globalSearch) globalSearch.placeholder = name === 'screening' ? 'Search screening queue...' : 'Search applications, clients...';
 
   // Close mobile menu on navigation
   var sidebar = document.querySelector('.sidebar');
@@ -9521,12 +9576,12 @@ function screeningBadge(status) {
   if (s === 'simulated_fallback' || s === 'simulated') return '<span class="badge pending">Simulated</span>';
   if (s === 'pending' || s === 'pending_provider') return '<span class="badge pending">Pending</span>';
   if (s === 'failed' || s === 'screening_unavailable') return '<span class="badge high">Unavailable</span>';
-  if (s === 'completed_clear') return '<span class="badge approved">Clear</span>';
+  if (s === 'completed_clear') return '<span class="badge approved">No Match</span>';
   if (s === 'completed_match') return '<span class="badge high">Match</span>';
   if (s === 'live_provider') return '<span class="badge approved">Live</span>';
   if (s === 'declared') return '<span class="badge pending">Declared</span>';
   if (s === 'not_declared') return '<span class="badge approved">Not Declared</span>';
-  if (s === 'clear' || s === 'no_match' || s === 'passed') return '<span class="badge approved">Clear</span>';
+  if (s === 'clear' || s === 'no_match' || s === 'passed') return '<span class="badge approved">No Match</span>';
   if (s === 'match' || s === 'hit') return '<span class="badge high">Match</span>';
   if (s === 'possible_match' || s === 'review') return '<span class="badge pending">Review</span>';
   return '<span class="badge pending">' + escapeHtml(status) + '</span>';
@@ -9534,7 +9589,8 @@ function screeningBadge(status) {
 
 function screeningDispositionStatusChip(row) {
   if (!row || row.review_actionable !== false || !row.review_disposition) return '';
-  if (row.review_disposition === 'cleared') return 'False Positive Cleared';
+  if (row.review_disposition === 'cleared') return 'No Match';
+  if (row.canonical_disposition === 'confirmed_match' || row.review_disposition_code === 'confirmed_match') return 'Match Confirmed';
   if (row.review_disposition === 'follow_up_required') return 'Follow-Up Required';
   if (row.review_disposition === 'escalated' && row.review_disposition_code === 'escalated_to_edd') return 'Escalated to EDD';
   if (row.review_disposition === 'escalated') return 'Escalated';
@@ -9564,6 +9620,55 @@ function screeningQueuePageSize() {
   return typeof SCREENING_QUEUE_PAGE_SIZE === 'number' && SCREENING_QUEUE_PAGE_SIZE > 0
     ? SCREENING_QUEUE_PAGE_SIZE
     : 50;
+}
+
+function readScreeningQueueFiltersFromDom() {
+  function val(id) {
+    var el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+  }
+  SCREENING_QUEUE_FILTERS = {
+    search: val('screening-queue-search'),
+    status: val('screening-filter-status'),
+    type: val('screening-filter-type'),
+    provider: val('screening-filter-provider'),
+    pep: val('screening-filter-pep'),
+    application_ref: val('screening-filter-application-ref')
+  };
+  return SCREENING_QUEUE_FILTERS;
+}
+
+function screeningQueueQueryParams(offset) {
+  var filters = readScreeningQueueFiltersFromDom();
+  var params = [
+    'limit=' + encodeURIComponent(screeningQueuePageSize()),
+    'offset=' + encodeURIComponent(Math.max(0, offset || 0))
+  ];
+  Object.keys(filters).forEach(function(key) {
+    if (filters[key]) params.push(encodeURIComponent(key) + '=' + encodeURIComponent(filters[key]));
+  });
+  return params;
+}
+
+function queueScreeningQueueSearch() {
+  if (SCREENING_QUEUE_SEARCH_TIMER) clearTimeout(SCREENING_QUEUE_SEARCH_TIMER);
+  SCREENING_QUEUE_SEARCH_TIMER = setTimeout(function() {
+    applyScreeningQueueFilters();
+  }, 250);
+}
+
+function applyScreeningQueueFilters() {
+  readScreeningQueueFiltersFromDom();
+  markScreeningQueueDirty();
+  renderScreening({ force: true, offset: 0 });
+}
+
+function resetScreeningQueueFilters() {
+  ['screening-queue-search', 'screening-filter-status', 'screening-filter-type', 'screening-filter-provider', 'screening-filter-pep', 'screening-filter-application-ref'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  applyScreeningQueueFilters();
 }
 
 function renderScreeningQueueMeta() {
@@ -9613,10 +9718,7 @@ async function loadScreeningQueue(options) {
   }
   renderScreeningQueueMeta();
   try {
-    var params = [
-      'limit=' + encodeURIComponent(screeningQueuePageSize()),
-      'offset=' + encodeURIComponent(offset)
-    ];
+    var params = screeningQueueQueryParams(offset);
     if (force) params.push('refresh=' + Date.now());
     var path = '/screening/queue?' + params.join('&');
     var payload = await boApiCall('GET', path, null, options);
@@ -9652,7 +9754,7 @@ function screeningQueueStatusBadge(statusKey, statusLabel) {
   else if (statusKey === 'reviewed_false_positive_cleared' || statusKey === 'reviewed') cls = 'approved';
   else if (statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
   else if (statusKey === 'screening_simulated' || statusKey === 'screening_sandbox' || statusKey === 'screening_not_configured' || statusKey === 'screening_unavailable') cls = 'high';
-  else if (statusKey === 'review_escalated') cls = 'high';
+  else if (statusKey === 'review_escalated' || statusKey === 'review_confirmed_match') cls = 'high';
   else if (statusKey === 'review_follow_up_required') cls = 'pending';
   else if (statusKey === 'review_required') cls = 'high';
   return '<span class="badge ' + cls + '">' + escapeHtml(statusLabel || statusKey || 'Pending') + '</span>';
@@ -9666,7 +9768,8 @@ function screeningTagBadge(label, cls) {
 function screeningReviewDisplayLabel(row) {
   if (!row || !row.review_disposition) return '';
   if (row.review_four_eyes_status === 'pending_second_review') return 'Second Review Required';
-  if (row.review_disposition === 'cleared') return 'False Positive Cleared';
+  if (row.review_disposition === 'cleared') return 'No Match';
+  if (row.canonical_disposition === 'confirmed_match' || row.review_disposition_code === 'confirmed_match') return 'Match Confirmed';
   if (row.review_disposition === 'escalated' && row.review_disposition_code === 'escalated_to_edd') return 'Escalated to EDD';
   if (row.review_disposition === 'escalated') return 'Escalated';
   if (row.review_disposition === 'follow_up_required') return 'Follow-Up Required';
@@ -9693,17 +9796,24 @@ function screeningReviewBadge(row, options) {
   if (pendingSecond) cls = 'pending';
   var label = screeningReviewDisplayLabel(row);
   var meta = row.reviewed_by ? ' by ' + row.reviewed_by : '';
-  var code = row.review_disposition_code ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Code: ' + escapeHtml(row.review_disposition_code.replace(/_/g, ' ')) + '</div>' : '';
+  var code = '';
   var second = pendingSecond
     ? '<div style="font-size:11px;color:var(--amber);font-weight:600;margin-top:2px;">Second reviewer required</div>'
     : completeSecond
       ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Second review: ' + escapeHtml(row.second_reviewed_by || 'Recorded') + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>'
       : '';
+  var evidenceDocs = Array.isArray(row.review_evidence_documents) ? row.review_evidence_documents : [];
+  var evidenceDocHtml = evidenceDocs.length
+    ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Uploaded evidence: ' + evidenceDocs.map(function(doc) {
+        return escapeHtml(doc.doc_name || doc.name || doc.id || 'Document');
+      }).join(', ') + '</div>'
+    : '';
   var chip = options.suppressChip ? '' : '<span class="badge ' + cls + '">' + escapeHtml(label) + '</span>';
   return '<div style="margin-top:4px;">' + chip +
     (meta ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(meta + (row.reviewed_at ? ' • ' + String(row.reviewed_at).substring(0, 19).replace('T', ' ') : '')) + '</div>' : '') +
     code +
     (row.review_evidence_reference ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Evidence/reference: ' + escapeHtml(row.review_evidence_reference) + '</div>' : '') +
+    evidenceDocHtml +
     (row.review_rationale ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_rationale) + '</div>' : row.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_notes) + '</div>' : '') +
     second +
     '</div>';
@@ -9714,9 +9824,14 @@ function screeningReviewHistory(row) {
   var html = '<div style="margin-top:12px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;line-height:1.5;">';
   html += '<div style="font-weight:700;color:var(--text1);margin-bottom:6px;">Disposition History</div>';
   html += '<div><strong>First reviewer:</strong> ' + escapeHtml(row.reviewed_by || 'Not recorded') + (row.reviewed_at ? ' • ' + escapeHtml(String(row.reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>';
-  html += '<div><strong>Decision:</strong> ' + escapeHtml(String(row.review_disposition || '').replace(/_/g, ' ')) + (row.review_disposition_code ? ' / ' + escapeHtml(row.review_disposition_code.replace(/_/g, ' ')) : '') + '</div>';
+  html += '<div><strong>Decision:</strong> ' + escapeHtml(screeningReviewDisplayLabel(row)) + '</div>';
   if (row.review_rationale || row.review_notes) html += '<div><strong>Rationale:</strong> ' + escapeHtml(row.review_rationale || row.review_notes) + '</div>';
   if (row.review_evidence_reference) html += '<div><strong>Evidence/reference:</strong> ' + escapeHtml(row.review_evidence_reference) + '</div>';
+  if (Array.isArray(row.review_evidence_documents) && row.review_evidence_documents.length) {
+    html += '<div><strong>Uploaded evidence:</strong> ' + row.review_evidence_documents.map(function(doc) {
+      return escapeHtml(doc.doc_name || doc.name || doc.id || 'Document');
+    }).join(', ') + '</div>';
+  }
   if (row.requires_four_eyes) {
     if (row.second_reviewed_by) {
       html += '<div><strong>Second reviewer:</strong> ' + escapeHtml(row.second_reviewed_by) + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>';
@@ -9780,6 +9895,7 @@ function getInlineScreeningDispositionState(applicationRef, subjectType, subject
       dispositionCode: pendingSecondReview ? 'false_positive_cleared' : '',
       rationale: '',
       evidenceReference: '',
+      evidenceFile: null,
       error: ''
     };
   }
@@ -9805,6 +9921,42 @@ function updateInlineScreeningDispositionField(applicationRef, subjectType, subj
     var counter = document.getElementById('screening-inline-rationale-counter-' + screeningReviewSubjectDomKey(applicationRef, subjectType, subjectName));
     if (counter) counter.textContent = screeningDispositionRationaleCounterText(state.disposition || 'escalated', value || '');
   }
+}
+
+function setInlineScreeningEvidenceFile(applicationRef, subjectType, subjectName, input) {
+  var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName);
+  var file = input && input.files && input.files[0] ? input.files[0] : null;
+  if (file && file.size > boDocUploadMaxBytes()) {
+    state.error = 'File too large - maximum ' + boDocUploadMaxLabel() + '.';
+    state.evidenceFile = null;
+    if (input) input.value = '';
+  } else {
+    state.evidenceFile = file;
+    state.error = '';
+  }
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
+function removeInlineScreeningEvidenceFile(applicationRef, subjectType, subjectName) {
+  var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName);
+  state.evidenceFile = null;
+  state.error = '';
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
+async function uploadScreeningEvidenceFile(applicationRef, file) {
+  if (!file) return null;
+  if (file.size > boDocUploadMaxBytes()) {
+    throw new Error('File too large - maximum ' + boDocUploadMaxLabel() + '.');
+  }
+  var formData = new FormData();
+  formData.append('file', file);
+  var response = await boApiCall('POST', '/applications/' + encodeURIComponent(applicationRef) + '/documents?doc_type=' + encodeURIComponent('supporting_document') + '&screening_evidence=true', formData);
+  var documentId = response && (response.id || (response.data && response.data.id));
+  if (!documentId) {
+    throw new Error('Evidence upload completed without a document id. Disposition was not saved.');
+  }
+  return Object.assign({}, response && response.data ? response.data : response, { id: documentId });
 }
 
 async function refreshApplicationDetailScreening(subjectType, subjectName) {
@@ -9836,18 +9988,13 @@ async function submitInlineScreeningDisposition(applicationRef, subjectType, sub
     return;
   }
   if (disposition === 'cleared' && !canClearScreeningDisposition()) {
-    state.error = 'False-positive clearance requires Compliance Officer, SCO, or Admin role.';
+    state.error = 'No Match disposition requires Compliance Officer, SCO, or Admin role.';
     renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
     return;
   }
   var dispositionCode = state.dispositionCode || (screeningReviewOptionsForInline(disposition)[0] || {}).value || '';
   if (!dispositionCode) {
     state.error = 'Select a disposition code before saving.';
-    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
-    return;
-  }
-  if (disposition === 'cleared' && !String(state.evidenceReference || '').trim()) {
-    state.error = 'False-positive clearance requires an evidence / provider reference.';
     renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
     return;
   }
@@ -9864,6 +10011,10 @@ async function submitInlineScreeningDisposition(applicationRef, subjectType, sub
   state.error = '';
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
   try {
+    var uploadedEvidence = null;
+    if (state.evidenceFile) {
+      uploadedEvidence = await uploadScreeningEvidenceFile(row.application_ref || row.application_id || applicationRef, state.evidenceFile);
+    }
     var resp = await boApiCall('POST', '/screening/review', {
       application_id: row.application_ref || row.application_id || applicationRef,
       subject_type: row.subject_type || subjectType,
@@ -9873,6 +10024,7 @@ async function submitInlineScreeningDisposition(applicationRef, subjectType, sub
       rationale: rationale,
       notes: rationale,
       evidence_reference: String(state.evidenceReference || '').trim(),
+      evidence_document_id: uploadedEvidence ? uploadedEvidence.id : '',
       source_surface: 'application_detail_screening_tab'
     });
     INLINE_SCREENING_DISPOSITION_STATE[key] = {
@@ -9880,6 +10032,7 @@ async function submitInlineScreeningDisposition(applicationRef, subjectType, sub
       dispositionCode: '',
       rationale: '',
       evidenceReference: '',
+      evidenceFile: null,
       error: ''
     };
     markScreeningQueueDirty();
@@ -9937,24 +10090,27 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
     { requireClearPermission: true }
   );
   var clearSelected = disposition === 'cleared';
+  var matchSelected = disposition === 'match';
   var escalateSelected = disposition === 'escalated';
-  var followUpSelected = disposition === 'follow_up_required';
   var subjectDomKey = screeningReviewSubjectDomKey(app.ref, subjectType, subjectName);
   var buttonBase = 'padding:8px 12px;border-radius:999px;border:1px solid var(--border1);background:#fff;font-size:12px;font-weight:600;cursor:pointer;';
   var buttonActive = 'background:rgba(43,47,143,0.08);border-color:var(--brand);color:var(--brand);';
   var clearDisabled = !canClearScreeningDisposition();
   var explanation = pendingSecondReview
-    ? 'A first officer has already recorded a sensitive clear. A distinct second reviewer must confirm it here.'
-    : 'This screening match still requires officer review.';
+    ? 'A first officer has already recorded a sensitive No Match. A distinct second reviewer must confirm it here.'
+    : 'This screening item still requires officer review.';
   var html = '<div style="margin-top:12px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">';
   html += '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;"><strong>' + escapeHtml(explanation) + '</strong></div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">';
-  html += '<button type="button" style="' + buttonBase + (clearSelected ? buttonActive : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'cleared\')">' + (pendingSecondReview ? 'Second Review' : 'Clear / False Positive') + '</button>';
+  html += '<button type="button" title="This provider hit does not appear to relate to the subject." style="' + buttonBase + (clearSelected ? buttonActive : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'cleared\')">No Match</button>';
   if (!pendingSecondReview) {
+    html += '<button type="button" title="This provider hit appears to relate to the subject." style="' + buttonBase + (matchSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'match\')">Match</button>';
     html += '<button type="button" style="' + buttonBase + (escalateSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'escalated\')">Escalate</button>';
-    html += '<button type="button" style="' + buttonBase + (followUpSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'follow_up_required\')">Follow-Up Required</button>';
   }
   html += '</div>';
+  html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Upload supporting evidence (optional)</div><input class="form-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" ' + (submitting ? 'disabled ' : '') + ' onchange="setInlineScreeningEvidenceFile(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',this)" />' +
+    (state.evidenceFile ? '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--text2);"><span>' + escapeHtml(state.evidenceFile.name) + '</span><button type="button" class="btn btn-outline btn-sm" ' + (submitting ? 'disabled ' : '') + ' onclick="removeInlineScreeningEvidenceFile(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\')">Remove</button></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Accepted file types follow the secure document upload policy.</div>') +
+    '</div>';
   if (disposition === 'escalated') {
     html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Escalation outcome</div><select class="form-select" ' + (submitting ? 'disabled ' : '') + 'onchange="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'dispositionCode\',this.value)">';
     html += '<option value="">Select escalation reason</option>';
@@ -9963,8 +10119,8 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
     });
     html += '</select></div>';
   }
-  if (disposition === 'cleared') {
-    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Evidence / Provider Reference</div><input class="form-input" ' + (submitting ? 'disabled ' : '') + ' value="' + escapeHtml(state.evidenceReference || '') + '" oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'evidenceReference\',this.value)" placeholder="Provider case ID, registry extract, or review-pack reference..." /><div style="font-size:11px;color:var(--text3);margin-top:6px;">Required for false-positive clearance. Stored in audit evidence; do not paste raw PII.</div></div>';
+  if (disposition === 'cleared' || disposition === 'match' || disposition === 'escalated') {
+    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Evidence / Provider Reference (optional)</div><input class="form-input" ' + (submitting ? 'disabled ' : '') + ' value="' + escapeHtml(state.evidenceReference || '') + '" oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'evidenceReference\',this.value)" placeholder="Provider case ID, registry extract, or review-pack reference..." /><div style="font-size:11px;color:var(--text3);margin-top:6px;">Optional. Stored with the audit event; do not paste raw PII.</div></div>';
   }
   html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Rationale</div><textarea class="form-input" rows="4" ' + (submitting ? 'disabled ' : '') + ' oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'rationale\',this.value)" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;">' + escapeHtml(state.rationale || '') + '</textarea><div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(screeningDispositionRationaleHelp(disposition || 'escalated')) + '</div><div id="screening-inline-rationale-counter-' + escapeHtml(subjectDomKey) + '" style="font-size:11px;color:var(--text2);margin-top:4px;">' + escapeHtml(screeningDispositionRationaleCounterText(disposition || 'escalated', state.rationale || '')) + '</div></div>';
   if (state.error) {
@@ -11016,7 +11172,7 @@ function screeningTriagePriority(subject) {
   var statusKey = String(subject.status_key || '').toLowerCase();
   if (dispositionCode === 'follow_up_required' || dispositionCode === 'needs_more_information' || statusLabel.indexOf('follow-up') !== -1) return 3;
   if (dispositionCode === 'escalated' || dispositionCode === 'escalated_to_edd' || dispositionCode === 'material_concern' || statusLabel.indexOf('escalat') !== -1 || statusKey === 'review_escalated') return 4;
-  if (statusKey === 'screened_no_match' || statusLabel === 'no provider match') return 6;
+  if (statusKey === 'screened_no_match' || statusLabel === 'no match') return 6;
   return 5;
 }
 
@@ -11125,7 +11281,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     : 'awaiting_screening';
   var companyFallbackStatusLabel = screeningSummary.screening_run_recorded
     ? (companyFallbackStatusKey === 'screened_no_match'
-        ? 'No Provider Match'
+        ? 'No Match'
         : (companyFallbackStatusKey === 'review_required'
             ? 'Review Required'
             : (companyFallbackStatusKey === 'screening_simulated'
@@ -11208,7 +11364,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
     : 'awaiting_screening';
   var personFallbackStatusLabel = screening
     ? (personFallbackStatusKey === 'screened_no_match'
-        ? 'No Provider Match'
+        ? 'No Match'
         : (personFallbackStatusKey === 'declared_pep_review'
             ? 'Declared PEP Review'
             : (personFallbackStatusKey === 'review_required'
@@ -11317,7 +11473,7 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
     : 'awaiting_screening';
   var companyFallbackStatusLabel = screeningSummary.screening_run_recorded
     ? (companyFallbackStatusKey === 'screened_no_match'
-        ? 'No Provider Match'
+        ? 'No Match'
         : (companyFallbackStatusKey === 'review_required'
             ? 'Review Required'
             : (companyFallbackStatusKey === 'screening_simulated'
@@ -11377,7 +11533,7 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
       : 'awaiting_screening';
     var personFallbackStatusLabel = screening
       ? (personFallbackStatusKey === 'screened_no_match'
-          ? 'No Provider Match'
+          ? 'No Match'
           : (personFallbackStatusKey === 'declared_pep_review'
               ? 'Declared PEP Review'
               : (personFallbackStatusKey === 'review_required'
@@ -11539,17 +11695,19 @@ function openScreeningReviewByRow(rowKey) {
 }
 
 function screeningDispositionLabel(disposition) {
-  var labels = { cleared: 'Clear reviewed false positive', escalated: 'Record blocking match', follow_up_required: 'Request Follow-Up' };
+  var labels = { cleared: 'No Match', match: 'Match', escalated: 'Escalate', follow_up_required: 'Historical Follow-Up' };
   return labels[disposition] || disposition;
 }
 
 function screeningDispositionCodeOptions(disposition) {
   var options = {
     cleared: [
-      ['false_positive_cleared', 'False positive cleared']
+      ['false_positive_cleared', 'No Match']
+    ],
+    match: [
+      ['confirmed_match', 'Match confirmed']
     ],
     escalated: [
-      ['true_match', 'True match'],
       ['material_concern', 'Material concern'],
       ['escalated_to_edd', 'Escalated to EDD']
     ],
@@ -11561,8 +11719,6 @@ function screeningDispositionCodeOptions(disposition) {
 }
 
 var SCREENING_RATIONALE_MIN_CHARS = 12;
-var SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40;
-var SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8;
 
 function screeningRationaleWordCount(value) {
   var matches = String(value || '').replace(/[-/]/g, ' ').match(/[A-Za-z0-9]+/g);
@@ -11572,10 +11728,13 @@ function screeningRationaleWordCount(value) {
 function screeningDispositionRequirement(disposition) {
   if (disposition === 'cleared') {
     return {
-      minChars: SCREENING_CLEAR_RATIONALE_MIN_CHARS,
-      minWords: SCREENING_CLEAR_RATIONALE_MIN_WORDS,
-      label: 'false-positive clearance'
+      minChars: SCREENING_RATIONALE_MIN_CHARS,
+      minWords: 0,
+      label: 'No Match'
     };
+  }
+  if (disposition === 'match') {
+    return { minChars: SCREENING_RATIONALE_MIN_CHARS, minWords: 0, label: 'Match' };
   }
   if (disposition === 'follow_up_required') {
     return { minChars: SCREENING_RATIONALE_MIN_CHARS, minWords: 0, label: 'follow-up' };
@@ -11589,7 +11748,10 @@ function screeningDispositionRequirement(disposition) {
 function screeningDispositionRationaleHelp(disposition) {
   var requirement = screeningDispositionRequirement(disposition);
   if (disposition === 'cleared') {
-    return 'False-positive clearance requires at least ' + requirement.minChars + ' characters and ' + requirement.minWords + ' words citing the evidence reviewed. The original match remains visible as reviewed/cleared.';
+    return 'No Match rationale must briefly state why this provider hit does not appear to relate to the subject.';
+  }
+  if (disposition === 'match') {
+    return 'Match rationale must briefly state why this provider hit appears to relate to the subject.';
   }
   return 'Rationale must be at least ' + requirement.minChars + ' characters.';
 }
@@ -11615,13 +11777,13 @@ function screeningDispositionValidationState(disposition, rationale, disposition
     return { valid: false, message: 'Select a screening action to enable save.' };
   }
   if (disposition === 'cleared' && options.requireClearPermission && !canClearScreeningDisposition()) {
-    return { valid: false, message: 'False-positive clearance requires Compliance Officer, SCO, or Admin role.' };
+    return { valid: false, message: 'No Match disposition requires Compliance Officer, SCO, or Admin role.' };
+  }
+  if (disposition === 'match' && !String(dispositionCode || '').trim()) {
+    return { valid: false, message: 'Select Match to enable save.' };
   }
   if (disposition === 'escalated' && !String(dispositionCode || '').trim()) {
     return { valid: false, message: 'Select an escalation reason to enable save.' };
-  }
-  if (disposition === 'cleared' && !String(evidenceReference || '').trim()) {
-    return { valid: false, message: 'Add an evidence / provider reference to enable false-positive clearance.' };
   }
   var rationaleError = screeningDispositionRationaleError(disposition, rationale || '');
   if (rationaleError) {
@@ -11636,12 +11798,6 @@ function screeningDispositionRationaleError(disposition, rationale) {
   }
   if (rationale.length < SCREENING_RATIONALE_MIN_CHARS) {
     return 'Rationale must be at least ' + SCREENING_RATIONALE_MIN_CHARS + ' characters.';
-  }
-  if (disposition === 'cleared' && (
-    rationale.length < SCREENING_CLEAR_RATIONALE_MIN_CHARS ||
-    screeningRationaleWordCount(rationale) < SCREENING_CLEAR_RATIONALE_MIN_WORDS
-  )) {
-    return 'Cleared screening rationale must be at least ' + SCREENING_CLEAR_RATIONALE_MIN_CHARS + ' characters and ' + SCREENING_CLEAR_RATIONALE_MIN_WORDS + ' words, citing the evidence reviewed.';
   }
   return '';
 }
@@ -11666,6 +11822,38 @@ function setScreeningDispositionError(message) {
   el.style.display = '';
 }
 
+function setScreeningDispositionEvidenceFile(input) {
+  if (!pendingScreeningDisposition) return;
+  var file = input && input.files && input.files[0] ? input.files[0] : null;
+  var help = document.getElementById('screening-disposition-evidence-file-help');
+  if (file && file.size > boDocUploadMaxBytes()) {
+    pendingScreeningDisposition.evidenceFile = null;
+    if (input) input.value = '';
+    setScreeningDispositionError('File too large - maximum ' + boDocUploadMaxLabel() + '.');
+    if (help) help.textContent = 'Accepted file types follow the secure document upload policy.';
+    updateScreeningDispositionSubmitState();
+    return;
+  }
+  pendingScreeningDisposition.evidenceFile = file;
+  setScreeningDispositionError('');
+  if (help) {
+    help.innerHTML = file
+      ? escapeHtml(file.name) + ' <button type="button" class="btn btn-outline btn-sm" onclick="removeScreeningDispositionEvidenceFile()" style="margin-left:8px;">Remove</button>'
+      : 'Accepted file types follow the secure document upload policy.';
+  }
+  updateScreeningDispositionSubmitState();
+}
+
+function removeScreeningDispositionEvidenceFile() {
+  if (pendingScreeningDisposition) pendingScreeningDisposition.evidenceFile = null;
+  var input = document.getElementById('screening-disposition-evidence-file');
+  if (input) input.value = '';
+  var help = document.getElementById('screening-disposition-evidence-file-help');
+  if (help) help.textContent = 'Accepted file types follow the secure document upload policy.';
+  setScreeningDispositionError('');
+  updateScreeningDispositionSubmitState();
+}
+
 function updateScreeningDispositionRationaleCounter(disposition, value) {
   var el = document.getElementById('screening-disposition-rationale-counter');
   if (!el) return;
@@ -11688,7 +11876,7 @@ function updateScreeningDispositionSubmitState() {
 function openScreeningDispositionModalByRow(rowKey, disposition) {
   var row = SCREENING_REVIEW_ROWS[rowKey];
   if (!row) { showToast('Screening row is no longer available', 'error'); return; }
-  pendingScreeningDisposition = { rowKey: rowKey, row: row, disposition: disposition };
+  pendingScreeningDisposition = { rowKey: rowKey, row: row, disposition: disposition, evidenceFile: null };
   setScreeningDispositionError('');
 
   var actionLabel = screeningDispositionLabel(disposition);
@@ -11698,9 +11886,11 @@ function openScreeningDispositionModalByRow(rowKey, disposition) {
   if (subject) subject.textContent = row.subject_name + ' (' + String(row.subject_type || '').replace('_', ' ') + ') — ' + row.application_ref;
   var select = document.getElementById('screening-disposition-code');
   if (select) {
-    select.innerHTML = '<option value="">Select disposition code</option>' + screeningDispositionCodeOptions(disposition).map(function(opt) {
+    var modalOptions = screeningDispositionCodeOptions(disposition);
+    select.innerHTML = '<option value="">Select disposition outcome</option>' + modalOptions.map(function(opt) {
       return '<option value="' + escapeHtml(opt[0]) + '">' + escapeHtml(opt[1]) + '</option>';
     }).join('');
+    if (modalOptions.length === 1) select.value = modalOptions[0][0];
     select.onchange = updateScreeningDispositionSubmitState;
   }
   var rationale = document.getElementById('screening-disposition-rationale');
@@ -11716,13 +11906,13 @@ function openScreeningDispositionModalByRow(rowKey, disposition) {
     evidence.value = '';
     evidence.oninput = updateScreeningDispositionSubmitState;
   }
-  var evidenceRequired = document.getElementById('screening-disposition-evidence-required');
-  if (evidenceRequired) evidenceRequired.style.display = disposition === 'cleared' ? '' : 'none';
+  var evidenceFile = document.getElementById('screening-disposition-evidence-file');
+  if (evidenceFile) evidenceFile.value = '';
+  var evidenceFileHelp = document.getElementById('screening-disposition-evidence-file-help');
+  if (evidenceFileHelp) evidenceFileHelp.textContent = 'Accepted file types follow the secure document upload policy.';
   var evidenceHelp = document.getElementById('screening-disposition-evidence-help');
   if (evidenceHelp) {
-    evidenceHelp.textContent = disposition === 'cleared'
-      ? 'Required for false-positive clearance. Reference provider case IDs, source records, or review-pack evidence; do not paste raw PII.'
-      : 'Optional evidence/reference. Use provider case IDs, source records, or review-pack references; do not paste raw PII.';
+    evidenceHelp.textContent = 'Optional evidence/reference. Use provider case IDs, source records, or review-pack references; do not paste raw PII.';
   }
   var rationaleHelp = document.getElementById('screening-disposition-rationale-help');
   if (rationaleHelp) rationaleHelp.textContent = screeningDispositionRationaleHelp(disposition);
@@ -11743,7 +11933,7 @@ function openScreeningDispositionModalByRow(rowKey, disposition) {
     );
     if (needsSecond) {
       var bits = row.sensitivity_flags && row.sensitivity_flags.length ? row.sensitivity_flags.join(', ').replace(/_/g, ' ') : 'sensitive screening subject';
-      panel.innerHTML = '<strong>Four-eyes control:</strong> clearing this subject requires two distinct officers. ' +
+      panel.innerHTML = '<strong>Four-eyes control:</strong> No Match for this subject requires two distinct officers. ' +
         (row.review_four_eyes_status === 'pending_second_review' ? 'This submission will be recorded as the second review if you are not the first reviewer.' : 'First submission will remain pending until a second reviewer signs off.') +
         '<div style="margin-top:4px;">Sensitivity: ' + escapeHtml(bits) + '</div>';
       panel.style.display = '';
@@ -11777,11 +11967,7 @@ async function submitScreeningDisposition() {
   var evidenceReference = (document.getElementById('screening-disposition-evidence').value || '').trim();
   if (!code) { setScreeningDispositionError('Select a disposition code.'); return; }
   if (disposition === 'cleared' && !canClearScreeningDisposition()) {
-    setScreeningDispositionError('False-positive clearance requires Compliance Officer, SCO, or Admin role.');
-    return;
-  }
-  if (disposition === 'cleared' && !evidenceReference) {
-    setScreeningDispositionError('False-positive clearance requires an evidence / provider reference.');
+    setScreeningDispositionError('No Match disposition requires Compliance Officer, SCO, or Admin role.');
     return;
   }
   var rationaleError = screeningDispositionRationaleError(disposition, rationale);
@@ -11790,6 +11976,10 @@ async function submitScreeningDisposition() {
   var btn = document.getElementById('screening-disposition-submit');
   if (btn) btn.disabled = true;
   try {
+    var uploadedEvidence = null;
+    if (pendingScreeningDisposition.evidenceFile) {
+      uploadedEvidence = await uploadScreeningEvidenceFile(row.application_ref || row.application_id, pendingScreeningDisposition.evidenceFile);
+    }
     var resp = await boApiCall('POST', '/screening/review', {
       application_id: row.application_ref || row.application_id,
       subject_type: row.subject_type,
@@ -11799,6 +11989,7 @@ async function submitScreeningDisposition() {
       rationale: rationale,
       notes: rationale,
       evidence_reference: evidenceReference,
+      evidence_document_id: uploadedEvidence ? uploadedEvidence.id : '',
       source_surface: 'screening_queue'
     });
     closeModal('modal-screening-disposition');
@@ -11825,6 +12016,7 @@ async function renderScreening(options) {
   renderScreeningQueueMeta();
 
   await loadScreeningQueue({ force: !!options.force || SCREENING_QUEUE_DIRTY, offset: options.offset });
+  tbody.innerHTML = '';
   SCREENING_REVIEW_ROWS = {};
 
   if (!SCREENING_QUEUE.rows.length) {
@@ -11844,15 +12036,14 @@ async function renderScreening(options) {
         '</div>';
       var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReviewByRow(\'' + rowKey + '\')">View</button>';
       if (row.review_required && row.review_actionable !== false) {
-        var clearLabel = row.review_four_eyes_status === 'pending_second_review' ? 'Second Review' : 'Clear';
         if (canClearScreeningDisposition()) {
-          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">' + clearLabel + '</button>';
+          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">No Match</button>';
         } else {
-          actions += ' <button class="btn btn-outline btn-sm" disabled title="False-positive clearance requires Compliance Officer, SCO, or Admin role.">Clear</button>';
+          actions += ' <button class="btn btn-outline btn-sm" disabled title="No Match requires Compliance Officer, SCO, or Admin role.">No Match</button>';
         }
         if (row.review_four_eyes_status !== 'pending_second_review') {
+          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'match\')">Match</button>';
           actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'escalated\')">Escalate</button>';
-          actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'follow_up_required\')">Follow-Up</button>';
         }
       }
 
@@ -17190,7 +17381,8 @@ function screeningAuditSourceLabel(sourceSurface) {
 
 function screeningAuditDispositionLabel(detail) {
   var code = String(detail && (detail.disposition_code || detail.disposition) || '').trim().toLowerCase();
-  if (code === 'false_positive_cleared' || code === 'cleared') return 'False Positive Cleared';
+  if (code === 'false_positive_cleared' || code === 'cleared') return 'No Match';
+  if (code === 'confirmed_match') return 'Match Confirmed';
   if (code === 'needs_more_information' || code === 'follow_up_required') return 'Follow-Up Required';
   if (code === 'escalated_to_edd') return 'Escalated to EDD';
   if (code === 'true_match' || code === 'material_concern' || code === 'escalated') return 'Escalated';
@@ -19271,6 +19463,13 @@ function toggleDarkMode() {
 
 function handleGlobalSearch(q) {
   var query = String(q || '');
+  var screeningView = document.getElementById('view-screening');
+  if (screeningView && screeningView.classList.contains('active')) {
+    var queueSearch = document.getElementById('screening-queue-search');
+    if (queueSearch && queueSearch.value !== query) queueSearch.value = query;
+    queueScreeningQueueSearch();
+    return;
+  }
   var appSearch = document.getElementById('applications-search');
   if (appSearch && appSearch.value !== query) appSearch.value = query;
   applicationsCurrentPage = 1;

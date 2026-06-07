@@ -190,16 +190,6 @@ def _review_reason_present(screening: dict) -> bool:
     )
 
 
-def _review_evidence_present(screening: dict) -> bool:
-    return bool(
-        screening.get("review_evidence_reference")
-        or screening.get("evidence_reference")
-        or screening.get("evidence")
-        or screening.get("reference")
-        or screening.get("source_reference")
-    )
-
-
 def _review_timestamp_present(screening: dict) -> bool:
     return bool(
         screening.get("reviewed_at")
@@ -252,7 +242,6 @@ def _is_false_positive_clearance(screening: dict) -> bool:
     return (
         _review_identity_present(screening)
         and _review_reason_present(screening)
-        and _review_evidence_present(screening)
         and _review_timestamp_present(screening)
         and _review_audit_present(screening)
         and _review_second_signoff_satisfied(screening)
@@ -1169,7 +1158,7 @@ STATE_LABELS = {
     NOT_STARTED: "Awaiting Screening",
     PENDING_PROVIDER: "Screening Pending Provider",
     PARTIAL_RESULT: "Partial Screening Result",
-    COMPLETED_CLEAR: "No Provider Match",
+    COMPLETED_CLEAR: "No Match",
     COMPLETED_MATCH: "Provider Match",
     NOT_CONFIGURED: "Screening Not Configured",
     FAILED: "Screening Unavailable",
@@ -1190,7 +1179,7 @@ def state_label(state: str, declared_pep: bool = False) -> str:
     base = STATE_LABELS.get(state, "Awaiting Screening")
     if declared_pep and state != COMPLETED_MATCH:
         if state == COMPLETED_CLEAR:
-            return "Declared PEP — Provider Clear"
+            return "Declared PEP — No Match"
         return "Declared PEP — " + base
     return base
 
