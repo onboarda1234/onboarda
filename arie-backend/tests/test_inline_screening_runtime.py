@@ -154,7 +154,7 @@ def _runtime_js(html, config):
                 function switchDetailTab() {{}}
                 function loadDecisionRecords() {{}}
                 function loadAuditTrail() {{}}
-                async function boApiCall(method, path) {{ boCalls.push([method, path]); return {{ status: 'complete' }}; }}
+                async function boApiCall(method, path, body) {{ boCalls.push([method, path, body]); return {{ status: 'complete' }}; }}
                 """
             ),
             region,
@@ -538,7 +538,30 @@ def _runtime_js(html, config):
                   errorDisplay: inlineRefreshElements['screening-inline-error-' + subjectDomKey].style.display,
                   counterText: inlineRefreshElements['screening-inline-rationale-counter-' + subjectDomKey].textContent
                 };
-                console.log(JSON.stringify({
+
+                const fallbackSubmitKey = screeningReviewSubjectKey(triageApp.ref, 'director', 'Jane Director');
+                currentApp = triageApp;
+                currentScreeningReviewFocus = { subject_type: 'director', subject_name: 'Jane Director' };
+                SCREENING_QUEUE = { rows: [] };
+                INLINE_SCREENING_DISPOSITION_STATE[fallbackSubmitKey] = {
+                  disposition: 'cleared',
+                  dispositionCode: 'false_positive_cleared',
+                  rationale: 'Officer reviewed the provider evidence and confirmed this is not the same subject.',
+                  evidenceReference: '',
+                  evidenceFile: null,
+                  error: ''
+                };
+                boCalls = [];
+                submitInlineScreeningDisposition(
+                  triageApp.ref,
+                  'director',
+                  'Jane Director'
+                ).then(function() {
+                  var fallbackSubmitResult = {
+                    calls: boCalls.slice(),
+                    state: INLINE_SCREENING_DISPOSITION_STATE[fallbackSubmitKey]
+                  };
+                  console.log(JSON.stringify({
                   rationaleEmpty,
                   clearCounter,
                   matchCounter,
@@ -575,8 +598,13 @@ def _runtime_js(html, config):
                   resolvedCockpitHtml,
                   directDetailWithoutQueueHtml,
                   directDetailWithoutQueueSubjects,
-                  inlineRefreshResult
-                }));
+                    inlineRefreshResult,
+                    fallbackSubmitResult
+                  }));
+                }).catch(function(err) {
+                  console.error(err);
+                  process.exit(1);
+                });
                 """
             ),
         ]
@@ -1173,6 +1201,15 @@ class TestInlineScreeningRuntime:
         assert "Escalate" in result["directDetailWithoutQueueHtml"]
         assert "Save disposition" in result["directDetailWithoutQueueHtml"]
         assert "Follow-Up Required</button>" not in result["directDetailWithoutQueueHtml"]
+        fallback_calls = result["fallbackSubmitResult"]["calls"]
+        review_call = next(call for call in fallback_calls if call[0] == "POST" and call[1] == "/screening/review")
+        assert review_call[2]["application_id"] == "ARF-TRIAGE-12"
+        assert review_call[2]["subject_type"] == "director"
+        assert review_call[2]["subject_name"] == "Jane Director"
+        assert review_call[2]["disposition"] == "cleared"
+        assert review_call[2]["disposition_code"] == "false_positive_cleared"
+        assert review_call[2]["source_surface"] == "application_detail_screening_tab"
+        assert result["fallbackSubmitResult"]["state"]["disposition"] == ""
 
     def test_activity_log_formats_screening_reviews_for_officers(self):
         html = _read_backoffice()
