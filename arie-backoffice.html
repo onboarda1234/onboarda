@@ -9892,6 +9892,30 @@ function screeningReviewOptionsForInline(disposition) {
   });
 }
 
+function screeningReviewFallbackRow(app, subjectType, subjectName, statusKey, statusLabel, providerFacts, providerEvidence) {
+  statusKey = String(statusKey || '').trim();
+  if (statusKey !== 'review_required' && statusKey !== 'declared_pep_review') return null;
+  providerFacts = providerFacts || {};
+  return {
+    application_id: app && app.id,
+    application_ref: app && app.ref,
+    company_name: app && app.company,
+    subject_type: subjectType,
+    subject_name: subjectName,
+    status_key: statusKey,
+    status_label: statusLabel || (statusKey === 'declared_pep_review' ? 'Declared PEP Review' : 'Review Required'),
+    watchlist_status: statusKey === 'declared_pep_review' ? 'review' : (providerFacts.matched ? 'review' : 'pending'),
+    review_required: true,
+    review_actionable: true,
+    review_four_eyes_status: 'not_required',
+    review_disposition: '',
+    review_disposition_code: '',
+    canonical_disposition: '',
+    total_hits: providerFacts.total_hits || providerFacts.total || 0,
+    provider_evidence: Array.isArray(providerEvidence) ? providerEvidence : []
+  };
+}
+
 function getMergedScreeningReviewRow(app, queueRow, reviewRow, subjectType, subjectName) {
   if (!app) return queueRow || reviewRow || null;
   var subjectKey = (subjectType || '') + '|' + (subjectName || '');
@@ -11324,6 +11348,17 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
                         ? 'Screening Not Configured'
                         : (companyFallbackStatusKey === 'screening_unavailable' ? 'Screening Unavailable' : 'Screening Pending Provider'))))))
     : 'Awaiting Screening';
+  if (!reviewRow) {
+    reviewRow = screeningReviewFallbackRow(
+      app,
+      'entity',
+      app.company,
+      companyFallbackStatusKey,
+      companyFallbackStatusLabel,
+      companyHits,
+      companyResults
+    );
+  }
   var primaryEntityLabel = reviewRow ? reviewRow.status_label : companyFallbackStatusLabel;
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : companyFallbackStatusKey, primaryEntityLabel),
@@ -11409,8 +11444,20 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
                             ? (personDeclaredPep ? 'Declared PEP — Screening Not Configured' : 'Screening Not Configured')
                             : (personFallbackStatusKey === 'screening_unavailable'
                                 ? (personDeclaredPep ? 'Declared PEP — Screening Unavailable' : 'Screening Unavailable')
-                                : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))))
+                                  : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))))
     : 'Awaiting Screening';
+  var fallbackPersonProviderResults = [].concat((screening && screening.results) || []);
+  if (!reviewRow) {
+    reviewRow = screeningReviewFallbackRow(
+      app,
+      person.subject_type,
+      person.name,
+      personFallbackStatusKey,
+      personFallbackStatusLabel,
+      facts,
+      fallbackPersonProviderResults
+    );
+  }
   var primaryPersonLabel = reviewRow ? reviewRow.status_label : personFallbackStatusLabel;
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : personFallbackStatusKey, primaryPersonLabel),
@@ -11516,6 +11563,17 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
                         ? 'Screening Not Configured'
                         : (companyFallbackStatusKey === 'screening_unavailable' ? 'Screening Unavailable' : 'Screening Pending Provider'))))))
     : 'Awaiting Screening';
+  if (!entityReviewRow) {
+    entityReviewRow = screeningReviewFallbackRow(
+      app,
+      'entity',
+      app.company,
+      companyFallbackStatusKey,
+      companyFallbackStatusLabel,
+      companyHits,
+      companyResults
+    );
+  }
   subjects.push({
     kind: 'entity',
     subject_type: 'entity',
@@ -11581,6 +11639,17 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
                                   : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))))
       : 'Awaiting Screening';
     var personProviderResults = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
+    if (!reviewRow) {
+      reviewRow = screeningReviewFallbackRow(
+        app,
+        person.subject_type,
+        person.name,
+        personFallbackStatusKey,
+        personFallbackStatusLabel,
+        facts,
+        personProviderResults
+      );
+    }
     subjects.push({
       kind: 'person',
       person: person,
