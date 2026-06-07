@@ -987,6 +987,39 @@ class TestAuthenticatedAccess:
         assert detail["doc_type"] == "cert_inc"
         assert detail["duration_ms"] is not None
 
+    def test_screening_evidence_upload_reuses_secure_document_endpoint(self, api_server):
+        """Backoffice screening evidence upload can use supporting_document outside KYC state."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_screening_upload",))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_screening_upload",))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_screening_upload", "ARF-SCREENING-UPLOAD", "screening_client",
+             "Screening Upload Ltd", "Mauritius", "Technology", "SME", "in_review"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/app_screening_upload/documents?doc_type=supporting_document&screening_evidence=true",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("screening-evidence.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+            timeout=3,
+        )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["doc_type"] == "supporting_document"
+        assert body["doc_name"] == "screening-evidence.pdf"
+
     def test_edd_creation_preserves_unknown_risk_and_ui_has_no_high_fallback(self, api_server):
         """EDD must not fabricate HIGH/0 when parent application risk is unknown."""
         from auth import create_token
@@ -4062,64 +4095,51 @@ class TestGovernanceAttemptAudit:
         assert short_rationale.status_code == 400
         assert "rationale" in short_rationale.json()["error"]
 
-        thin_clear_rationale = http_requests.post(
+        no_match_without_evidence = http_requests.post(
             f"{api_server}/api/screening/review",
             json={
                 "application_id": app_id,
                 "subject_type": "entity",
                 "subject_name": "Phase 1C Required Fields Ltd",
-                "disposition": "cleared",
-                "disposition_code": "provider_no_relevant_match",
-                "rationale": "False positive",
+                "disposition": "no_match",
+                "rationale": "Officer reviewed the provider hit and confirmed it is not the same entity.",
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=3,
         )
-        assert thin_clear_rationale.status_code == 400
-        assert "40 characters" in thin_clear_rationale.json()["error"]
-        assert "8 words" in thin_clear_rationale.json()["error"]
-
-        legacy_alias_without_evidence = http_requests.post(
-            f"{api_server}/api/screening/review",
-            json={
-                "application_id": app_id,
-                "subject_type": "entity",
-                "subject_name": "Phase 1C Required Fields Ltd",
-                "disposition": "cleared",
-                "disposition_code": "provider_no_relevant_match",
-                "rationale": "Officer reviewed provider and registry evidence and wants to clear this as not the same entity.",
-            },
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=3,
-        )
-        assert legacy_alias_without_evidence.status_code == 400
-        assert "evidence_reference" in legacy_alias_without_evidence.json()["error"]
+        assert no_match_without_evidence.status_code == 200
+        assert no_match_without_evidence.json()["review"]["canonical_disposition"] == "false_positive_cleared"
 
         conn = get_db()
-        review = conn.execute("SELECT id FROM screening_reviews WHERE application_id = ?", (app_id,)).fetchone()
+        review = conn.execute(
+            "SELECT id, disposition, disposition_code FROM screening_reviews WHERE application_id = ?",
+            (app_id,),
+        ).fetchone()
         row = conn.execute(
             """
             SELECT detail FROM audit_log
-            WHERE target = ? AND action = 'Governance Attempt'
+            WHERE target = ? AND action = 'Screening Review'
             ORDER BY id DESC LIMIT 1
             """,
-            (app_id,),
+            (app_ref,),
         ).fetchone()
         conn.close()
 
-        assert review is None
+        assert review is not None
+        assert review["disposition"] == "cleared"
+        assert review["disposition_code"] == "false_positive_cleared"
         assert row is not None
         detail = json.loads(row["detail"])
-        assert detail["action"] == "screening.review_disposition"
-        assert detail["outcome"] == "rejected"
-        assert detail["response_code"] == 400
+        assert detail["canonical_disposition"] == "false_positive_cleared"
+        assert detail["evidence_reference_provided"] is False
+        assert detail["evidence_file_uploaded"] is False
 
-    def test_false_positive_clearance_requires_evidence_reference(self, api_server):
-        """Canonical false-positive clearance must cite evidence/reference, not just a conclusion."""
+    def test_no_match_clearance_allows_empty_evidence_reference(self, api_server):
+        """No Match maps to false-positive/cleared semantics and may omit evidence text."""
         from auth import create_token
         from db import get_db
 
-        app_id = "app_screening_fp_needs_evidence"
+        app_id = "app_screening_fp_optional_evidence"
         app_ref = "ARF-2026-SCREEN-FP-EVIDENCE"
         conn = get_db()
         conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
@@ -4139,15 +4159,17 @@ class TestGovernanceAttemptAudit:
                 "application_id": app_ref,
                 "subject_type": "entity",
                 "subject_name": "Screening FP Evidence Ltd",
-                "disposition": "false_positive_cleared",
-                "rationale": "Officer confirmed this provider hit relates to a different entity after detailed review.",
+                "disposition": "no_match",
+                "rationale": "Officer confirmed this provider hit relates to a different entity.",
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=3,
         )
 
-        assert resp.status_code == 400
-        assert "evidence_reference" in resp.json()["error"]
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["review"]["review_disposition"] == "cleared"
+        assert body["review"]["canonical_disposition"] == "false_positive_cleared"
 
     def test_analyst_cannot_clear_screening_match(self, api_server):
         """Analyst role may not formally clear a completed_match false positive."""
@@ -4634,6 +4656,65 @@ class TestGovernanceAttemptAudit:
         assert row is not None
         detail = json.loads(row["detail"])
         assert detail["source_surface"] == "application_detail_screening_tab"
+
+    def test_screening_review_links_evidence_document_metadata(self, api_server):
+        """Screening review can link an existing application document as uploaded evidence."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1c_screening_evidence_doc"
+        app_ref = "ARF-2026-PHASE1C-EVIDENCE-DOC"
+        doc_id = "doc_screening_evidence_001"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "phase1c_client", "Evidence Document Ltd", "in_review"))
+        conn.execute("""
+            INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path, file_size, mime_type, verification_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (doc_id, app_id, "supporting_document", "screening-evidence.pdf", "/tmp/screening-evidence.pdf", 128, "application/pdf", "pending"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": "Evidence Document Ltd",
+                "disposition": "match",
+                "rationale": "Officer confirmed this provider hit appears to relate to the subject.",
+                "evidence_document_id": doc_id,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["review"]["canonical_disposition"] == "confirmed_match"
+        assert body["review"]["review_evidence_documents"][0]["id"] == doc_id
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+        detail = json.loads(row["detail"])
+        assert detail["evidence_file_uploaded"] is True
+        assert detail["evidence_document"]["id"] == doc_id
 
     def test_screening_escalated_to_edd_routes_application(self, api_server, monkeypatch):
         """Canonical escalated_to_edd disposition must actuate/preserve EDD workflow."""

@@ -164,7 +164,7 @@ def _runtime_js(html, config):
                 const app = CONFIG.currentApp;
                 const rationaleEmpty = screeningDispositionRationaleError('escalated', '   ');
                 const clearCounter = screeningDispositionRationaleCounterText('cleared', 'Short evidence note');
-                const followUpCounter = screeningDispositionRationaleCounterText('follow_up_required', 'Need more info');
+                const matchCounter = screeningDispositionRationaleCounterText('match', 'Confirmed hit');
                 const escalateCounter = screeningDispositionRationaleCounterText('escalated', 'Escalation ready');
                 const unresolvedHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
                 const subjectKey = screeningReviewSubjectKey(app.ref, row.subject_type, row.subject_name);
@@ -174,7 +174,7 @@ def _runtime_js(html, config):
                   review_disposition_code: 'false_positive_cleared',
                   review_actionable: false,
                   status_key: 'reviewed_false_positive_cleared',
-                  status_label: 'False Positive Cleared'
+                  status_label: 'No Match'
                 });
                 const resolvedHtml = renderInlineScreeningDispositionPanel(
                   app,
@@ -193,27 +193,27 @@ def _runtime_js(html, config):
                 INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
                   disposition: 'cleared',
                   dispositionCode: 'false_positive_cleared',
-                  rationale: 'Officer reviewed the provider evidence, date-of-birth mismatch, nationality mismatch, and client file and confirmed this is a false positive.',
+                  rationale: 'Officer reviewed the provider evidence and confirmed this is not the same subject.',
                   evidenceReference: 'CA-case-100 and passport copy pack 12',
                   error: ''
                 };
                 const validClearHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
                 INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
-                  disposition: 'follow_up_required',
-                  dispositionCode: 'needs_more_information',
+                  disposition: 'match',
+                  dispositionCode: 'confirmed_match',
                   rationale: 'Short',
                   evidenceReference: '',
                   error: ''
                 };
-                const invalidFollowUpHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                const invalidMatchHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
                 INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
-                  disposition: 'follow_up_required',
-                  dispositionCode: 'needs_more_information',
-                  rationale: 'Need client clarification on nationality and alias history.',
+                  disposition: 'match',
+                  dispositionCode: 'confirmed_match',
+                  rationale: 'Confirmed relevant provider hit.',
                   evidenceReference: '',
                   error: ''
                 };
-                const validFollowUpHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
+                const validMatchHtml = renderInlineScreeningDispositionPanel(app, row, row.subject_type, row.subject_name);
                 const resolvedBadgeHtml = screeningReviewBadge(resolvedRow);
                 const dedupedQueueStatusHtml =
                   screeningQueueStatusBadge(resolvedRow.status_key, resolvedRow.status_label) +
@@ -348,7 +348,7 @@ def _runtime_js(html, config):
                     review_disposition: 'cleared',
                     review_disposition_code: 'false_positive_cleared',
                     status_key: 'reviewed_false_positive_cleared',
-                    status_label: 'False Positive Cleared',
+                    status_label: 'No Match',
                     reviewed_by: 'Aisha Sudally',
                     reviewed_at: '2026-05-31T10:00:00Z'
                   }],
@@ -481,7 +481,7 @@ def _runtime_js(html, config):
                 console.log(JSON.stringify({
                   rationaleEmpty,
                   clearCounter,
-                  followUpCounter,
+                  matchCounter,
                   escalateCounter,
                   unresolvedHtml,
                   resolvedHtml,
@@ -505,8 +505,8 @@ def _runtime_js(html, config):
                   }),
                   invalidClearHtml,
                   validClearHtml,
-                  invalidFollowUpHtml,
-                  validFollowUpHtml,
+                  invalidMatchHtml,
+                  validMatchHtml,
                   resolvedSupportBadgeHtml,
                   declaredPepZeroHitSummary: screeningTriageHitSummary({ declared_pep: true, hit_count: 0 }),
                   capturedFocus,
@@ -548,7 +548,13 @@ def _queue_runtime_js(html):
                 function openScreeningReviewByRow() {}
                 function openScreeningDispositionModalByRow() {}
                 function canClearScreeningDisposition() { return true; }
-                var tbody = { innerHTML: '', rows: [], appendChild(node) { this.rows.push(node); } };
+                var tbody = {
+                  _innerHTML: '',
+                  rows: [],
+                  set innerHTML(value) { this._innerHTML = value; this.rows = []; },
+                  get innerHTML() { return this._innerHTML; },
+                  appendChild(node) { this.rows.push(node); }
+                };
                 var stat = { textContent: '' };
                 var document = {
                   getElementById(id) {
@@ -574,7 +580,7 @@ def _queue_runtime_js(html):
                       pep_declared_status: 'not_declared',
                       pep_screening_status: 'pending',
                       status_key: 'reviewed_false_positive_cleared',
-                      status_label: 'False Positive Cleared',
+                      status_label: 'No Match',
                       review_required: false,
                       review_actionable: false,
                       review_disposition: 'cleared',
@@ -842,11 +848,13 @@ class TestInlineScreeningRuntime:
                 },
             )
         )
-        assert "Clear / False Positive" in result["unresolvedHtml"]
+        assert "No Match" in result["unresolvedHtml"]
+        assert "Match" in result["unresolvedHtml"]
         assert "Escalate" in result["unresolvedHtml"]
-        assert "Follow-Up Required" in result["unresolvedHtml"]
+        assert "Follow-Up Required" not in result["unresolvedHtml"]
         assert "Save disposition" in result["unresolvedHtml"]
         assert "required for escalation" in result["unresolvedHtml"]
+        assert "Upload supporting evidence (optional)" in result["unresolvedHtml"]
 
     def test_rationale_is_mandatory_and_permission_message_is_present(self):
         html = _read_backoffice()
@@ -862,9 +870,8 @@ class TestInlineScreeningRuntime:
         )
         assert result["rationaleEmpty"] == "Please enter a rationale before saving this screening disposition."
         assert "You do not have permission to disposition screening results." in result["unresolvedHtml"]
-        assert "40 characters" in result["clearCounter"]
-        assert "false-positive clearance" in result["clearCounter"]
-        assert "14 / 12 characters" in result["followUpCounter"]
+        assert "requirement met" in result["clearCounter"]
+        assert "13 / 12 characters" in result["matchCounter"]
         assert "16 / 12 characters" in result["escalateCounter"]
 
     def test_submitting_state_disables_inline_save_button(self):
@@ -911,8 +918,8 @@ class TestInlineScreeningRuntime:
         assert "disabled" in result["invalidClearHtml"]
         assert "Please enter a rationale" not in result["validClearHtml"]
         assert "disabled" not in result["validClearHtml"]
-        assert "disabled" in result["invalidFollowUpHtml"]
-        assert "disabled" not in result["validFollowUpHtml"]
+        assert "disabled" in result["invalidMatchHtml"]
+        assert "disabled" not in result["validMatchHtml"]
 
     def test_resolved_hit_is_rendered_read_only(self):
         html = _read_backoffice()
@@ -929,25 +936,26 @@ class TestInlineScreeningRuntime:
         assert "read-only" in result["resolvedHtml"]
         assert "View audit trail" in result["resolvedHtml"]
         assert "Save disposition" not in result["resolvedHtml"]
-        assert "False Positive Cleared" in result["resolvedBadgeHtml"]
+        assert "No Match" in result["resolvedBadgeHtml"]
         assert "Review Required" not in result["resolvedBadgeHtml"]
-        assert result["dedupedQueueStatusHtml"].count("False Positive Cleared") == 1
+        assert result["dedupedQueueStatusHtml"].count("No Match") == 1
         assert "Pending" not in result["resolvedSupportBadgeHtml"]
-        assert "False Positive Cleared" in result["resolvedSupportBadgeHtml"]
+        assert "No Match" in result["resolvedSupportBadgeHtml"]
 
     def test_screening_queue_dirty_flag_forces_refetch(self):
         html = _read_backoffice()
         result = _run_node(_queue_runtime_js(html))
         assert result["dirtyAfterRender"] is False
         assert result["renderedRows"] == 1
-        assert result["queueRowLabel"] == "False Positive Cleared"
+        assert result["queueRowLabel"] == "No Match"
         assert result["calledPaths"]
         assert result["calledPaths"][0].startswith("/screening/queue?")
         assert "refresh=" in result["calledPaths"][0]
         assert "limit=50" in result["calledPaths"][0]
         assert "offset=0" in result["calledPaths"][0]
         assert "Pending" not in result["renderedHtml"]
-        assert "False Positive Cleared" in result["renderedHtml"]
+        assert "Loading screening queue" not in result["renderedHtml"]
+        assert "No Match" in result["renderedHtml"]
 
     def test_screening_queue_sidebar_alias_routes_to_screening_renderer(self):
         html = _read_backoffice()
@@ -999,7 +1007,7 @@ class TestInlineScreeningRuntime:
         assert result["triageSubjectOrder"] == [
             "Jane Director|Review Required",
             "John Harbor|Follow-Up Required",
-            "Triage Holdings Ltd|False Positive Cleared",
+            "Triage Holdings Ltd|No Match",
         ]
         assert result["capturedFocus"] == {
             "application_ref": "ARF-TRIAGE-12",
@@ -1028,7 +1036,7 @@ class TestInlineScreeningRuntime:
         result = _run_node(_activity_log_runtime_js(html))
         assert "Screening Review Completed" in result["html"]
         assert "Subject:</strong> John Harbor" in result["html"]
-        assert "False Positive Cleared" in result["html"]
+        assert "No Match" in result["html"]
         assert "Technical audit details" in result["html"]
         assert "application_detail_screening_tab" in result["html"]
         assert "Status Change" in result["html"]
