@@ -9993,6 +9993,43 @@ function updateInlineScreeningDispositionField(applicationRef, subjectType, subj
     var counter = document.getElementById('screening-inline-rationale-counter-' + screeningReviewSubjectDomKey(applicationRef, subjectType, subjectName));
     if (counter) counter.textContent = screeningDispositionRationaleCounterText(state.disposition || 'escalated', value || '');
   }
+  if (field === 'rationale' || field === 'evidenceReference' || field === 'dispositionCode') {
+    refreshInlineScreeningDispositionValidation(applicationRef, subjectType, subjectName);
+  }
+}
+
+function refreshInlineScreeningDispositionValidation(applicationRef, subjectType, subjectName) {
+  var row = getMergedScreeningReviewRow(currentApp, null, null, subjectType, subjectName);
+  var state = getInlineScreeningDispositionState(applicationRef, subjectType, subjectName, row);
+  var disposition = state.disposition || '';
+  var dispositionOptions = screeningReviewOptionsForInline(disposition);
+  var selectedCode = state.dispositionCode || (dispositionOptions.length === 1 ? dispositionOptions[0].value : '');
+  var validity = screeningDispositionValidationState(
+    disposition,
+    state.rationale || '',
+    selectedCode,
+    state.evidenceReference || '',
+    { requireClearPermission: true }
+  );
+  var subjectDomKey = screeningReviewSubjectDomKey(applicationRef, subjectType, subjectName);
+  var key = screeningReviewSubjectKey(applicationRef, subjectType, subjectName);
+  var saveButton = document.getElementById('screening-inline-save-' + subjectDomKey);
+  if (saveButton) saveButton.disabled = !!INLINE_SCREENING_DISPOSITION_SUBMITTING[key] || !validity.valid;
+  var validationEl = document.getElementById('screening-inline-validation-' + subjectDomKey);
+  if (validationEl) {
+    if (!state.error && !validity.valid) {
+      validationEl.textContent = validity.message;
+      validationEl.style.display = '';
+    } else {
+      validationEl.textContent = '';
+      validationEl.style.display = 'none';
+    }
+  }
+  var errorEl = document.getElementById('screening-inline-error-' + subjectDomKey);
+  if (errorEl && !state.error) {
+    errorEl.textContent = '';
+    errorEl.style.display = 'none';
+  }
 }
 
 function setInlineScreeningEvidenceFile(applicationRef, subjectType, subjectName, input) {
@@ -10195,15 +10232,11 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
     html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Evidence / Provider Reference (optional)</div><input class="form-input" ' + (submitting ? 'disabled ' : '') + ' value="' + escapeHtml(state.evidenceReference || '') + '" oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'evidenceReference\',this.value)" placeholder="Provider case ID, registry extract, or review-pack reference..." /><div style="font-size:11px;color:var(--text3);margin-top:6px;">Optional. Stored with the audit event; do not paste raw PII.</div></div>';
   }
   html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Rationale</div><textarea class="form-input" rows="4" ' + (submitting ? 'disabled ' : '') + ' oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'rationale\',this.value)" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;">' + escapeHtml(state.rationale || '') + '</textarea><div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(screeningDispositionRationaleHelp(disposition || 'escalated')) + '</div><div id="screening-inline-rationale-counter-' + escapeHtml(subjectDomKey) + '" style="font-size:11px;color:var(--text2);margin-top:4px;">' + escapeHtml(screeningDispositionRationaleCounterText(disposition || 'escalated', state.rationale || '')) + '</div></div>';
-  if (state.error) {
-    html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;">' + escapeHtml(state.error) + '</div>';
-  }
+  html += '<div id="screening-inline-error-' + escapeHtml(subjectDomKey) + '" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;' + (state.error ? '' : 'display:none;') + '">' + escapeHtml(state.error || '') + '</div>';
   html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
-  html += '<button type="button" class="btn btn-primary" ' + (submitting || !validity.valid ? 'disabled ' : '') + ' onclick="submitInlineScreeningDisposition(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\')">' + (submitting ? 'Saving…' : 'Save disposition') + '</button>';
+  html += '<button type="button" id="screening-inline-save-' + escapeHtml(subjectDomKey) + '" class="btn btn-primary" ' + (submitting || !validity.valid ? 'disabled ' : '') + ' onclick="submitInlineScreeningDisposition(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\')">' + (submitting ? 'Saving…' : 'Save disposition') + '</button>';
   html += '<span style="font-size:11px;color:var(--text3);">Backend screening gates remain authoritative.</span>';
-  if (!state.error && !validity.valid) {
-    html += '<div style="margin-top:8px;font-size:11px;color:#92400e;">' + escapeHtml(validity.message) + '</div>';
-  }
+  html += '<div id="screening-inline-validation-' + escapeHtml(subjectDomKey) + '" style="margin-top:8px;font-size:11px;color:#92400e;' + (!state.error && !validity.valid ? '' : 'display:none;') + '">' + escapeHtml(!state.error && !validity.valid ? validity.message : '') + '</div>';
   html += '</div></div>';
   return html;
 }

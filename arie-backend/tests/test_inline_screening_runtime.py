@@ -496,6 +496,48 @@ def _runtime_js(html, config):
                     reviewActionable: subject.review_actionable
                   };
                 });
+                const inlineRefreshElements = {};
+                document = {
+                  getElementById(id) {
+                    return inlineRefreshElements[id] || null;
+                  }
+                };
+                currentApp = app;
+                SCREENING_QUEUE = { rows: [row] };
+                INLINE_SCREENING_DISPOSITION_STATE[subjectKey] = {
+                  disposition: 'cleared',
+                  dispositionCode: 'false_positive_cleared',
+                  rationale: '',
+                  evidenceReference: '',
+                  evidenceFile: null,
+                  error: ''
+                };
+                const subjectDomKey = screeningReviewSubjectDomKey(app.ref, row.subject_type, row.subject_name);
+                inlineRefreshElements['screening-inline-save-' + subjectDomKey] = { disabled: true };
+                inlineRefreshElements['screening-inline-validation-' + subjectDomKey] = {
+                  textContent: 'Please enter a rationale before saving this screening disposition.',
+                  style: { display: '' }
+                };
+                inlineRefreshElements['screening-inline-error-' + subjectDomKey] = {
+                  textContent: 'Please enter a rationale before saving this screening disposition.',
+                  style: { display: '' }
+                };
+                inlineRefreshElements['screening-inline-rationale-counter-' + subjectDomKey] = { textContent: '' };
+                updateInlineScreeningDispositionField(
+                  app.ref,
+                  row.subject_type,
+                  row.subject_name,
+                  'rationale',
+                  'Officer reviewed the provider evidence and confirmed this is not the same subject.'
+                );
+                const inlineRefreshResult = {
+                  saveDisabled: inlineRefreshElements['screening-inline-save-' + subjectDomKey].disabled,
+                  validationText: inlineRefreshElements['screening-inline-validation-' + subjectDomKey].textContent,
+                  validationDisplay: inlineRefreshElements['screening-inline-validation-' + subjectDomKey].style.display,
+                  errorText: inlineRefreshElements['screening-inline-error-' + subjectDomKey].textContent,
+                  errorDisplay: inlineRefreshElements['screening-inline-error-' + subjectDomKey].style.display,
+                  counterText: inlineRefreshElements['screening-inline-rationale-counter-' + subjectDomKey].textContent
+                };
                 console.log(JSON.stringify({
                   rationaleEmpty,
                   clearCounter,
@@ -532,7 +574,8 @@ def _runtime_js(html, config):
                   triageCockpitHtml,
                   resolvedCockpitHtml,
                   directDetailWithoutQueueHtml,
-                  directDetailWithoutQueueSubjects
+                  directDetailWithoutQueueSubjects,
+                  inlineRefreshResult
                 }));
                 """
             ),
@@ -971,6 +1014,26 @@ class TestInlineScreeningRuntime:
         assert "disabled" not in result["validClearHtml"]
         assert "disabled" in result["invalidMatchHtml"]
         assert "disabled" not in result["validMatchHtml"]
+
+    def test_inline_rationale_input_refreshes_save_button_validation_state(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "currentUser": {"role": "co", "name": "Officer Test"},
+                    "currentApp": _app(),
+                    "row": _row(),
+                },
+            )
+        )
+        refresh = result["inlineRefreshResult"]
+        assert refresh["saveDisabled"] is False
+        assert refresh["validationDisplay"] == "none"
+        assert refresh["validationText"] == ""
+        assert refresh["errorDisplay"] == "none"
+        assert refresh["errorText"] == ""
+        assert "requirement met" in refresh["counterText"]
 
     def test_resolved_hit_is_rendered_read_only(self):
         html = _read_backoffice()
