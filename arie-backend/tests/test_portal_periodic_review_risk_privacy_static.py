@@ -34,4 +34,5 @@ def test_periodic_review_portal_does_not_expose_officer_memo_or_rationale_copy()
     assert "officer_confirmed_risk_decision" not in html
     assert "senior_review_required_before_risk_change" not in html
     assert "backoffice_periodic_review_risk_reassessment" not in html
-
+    assert "senior review" not in html.lower()
+    assert "officer notes" not in html.lower()
