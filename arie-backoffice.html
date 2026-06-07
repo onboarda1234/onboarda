@@ -1802,7 +1802,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
       <thead>
-        <tr><th>Client</th><th>Risk Level</th><th>Due Date</th><th>Case Status</th><th>Owner</th><th>Last Activity</th><th>Action</th></tr>
+        <tr><th>Client</th><th>Risk Level</th><th>Due Date</th><th>Case Status</th><th>Owner</th><th>Notifications</th><th>Last Activity</th><th>Action</th></tr>
       </thead>
       <tbody id="periodic-reviews-body"></tbody>
     </table>
@@ -3908,6 +3908,7 @@ function normalizePeriodicReview(raw) {
   var dueDate = projection.due_date || raw.due_date || projection.next_review_date || raw.next_review_date || '—';
   var operationalStatusLabel = projection.status_label || raw.status_label || status.label;
   var lastActivity = projection.last_activity_at || raw.last_activity_at || projection.updated_at || raw.updated_at || raw.created_at || '';
+  var notificationSummary = projection.notification_summary || raw.notification_summary || {};
   return {
     id: raw.id,
     reviewId: reviewId,
@@ -3934,10 +3935,41 @@ function normalizePeriodicReview(raw) {
     isDueDateMissing: projection.is_due_date_missing === true || raw.is_due_date_missing === true,
     dueState: projection.due_state || raw.due_state || '',
     lastActivityAt: lastActivity,
+    notificationSummary: notificationSummary,
+    clientNotificationStatus: notificationSummary.client_notification_status || projection.client_notification_status || raw.client_notification_status || 'not_sent',
+    clientNotificationStatusLabel: notificationSummary.client_notification_status_label || projection.client_notification_status_label || raw.client_notification_status_label || 'Not sent',
+    reminderCount: Number(notificationSummary.reminder_count || projection.reminder_count || raw.reminder_count || 0),
+    lastReminderSentAt: notificationSummary.last_reminder_sent_at || projection.last_reminder_sent_at || raw.last_reminder_sent_at || '',
+    nextReminderDueAt: notificationSummary.next_reminder_due_at || projection.next_reminder_due_at || raw.next_reminder_due_at || '',
+    officerAlertStatus: notificationSummary.officer_alert_status || projection.officer_alert_status || raw.officer_alert_status || '',
+    clientActionRequiredLabel: notificationSummary.client_action_required_label || projection.client_action_required_label || raw.client_action_required_label || '',
     primaryActionLabel: projection.primary_action_label || raw.primary_action_label || 'Open review case',
     canTakeAction: projection.can_take_action !== false && raw.can_take_action !== false,
     fixture_payload: status.payload
   };
+}
+
+function periodicReviewNotificationTone(status) {
+  var key = String(status || '').toLowerCase();
+  if (key === 'failed') return 'rejected';
+  if (key === 'reminder_due' || key === 'overdue_notified') return 'pending';
+  if (key === 'sent') return 'approved';
+  return 'draft';
+}
+
+function periodicReviewNotificationCell(review) {
+  var status = review.clientNotificationStatus || 'not_sent';
+  var label = review.clientNotificationStatusLabel || 'Not sent';
+  var tone = periodicReviewNotificationTone(status);
+  var reminderText = review.reminderCount ? ('Reminders: ' + String(review.reminderCount)) : 'No reminders';
+  var nextText = review.nextReminderDueAt ? ('Next: ' + reviewQueueDateLabel(review.nextReminderDueAt)) : '';
+  var officerAlert = String(review.officerAlertStatus || '').toLowerCase() === 'active'
+    ? '<div style="font-size:11px;color:var(--amber);margin-top:3px;">Officer alert active</div>'
+    : '';
+  return '<span class="badge ' + tone + '" style="font-size:11px;">' + escapeHtml(label) + '</span>' +
+    '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(reminderText) + '</div>' +
+    (nextText ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(nextText) + '</div>' : '') +
+    officerAlert;
 }
 
 function eddTriggerText(caseRow) {
@@ -14926,6 +14958,35 @@ function renderPeriodicReviewWorkspaceOverview(reviewDetail) {
   '</div>';
 }
 
+function renderPeriodicReviewWorkspaceNotifications(reviewDetail) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var overview = workspace.overview || {};
+  var summary = overview.notification_summary || reviewDetail.notification_summary || {};
+  var status = summary.client_notification_status_label || reviewDetail.client_notification_status_label || 'Not sent';
+  var rawStatus = summary.client_notification_status || reviewDetail.client_notification_status || 'not_sent';
+  var action = summary.client_action_required_label || reviewDetail.client_action_required_label || 'No client action required';
+  var reminderCount = Number(summary.reminder_count || reviewDetail.reminder_count || 0);
+  var officerAlert = String(summary.officer_alert_status || reviewDetail.officer_alert_status || '').toLowerCase();
+  var tone = periodicReviewNotificationTone(rawStatus);
+  return '<div style="display:grid;gap:12px;">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      lifecycleDetailBadge(status, tone === 'rejected' ? 'red' : (tone === 'pending' ? 'amber' : (tone === 'approved' ? 'green' : 'slate'))) +
+      lifecycleDetailBadge('Reminders: ' + String(reminderCount), reminderCount ? 'amber' : 'slate') +
+      (officerAlert === 'active' ? lifecycleDetailBadge('Officer alert active', 'amber') : lifecycleDetailBadge('No officer alert', 'green')) +
+    '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
+      lifecycleDetailMeta('Client action', action) +
+      lifecycleDetailMeta('Initial sent', lifecycleFormatDate(summary.initial_notification_sent_at || reviewDetail.initial_notification_sent_at || '')) +
+      lifecycleDetailMeta('Last reminder', lifecycleFormatDate(summary.last_reminder_sent_at || reviewDetail.last_reminder_sent_at || '')) +
+      lifecycleDetailMeta('Next reminder due', lifecycleFormatDate(summary.next_reminder_due_at || reviewDetail.next_reminder_due_at || '')) +
+      lifecycleDetailMeta('Channel', summary.notification_channel || reviewDetail.notification_channel || 'portal') +
+    '</div>' +
+    (summary.last_notification_error || reviewDetail.last_notification_error
+      ? '<div style="font-size:12px;color:var(--red);line-height:1.6;">Last notification error: ' + escapeHtml(summary.last_notification_error || reviewDetail.last_notification_error) + '</div>'
+      : '<div style="font-size:12px;color:var(--text2);line-height:1.6;">Client notifications use the portal notification center and configured transactional email where enabled.</div>') +
+  '</div>';
+}
+
 function renderPeriodicReviewWorkspaceReadiness(reviewDetail) {
   var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
   var readiness = workspace.readiness || {};
@@ -15364,6 +15425,7 @@ function renderLifecycleDetailTab(context) {
       currentReviewCardHtml +
       lifecycleDetailCard('Active Blockers / Readiness', 'Deterministic readiness state for the next officer step.', readinessBody, '#f59e0b') +
       lifecycleDetailCard('Client Attestation Summary', 'Read-only portal attestation answers captured against the canonical periodic review.', clientAttestationBody, '#0b5e8d') +
+      (activeReview ? lifecycleDetailCard('Notification Status', 'Client reminders and officer alert state for this review.', renderPeriodicReviewWorkspaceNotifications(activeReview), '#0f766e') : '') +
       lifecycleDetailCard('Documents & Evidence', 'Conditional periodic review document requests and uploaded evidence.', documentsBody, '#0f766e') +
       lifecycleDetailCard('Monitoring Alerts Considered In This Review', 'Compact monitoring context with a direct link back to the owner workflow.', monitoringBody, '#2557d6') +
       lifecycleDetailCard('Officer Findings Draft', 'Internal notes that can feed the final decision.', findingsBody, '#7c3aed') +
@@ -16276,13 +16338,14 @@ function renderPeriodicReviews() {
       '<td><span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(queueLabel) + '</span>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(reviewQueueTriggerSummary(review)) + '</div></td>' +
       '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
+      '<td style="font-size:12px;">' + periodicReviewNotificationCell(review) + '</td>' +
       '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(reviewQueueDateLabel(review.lastActivityAt)) + '</td>' +
       '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openMonitoringReviewLifecycle(\'' + escapeHtml(review.ref) + '\',' + JSON.stringify(review.id) + ')">' + escapeHtml(review.primaryActionLabel || 'Open review case') + '</button></td>';
     tbody.appendChild(tr);
     rendered++;
   });
   if (!rendered) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:18px;">No periodic review cases match the current filters.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">No periodic review cases match the current filters.</td></tr>';
   }
 }
 

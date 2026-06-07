@@ -246,6 +246,14 @@ def portal_task_summary_from_review(review_row, projection: Optional[Dict[str, A
             ATTESTATION_STATUS_DRAFT: "Draft saved",
             ATTESTATION_STATUS_SUBMITTED: "Submitted",
         }.get(snapshot["status"], "Not started"),
+        "notification_summary": projection.get("notification_summary") or {
+            "client_notification_status": projection.get("client_notification_status"),
+            "client_notification_status_label": projection.get("client_notification_status_label"),
+            "last_reminder_sent_at": projection.get("last_reminder_sent_at"),
+            "reminder_count": projection.get("reminder_count", 0),
+            "next_reminder_due_at": projection.get("next_reminder_due_at"),
+            "client_action_required_label": projection.get("client_action_required_label"),
+        },
         "saved_at": snapshot.get("saved_at"),
         "submitted_at": snapshot.get("submitted_at"),
     }

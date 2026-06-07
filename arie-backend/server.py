@@ -228,6 +228,10 @@ from periodic_review_document_requests import (
     list_backoffice_periodic_review_document_requests as _list_backoffice_periodic_review_document_requests,
     list_portal_periodic_review_document_requests as _list_portal_periodic_review_document_requests,
 )
+from periodic_review_notifications import (
+    process_periodic_review_notification as _process_periodic_review_notification,
+    run_periodic_review_notification_sweep as _run_periodic_review_notification_sweep,
+)
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
 try:
@@ -19667,6 +19671,45 @@ class PeriodicReviewScheduleHandler(BaseHandler):
         })
 
 
+class PeriodicReviewNotificationsRunHandler(BaseHandler):
+    """POST /api/monitoring/reviews/notifications/run -- process PRS-6 nudges."""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        review_id = data.get("review_id")
+        review_ids = None
+        if review_id not in (None, ""):
+            parsed = _parse_review_id(self, review_id)
+            if parsed is None:
+                return
+            review_ids = [parsed]
+        channel = data.get("channel") or None
+        db = get_db()
+        try:
+            result = _run_periodic_review_notification_sweep(
+                db,
+                review_ids=review_ids,
+                channel=channel,
+                email_sender=send_portal_email,
+                actor=user,
+                source_surface="periodic_review_queue",
+            )
+            db.commit()
+            self.success({"status": "periodic_review_notifications_processed", **result})
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error("Periodic review notification sweep failed: %s", exc, exc_info=True)
+            self.error("Failed to process periodic review notifications", 500)
+        finally:
+            db.close()
+
+
 # ──────────────────────────────────────────────────────────
 # PR-03: Periodic Review Operating Model -- additive handlers
 # ──────────────────────────────────────────────────────────
@@ -19725,6 +19768,7 @@ def _serialize_portal_periodic_review_attestation(db, review_row, *, projection=
         "task_status": task_summary.get("task_status") or snapshot.get("status"),
         "task_status_label": task_summary.get("task_status_label"),
         "primary_action_label": task_summary.get("primary_action_label"),
+        "notification_summary": task_summary.get("notification_summary"),
         "attestation": {
             "status": snapshot.get("status") or ATTESTATION_STATUS_NOT_STARTED,
             "saved_at": snapshot.get("saved_at"),
@@ -19911,6 +19955,7 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
     projection = dict(review.get("projection") or {})
     baseline = dict(review.get("periodic_review_baseline") or {})
     attestation = dict(review.get("client_attestation") or {})
+    notification_summary = dict(review.get("notification_summary") or projection.get("notification_summary") or {})
     requests = [
         dict(item) for item in (review.get("periodic_review_document_requests") or [])
         if isinstance(item, dict)
@@ -19997,6 +20042,7 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
             "trigger_source_label": projection.get("trigger_source_label") or review.get("trigger_source_label"),
             "last_activity_at": review.get("last_activity_at") or projection.get("last_activity_at"),
             "baseline_summary": baseline,
+            "notification_summary": notification_summary,
             "next_expected_step": next_step,
         },
         "attestation_summary": attestation,
@@ -20033,6 +20079,7 @@ def _periodic_review_workspace_snapshot(review_row) -> dict:
                 "blockers": monitoring_screening_blockers,
             },
             "baseline_summary": baseline,
+            "notification_summary": notification_summary,
             "outcome": review.get("outcome"),
             "findings_summary": review.get("officer_findings_note"),
             "rationale": review.get("officer_rationale") or review.get("outcome_reason"),
@@ -20182,6 +20229,19 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
         result["id"],
     )
     result["periodic_review_document_request_count"] = len(result["periodic_review_document_requests"])
+    result["client_notification_status"] = projection.get("client_notification_status")
+    result["client_notification_status_label"] = projection.get("client_notification_status_label")
+    result["initial_notification_sent_at"] = projection.get("initial_notification_sent_at")
+    result["last_reminder_sent_at"] = projection.get("last_reminder_sent_at")
+    result["reminder_count"] = projection.get("reminder_count", 0)
+    result["last_notification_error"] = projection.get("last_notification_error")
+    result["officer_alert_status"] = projection.get("officer_alert_status")
+    result["officer_alerted_at"] = projection.get("officer_alerted_at")
+    result["notification_channel"] = projection.get("notification_channel")
+    result["next_reminder_due_at"] = projection.get("next_reminder_due_at")
+    result["client_action_required"] = projection.get("client_action_required")
+    result["client_action_required_label"] = projection.get("client_action_required_label")
+    result["notification_summary"] = projection.get("notification_summary")
     result["officer_findings_note"] = result.get("officer_findings_note")
     result["officer_deficiencies_note"] = result.get("officer_deficiencies_note")
     result["officer_internal_review_note"] = result.get("officer_internal_review_note")
@@ -22830,6 +22890,13 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
                 actor=user,
                 generation_source=PERIODIC_REVIEW_DOCUMENT_GENERATION_SOURCE,
             )
+            _process_periodic_review_notification(
+                db,
+                refreshed_review,
+                email_sender=send_portal_email,
+                actor=user,
+                source_surface="portal_periodic_review_task",
+            )
             db.commit()
             self.success(_serialize_portal_periodic_review_attestation(db, refreshed_review, projection=projection, application=app))
         except Exception:
@@ -23112,6 +23179,24 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 source_surface="portal_periodic_review_documents",
                 after_state=result.get("requirement") or {},
             )
+            linked_review_id = (
+                (result.get("requirement") or {}).get("linked_periodic_review_id")
+                or (safe_after or {}).get("linked_periodic_review_id")
+                or safe_req.get("linked_periodic_review_id")
+            )
+            if linked_review_id:
+                review_row = db.execute(
+                    "SELECT * FROM periodic_reviews WHERE id = ?",
+                    (linked_review_id,),
+                ).fetchone()
+                if review_row:
+                    _process_periodic_review_notification(
+                        db,
+                        review_row,
+                        email_sender=send_portal_email,
+                        actor=user,
+                        source_surface="portal_periodic_review_documents",
+                    )
             db.commit()
             self.success({
                 "status": "submitted",
@@ -23501,6 +23586,7 @@ def make_app():
         (r"/api/monitoring/agents", MonitoringAgentsHandler),
         (r"/api/monitoring/automation/status", MonitoringAutomationStatusHandler),
         # Periodic Reviews (more specific routes first)
+        (r"/api/monitoring/reviews/notifications/run", PeriodicReviewNotificationsRunHandler),
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items/generate",
          PeriodicReviewRequiredItemsGenerateHandler),
@@ -23845,6 +23931,83 @@ if __name__ == "__main__":
             logger.info("monitoring-automation: scheduled runner disabled for environment=%s", ENVIRONMENT)
     except Exception:
         logger.exception("monitoring-automation: startup registration failed")
+        if ENVIRONMENT in ("production", "staging"):
+            raise
+
+    # PRS-6 notification/reminder sweep. This only reads canonical
+    # periodic_reviews state and writes notification metadata, portal
+    # notifications, and audit rows. It does not mutate risk, memo,
+    # approval, EDD, screening, or monitoring workflow truth.
+    try:
+        _prs6_enabled = str(
+            os.environ.get("PERIODIC_REVIEW_NOTIFICATIONS_ENABLED", "true")
+        ).strip().lower() not in ("0", "false", "no", "off")
+        if ENVIRONMENT not in ("testing",) and _prs6_enabled:
+            try:
+                _prs6_interval_seconds = int(
+                    os.environ.get("PERIODIC_REVIEW_NOTIFICATION_SWEEP_SECONDS", "3600")
+                )
+            except (TypeError, ValueError):
+                _prs6_interval_seconds = 3600
+            _prs6_interval_seconds = max(300, _prs6_interval_seconds)
+            try:
+                _prs6_initial_delay = int(
+                    os.environ.get("PERIODIC_REVIEW_NOTIFICATION_INITIAL_DELAY_SECONDS", "90")
+                )
+            except (TypeError, ValueError):
+                _prs6_initial_delay = 90
+            _prs6_initial_delay = max(0, _prs6_initial_delay)
+
+            def _periodic_review_notification_tick():
+                db = None
+                try:
+                    db = get_db()
+                    summary = _run_periodic_review_notification_sweep(
+                        db,
+                        email_sender=send_portal_email,
+                        actor={"sub": "system:periodic-review-notifications", "name": "Periodic Review Notification Service", "role": "system"},
+                        source_surface="periodic_review_notification_service",
+                    )
+                    db.commit()
+                    logger.info(
+                        "periodic-review-notifications: processed=%s sent=%s failed=%s officer_alerts=%s",
+                        summary.get("processed"),
+                        summary.get("sent_count"),
+                        summary.get("failed_count"),
+                        summary.get("officer_alert_count"),
+                    )
+                except Exception:
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    logger.exception("periodic-review-notifications: scheduled run failed")
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+
+            _prs6_notifications_cb = tornado.ioloop.PeriodicCallback(
+                _periodic_review_notification_tick,
+                _prs6_interval_seconds * 1000,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                _prs6_initial_delay,
+                _periodic_review_notification_tick,
+            )
+            _prs6_notifications_cb.start()
+            logger.info(
+                "periodic-review-notifications: scheduled runner registered (interval=%ss initial_delay=%ss)",
+                _prs6_interval_seconds,
+                _prs6_initial_delay,
+            )
+        else:
+            logger.info("periodic-review-notifications: scheduled runner disabled for environment=%s", ENVIRONMENT)
+    except Exception:
+        logger.exception("periodic-review-notifications: startup registration failed")
         if ENVIRONMENT in ("production", "staging"):
             raise
 

@@ -14,6 +14,7 @@ from periodic_review_attestation import (
     task_primary_action_label,
     task_status_label,
 )
+from periodic_review_notifications import notification_projection_from_review
 
 ACTIVE_REVIEW_STATES = (
     "pending",
@@ -446,6 +447,10 @@ def build_review_projection(
     attestation = attestation_snapshot_from_review(review)
     attestation_status = str(attestation.get("status") or ATTESTATION_STATUS_NOT_STARTED)
     document_request_status = _periodic_review_document_request_status(db, review_id)
+    notification_summary = notification_projection_from_review(
+        review,
+        document_summary=document_request_status,
+    )
     findings_present = any(
         str(_row_get(review, field) or "").strip()
         for field in ("officer_findings_note", "officer_deficiencies_note", "officer_internal_review_note")
@@ -517,6 +522,21 @@ def build_review_projection(
         "periodic_review_required_document_request_count": document_request_status["required_count"],
         "periodic_review_missing_document_request_count": document_request_status["missing_count"],
         "periodic_review_documents_pending_review_count": document_request_status["review_required_count"],
+        "client_notification_status": notification_summary["client_notification_status"],
+        "client_notification_status_label": notification_summary["client_notification_status_label"],
+        "initial_notification_sent_at": notification_summary["initial_notification_sent_at"],
+        "last_reminder_sent_at": notification_summary["last_reminder_sent_at"],
+        "reminder_count": notification_summary["reminder_count"],
+        "last_notification_error": notification_summary["last_notification_error"],
+        "officer_alert_status": notification_summary["officer_alert_status"],
+        "officer_alerted_at": notification_summary["officer_alerted_at"],
+        "notification_channel": notification_summary["notification_channel"],
+        "next_reminder_due_at": notification_summary["next_reminder_due_at"],
+        "client_action_required": notification_summary["client_action_required"],
+        "client_action_required_label": notification_summary["client_action_required_label"],
+        "notification_suppressed": notification_summary["notification_suppressed"],
+        "is_client_action_overdue": notification_summary["is_client_action_overdue"],
+        "notification_summary": notification_summary,
         "created_at": _row_get(review, "created_at"),
         "updated_at": updated_at,
         "last_activity_at": updated_at,

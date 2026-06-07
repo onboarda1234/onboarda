@@ -877,6 +877,15 @@ def _get_postgres_schema() -> str:
         findings_updated_at TIMESTAMP,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
+        client_notification_status TEXT DEFAULT 'not_sent',
+        initial_notification_sent_at TIMESTAMP,
+        last_reminder_sent_at TIMESTAMP,
+        reminder_count INTEGER DEFAULT 0,
+        last_notification_error TEXT,
+        officer_alert_status TEXT,
+        officer_alerted_at TIMESTAMP,
+        notification_channel TEXT DEFAULT 'portal',
+        next_reminder_due_at TIMESTAMP,
         required_items TEXT,
         required_items_generated_at TIMESTAMP,
         state_changed_at TIMESTAMP,
@@ -1886,6 +1895,15 @@ def _get_sqlite_schema() -> str:
         findings_updated_at TEXT,
         memo_status TEXT,
         periodic_review_memo_id INTEGER,
+        client_notification_status TEXT DEFAULT 'not_sent',
+        initial_notification_sent_at TEXT,
+        last_reminder_sent_at TEXT,
+        reminder_count INTEGER DEFAULT 0,
+        last_notification_error TEXT,
+        officer_alert_status TEXT,
+        officer_alerted_at TEXT,
+        notification_channel TEXT DEFAULT 'portal',
+        next_reminder_due_at TEXT,
         required_items TEXT,
         required_items_generated_at TEXT,
         state_changed_at TEXT,
@@ -3125,6 +3143,37 @@ def _ensure_periodic_review_findings_schema(db: DBConnection):
     for column, definition in review_columns.items():
         if not _safe_column_exists(db, "periodic_reviews", column):
             db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+
+def _ensure_periodic_review_notification_schema(db: DBConnection):
+    """Add PRS-6 notification/reminder metadata to the canonical review shell."""
+    if not _safe_table_exists(db, "periodic_reviews"):
+        return
+
+    ts_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    review_columns = {
+        "client_notification_status": "TEXT DEFAULT 'not_sent'",
+        "initial_notification_sent_at": ts_type,
+        "last_reminder_sent_at": ts_type,
+        "reminder_count": "INTEGER DEFAULT 0",
+        "last_notification_error": "TEXT",
+        "officer_alert_status": "TEXT",
+        "officer_alerted_at": ts_type,
+        "notification_channel": "TEXT DEFAULT 'portal'",
+        "next_reminder_due_at": ts_type,
+    }
+    for column, definition in review_columns.items():
+        if not _safe_column_exists(db, "periodic_reviews", column):
+            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_client_notification_status "
+        "ON periodic_reviews(client_notification_status)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_next_reminder_due_at "
+        "ON periodic_reviews(next_reminder_due_at)"
+    )
 
 
 SUPERVISOR_AUDIT_LOG_COLUMNS = (
@@ -5930,6 +5979,19 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.38c: Ensured periodic review findings schema")
     except Exception as e:
         logger.error("Migration v2.38c failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.38d: PRS-6 notification/reminder metadata on the
+    # canonical periodic review shell.
+    try:
+        _ensure_periodic_review_notification_schema(db)
+        db.commit()
+        logger.info("Migration v2.38d: Ensured periodic review notification schema")
+    except Exception as e:
+        logger.error("Migration v2.38d failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
