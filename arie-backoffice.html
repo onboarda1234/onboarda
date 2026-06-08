@@ -19282,17 +19282,60 @@ function officerCorrectionHistoryPepValue(state) {
   return 'Client declared: ' + declared + ' | Officer verified: ' + officerCorrectionOfficerPepDisplay(state);
 }
 
+var OFFICER_CORRECTION_HISTORY_EXPANDED = false;
+
+function officerCorrectionLooksEncrypted(value) {
+  if (value == null) return false;
+  var text = String(value).trim();
+  if (!text) return false;
+  if (/^(gAAAAA|enc:|encrypted:|ciphertext:|fernet:|jwe:)/i.test(text)) return true;
+  if (/("ciphertext"|"encrypted_value"|"nonce"|"tag"|"iv")\s*:/i.test(text)) return true;
+  if (/^-----BEGIN [A-Z ]+-----/.test(text)) return true;
+  if (/^[a-f0-9]{64,}$/i.test(text)) return true;
+  var compact = text.replace(/\s+/g, '');
+  var hasWhitespace = /\s/.test(text);
+  var tokenish = /^[A-Za-z0-9+/_=-]+$/.test(compact);
+  var urlTokenish = /^[A-Za-z0-9._~-]+$/.test(compact);
+  if (compact.length >= 96 && !hasWhitespace && (tokenish || urlTokenish)) return true;
+  return false;
+}
+
+function officerCorrectionSecureFallback() {
+  return 'Previous value unavailable / securely stored';
+}
+
 function officerCorrectionReadableValue(value, fieldName) {
   if (value == null || value === '') return '—';
   if (fieldName === 'ownership_pct') return normalizeDetailValue(value) + '%';
   if (Array.isArray(value)) {
     var readable = value.filter(function(item) {
       return item != null && typeof item !== 'object' && String(item).trim() !== '';
-    }).map(function(item) { return normalizeDetailValue(item); });
+    }).map(function(item) { return officerCorrectionReadableValue(item, fieldName); }).filter(function(item) {
+      return item && item !== '—';
+    });
     return readable.length ? readable.join(', ') : (value.length ? value.length + ' item(s)' : '—');
   }
   if (typeof value === 'object') {
-    return firstMeaningfulDetailValue(value.display, value.label, value.name, value.full_name, value.entity_name, value.value, 'Updated details');
+    var objectValue = firstMeaningfulDetailValue(
+      value.display,
+      value.label,
+      value.name,
+      value.full_name,
+      value.entity_name,
+      value.value,
+      ''
+    );
+    if (objectValue && objectValue !== '—' && !officerCorrectionLooksEncrypted(objectValue)) return objectValue;
+    if (value.ciphertext || value.encrypted_value || value.iv || value.nonce || value.tag) return officerCorrectionSecureFallback();
+    return 'Updated details';
+  }
+  if (typeof value === 'string') {
+    var trimmed = value.trim();
+    if (trimmed && (trimmed[0] === '{' || trimmed[0] === '[')) {
+      var parsed = safeParseJson(trimmed, null);
+      if (parsed) return officerCorrectionReadableValue(parsed, fieldName);
+    }
+    if (officerCorrectionLooksEncrypted(trimmed)) return officerCorrectionSecureFallback();
   }
   return normalizeDetailValue(value);
 }
@@ -19395,21 +19438,70 @@ function renderOfficerCorrectionWarning(app) {
   el.innerHTML = '<strong>RegMind follow-up:</strong> Recent corrections updated the risk, memo status, and approval blockers where required.';
 }
 
+function officerCorrectionHistoryTimestamp(item) {
+  item = item || {};
+  var value = item.corrected_at || item.created_at || item.timestamp || '';
+  var parsed = Date.parse(String(value || '').replace(' ', 'T'));
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+function officerCorrectionHistorySort(corrections) {
+  return (corrections || []).slice().sort(function(a, b) {
+    var byDate = officerCorrectionHistoryTimestamp(b) - officerCorrectionHistoryTimestamp(a);
+    if (byDate) return byDate;
+    return Number(b && b.id || 0) - Number(a && a.id || 0);
+  });
+}
+
+function officerCorrectionHistoryRiskImpact(item) {
+  var downstream = safeObject((item || {}).downstream_state);
+  return downstream.risk_impact || (downstream.risk_recomputed ? 'Risk recomputed' : 'No risk recomputation required');
+}
+
+function toggleOfficerCorrectionHistory() {
+  OFFICER_CORRECTION_HISTORY_EXPANDED = !OFFICER_CORRECTION_HISTORY_EXPANDED;
+  renderOfficerCorrectionHistory(currentApp);
+}
+
 function renderOfficerCorrectionHistory(app) {
   var el = document.getElementById('detail-officer-corrections');
   if (!el) return;
-  var corrections = (app && app.officerCorrections) || [];
+  var corrections = officerCorrectionHistorySort((app && app.officerCorrections) || []);
   if (!corrections.length) {
     el.innerHTML = '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text3);">No officer corrections have been recorded for this application.</div>';
     return;
   }
-  el.innerHTML = corrections.map(function(item) {
+  var latest = corrections[0] || {};
+  var latestField = officerCorrectionHistoryField(latest, app);
+  var latestOfficer = latest.corrected_by_name || latest.corrected_by || 'Officer';
+  var latestDate = normalizeDetailValue(latest.corrected_at || latest.created_at);
+  var latestRiskImpact = officerCorrectionHistoryRiskImpact(latest);
+  var summaryHtml = '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">' +
+      '<div style="min-width:0;flex:1;">' +
+        '<div style="font-size:12px;font-weight:700;color:var(--text1);">Officer Correction History</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px;">' +
+          '<div><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;">Corrections</div><div style="font-size:12px;color:var(--text1);font-weight:600;">' + escapeHtml(String(corrections.length)) + '</div></div>' +
+          '<div><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;">Latest correction</div><div style="font-size:12px;color:var(--text1);font-weight:600;">' + escapeHtml(latestField) + '</div></div>' +
+          '<div><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;">Latest officer</div><div style="font-size:12px;color:var(--text1);font-weight:600;">' + escapeHtml(latestOfficer) + '</div></div>' +
+          '<div><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;">Latest date</div><div style="font-size:12px;color:var(--text1);font-weight:600;">' + escapeHtml(latestDate) + '</div></div>' +
+          '<div style="grid-column:span 2;"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;">Latest risk impact</div><div style="font-size:12px;color:var(--text1);font-weight:600;">' + escapeHtml(latestRiskImpact) + '</div></div>' +
+        '</div>' +
+      '</div>' +
+      '<button type="button" class="btn btn-outline btn-sm" onclick="toggleOfficerCorrectionHistory()">' + (OFFICER_CORRECTION_HISTORY_EXPANDED ? 'Collapse' : 'Expand') + '</button>' +
+    '</div>' +
+  '</div>';
+  if (!OFFICER_CORRECTION_HISTORY_EXPANDED) {
+    el.innerHTML = summaryHtml;
+    return;
+  }
+  var detailsHtml = corrections.map(function(item) {
     var beforeText = officerCorrectionHistoryValue(item.before_state, item);
     var afterText = officerCorrectionHistoryValue(item.after_state, item);
     var fieldLabel = officerCorrectionHistoryField(item, app);
     var downstream = safeObject(item.downstream_state);
     var sourceSurface = downstream.source_surface || item.correction_source || 'officer_review';
-    var riskImpact = downstream.risk_impact || (downstream.risk_recomputed ? 'Risk recomputed' : 'No risk recomputation required');
+    var riskImpact = officerCorrectionHistoryRiskImpact(item);
     var memoImpact = downstream.memo_impact || (downstream.memo_requires_regeneration ? 'Memo marked stale' : 'No memo impact');
     return '<div style="padding:12px;margin-bottom:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Field corrected:</strong> ' + escapeHtml(fieldLabel) + '</div>' +
@@ -19423,6 +19515,7 @@ function renderOfficerCorrectionHistory(app) {
       '<div style="font-size:12px;color:var(--text2);"><strong>Reason / Evidence:</strong> ' + escapeHtml(officerCorrectionHistoryReasonEvidence(item)) + '</div>' +
     '</div>';
   }).join('');
+  el.innerHTML = summaryHtml + '<div style="margin-top:10px;">' + detailsHtml + '</div>';
 }
 
 async function submitOfficerCorrection() {
