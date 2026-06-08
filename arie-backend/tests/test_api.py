@@ -945,6 +945,314 @@ class TestAuthenticatedAccess:
         assert targets == {app_ref, f"application:{app_ref}"}
         assert pack["audit_log"]["entries"][0]["detail_json"]["memo_version"] == "v1"
 
+    def test_application_export_pack_zip_succeeds_and_audits(self, api_server):
+        """Admin/SCO can download an audited ZIP with PDFs, CSV, and app-scoped documents."""
+        import io
+        import zipfile
+        from pathlib import Path
+
+        from auth import create_token
+        from db import get_db
+        from server import UPLOAD_DIR
+
+        app_id = "app_export_pack"
+        app_ref = "ARF-EXPORT-1"
+        other_app_id = "app_export_pack_other"
+        encrypted_value = "gAAAAABmVeryLongEncryptedLookingValueThatMustNeverRenderInOfficerCorrectionPdf000000000000000000000000000000"
+        upload_dir = Path(UPLOAD_DIR)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        doc_path = upload_dir / "app_export_pack_doc.pdf"
+        other_doc_path = upload_dir / "app_export_pack_other_doc.pdf"
+        doc_path.write_bytes(b"%PDF-1.4\nexport pack evidence\n")
+        other_doc_path.write_bytes(b"%PDF-1.4\nother app evidence\n")
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?)", (app_ref, f"application:{app_ref}"))
+        conn.execute("DELETE FROM application_corrections WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM documents WHERE application_id IN (?, ?)", (app_id, other_app_id))
+        conn.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM ubos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM intermediaries WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", (app_id, other_app_id))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, ownership_structure,
+             status, risk_level, risk_score, risk_dimensions, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                app_ref,
+                "testclient001",
+                "Export Pack Ltd",
+                "Mauritius",
+                "Fintech",
+                "LLC",
+                "Direct ownership",
+                "under_review",
+                "HIGH",
+                78,
+                json.dumps({"country": 20, "sector": 30}),
+                json.dumps({
+                    "registered_entity_name": "Export Pack Ltd",
+                    "trading_name": "Export Original",
+                    "expected_activity": "Cross-border payment services",
+                    "screening_report": {
+                        "status": "completed",
+                        "provider_reference": "safe-provider-ref",
+                        "raw_provider_json": {"must": "not render"},
+                    },
+                }),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",
+            (other_app_id, "ARF-EXPORT-OTHER", "testclient001", "Other Export Ltd", "under_review"),
+        )
+        conn.execute(
+            "INSERT INTO directors (id, application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?, ?)",
+            ("dir_export_1", app_id, "Dana Director", "Mauritius", "No"),
+        )
+        conn.execute(
+            "INSERT INTO ubos (id, application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?, ?, ?, ?, ?, ?)",
+            ("ubo_export_1", app_id, "Uma Owner", "UAE", 75, "Yes"),
+        )
+        conn.execute(
+            "INSERT INTO intermediaries (id, application_id, entity_name, jurisdiction, ownership_pct) VALUES (?, ?, ?, ?, ?)",
+            ("int_export_1", app_id, "HoldCo Export", "BVI", 25),
+        )
+        conn.execute(
+            """
+            INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path, file_size, mime_type, is_current)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("doc_export_1", app_id, "cert_inc", "../../certificate export.pdf", str(doc_path), doc_path.stat().st_size, "application/pdf", 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path, file_size, mime_type, is_current)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("doc_export_other", other_app_id, "passport", "other-app.pdf", str(other_doc_path), other_doc_path.stat().st_size, "application/pdf", 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO screening_reviews
+            (application_id, subject_type, subject_name, disposition, disposition_code, rationale, reviewer_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "entity", "Export Pack Ltd", "cleared", "false_positive", "Name-only match cleared.", "Test Admin"),
+        )
+        conn.execute(
+            """
+            INSERT INTO application_corrections
+            (application_id, target_type, target_id, subject_type, field_scope, materiality,
+             correction_reason, before_state, after_state, downstream_state,
+             corrected_by, corrected_by_name, corrected_by_role)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                "prescreening_field",
+                None,
+                "application",
+                "trading_name",
+                "risk_relevant",
+                "Registry evidence confirmed the trading name.",
+                json.dumps({"trading_name": encrypted_value, "original_client_value": "Export Original"}),
+                json.dumps({"trading_name": "Export Corrected"}),
+                json.dumps({"risk_impact": "No risk recomputation required", "memo_impact": "No memo impact"}),
+                "admin001",
+                "Test Admin",
+                "admin",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        payload = {
+            "export_type": "regulator",
+            "reason": "Requested by auditor",
+            "include_sections": [
+                "client_submission",
+                "documents",
+                "risk_assessment",
+                "screening_summary",
+                "compliance_memo",
+                "officer_corrections",
+                "audit_trail",
+            ],
+            "redaction_level": "full_internal",
+        }
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_ref}/export-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        assert "application/zip" in resp.headers.get("Content-Type", "")
+        assert f"RegMind_Evidence_Pack_{app_ref}_" in resp.headers.get("Content-Disposition", "")
+
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            names = zf.namelist()
+            root = f"RegMind_Evidence_Pack_{app_ref}/"
+            assert f"{root}00_manifest.pdf" in names
+            assert f"{root}01_case_summary.pdf" in names
+            assert f"{root}02_client_submission.pdf" in names
+            assert f"{root}03_risk_assessment.pdf" in names
+            assert f"{root}04_screening_summary.pdf" in names
+            assert f"{root}05_officer_corrections.pdf" in names
+            assert f"{root}06_compliance_memo.pdf" in names
+            assert f"{root}07_audit_trail.csv" in names
+            uploaded = [name for name in names if name.startswith(f"{root}08_uploaded_documents/")]
+            assert uploaded == [f"{root}08_uploaded_documents/cert_inc_certificate_export.pdf"]
+            assert all(".." not in name for name in names)
+            assert not any("other-app.pdf" in name for name in names)
+            combined = b"".join(zf.read(name) for name in names)
+            assert encrypted_value.encode() not in combined
+            audit_csv = zf.read(f"{root}07_audit_trail.csv").decode("utf-8")
+            assert "evidence_pack_export_requested" in audit_csv
+
+        conn = get_db()
+        audit_rows = conn.execute(
+            "SELECT action, detail FROM audit_log WHERE target = ? AND action LIKE 'evidence_pack_export_%' ORDER BY id ASC",
+            (app_ref,),
+        ).fetchall()
+        conn.close()
+        actions = [row["action"] for row in audit_rows]
+        assert "evidence_pack_export_requested" in actions
+        assert "evidence_pack_export_completed" in actions
+        completed = json.loads(audit_rows[-1]["detail"])
+        assert completed["result"] == "success"
+        assert completed["file_count"] >= 9
+        assert completed["pack_sha256"]
+
+    def test_application_export_pack_sco_can_export(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_export_pack_sco"
+        app_ref = "ARF-EXPORT-SCO"
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",
+            (app_id, app_ref, "testclient001", "SCO Export Ltd", "under_review"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("sco001", "sco", "Test SCO", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_ref}/export-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "export_type": "internal_case",
+                "reason": "SCO case review",
+                "include_sections": ["audit_trail"],
+                "redaction_level": "external_redacted",
+            },
+            timeout=10,
+        )
+        assert resp.status_code == 200, resp.text
+        assert "application/zip" in resp.headers.get("Content-Type", "")
+
+    @pytest.mark.parametrize(
+        "token_user, expected_status",
+        [
+            (("testclient001", "client", "Test Client", "client"), 403),
+            (("co001", "co", "Test CO", "officer"), 403),
+            (("analyst001", "analyst", "Test Analyst", "officer"), 403),
+        ],
+    )
+    def test_application_export_pack_rejects_unauthorized_roles(self, api_server, token_user, expected_status):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_export_pack_rbac"
+        app_ref = "ARF-EXPORT-RBAC"
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",
+            (app_id, app_ref, "testclient001", "RBAC Export Ltd", "under_review"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token(*token_user)
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_ref}/export-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "export_type": "regulator",
+                "reason": "RBAC test",
+                "include_sections": ["audit_trail"],
+                "redaction_level": "full_internal",
+            },
+            timeout=5,
+        )
+        assert resp.status_code == expected_status
+
+    @pytest.mark.parametrize(
+        "payload, expected_error",
+        [
+            ({"export_type": "regulator", "reason": "", "include_sections": ["audit_trail"], "redaction_level": "full_internal"}, "reason is required"),
+            ({"export_type": "bad", "reason": "x", "include_sections": ["audit_trail"], "redaction_level": "full_internal"}, "invalid export_type"),
+            ({"export_type": "regulator", "reason": "x", "include_sections": ["audit_trail"], "redaction_level": "bad"}, "invalid redaction_level"),
+            ({"export_type": "regulator", "reason": "x", "include_sections": ["raw_provider_json"], "redaction_level": "full_internal"}, "unknown include_section"),
+            ({"export_type": "regulator", "reason": "x", "include_sections": [], "redaction_level": "full_internal"}, "include_sections must include at least one section"),
+        ],
+    )
+    def test_application_export_pack_validates_request_body(self, api_server, payload, expected_error):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_export_pack_validation"
+        app_ref = "ARF-EXPORT-VALIDATION"
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",
+            (app_id, app_ref, "testclient001", "Validation Export Ltd", "under_review"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_ref}/export-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+            timeout=5,
+        )
+        assert resp.status_code == 400
+        assert expected_error in resp.text
+
+    def test_application_export_pack_invalid_application_returns_404(self, api_server):
+        from auth import create_token
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/no_such_export_app/export-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "export_type": "regulator",
+                "reason": "Not found test",
+                "include_sections": ["audit_trail"],
+                "redaction_level": "full_internal",
+            },
+            timeout=5,
+        )
+        assert resp.status_code == 404
+
     def test_failed_document_upload_is_audited(self, api_server):
         """Rejected uploads are security events and must appear in case audit."""
         from auth import create_token
