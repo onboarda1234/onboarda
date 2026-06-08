@@ -3641,8 +3641,6 @@ OFFICER_CORRECTION_DIRECTOR_FIELDS = frozenset({
     "nationality",
     "date_of_birth",
     "is_pep",
-    "verified_pep",
-    "pep_status",
 })
 OFFICER_CORRECTION_UBO_FIELDS = frozenset(
     set(OFFICER_CORRECTION_DIRECTOR_FIELDS) | {"ownership_pct"}
@@ -3651,6 +3649,10 @@ OFFICER_CORRECTION_INTERMEDIARY_FIELDS = frozenset({
     "entity_name",
     "jurisdiction",
     "ownership_pct",
+})
+OFFICER_CORRECTION_PEP_VERIFICATION_FIELDS = frozenset({
+    "verified_pep",
+    "pep_status",
 })
 OFFICER_CORRECTION_TIER1_FIELDS = frozenset({
     "country",
@@ -3694,6 +3696,7 @@ OFFICER_CORRECTION_RISK_RELEVANT_FIELDS = frozenset({
     "expected_volumes",
     "monthly_volume",
     "entity_type",
+    "nationality",
 })
 OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
     set(OFFICER_CORRECTION_TIER1_FIELDS)
@@ -3704,6 +3707,8 @@ OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
         "business_description",
         "trading_name",
         "full_name",
+        "nationality",
+        "date_of_birth",
         "entity_name",
     }
 )
@@ -3791,6 +3796,196 @@ PRESCREENING_CORRECTION_ALLOWED_FIELDS = {
         "risk_relevant": True,
     },
 }
+
+PORTAL_COUNTRY_OPTIONS = (
+    "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina",
+    "Armenia", "Australia", "Austria", "Azerbaijan", "Bahamas", "Bahrain", "Bangladesh", "Barbados",
+    "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina",
+    "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi", "Cabo Verde", "Cambodia",
+    "Cameroon", "Canada", "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros",
+    "Congo (Brazzaville)", "Congo (DRC)", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic",
+    "Denmark", "Djibouti", "Dominica", "Dominican Republic", "Ecuador", "Egypt", "El Salvador",
+    "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia", "Fiji", "Finland", "France",
+    "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea",
+    "Guinea-Bissau", "Guyana", "Haiti", "Honduras", "Hong Kong SAR", "Hungary", "Iceland", "India",
+    "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Jamaica", "Japan", "Jordan", "Kazakhstan",
+    "Kenya", "Kiribati", "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia",
+    "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Madagascar", "Malawi", "Malaysia", "Maldives",
+    "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova",
+    "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar", "Namibia", "Nauru", "Nepal",
+    "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia",
+    "Norway", "Oman", "Pakistan", "Palau", "Panama", "Papua New Guinea", "Paraguay", "Peru",
+    "Philippines", "Poland", "Portugal", "Qatar", "Romania", "Russia", "Rwanda",
+    "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa",
+    "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles",
+    "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa",
+    "South Korea", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden", "Switzerland",
+    "Syria", "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga",
+    "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine",
+    "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Vanuatu",
+    "Vatican City", "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe",
+    "Anguilla", "Belize (Offshore)", "Bermuda", "British Virgin Islands", "Cayman Islands",
+    "Gibraltar", "Guernsey", "Isle of Man", "Jersey", "Labuan (Malaysia)", "Turks and Caicos Islands",
+)
+PORTAL_ENTITY_TYPE_OPTIONS = (
+    "Listed Company on Regulated Exchange",
+    "Regulated Financial Institution",
+    "Government / Public Sector Entity",
+    "Large Private Company (revenue > USD 10m)",
+    "SME / Private Company",
+    "Newly Incorporated Company (< 1 year)",
+    "Trust",
+    "Foundation",
+    "Regulated Fund (CIS / Licensed)",
+    "Unregulated Fund / SPV",
+    "Non-Profit Organisation / NGO",
+    "Shell Company / Special Purpose Vehicle",
+)
+PORTAL_SECTOR_OPTIONS = (
+    "Fintech / Payments",
+    "Forex / FX Trading (Retail)",
+    "Forex / FX Trading (Institutional)",
+    "Crypto / Digital Assets Exchange",
+    "Crypto / Digital Assets Custody",
+    "Crypto / Web3 / DeFi",
+    "Remittance / Money Transfer",
+    "Payment Processing / Gateway",
+    "E-Money / E-Wallet Provider",
+    "Lending / Credit Services",
+    "Insurance / InsurTech",
+    "Investment Management",
+    "Capital Markets / Brokerage",
+    "Private Equity / Venture Capital",
+    "Hedge Fund",
+    "Family Office / Wealth Management",
+    "Crowdfunding / P2P Lending",
+    "Banking-as-a-Service",
+    "E-Commerce / Online Retail",
+    "Import / Export",
+    "Wholesale / Distribution",
+    "Commodities Trading",
+    "Precious Metals / Gems",
+    "Oil & Gas / Energy Trading",
+    "Agricultural Commodities",
+    "Logistics / Freight Forwarding",
+    "Software / SaaS",
+    "IT Services / Outsourcing",
+    "Cybersecurity",
+    "Artificial Intelligence / ML",
+    "Cloud Services",
+    "Telecommunications",
+    "Media Technology",
+    "iGaming / Online Gambling",
+    "Online Casino / Sports Betting",
+    "Video Games / Esports",
+    "NFT / Gaming Assets",
+    "Entertainment / Media",
+    "Streaming / Content Platforms",
+    "MSB / Money Services Business",
+    "Bureau de Change",
+    "Licensed Brokerage",
+    "Law Firm / Legal Services",
+    "Accounting / Audit Firm",
+    "Real Estate (Commercial)",
+    "Real Estate (Development)",
+    "Corporate Services Provider",
+    "Trust / Fiduciary Services",
+    "Management Consulting",
+    "Financial / Tax Advisory",
+    "Travel & Hospitality",
+    "Healthcare / MedTech",
+    "Education / EdTech",
+    "Food & Beverage",
+    "Fashion / Luxury Goods",
+    "Manufacturing",
+    "Construction",
+    "Charity / NGO / Non-Profit",
+)
+PORTAL_OWNERSHIP_STRUCTURE_OPTIONS = (
+    "Simple — direct identifiable UBOs",
+    "1–2 ownership layers",
+    "3+ ownership layers / nominee shareholders",
+    "Complex multi-jurisdiction / opaque structure",
+)
+PORTAL_INTRODUCTION_METHOD_OPTIONS = (
+    "Direct application — client initiated",
+    "Introduced by regulated intermediary / agent",
+    "Introduced by non-regulated intermediary",
+    "Unsolicited / unknown referral source",
+)
+PORTAL_MONTHLY_VOLUME_OPTIONS = (
+    "Under USD 50,000 per month",
+    "USD 50,000 to USD 500,000 per month",
+    "USD 500,000 to USD 5,000,000 per month",
+    "Over USD 5,000,000 per month",
+)
+PORTAL_PEP_DECLARATION_OPTIONS = ("Yes", "No")
+
+CONTROLLED_CORRECTION_OPTION_SETS = {
+    "country_of_incorporation": PORTAL_COUNTRY_OPTIONS,
+    "country": PORTAL_COUNTRY_OPTIONS,
+    "jurisdiction": PORTAL_COUNTRY_OPTIONS,
+    "nationality": PORTAL_COUNTRY_OPTIONS,
+    "sector": PORTAL_SECTOR_OPTIONS,
+    "entity_type": PORTAL_ENTITY_TYPE_OPTIONS,
+    "ownership_structure": PORTAL_OWNERSHIP_STRUCTURE_OPTIONS,
+    "introduction_method": PORTAL_INTRODUCTION_METHOD_OPTIONS,
+    "monthly_volume": PORTAL_MONTHLY_VOLUME_OPTIONS,
+    "expected_volume": PORTAL_MONTHLY_VOLUME_OPTIONS,
+    "expected_volumes": PORTAL_MONTHLY_VOLUME_OPTIONS,
+    "is_pep": PORTAL_PEP_DECLARATION_OPTIONS,
+}
+PORTAL_OPTION_ALIASES = {
+    ("sector", "crypto exchange"): "Crypto / Digital Assets Exchange",
+    ("sector", "crypto / virtual assets"): "Crypto / Digital Assets Exchange",
+    ("sector", "technology"): "Software / SaaS",
+    ("sector", "technology / saas"): "Software / SaaS",
+    ("sector", "professional services"): "Law Firm / Legal Services",
+    ("country", "uk"): "United Kingdom",
+    ("country", "gb"): "United Kingdom",
+    ("country", "usa"): "United States",
+    ("country", "us"): "United States",
+    ("country", "uae"): "United Arab Emirates",
+}
+
+
+def _canonical_option_key(value):
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _canonical_option_lookup(options):
+    return {_canonical_option_key(option): option for option in options or ()}
+
+
+def _canonicalize_controlled_option(field_path, value):
+    field_key = str(field_path or "").strip()
+    option_field = "country" if field_key in {"country_of_incorporation", "country", "jurisdiction", "nationality"} else field_key
+    if field_key == "is_pep":
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        normalized = _canonical_option_key(value)
+        if normalized in {"yes", "y", "true", "1", "pep"}:
+            return "Yes"
+        if normalized in {"no", "n", "false", "0", "not pep", "non-pep", "non pep"}:
+            return "No"
+        raise ValueError("is_pep must be Yes or No")
+
+    options = CONTROLLED_CORRECTION_OPTION_SETS.get(field_key)
+    if not options:
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return text
+    alias = PORTAL_OPTION_ALIASES.get((option_field, _canonical_option_key(text)))
+    if alias:
+        return alias
+    lookup = _canonical_option_lookup(options)
+    canonical = lookup.get(_canonical_option_key(text))
+    if canonical:
+        return canonical
+    raise ValueError(
+        f"{field_key} must use a controlled portal option"
+    )
 
 
 def _prescreening_correction_field_label(field_path):
@@ -4159,7 +4354,8 @@ def _officer_correction_target_config(target_type, payload):
     if target_type == "pep_status":
         if subject_type not in ("director", "ubo"):
             raise ValueError("pep_status corrections require subject_type 'director' or 'ubo'")
-        return _officer_correction_target_config(subject_type, payload)
+        table = "directors" if subject_type == "director" else "ubos"
+        return {"table": table, "id_field": "id", "allowed_fields": OFFICER_CORRECTION_PEP_VERIFICATION_FIELDS}
     raise ValueError(f"Unsupported correction target_type '{target_type}'")
 
 
@@ -4271,6 +4467,55 @@ CLIENT_PRESCREENING_PRICING_FORBIDDEN_KEYS = {
     "risk_score",
 }
 
+CLIENT_PARTY_FORBIDDEN_KEYS = {
+    "corrected_at",
+    "corrected_by",
+    "correction_note",
+    "correction_reason",
+    "correction_source",
+    "evidence_source",
+    "officer_verified_pep",
+    "officer_verified_pep_display",
+    "pep_status",
+    "pep_status_display",
+    "pep_verification_source",
+    "screening_confirmed_pep",
+    "screening_disposition",
+    "screening_provider",
+    "screening_reference",
+    "verified_pep",
+}
+
+CLIENT_PEP_DECLARATION_FORBIDDEN_KEYS = {
+    "corrected_at",
+    "corrected_by",
+    "correction_note",
+    "correction_reason",
+    "correction_source",
+    "evidence_source",
+    "officer_verified_pep",
+    "pep_status",
+    "pep_verification_source",
+    "screening_confirmed_pep",
+    "verified_pep",
+}
+
+
+def _client_safe_party_record(party):
+    item = {
+        key: value
+        for key, value in dict(party or {}).items()
+        if key not in CLIENT_PARTY_FORBIDDEN_KEYS
+    }
+    pep_declaration = item.get("pep_declaration")
+    if isinstance(pep_declaration, dict):
+        item["pep_declaration"] = {
+            key: value
+            for key, value in pep_declaration.items()
+            if key not in CLIENT_PEP_DECLARATION_FORBIDDEN_KEYS
+        }
+    return item
+
 
 def _client_safe_application_detail(result):
     """Project application detail to the client portal's resume surface.
@@ -4296,6 +4541,9 @@ def _client_safe_application_detail(result):
             }
             prescreening["pricing"] = pricing
         safe["prescreening_data"] = prescreening
+    for party_key in ("directors", "ubos", "intermediaries"):
+        if isinstance(safe.get(party_key), list):
+            safe[party_key] = [_client_safe_party_record(item) for item in safe[party_key]]
 
     return safe
 
@@ -4923,6 +5171,13 @@ class ApplicationCorrectionHandler(BaseHandler):
                 "Unsupported field(s) for target: " + ", ".join(unsupported),
                 400,
             )
+        try:
+            field_changes = {
+                field: _canonicalize_controlled_option(field, value)
+                for field, value in field_changes.items()
+            }
+        except ValueError as exc:
+            return self.error(str(exc), 400)
 
         materiality = _normalize_officer_correction_materiality(
             target_type,
@@ -4971,6 +5226,7 @@ class ApplicationCorrectionHandler(BaseHandler):
                 or set(field_changes).intersection(OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS)
             )
             substantive_change = bool(materiality == "tier1" or risk_relevant or memo_visible)
+            risk_before = _application_risk_state_for_correction(app_dict) if risk_relevant else None
 
             before_state, after_state = self._apply_officer_correction(
                 db=db,
@@ -4988,6 +5244,18 @@ class ApplicationCorrectionHandler(BaseHandler):
                 substantive_change=substantive_change,
                 user=user,
             )
+            if risk_before:
+                before_state["risk_before"] = risk_before
+            if target_type in {"director", "ubo", "intermediary"}:
+                before_state["source_surface"] = (
+                    correction_source if correction_source != "backoffice_ui"
+                    else "application_overview_party_correction_mode"
+                )
+                after_state["source_surface"] = before_state["source_surface"]
+                before_state["party_type"] = target_type
+                after_state["party_type"] = target_type
+                before_state["portal_visible"] = False
+                after_state["portal_visible"] = False
 
             downstream_state = self._run_correction_downstream(
                 db,
@@ -5001,6 +5269,35 @@ class ApplicationCorrectionHandler(BaseHandler):
                 user,
                 self.get_client_ip(),
             )
+            downstream_state.setdefault(
+                "source_surface",
+                "application_overview_party_correction_mode"
+                if target_type in {"director", "ubo", "intermediary"} else correction_source,
+            )
+            if risk_relevant:
+                refreshed_for_risk = db.execute(
+                    "SELECT * FROM applications WHERE id = ?",
+                    (app_dict["id"],),
+                ).fetchone()
+                risk_after = _application_risk_state_for_correction(refreshed_for_risk)
+                after_state["risk_after"] = risk_after
+                risk_result = downstream_state.get("risk_result") or {}
+                if risk_result.get("recomputed"):
+                    downstream_state["risk_impact"] = (
+                        "Risk recomputed: "
+                        f"{risk_result.get('old_score')} / {risk_result.get('old_level')} -> "
+                        f"{risk_result.get('new_score')} / {risk_result.get('new_level')}"
+                        if risk_result.get("changed")
+                        else (
+                            "Risk recomputed: no change "
+                            f"({risk_result.get('new_score')} / {risk_result.get('new_level')})"
+                        )
+                    )
+                else:
+                    downstream_state["risk_impact"] = "Risk recomputation not run because no stored score exists"
+            else:
+                downstream_state.setdefault("risk_impact", "No risk recomputation required")
+
             stale_result = {"marked": False}
             if substantive_change:
                 stale_result = _mark_latest_memo_stale(
@@ -5018,6 +5315,13 @@ class ApplicationCorrectionHandler(BaseHandler):
                     after_state=after_state,
                 )
                 downstream_state["memo_stale"] = stale_result
+                downstream_state["memo_impact"] = (
+                    "Memo marked stale" if stale_result.get("marked")
+                    else "No memo existed"
+                )
+                after_state["memo_after"] = stale_result
+            else:
+                downstream_state.setdefault("memo_impact", "No memo impact")
 
             db.execute(
                 """
@@ -5212,7 +5516,7 @@ class ApplicationCorrectionHandler(BaseHandler):
             self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
             return before_state, after_state
 
-        if target_type == "pep_status" or any(field in field_changes for field in ("is_pep", "verified_pep", "pep_status")):
+        if target_type == "pep_status" or any(field in field_changes for field in ("verified_pep", "pep_status")):
             return self._apply_pep_correction(
                 db=db,
                 app_id=app["id"],
@@ -5241,6 +5545,8 @@ class ApplicationCorrectionHandler(BaseHandler):
             elif field == "date_of_birth" and value:
                 _check_dob_not_future(value)
                 normalized = _validate_date_of_birth(value)
+            elif field == "is_pep":
+                normalized = _canonicalize_controlled_option(field, value)
             normalized_updates[field] = normalized
             after_state[field] = normalized
 
@@ -5253,8 +5559,27 @@ class ApplicationCorrectionHandler(BaseHandler):
             if full_name:
                 normalized_updates["full_name"] = full_name
                 after_state["full_name"] = full_name
+            if "is_pep" in normalized_updates:
+                pep_declaration = parse_json_field(target_row.get("pep_declaration"), {})
+                current_pep_state = _derive_party_pep_visibility(target_row, pep_declaration)
+                declared_pep = _pep_declaration_bool(normalized_updates.get("is_pep"))
+                updated_pep_declaration = dict(pep_declaration)
+                updated_pep_declaration["declared_pep"] = declared_pep
+                updated_pep_declaration["client_declared_pep"] = declared_pep
+                normalized_updates["pep_declaration"] = json.dumps(
+                    updated_pep_declaration,
+                    default=str,
+                    sort_keys=True,
+                )
+                before_state["client_declared_pep"] = current_pep_state.get("client_declared_pep")
+                after_state["client_declared_pep"] = declared_pep
+                after_state["pep_declaration"] = {
+                    "declared_pep": declared_pep,
+                    "client_declared_pep": declared_pep,
+                }
 
-        if not set(normalized_updates).issubset(set(target_config["allowed_fields"])):
+        safe_update_fields = set(target_config["allowed_fields"]) | {"pep_declaration"}
+        if not set(normalized_updates).issubset(safe_update_fields):
             raise ValueError("Unsafe subject correction fields rejected")
         # Safe SQL identifier interpolation: table/id_field are hard-coded
         # whitelist values and assignments use only validated field names.
@@ -5521,6 +5846,10 @@ class ControlledPrescreeningCorrectionHandler(BaseHandler):
             value = "" if raw_value is None else str(raw_value).strip()
             if not value:
                 return self.error(f"{field_path} requires a non-empty corrected value", 400)
+            try:
+                value = _canonicalize_controlled_option(field_path, value)
+            except ValueError as exc:
+                return self.error(str(exc), 400)
             max_length = PRESCREENING_CORRECTION_ALLOWED_FIELDS[field_path].get("max_length", 240)
             if len(value) > max_length:
                 return self.error(f"{field_path} exceeds maximum length {max_length}", 400)

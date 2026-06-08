@@ -183,7 +183,14 @@ def test_officer_correction_field_specific_controls_are_configured():
         assert(cfg('ubo', 'ownership_pct', '').type === 'number', 'ownership percentage must use number input');
         assert(cfg('ubo', 'ownership_pct', '').min === 0 && cfg('ubo', 'ownership_pct', '').max === 100, 'ownership percentage must be bounded 0-100');
         assert(cfg('director', 'date_of_birth', '').type === 'date', 'date of birth must use date input');
+        assert(cfg('director', 'nationality', 'Mauritius').type === 'select', 'director nationality must use select');
+        assert(cfg('director', 'is_pep', 'No').type === 'select', 'client-declared PEP must use select');
+        assert(cfg('intermediary', 'jurisdiction', 'Mauritius').type === 'select', 'intermediary jurisdiction must use select');
+        assert(cfg('application', 'country_of_incorporation', 'Mauritius').type === 'select', 'country of incorporation must use select');
+        assert(cfg('application', 'introduction_method', '').type === 'select', 'introduction method must use select');
         assert(cfg('pep_status', 'verified_pep', '').type === 'pep_status', 'PEP verification must use PEP status control');
+        assert(cfg('director', 'nationality', 'Mauritius').options.includes('United Kingdom'), 'country options should include portal country list');
+        assert(cfg('application', 'sector', 'Software / SaaS').options.includes('Crypto / Digital Assets Exchange'), 'sector options should include portal sector list');
         console.log(JSON.stringify({ ok: true }));
         """
     )
@@ -258,3 +265,24 @@ def test_pr410b_prescreening_correction_mode_static_contract():
     assert "this risk-relevant correction type is deferred to a later controlled release." in html
     assert "No risk recomputation required" in html
     assert "Memo impact" in html
+
+
+def test_pr410c_party_card_and_dropdown_static_contract():
+    html = _read_backoffice()
+    assert "function renderPartyCard" in html
+    assert "function renderPartySection" in html
+    assert "Correct party details" in html
+    assert "Review screening" in html
+    assert "PEP / Screening Status" in html
+    assert "Client-declared PEP" in html
+    assert "Officer-verified PEP" in html
+    assert "Screening-confirmed PEP" in html
+    assert "Missing" in html
+    assert "openPartyCorrectionModal" in html
+    assert "application_overview_party_correction_mode" in html
+    assert "OFFICER_PORTAL_COUNTRY_OPTIONS" in html
+    assert "OFFICER_PORTAL_SECTOR_OPTIONS" in html
+    assert "Crypto / Digital Assets Exchange" in html
+    assert "Introduced by non-regulated intermediary" in html
+    assert "{ value: 'is_pep', label: 'Client-declared PEP status' }" in html
+    assert "renderPrescreenCorrectionControl" in html

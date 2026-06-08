@@ -7736,6 +7736,23 @@ function updatePrescreenCorrectionHighlight(input) {
   input.style.background = changed ? '#fffbeb' : 'var(--surface1)';
 }
 
+function renderPrescreenCorrectionControl(field, currentRaw) {
+  var fieldKey = field && field.key || '';
+  var currentValue = currentRaw == null ? '' : String(currentRaw);
+  var dataAttrs = ' data-field="' + escapeHtml(fieldKey) + '" data-current-value="' + escapeHtml(currentValue) + '"';
+  var cfg = officerCorrectionValueControlConfig('application', fieldKey, currentValue);
+  if (cfg.type === 'select') {
+    var options = uniqueOfficerCorrectionOptions([currentValue].concat(cfg.options || []));
+    return '<select class="form-select prescreen-correction-input"' + dataAttrs + ' onchange="updatePrescreenCorrectionHighlight(this)">' +
+      '<option value="">' + escapeHtml(cfg.placeholder || 'Select corrected value...') + '</option>' +
+      options.map(function(option) {
+        return '<option value="' + escapeHtml(option) + '"' + (String(option) === currentValue ? ' selected' : '') + '>' + escapeHtml(option) + '</option>';
+      }).join('') +
+      '</select>';
+  }
+  return '<input class="form-input prescreen-correction-input"' + dataAttrs + ' value="' + escapeHtml(currentValue) + '" oninput="updatePrescreenCorrectionHighlight(this)" />';
+}
+
 async function savePrescreenCorrectionMode(event) {
   if (event) {
     event.preventDefault();
@@ -7830,7 +7847,7 @@ function renderPrescreenSummary(app, prescreenFields) {
       var label = '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(field.label) + '</div>';
       if (mode && isAllowed) {
         return '<div style="' + baseStyle + '">' + label +
-          '<input class="form-input prescreen-correction-input" data-field="' + escapeHtml(field.key) + '" data-current-value="' + escapeHtml(currentRaw == null ? '' : String(currentRaw)) + '" value="' + escapeHtml(currentRaw == null ? '' : String(currentRaw)) + '" oninput="updatePrescreenCorrectionHighlight(this)" />' +
+          renderPrescreenCorrectionControl(field, currentRaw) +
           '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Original client value: ' + escapeHtml(original) + '</div>' +
         '</div>';
       }
@@ -7847,6 +7864,118 @@ function renderPrescreenSummary(app, prescreenFields) {
     }).join('') +
     '</div>';
   container.innerHTML = header + body + footer;
+}
+
+function partyRecordId(party) {
+  return String((party && (party.id || party.person_key)) || '');
+}
+
+function partyDisplayValue(value, missingLabel) {
+  var normalized = normalizeDetailValue(value);
+  if (!normalized || normalized === '—') {
+    return '<span style="color:#b45309;font-weight:600;">' + escapeHtml(missingLabel || 'Missing') + '</span>';
+  }
+  return escapeHtml(normalized);
+}
+
+function partyCorrectionStatus(app, party) {
+  var partyId = partyRecordId(party);
+  var corrections = ((app && app.officerCorrections) || []).filter(function(item) {
+    return String(item.target_id || '') === partyId;
+  });
+  if (!corrections.length) return { label: 'None', detail: '' };
+  var latest = corrections[0] || {};
+  return {
+    label: 'Corrected',
+    detail: [officerCorrectionHistoryField(latest, app), normalizeDetailValue(latest.corrected_at)].filter(Boolean).join(' | ')
+  };
+}
+
+function partyScreeningPepDisplay(party) {
+  party = party || {};
+  if (party.screening_confirmed_pep === true || party.screening_confirmed_pep === 'Yes') return 'Screening-confirmed PEP';
+  if (party.screening_confirmed_pep === false || party.screening_confirmed_pep === 'No') return 'Screening did not confirm PEP';
+  if (party.screening_status || party.screening_pep_status) return normalizeDetailValue(party.screening_pep_status || party.screening_status);
+  return 'Not available';
+}
+
+function renderPartyFact(label, value, missingLabel) {
+  return '<div style="padding:8px 10px;border:1px solid var(--border1);border-radius:6px;background:var(--surface1);">' +
+    '<div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px;">' + escapeHtml(label) + '</div>' +
+    '<div style="font-size:12px;color:var(--text1);font-weight:600;word-break:break-word;">' + partyDisplayValue(value, missingLabel) + '</div>' +
+  '</div>';
+}
+
+function renderPartyCard(party, partyType, app) {
+  party = party || {};
+  var displayName = buildPartyDisplayName(party);
+  var roleLabel = partyType === 'ubo' ? 'UBO' : partyType === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
+  var correctionStatus = partyCorrectionStatus(app, party);
+  var ownershipValue = partyType === 'director' ? 'N/A' : party.pct;
+  var nationalityLabel = partyType === 'intermediary' ? 'Jurisdiction' : 'Nationality';
+  var nationalityValue = partyType === 'intermediary' ? party.jurisdiction : party.nat;
+  var declaredPep = party.client_declared_pep_display || normalizePepDisplay(party.pep);
+  var verifiedPep = party.officer_verified_pep_display || 'Not verified yet';
+  var screeningPep = partyScreeningPepDisplay(party);
+  return '<div class="party-review-card" style="padding:12px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+    '<div style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(roleLabel) + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+        '<span class="badge ' + (correctionStatus.label === 'Corrected' ? 'pending' : 'draft') + '" title="' + escapeHtml(correctionStatus.detail || correctionStatus.label) + '">' + escapeHtml(correctionStatus.label === 'Corrected' ? 'Corrected' : 'No correction') + '</span>' +
+        '<button class="btn btn-outline btn-sm" onclick="openPartyCorrectionModal(\'' + escapeHtml(partyType) + '\',\'' + escapeHtml(partyRecordId(party)) + '\')">Correct party details</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'screening\')">Review screening</button>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-bottom:10px;">' +
+      renderPartyFact('Role', roleLabel, 'Missing') +
+      renderPartyFact(nationalityLabel, nationalityValue, 'Missing') +
+      renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing') +
+      renderPartyFact('Ownership', ownershipValue === 'N/A' ? 'N/A' : normalizeDetailValue(ownershipValue) + '%', partyType === 'director' ? 'N/A' : 'Missing') +
+    '</div>' +
+    '<div style="padding:10px;border:1px solid rgba(245,158,11,0.35);border-radius:8px;background:#fffbeb;">' +
+      '<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">PEP / Screening Status</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">' +
+        renderPartyFact('Client-declared PEP', declaredPep, 'Not captured') +
+        renderPartyFact('Officer-verified PEP', verifiedPep, 'Not verified yet') +
+        renderPartyFact('Screening-confirmed PEP', screeningPep, 'Not available') +
+      '</div>' +
+    '</div>' +
+    (partyType !== 'intermediary' ? renderPepDeclarationDetailsHtml(party) : '') +
+  '</div>';
+}
+
+function renderPartySection(app) {
+  var html = '<div style="font-size:12px;font-weight:700;margin-bottom:8px;">Directors</div>';
+  html += app.directors.length ? app.directors.map(function(d) {
+    return renderPartyCard(d, 'director', app);
+  }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No directors persisted.</div>';
+  html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px;">Ultimate Beneficial Owners</div>';
+  html += app.ubos.length ? app.ubos.map(function(u) {
+    return renderPartyCard(u, 'ubo', app);
+  }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No UBOs persisted.</div>';
+  html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px;">Intermediary Shareholders</div>';
+  html += app.intermediaries.length ? app.intermediaries.map(function(i) {
+    return renderPartyCard(i, 'intermediary', app);
+  }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No intermediary shareholders persisted.</div>';
+  return html;
+}
+
+function openPartyCorrectionModal(partyType, partyId) {
+  openOfficerCorrectionModal();
+  var target = document.getElementById('officer-correction-target');
+  var personTarget = document.getElementById('officer-correction-person-target');
+  if (target) target.value = 'person';
+  if (personTarget) personTarget.value = partyType;
+  updateOfficerCorrectionForm();
+  var subject = document.getElementById('officer-correction-subject');
+  if (subject && partyId) {
+    subject.value = partyId;
+    updateOfficerCorrectionCurrentValue();
+    renderOfficerCorrectionValueControl();
+  }
 }
 
 function renderAuthoritativeAppDetail(app, options) {
@@ -7996,46 +8125,7 @@ function renderAuthoritativeAppDetail(app, options) {
   ];
   renderPrescreenSummary(app, prescreenFields);
 
-  var personsHtml = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Directors</div>';
-  personsHtml += app.directors.length ? app.directors.map(function(d) {
-    var displayName = buildPartyDisplayName(d);
-    var nationality = normalizeDetailValue(d.nat);
-    var labels = [];
-    if (nationality !== '—') labels.push(nationality);
-    if (d.dob) labels.push('DOB: ' + escapeHtml(d.dob));
-    labels.push('PEP: ' + escapeHtml(d.pep_status_display || normalizePepDisplay(d.pep)));
-    labels.push('Declared PEP: ' + escapeHtml(d.client_declared_pep_display || 'Not captured'));
-    labels.push('Verified PEP: ' + escapeHtml(d.officer_verified_pep_display || 'Not verified yet'));
-    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
-      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(labels.join(' | ')) + '</div>' +
-      renderPepDeclarationDetailsHtml(d) +
-    '</div>';
-  }).join('') : '<div style="font-size:12px;color:var(--text3);">No directors persisted.</div>';
-  personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">UBOs</div>';
-  personsHtml += app.ubos.length ? app.ubos.map(function(u) {
-    var displayName = buildPartyDisplayName(u);
-    var meta = ['Ownership: ' + escapeHtml(normalizeDetailValue(u.pct)) + '%'];
-    var nationality = normalizeDetailValue(u.nat);
-    if (nationality !== '—') meta.push('Nationality: ' + escapeHtml(nationality));
-    if (u.dob) meta.push('DOB: ' + escapeHtml(u.dob));
-    meta.push('PEP: ' + escapeHtml(u.pep_status_display || normalizePepDisplay(u.pep)));
-    meta.push('Declared PEP: ' + escapeHtml(u.client_declared_pep_display || 'Not captured'));
-    meta.push('Verified PEP: ' + escapeHtml(u.officer_verified_pep_display || 'Not verified yet'));
-    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
-      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + meta.join(' | ') + '</div>' +
-      renderPepDeclarationDetailsHtml(u) +
-    '</div>';
-  }).join('') : '<div style="font-size:12px;color:var(--text3);">No UBOs persisted.</div>';
-  personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">Intermediary Shareholders</div>';
-  personsHtml += app.intermediaries.length ? app.intermediaries.map(function(i) {
-    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
-      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(buildPartyDisplayName(i)) + '</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Jurisdiction: ' + escapeHtml(normalizeDetailValue(i.jurisdiction)) + ' | Ownership: ' + escapeHtml(normalizeDetailValue(i.pct)) + '%</div>' +
-    '</div>';
-  }).join('') : '<div style="font-size:12px;color:var(--text3);">No intermediary shareholders persisted.</div>';
-  document.getElementById('detail-persons').innerHTML = personsHtml;
+  document.getElementById('detail-persons').innerHTML = renderPartySection(app);
   renderOfficerCorrectionWarning(app);
   renderOfficerCorrectionHistory(app);
 
@@ -18749,6 +18839,77 @@ function uniqueOfficerCorrectionOptions(values) {
   });
 }
 
+var OFFICER_PORTAL_COUNTRY_OPTIONS = [
+  'Afghanistan','Albania','Algeria','Andorra','Angola','Antigua and Barbuda','Argentina',
+  'Armenia','Australia','Austria','Azerbaijan','Bahamas','Bahrain','Bangladesh','Barbados',
+  'Belarus','Belgium','Belize','Benin','Bhutan','Bolivia','Bosnia and Herzegovina',
+  'Botswana','Brazil','Brunei','Bulgaria','Burkina Faso','Burundi','Cabo Verde','Cambodia',
+  'Cameroon','Canada','Central African Republic','Chad','Chile','China','Colombia','Comoros',
+  'Congo (Brazzaville)','Congo (DRC)','Costa Rica','Croatia','Cuba','Cyprus','Czech Republic',
+  'Denmark','Djibouti','Dominica','Dominican Republic','Ecuador','Egypt','El Salvador',
+  'Equatorial Guinea','Eritrea','Estonia','Eswatini','Ethiopia','Fiji','Finland','France',
+  'Gabon','Gambia','Georgia','Germany','Ghana','Greece','Grenada','Guatemala','Guinea',
+  'Guinea-Bissau','Guyana','Haiti','Honduras','Hong Kong SAR','Hungary','Iceland','India',
+  'Indonesia','Iran','Iraq','Ireland','Israel','Italy','Jamaica','Japan','Jordan','Kazakhstan',
+  'Kenya','Kiribati','Kuwait','Kyrgyzstan','Laos','Latvia','Lebanon','Lesotho','Liberia',
+  'Libya','Liechtenstein','Lithuania','Luxembourg','Madagascar','Malawi','Malaysia','Maldives',
+  'Mali','Malta','Marshall Islands','Mauritania','Mauritius','Mexico','Micronesia','Moldova',
+  'Monaco','Mongolia','Montenegro','Morocco','Mozambique','Myanmar','Namibia','Nauru','Nepal',
+  'Netherlands','New Zealand','Nicaragua','Niger','Nigeria','North Korea','North Macedonia',
+  'Norway','Oman','Pakistan','Palau','Panama','Papua New Guinea','Paraguay','Peru',
+  'Philippines','Poland','Portugal','Qatar','Romania','Russia','Rwanda',
+  'Saint Kitts and Nevis','Saint Lucia','Saint Vincent and the Grenadines','Samoa',
+  'San Marino','Sao Tome and Principe','Saudi Arabia','Senegal','Serbia','Seychelles',
+  'Sierra Leone','Singapore','Slovakia','Slovenia','Solomon Islands','Somalia','South Africa',
+  'South Korea','South Sudan','Spain','Sri Lanka','Sudan','Suriname','Sweden','Switzerland',
+  'Syria','Taiwan','Tajikistan','Tanzania','Thailand','Timor-Leste','Togo','Tonga',
+  'Trinidad and Tobago','Tunisia','Turkey','Turkmenistan','Tuvalu','Uganda','Ukraine',
+  'United Arab Emirates','United Kingdom','United States','Uruguay','Uzbekistan','Vanuatu',
+  'Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe',
+  'Anguilla','Belize (Offshore)','Bermuda','British Virgin Islands','Cayman Islands',
+  'Gibraltar','Guernsey','Isle of Man','Jersey','Labuan (Malaysia)','Turks and Caicos Islands'
+];
+
+var OFFICER_PORTAL_SECTOR_OPTIONS = [
+  'Fintech / Payments','Forex / FX Trading (Retail)','Forex / FX Trading (Institutional)',
+  'Crypto / Digital Assets Exchange','Crypto / Digital Assets Custody','Crypto / Web3 / DeFi',
+  'Remittance / Money Transfer','Payment Processing / Gateway','E-Money / E-Wallet Provider',
+  'Lending / Credit Services','Insurance / InsurTech','Investment Management','Capital Markets / Brokerage',
+  'Private Equity / Venture Capital','Hedge Fund','Family Office / Wealth Management','Crowdfunding / P2P Lending',
+  'Banking-as-a-Service','E-Commerce / Online Retail','Import / Export','Wholesale / Distribution',
+  'Commodities Trading','Precious Metals / Gems','Oil & Gas / Energy Trading','Agricultural Commodities',
+  'Logistics / Freight Forwarding','Software / SaaS','IT Services / Outsourcing','Cybersecurity',
+  'Artificial Intelligence / ML','Cloud Services','Telecommunications','Media Technology','iGaming / Online Gambling',
+  'Online Casino / Sports Betting','Video Games / Esports','NFT / Gaming Assets','Entertainment / Media',
+  'Streaming / Content Platforms','MSB / Money Services Business','Bureau de Change','Licensed Brokerage',
+  'Law Firm / Legal Services','Accounting / Audit Firm','Real Estate (Commercial)','Real Estate (Development)',
+  'Corporate Services Provider','Trust / Fiduciary Services','Management Consulting','Financial / Tax Advisory',
+  'Travel & Hospitality','Healthcare / MedTech','Education / EdTech','Food & Beverage','Fashion / Luxury Goods',
+  'Manufacturing','Construction','Charity / NGO / Non-Profit'
+];
+
+var OFFICER_PORTAL_ENTITY_TYPE_OPTIONS = [
+  'Listed Company on Regulated Exchange',
+  'Regulated Financial Institution',
+  'Government / Public Sector Entity',
+  'Large Private Company (revenue > USD 10m)',
+  'SME / Private Company',
+  'Newly Incorporated Company (< 1 year)',
+  'Trust',
+  'Foundation',
+  'Regulated Fund (CIS / Licensed)',
+  'Unregulated Fund / SPV',
+  'Non-Profit Organisation / NGO',
+  'Shell Company / Special Purpose Vehicle'
+];
+
+var OFFICER_INTRODUCTION_METHOD_OPTIONS = [
+  'Direct application — client initiated',
+  'Introduced by regulated intermediary / agent',
+  'Introduced by non-regulated intermediary',
+  'Unsolicited / unknown referral source'
+];
+
 function applicationValuesForCorrection(fieldName) {
   return uniqueOfficerCorrectionOptions((APPLICATIONS || []).map(function(app) {
     if (fieldName === 'country' || fieldName === 'jurisdiction' || fieldName === 'nationality') return app.country;
@@ -18767,6 +18928,7 @@ function officerCorrectionCountryOptions(currentValue) {
   return uniqueOfficerCorrectionOptions(
     [currentValue, currentApp && currentApp.country]
       .concat(applicationValuesForCorrection('country'))
+      .concat(OFFICER_PORTAL_COUNTRY_OPTIONS)
       .concat(configured)
   ).sort();
 }
@@ -18775,6 +18937,7 @@ function officerCorrectionSectorOptions(currentValue) {
   return uniqueOfficerCorrectionOptions(
     [currentValue, currentApp && currentApp.sector]
       .concat(applicationValuesForCorrection('sector'))
+      .concat(OFFICER_PORTAL_SECTOR_OPTIONS)
       .concat((SECTOR_RISK_CONFIG || []).map(function(item) { return item.sector; }))
   ).sort();
 }
@@ -18783,6 +18946,7 @@ function officerCorrectionEntityTypeOptions(currentValue) {
   return uniqueOfficerCorrectionOptions(
     [currentValue, currentApp && currentApp.entityType]
       .concat(applicationValuesForCorrection('entity_type'))
+      .concat(OFFICER_PORTAL_ENTITY_TYPE_OPTIONS)
       .concat((ENTITY_TYPE_SCORES || []).map(function(item) { return item.type; }))
   ).sort();
 }
@@ -18849,13 +19013,15 @@ function officerCorrectionFieldOptions(targetType) {
     director: [
       { value: 'full_name', label: 'Full name' },
       { value: 'nationality', label: 'Nationality' },
-      { value: 'date_of_birth', label: 'Date of birth' }
+      { value: 'date_of_birth', label: 'Date of birth' },
+      { value: 'is_pep', label: 'Client-declared PEP status' }
     ],
     ubo: [
       { value: 'full_name', label: 'Full name' },
       { value: 'nationality', label: 'Nationality' },
       { value: 'date_of_birth', label: 'Date of birth' },
-      { value: 'ownership_pct', label: 'Ownership percentage' }
+      { value: 'ownership_pct', label: 'Ownership percentage' },
+      { value: 'is_pep', label: 'Client-declared PEP status' }
     ],
     intermediary: [
       { value: 'entity_name', label: 'Entity name' },
@@ -18951,6 +19117,7 @@ function officerCorrectionCurrentValue(app, targetType, fieldName, subjectId) {
   if (fieldName === 'full_name') return normalizeDetailValue(subject.name);
   if (fieldName === 'nationality') return normalizeDetailValue(subject.nat);
   if (fieldName === 'date_of_birth') return normalizeDetailValue(subject.dob);
+  if (fieldName === 'is_pep') return subject.client_declared_pep_display || normalizePepDisplay(subject.pep);
   return normalizeDetailValue(subject[fieldName]);
 }
 
@@ -18958,7 +19125,7 @@ function officerCorrectionValueControlConfig(targetType, fieldName, currentValue
   if (targetType === 'pep_status' || fieldName === 'verified_pep' || fieldName === 'pep_status') {
     return { type: 'pep_status' };
   }
-  if (fieldName === 'country' || fieldName === 'jurisdiction' || fieldName === 'nationality') {
+  if (fieldName === 'country' || fieldName === 'country_of_incorporation' || fieldName === 'jurisdiction' || fieldName === 'nationality') {
     return { type: 'select', placeholder: 'Select jurisdiction / country...', options: officerCorrectionCountryOptions(currentValue) };
   }
   if (fieldName === 'sector') {
@@ -18969,6 +19136,12 @@ function officerCorrectionValueControlConfig(targetType, fieldName, currentValue
   }
   if (fieldName === 'ownership_structure') {
     return { type: 'select', placeholder: 'Select ownership structure...', options: uniqueOfficerCorrectionOptions([currentValue].concat(OFFICER_OWNERSHIP_STRUCTURE_OPTIONS)) };
+  }
+  if (fieldName === 'introduction_method') {
+    return { type: 'select', placeholder: 'Select introduction method...', options: uniqueOfficerCorrectionOptions([currentValue].concat(OFFICER_INTRODUCTION_METHOD_OPTIONS)) };
+  }
+  if (fieldName === 'is_pep') {
+    return { type: 'select', placeholder: 'Select client-declared PEP status...', options: ['No', 'Yes'] };
   }
   if (fieldName === 'ownership_pct') {
     return { type: 'number', min: 0, max: 100, step: '0.01', placeholder: 'Enter ownership percentage' };
@@ -19285,7 +19458,9 @@ async function submitOfficerCorrection() {
     correction_reason: explanation,
     evidence_source: explanation,
     correction_note: explanation,
-    correction_source: 'backoffice_ui'
+    correction_source: ['director', 'ubo', 'intermediary'].indexOf(targetType) >= 0
+      ? 'application_overview_party_correction_mode'
+      : (targetType === 'pep_status' ? 'application_overview_pep_verification' : 'backoffice_ui')
   };
   payload.field_changes[fieldName] = fieldValue;
   if (targetType === 'pep_status') {
@@ -19303,6 +19478,7 @@ async function submitOfficerCorrection() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/corrections', payload);
     closeModal('modal-officer-correction');
     await refreshCurrentAppDetail();
+    loadActivityLog(currentApp);
     showToast('Correction saved. RegMind updated the risk, Enhanced Review requirements, memo status, and approval blockers where required.');
   } catch (err) {
     setOfficerCorrectionError(err.message || 'Failed to save correction.');
