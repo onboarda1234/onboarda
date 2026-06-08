@@ -311,6 +311,224 @@ class TestAuthenticatedAccess:
         assert "directors" not in row
         assert "ubos" not in row
 
+    def _seed_case_management_rows(self, officer_id="cm_co"):
+        from db import get_db
+
+        today = datetime.now(timezone.utc).date()
+        overdue = (today - timedelta(days=1)).isoformat()
+        due_soon = (today + timedelta(days=7)).isoformat()
+        current = "2020-01-01"
+        client_id = f"{officer_id}_client"
+
+        conn = get_db()
+        ids = [
+            f"{officer_id}_pricing",
+            f"{officer_id}_preapproval",
+            f"{officer_id}_review_overdue_app",
+            f"{officer_id}_review_due_app",
+            f"{officer_id}_other_app",
+            f"{officer_id}_alert_only_app",
+            f"{officer_id}_edd_app",
+        ]
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(f"DELETE FROM monitoring_alerts WHERE application_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM edd_cases WHERE application_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM periodic_reviews WHERE application_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM applications WHERE id IN ({placeholders})", ids)
+        conn.execute("INSERT OR IGNORE INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, ?, ?, 'active')",
+                     (client_id, f"{client_id}@example.test", "x", "CM Client"))
+        rows = [
+            (ids[0], f"ARF-CM-{officer_id}-PRICING", "CM Pricing Ltd", "pricing_review", "LOW", officer_id),
+            (ids[1], f"ARF-CM-{officer_id}-PRE", "CM Pre Approval Ltd", "pre_approval_review", "HIGH", officer_id),
+            (ids[2], f"ARF-CM-{officer_id}-RO", "CM Review Overdue Ltd", "kyc_documents", "HIGH", officer_id),
+            (ids[3], f"ARF-CM-{officer_id}-RD", "CM Review Due Ltd", "kyc_documents", "MEDIUM", officer_id),
+            (ids[4], f"ARF-CM-{officer_id}-OTHER", "CM Other Officer Ltd", "pricing_review", "LOW", "cm_other"),
+            (ids[5], f"ARF-CM-{officer_id}-ALERT", "CM Alert Only Ltd", "kyc_documents", "HIGH", officer_id),
+            (ids[6], f"ARF-CM-{officer_id}-EDD", "CM Lifecycle Only Ltd", "edd_required", "VERY_HIGH", officer_id),
+        ]
+        for app_id, ref, company, status, risk, assigned_to in rows:
+            conn.execute(
+                """
+                INSERT INTO applications (
+                    id, ref, client_id, company_name, country, status, risk_level,
+                    final_risk_level, assigned_to, created_at, updated_at, is_fixture
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (app_id, ref, client_id, company, "Mauritius", status, risk, risk, assigned_to, current, current),
+            )
+        conn.execute(
+            """
+            INSERT INTO periodic_reviews (
+                application_id, client_name, risk_level, status, due_date,
+                assigned_officer, trigger_source, review_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ids[2], "CM Review Overdue Ltd", "HIGH", "pending", overdue, officer_id, "schedule", "Scheduled review", overdue),
+        )
+        conn.execute(
+            """
+            INSERT INTO periodic_reviews (
+                application_id, client_name, risk_level, status, due_date,
+                assigned_officer, trigger_source, review_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ids[3], "CM Review Due Ltd", "MEDIUM", "pending", due_soon, officer_id, "schedule", "Scheduled review", due_soon),
+        )
+        overdue_id = conn.execute(
+            "SELECT id FROM periodic_reviews WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (ids[2],),
+        ).fetchone()["id"]
+        due_id = conn.execute(
+            "SELECT id FROM periodic_reviews WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (ids[3],),
+        ).fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO monitoring_alerts (
+                application_id, client_name, alert_type, severity, detected_by,
+                summary, status, linked_periodic_review_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ids[5], "CM Alert Only Ltd", "pep", "high", "monitor", "Alert must not become PR work", "open", overdue_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases (
+                application_id, client_name, risk_level, risk_score, stage,
+                assigned_officer, trigger_source, trigger_notes, origin_context
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ids[6], "CM Lifecycle Only Ltd", "VERY_HIGH", 88, "triggered", officer_id, "monitoring_alert", "Lifecycle item only", "monitoring_alert"),
+        )
+        conn.commit()
+        conn.close()
+        return {
+            "pricing_ref": rows[0][1],
+            "preapproval_ref": rows[1][1],
+            "overdue_review_ref": f"PR-{overdue_id}",
+            "due_review_ref": f"PR-{due_id}",
+        }
+
+    def test_case_management_worklist_rejects_unauthenticated_and_client(self, api_server, client_token):
+        resp = http_requests.get(f"{api_server}/api/case-management/worklist", timeout=3)
+        assert resp.status_code == 401
+
+        client_resp = http_requests.get(
+            f"{api_server}/api/case-management/worklist",
+            headers={"Authorization": f"Bearer {client_token}"},
+            timeout=3,
+        )
+        assert client_resp.status_code == 403
+
+    def test_case_management_worklist_returns_backend_owned_assigned_rows(self, api_server):
+        from auth import create_token
+
+        token = create_token("cm_co", "co", "CM Compliance Officer", "officer")
+        refs = self._seed_case_management_rows("cm_co")
+
+        resp = http_requests.get(
+            f"{api_server}/api/case-management/worklist?filter=all",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        refs_seen = {item["reference"] for item in body["items"]}
+        assert refs["pricing_ref"] in refs_seen
+        assert refs["preapproval_ref"] in refs_seen
+        assert refs["overdue_review_ref"] in refs_seen
+        assert refs["due_review_ref"] in refs_seen
+        assert "ARF-CM-cm_co-OTHER" not in refs_seen
+        assert all(item["source"] in {"applications", "periodic_reviews"} for item in body["items"])
+        assert "monitoring_alert" not in {item["type"] for item in body["items"]}
+        assert "lifecycle" not in {item["type"] for item in body["items"]}
+        pricing = next(item for item in body["items"] if item["reference"] == refs["pricing_ref"])
+        assert pricing["type"] == "application"
+        assert pricing["status"] == "Pricing Under Review"
+        assert pricing["open_target"]["kind"] == "application_detail"
+        preapproval = next(item for item in body["items"] if item["reference"] == refs["preapproval_ref"])
+        assert preapproval["type"] == "application"
+        assert preapproval["open_target"]["kind"] == "pre_approval"
+        overdue_review = next(item for item in body["items"] if item["reference"] == refs["overdue_review_ref"])
+        assert overdue_review["type"] == "periodic_review"
+        assert overdue_review["source"] == "periodic_reviews"
+        assert overdue_review["due_state"] == "overdue"
+        assert overdue_review["open_target"]["kind"] == "periodic_review_workspace"
+        assert body["counts"]["applications"] == 6
+        assert body["counts"]["periodic_reviews"] == 2
+        assert body["counts"]["pre_approval"] == 1
+        assert body["counts"]["overdue"] == 1
+        assert body["counts"]["due_soon"] == 1
+        assert body["counts"]["all"] == body["pagination"]["total"]
+
+    def test_case_management_worklist_filters_counts_and_empty_shape(self, api_server):
+        from auth import create_token
+
+        token = create_token("cm_filter", "analyst", "CM Analyst", "officer")
+        self._seed_case_management_rows("cm_filter")
+
+        for filter_name, expected_type in (("applications", "application"), ("periodic_reviews", "periodic_review")):
+            resp = http_requests.get(
+                f"{api_server}/api/case-management/worklist?filter={filter_name}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=3,
+            )
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["pagination"]["total"] == body["counts"][filter_name]
+            assert body["items"]
+            assert {item["type"] for item in body["items"]} == {expected_type}
+
+        overdue = http_requests.get(
+            f"{api_server}/api/case-management/worklist?filter=overdue",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        ).json()
+        assert overdue["items"]
+        assert {item["due_state"] for item in overdue["items"]} == {"overdue"}
+
+        due_soon = http_requests.get(
+            f"{api_server}/api/case-management/worklist?filter=due_soon",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        ).json()
+        assert due_soon["items"]
+        assert {item["due_state"] for item in due_soon["items"]} == {"due_soon"}
+
+        empty_token = create_token("cm_empty", "analyst", "CM Empty", "officer")
+        empty = http_requests.get(
+            f"{api_server}/api/case-management/worklist?filter=all",
+            headers={"Authorization": f"Bearer {empty_token}"},
+            timeout=3,
+        )
+        assert empty.status_code == 200
+        assert empty.json()["items"] == []
+        assert empty.json()["counts"] == {
+            "all": 0,
+            "applications": 0,
+            "periodic_reviews": 0,
+            "pre_approval": 0,
+            "overdue": 0,
+            "due_soon": 0,
+        }
+
+    def test_case_management_defaults_to_my_assigned_work_for_admin(self, api_server):
+        from auth import create_token
+
+        token = create_token("cm_admin", "admin", "CM Admin", "officer")
+        self._seed_case_management_rows("cm_admin")
+        self._seed_case_management_rows("cm_visible_other")
+
+        resp = http_requests.get(
+            f"{api_server}/api/case-management/worklist?filter=all",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        refs_seen = {item["reference"] for item in resp.json()["items"]}
+        assert "ARF-CM-cm_admin-PRICING" in refs_seen
+        assert "ARF-CM-cm_visible_other-PRICING" not in refs_seen
+
     def test_dashboard_returns_200_for_officer_with_fixture_filter(self, api_server):
         """Officer dashboard must not use ambiguous columns in joined recent query."""
         from auth import create_token

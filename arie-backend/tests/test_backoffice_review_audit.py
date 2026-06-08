@@ -758,13 +758,16 @@ class TestPrePhaseSixBackofficeUX:
 
     def test_case_management_projects_assigned_application_and_review_work(self):
         html = self._read_backoffice()
-        assert "function isAssignedToCurrentUser(app)" in html
-        assert "function buildCaseWorkItems()" in html
-        assert "APPLICATIONS.forEach(function(app)" in html
-        assert "PERIODIC_REVIEWS.forEach(function(review)" in html
-        assert "isWorkAssignedToCurrentUser(review.assignedOfficerId, review.assignedOfficerName)" in html
-        assert "openCasePeriodicReview" in html
-        assert "periodic_reviews" in html
+        assert "/case-management/worklist" in html
+        assert "function loadCaseWorklist(options)" in html
+        assert "function openCaseWorkItem(index)" in html
+        assert "open_target" in html
+        assert "CASE_WORKLIST_STATE.items.forEach(function(item, idx)" in html
+        case_region = html[html.index("var activeCaseTab = 'my-assigned';"):html.index("// ═══════════════════════════════════════════════════════════", html.index("function renderCases()"))]
+        assert "APPLICATIONS.forEach(function(app)" not in case_region
+        assert "PERIODIC_REVIEWS.forEach(function(review)" not in case_region
+        assert "buildCaseWorkItems" not in case_region
+        assert "loadCaseWorklist({ force: true })" in html
 
 
 # ═══════════════════════════════════════════════════════════

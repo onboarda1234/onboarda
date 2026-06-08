@@ -4556,6 +4556,297 @@ def _client_safe_application_detail(result):
     return safe
 
 
+CASE_MANAGEMENT_FILTERS = {
+    "all",
+    "applications",
+    "periodic_reviews",
+    "pre_approval",
+    "overdue",
+    "due_soon",
+}
+CASE_MANAGEMENT_DUE_SOON_DAYS = int(os.environ.get("CASE_MANAGEMENT_DUE_SOON_DAYS", "30") or "30")
+CASE_MANAGEMENT_APPLICATION_TERMINAL_STATUSES = {"approved", "rejected", "withdrawn"}
+CASE_MANAGEMENT_REVIEW_TERMINAL_STATUSES = {"completed", "cancelled", "canceled", "closed"}
+
+
+def _case_management_parse_date(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _case_management_date_text(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parsed = _case_management_parse_date(text)
+    return parsed.isoformat() if parsed else text
+
+
+def _case_management_due_state(due_value, *, canonical_state=None, is_overdue=False, days_until_due=None):
+    state = str(canonical_state or "").strip().lower()
+    if is_overdue or state == "overdue":
+        return "overdue"
+    if state in {"due_soon", "due"}:
+        return "due_soon"
+    if state in {"completed", "cancelled", "canceled", "missing_due_date"}:
+        return "none"
+    if days_until_due is not None:
+        try:
+            days = int(days_until_due)
+            if days < 0:
+                return "overdue"
+            if days <= CASE_MANAGEMENT_DUE_SOON_DAYS:
+                return "due_soon"
+            return "current"
+        except (TypeError, ValueError):
+            pass
+    due_date = _case_management_parse_date(due_value)
+    if not due_date:
+        return "none"
+    delta = (due_date - datetime.now(timezone.utc).date()).days
+    if delta < 0:
+        return "overdue"
+    if delta <= CASE_MANAGEMENT_DUE_SOON_DAYS:
+        return "due_soon"
+    return "current"
+
+
+def _case_management_filter_matches(item, filter_name):
+    if filter_name == "all":
+        return True
+    if filter_name == "applications":
+        return item.get("type") == "application"
+    if filter_name == "periodic_reviews":
+        return item.get("type") == "periodic_review"
+    if filter_name == "pre_approval":
+        return item.get("open_target", {}).get("kind") == "pre_approval"
+    if filter_name in {"overdue", "due_soon"}:
+        return item.get("due_state") == filter_name
+    return False
+
+
+def _case_management_filter_counts(items):
+    return {
+        filter_name: sum(1 for item in items if _case_management_filter_matches(item, filter_name))
+        for filter_name in ("all", "applications", "periodic_reviews", "pre_approval", "overdue", "due_soon")
+    }
+
+
+def _case_management_sort_key(item):
+    due = item.get("due_date") or "9999-12-31"
+    type_rank = 0 if item.get("type") == "application" else 1
+    return (due, type_rank, item.get("last_activity_at") or "", item.get("reference") or "")
+
+
+def _case_management_application_item(row):
+    status = str(row.get("status") or "").strip()
+    status_key = status.lower()
+    ref = row.get("ref") or row.get("id")
+    last_activity = row.get("updated_at") or row.get("created_at")
+    kind = "pre_approval" if status_key == "pre_approval_review" else "application_detail"
+    return {
+        "id": f"application:{row.get('id')}",
+        "type": "application",
+        "reference": ref,
+        "application_id": row.get("id"),
+        "review_id": None,
+        "client": row.get("company_name") or "",
+        "risk_level": _canonical_risk_level(row.get("final_risk_level") or row.get("risk_level")),
+        "status": get_status_label(status),
+        "assigned_to": row.get("assigned_name") or row.get("assigned_to") or "",
+        "assigned_to_user_id": row.get("assigned_to") or "",
+        "due_date": None,
+        "last_activity_at": _case_management_date_text(last_activity),
+        "due_state": "none",
+        "source": "applications",
+        "open_target": {
+            "kind": kind,
+            "application_reference": ref,
+            "review_reference": None,
+        },
+    }
+
+
+def _case_management_periodic_review_item(review, projection):
+    projection = projection or {}
+    review_id = projection.get("review_id") or review.get("id")
+    review_ref = projection.get("review_reference") or (f"PR-{review_id}" if review_id is not None else "")
+    application_ref = projection.get("application_ref") or review.get("application_ref") or review.get("application_id")
+    due_date = projection.get("due_date") or review.get("due_date") or review.get("next_review_date")
+    due_state = _case_management_due_state(
+        due_date,
+        canonical_state=projection.get("due_state") or review.get("due_state"),
+        is_overdue=bool(projection.get("is_overdue") or review.get("is_overdue")),
+        days_until_due=projection.get("days_until_due") or review.get("days_until_due"),
+    )
+    return {
+        "id": f"periodic_review:{review_id}",
+        "type": "periodic_review",
+        "reference": review_ref,
+        "application_id": projection.get("application_id") or review.get("application_id"),
+        "review_id": review_id,
+        "client": projection.get("client_name") or review.get("client_name") or "",
+        "risk_level": _canonical_risk_level(projection.get("risk_level") or review.get("risk_level")),
+        "status": projection.get("status_label") or review.get("status_label") or str(review.get("status") or "Pending").replace("_", " ").title(),
+        "assigned_to": projection.get("assigned_officer_name") or projection.get("owner_display_name") or review.get("assigned_officer") or "",
+        "assigned_to_user_id": projection.get("assigned_officer") or review.get("assigned_officer") or "",
+        "due_date": _case_management_date_text(due_date),
+        "last_activity_at": _case_management_date_text(
+            projection.get("last_activity_at")
+            or review.get("updated_at")
+            or review.get("created_at")
+            or review.get("assigned_at")
+        ),
+        "due_state": due_state,
+        "source": "periodic_reviews",
+        "open_target": {
+            "kind": "periodic_review_workspace",
+            "application_reference": application_ref,
+            "review_reference": review_ref,
+        },
+    }
+
+
+class CaseManagementWorklistHandler(BaseHandler):
+    """GET /api/case-management/worklist — backend-owned officer worklist."""
+
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") == "client" or user.get("role") not in {"admin", "sco", "co", "analyst"}:
+            self.log_audit(
+                user,
+                "Authorization Denied",
+                "Case Management Worklist",
+                "Rejected non-officer access to case management worklist",
+            )
+            return self.error("Insufficient permissions", 403)
+
+        filter_name = (self.get_argument("filter", "all") or "all").strip().lower()
+        if filter_name not in CASE_MANAGEMENT_FILTERS:
+            return self.error("Unsupported case management filter", 400)
+        limit = _bounded_int(self.get_argument("limit", 100), 100, min_value=1, max_value=100)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
+        query_text = (self.get_argument("q", "") or "").strip()
+        assigned_to_me_arg = str(self.get_argument("assigned_to_me", "true") or "true").strip().lower()
+        assigned_to_me = assigned_to_me_arg not in {"false", "0", "no"}
+        broaden_scope = (not assigned_to_me) and user.get("role") in {"admin", "sco"}
+
+        from fixture_filter import (
+            fixture_app_exclude_clause,
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
+        db = get_db()
+        try:
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+            items = []
+
+            app_query = """
+                SELECT
+                    a.id, a.ref, a.company_name, a.status, a.risk_level, a.final_risk_level,
+                    a.assigned_to, a.created_at, a.updated_at, u.full_name AS assigned_name
+                FROM applications a
+                LEFT JOIN users u ON a.assigned_to = u.id
+                WHERE 1=1
+            """
+            app_params = []
+            if not broaden_scope:
+                app_query += " AND a.assigned_to = ?"
+                app_params.append(user.get("sub"))
+            else:
+                app_query += " AND a.assigned_to IS NOT NULL AND TRIM(a.assigned_to) <> ''"
+            app_query += " AND LOWER(COALESCE(a.status, '')) NOT IN (" + ",".join("?" for _ in CASE_MANAGEMENT_APPLICATION_TERMINAL_STATUSES) + ")"
+            app_params.extend(sorted(CASE_MANAGEMENT_APPLICATION_TERMINAL_STATUSES))
+            if not show_fx:
+                fx_excl, fx_params = fixture_app_exclude_clause("a")
+                app_query += f" AND {fx_excl}"
+                app_params.extend(fx_params)
+            if query_text:
+                like_term = f"%{query_text.lower()}%"
+                app_query += """
+                    AND (
+                        LOWER(COALESCE(a.ref, '')) LIKE ?
+                        OR LOWER(COALESCE(a.company_name, '')) LIKE ?
+                        OR LOWER(COALESCE(a.status, '')) LIKE ?
+                        OR LOWER(COALESCE(u.full_name, '')) LIKE ?
+                    )
+                """
+                app_params.extend([like_term] * 4)
+            app_rows = db.execute(app_query, app_params).fetchall()
+            items.extend(_case_management_application_item(dict(row)) for row in app_rows)
+
+            review_query = "SELECT * FROM periodic_reviews WHERE 1=1"
+            review_params = []
+            if not broaden_scope:
+                review_query += " AND assigned_officer = ?"
+                review_params.append(user.get("sub"))
+            else:
+                review_query += " AND assigned_officer IS NOT NULL AND TRIM(assigned_officer) <> ''"
+            review_query += " AND LOWER(COALESCE(status, 'pending')) NOT IN (" + ",".join("?" for _ in CASE_MANAGEMENT_REVIEW_TERMINAL_STATUSES) + ")"
+            review_params.extend(sorted(CASE_MANAGEMENT_REVIEW_TERMINAL_STATUSES))
+            if not show_fx:
+                fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+                review_query += f" AND {fx_excl}"
+                review_params.extend(fx_params)
+            review_rows = [dict(row) for row in db.execute(review_query, review_params).fetchall()]
+            review_ids = [row["id"] for row in review_rows]
+            projections = (
+                {
+                    projection["review_id"]: projection
+                    for projection in _list_periodic_review_projections(db, review_ids=review_ids)
+                }
+                if review_ids
+                else {}
+            )
+            for review in review_rows:
+                item = _case_management_periodic_review_item(review, projections.get(review.get("id")))
+                if query_text:
+                    haystack = " ".join(
+                        str(item.get(key) or "")
+                        for key in ("reference", "client", "status", "assigned_to")
+                    ).lower()
+                    app_ref = str(item.get("open_target", {}).get("application_reference") or "").lower()
+                    if query_text.lower() not in haystack and query_text.lower() not in app_ref:
+                        continue
+                items.append(item)
+
+            items.sort(key=_case_management_sort_key)
+            counts = _case_management_filter_counts(items)
+            filtered_items = [item for item in items if _case_management_filter_matches(item, filter_name)]
+            page_items = filtered_items[offset:offset + limit]
+            self.success({
+                "items": page_items,
+                "counts": counts,
+                "pagination": {
+                    "limit": limit,
+                    "offset": offset,
+                    "total": len(filtered_items),
+                },
+                "filter": filter_name,
+                "assigned_to_me": not broaden_scope,
+                "due_soon_window_days": CASE_MANAGEMENT_DUE_SOON_DAYS,
+            })
+        finally:
+            db.close()
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -24896,6 +25187,9 @@ def make_app():
         (r"/api/auth/client/change-password", ClientChangePasswordHandler),
         (r"/api/auth/logout", LogoutHandler),
         (r"/api/auth/me", MeHandler),
+
+        # Case Management
+        (r"/api/case-management/worklist", CaseManagementWorklistHandler),
 
         # Applications (more specific routes first)
         (r"/api/applications/([^/]+)/submit", SubmitApplicationHandler),
