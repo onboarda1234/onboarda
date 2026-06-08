@@ -6571,41 +6571,6 @@ function normalizePepDisplay(value) {
   return 'Not verified yet';
 }
 
-function renderPepDeclarationDetailsHtml(person) {
-  var declaration = (person && person.pep_declaration && typeof person.pep_declaration === 'object') ? person.pep_declaration : {};
-  var source = String(person && (person.pep_verification_source || declaration.pep_verification_source) || '').toLowerCase();
-  var status = String(person && (person.pep_status || declaration.pep_status) || '').toLowerCase();
-  var screeningConfirmed = (source === 'screening_review' || source === 'screening_provider') && (status === 'confirmed_pep' || person.officer_verified_pep === true);
-  var rows = [
-    ['Client-declared PEP', person && person.client_declared_pep_display ? person.client_declared_pep_display : (declaration.client_declared_pep || declaration.declared_pep ? 'Client declared PEP' : 'Not captured')],
-    ['Officer-verified PEP', person && person.officer_verified_pep_display ? person.officer_verified_pep_display : 'Not verified yet'],
-    ['Screening-confirmed PEP', screeningConfirmed ? 'Yes' : 'No confirmed screening PEP'],
-    ['PEP role/type', declaration.pep_role_type || declaration.role_type || declaration.pep_type],
-    ['Position/title', declaration.position_title || declaration.public_function],
-    ['Country/jurisdiction', declaration.pep_country_jurisdiction || declaration.country_jurisdiction || declaration.jurisdiction],
-    ['Relationship type', declaration.relationship_type],
-    ['Related PEP name', declaration.related_pep_name],
-    ['Start date', declaration.start_date],
-    ['End date / current status', declaration.current_status ? 'Current' : declaration.end_date],
-    ['Source of wealth detail', declaration.source_of_wealth_detail || declaration.source_of_wealth_note],
-    ['Source of funds detail', declaration.source_of_funds_detail || declaration.source_of_funds_note],
-    ['Supporting evidence/reference', declaration.supporting_note_evidence || declaration.evidence_reference || declaration.supporting_evidence_reference],
-    ['Additional notes', declaration.notes]
-  ].filter(function(row) {
-    return normalizeDetailValue(row[1]) !== '—';
-  });
-  if (!rows.length) return '';
-  return '<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;">' +
-    '<div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Structured PEP declaration</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;">' +
-      rows.map(function(row) {
-        return '<div><div style="font-size:9px;color:#92400e;text-transform:uppercase;font-weight:700;">' + escapeHtml(row[0]) + '</div>' +
-          '<div style="font-size:12px;color:var(--text1);word-break:break-word;">' + escapeHtml(normalizeDetailValue(row[1])) + '</div></div>';
-      }).join('') +
-    '</div>' +
-  '</div>';
-}
-
 function buildPrescreeningPartyFallback(items, personType) {
   if (!Array.isArray(items)) return [];
   return items
@@ -7917,6 +7882,8 @@ function renderPartyCard(party, partyType, app) {
   var declaredPep = party.client_declared_pep_display || normalizePepDisplay(party.pep);
   var verifiedPep = party.officer_verified_pep_display || 'Not verified yet';
   var screeningPep = partyScreeningPepDisplay(party);
+  var pepDeclaration = (party.pep_declaration && typeof party.pep_declaration === 'object') ? party.pep_declaration : {};
+  var relationshipType = firstMeaningfulDetailValue(party.relationship_type, party.relationshipType, pepDeclaration.relationship_type, 'N/A');
   return '<div class="party-review-card" style="padding:12px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
     '<div style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div>' +
@@ -7935,15 +7902,15 @@ function renderPartyCard(party, partyType, app) {
       renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing') +
       renderPartyFact('Ownership', ownershipValue === 'N/A' ? 'N/A' : normalizeDetailValue(ownershipValue) + '%', partyType === 'director' ? 'N/A' : 'Missing') +
     '</div>' +
-    '<div style="padding:10px;border:1px solid rgba(245,158,11,0.35);border-radius:8px;background:#fffbeb;">' +
+    '<div style="padding:8px 10px;border:1px solid rgba(245,158,11,0.35);border-radius:8px;background:#fffbeb;">' +
       '<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">PEP / Screening Status</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">' +
         renderPartyFact('Client-declared PEP', declaredPep, 'Not captured') +
         renderPartyFact('Officer-verified PEP', verifiedPep, 'Not verified yet') +
         renderPartyFact('Screening-confirmed PEP', screeningPep, 'Not available') +
+        renderPartyFact('Relationship type', relationshipType, 'N/A') +
       '</div>' +
     '</div>' +
-    (partyType !== 'intermediary' ? renderPepDeclarationDetailsHtml(party) : '') +
   '</div>';
 }
 

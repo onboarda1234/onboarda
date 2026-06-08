@@ -16,6 +16,21 @@ def _read_backoffice():
         return f.read()
 
 
+def _extract_function(html, name):
+    start = html.index(f"function {name}")
+    brace = html.index("{", start)
+    depth = 0
+    for idx in range(brace, len(html)):
+        char = html[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start : idx + 1]
+    raise AssertionError(f"Could not extract function {name}")
+
+
 def _officer_runtime_js(html, scenario):
     pep_start = html.index("function normalizePepDisplay(value)")
     pep_end = html.index("\nfunction buildPartyDisplayName", pep_start)
@@ -343,6 +358,7 @@ def test_pr410b_prescreening_correction_mode_static_contract():
 
 def test_pr410c_party_card_and_dropdown_static_contract():
     html = _read_backoffice()
+    party_card = _extract_function(html, "renderPartyCard")
     assert "function renderPartyCard" in html
     assert "function renderPartySection" in html
     assert "Correct party details" in html
@@ -351,7 +367,14 @@ def test_pr410c_party_card_and_dropdown_static_contract():
     assert "Client-declared PEP" in html
     assert "Officer-verified PEP" in html
     assert "Screening-confirmed PEP" in html
+    assert "Relationship type" in party_card
     assert "Missing" in html
+    assert "Not captured" in html
+    assert "Not verified yet" in html
+    assert "Not available" in html
+    assert "N/A" in html
+    assert "Corrected" in party_card
+    assert "No correction" in party_card
     assert "openPartyCorrectionModal" in html
     assert "application_overview_party_correction_mode" in html
     assert "OFFICER_PORTAL_COUNTRY_OPTIONS" in html
@@ -360,3 +383,22 @@ def test_pr410c_party_card_and_dropdown_static_contract():
     assert "Introduced by non-regulated intermediary" in html
     assert "{ value: 'is_pep', label: 'Client-declared PEP status' }" in html
     assert "renderPrescreenCorrectionControl" in html
+
+
+def test_party_card_pep_display_is_consolidated_without_structured_duplicate():
+    html = _read_backoffice()
+    party_card = _extract_function(html, "renderPartyCard")
+
+    assert party_card.count("PEP / Screening Status") == 1
+    assert "Structured PEP declaration" not in html
+    assert "renderPepDeclarationDetailsHtml" not in party_card
+    assert "Client-declared PEP" in party_card
+    assert "Officer-verified PEP" in party_card
+    assert "Screening-confirmed PEP" in party_card
+    assert "Relationship type" in party_card
+    assert "renderPartyFact('Role'" in party_card
+    assert "renderPartyFact(nationalityLabel" in party_card
+    assert "renderPartyFact('Date of Birth'" in party_card
+    assert "renderPartyFact('Ownership'" in party_card
+    assert "openPartyCorrectionModal" in party_card
+    assert "Correct party details" in party_card

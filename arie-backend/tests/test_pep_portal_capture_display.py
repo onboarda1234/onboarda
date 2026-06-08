@@ -76,17 +76,16 @@ def test_portal_pep_fields_save_resume_and_submit_payload():
 def test_backoffice_displays_client_officer_and_screening_pep_labels():
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
 
-    assert "renderPepDeclarationDetailsHtml" in html
+    assert "renderPartyCard" in html
     assert "buildPrescreeningPartyFallback" in html
     assert "personHasDeclaredOrVerifiedPep" in html
     assert "psData.directors" in html
-    assert "Structured PEP declaration" in html
+    assert "PEP / Screening Status" in html
     assert "Client-declared PEP" in html
     assert "Officer-verified PEP" in html
     assert "Screening-confirmed PEP" in html
-    assert "PEP role/type" in html
-    assert "Position/title" in html
-    assert "Supporting evidence/reference" in html
+    assert "Relationship type" in html
+    assert "Structured PEP declaration" not in html
 
 
 def test_structured_pep_declaration_persists_in_party_json(db):
