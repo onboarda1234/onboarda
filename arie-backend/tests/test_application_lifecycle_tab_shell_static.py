@@ -70,7 +70,7 @@ def test_switch_detail_tab_supports_lifecycle_alerts_and_activity_without_regres
     assert "'lifecycle'" in section
     assert "'alerts'" in section
     assert "loadLifecycleDetailTab()" in section
-    assert "renderApplicationAlertsDetailTab()" in section
+    assert "loadApplicationAlertsDetailTab()" in section
     assert "loadDecisionRecords()" in section
     assert "loadActivityLog()" in section
     assert "loadNotes()" in section
@@ -79,10 +79,42 @@ def test_switch_detail_tab_supports_lifecycle_alerts_and_activity_without_regres
 def test_alerts_tab_shell_uses_existing_application_monitoring_alert_data():
     html = _read_backoffice()
     assert 'id="detail-tab-alerts"' in html
-    assert "function renderApplicationAlertsDetailTab()" in html
+    assert "function renderApplicationAlertsDetailTab(context)" in html
+    assert "async function loadApplicationAlertsDetailTab(force)" in html
+    assert "fetchLifecycleApplicationSummary(app.id" in html
     assert "monitoringAlerts: detail.monitoring_alerts || []" in html
     assert "No active alerts linked to this application." in html
     assert "showView('monitoring')" in html
+    assert "Active EDD / Lifecycle Work" in html
+    assert "No active non-review EDD or lifecycle investigation work is linked to this application." in html
+
+
+def test_alerts_tab_surfaces_non_review_edd_from_lifecycle_summary():
+    html = _read_backoffice()
+    start = html.index("function renderApplicationAlertsDetailTab(context)")
+    end = html.index("async function loadApplicationAlertsDetailTab(force)", start)
+    section = html[start:end]
+    assert "activeLifecycleItems" in section
+    assert "item.type === 'edd' && !item.linked_periodic_review_id" in section
+    assert "activeEddItems.map(lifecycleDetailItemRow)" in section
+    assert "Active EDD / Lifecycle Work" in section
+    assert "Periodic-review-linked work remains in Periodic Reviews." in section
+
+
+def test_periodic_reviews_tab_does_not_promote_non_review_work_without_active_review():
+    html = _read_backoffice()
+    start = html.index("function renderLifecycleDetailTab(context)")
+    end = html.index("async function loadLifecycleDetailTab(force)", start)
+    section = html[start:end]
+    assert "No Active Periodic Review" in section
+    assert "Periodic Reviews shows the review workflow, review evidence, readiness, decision, risk reassessment, and review history only." in section
+    assert "Active non-review work exists:" in section
+    assert "Open Alerts tab" in section
+    assert "Open Monitoring Alerts" in section
+    assert "Open EDD queue" in section
+    assert "Active reviews" in section
+    assert "Related Lifecycle Work" not in section
+    assert "activeWorkItems.map(lifecycleDetailItemRow)" not in section
 
 
 def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_decision_helpers():
