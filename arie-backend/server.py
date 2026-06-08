@@ -824,6 +824,14 @@ except ImportError:
     HAS_PDF_GENERATOR = False
     logging.getLogger("arie").warning("PDF generator not available — install weasyprint")
 
+from evidence_pack_export import (
+    ExportGenerationError,
+    ExportValidationError,
+    build_evidence_pack_zip,
+    export_download_filename,
+    validate_export_request,
+)
+
 # Supervisor framework
 try:
     from supervisor.api import setup_supervisor, get_supervisor_routes, get_supervisor
@@ -12822,6 +12830,160 @@ class ApplicationEvidencePackHandler(BaseHandler):
         })
 
 
+class ApplicationExportPackHandler(BaseHandler):
+    """POST /api/applications/:id/export-pack — audited ZIP evidence export."""
+
+    ALLOWED_ROLES = {"admin", "sco"}
+
+    def _audit_export_attempt(self, user, app_ref, detail, db=None, action="evidence_pack_export_requested"):
+        try:
+            self.log_audit(
+                user,
+                action,
+                app_ref or "application-export-pack",
+                json.dumps(detail, default=str, sort_keys=True),
+                db=db,
+                commit=True,
+            )
+        except Exception:
+            logger.exception("evidence_pack_export_audit_failed app_ref=%s action=%s", app_ref, action)
+
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        payload = self.get_json()
+        actor_role = str(user.get("role") or "").lower()
+        if user.get("type") == "client" or actor_role not in self.ALLOWED_ROLES:
+            self._audit_export_attempt(
+                user,
+                app_id,
+                {
+                    "event": "evidence_pack_export_requested",
+                    "application_id_or_ref": app_id,
+                    "result": "failure",
+                    "failure_reason": "insufficient_permissions",
+                    "actor_id": user.get("sub"),
+                    "actor_email": user.get("email", ""),
+                    "actor_role": user.get("role"),
+                },
+            )
+            return self.error("Insufficient permissions", 403)
+
+        db = get_db()
+        try:
+            app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+            if not app:
+                self._audit_export_attempt(
+                    user,
+                    app_id,
+                    {
+                        "event": "evidence_pack_export_requested",
+                        "application_id_or_ref": app_id,
+                        "result": "failure",
+                        "failure_reason": "application_not_found",
+                        "actor_id": user.get("sub"),
+                        "actor_email": user.get("email", ""),
+                        "actor_role": user.get("role"),
+                    },
+                    db=db,
+                )
+                return self.error("Application not found", 404)
+
+            app_dict = dict(app)
+            try:
+                export_request = validate_export_request(payload)
+            except ExportValidationError as exc:
+                self._audit_export_attempt(
+                    user,
+                    app_dict["ref"],
+                    {
+                        "event": "evidence_pack_export_requested",
+                        "application_id": app_dict["id"],
+                        "application_ref": app_dict["ref"],
+                        "result": "failure",
+                        "failure_reason": str(exc),
+                        "export_type": payload.get("export_type") if isinstance(payload, dict) else None,
+                        "redaction_level": payload.get("redaction_level") if isinstance(payload, dict) else None,
+                        "include_sections": payload.get("include_sections") if isinstance(payload, dict) else None,
+                        "actor_id": user.get("sub"),
+                        "actor_email": user.get("email", ""),
+                        "actor_role": user.get("role"),
+                    },
+                    db=db,
+                )
+                return self.error(str(exc), 400)
+
+            request_audit = {
+                "event": "evidence_pack_export_requested",
+                "application_id": app_dict["id"],
+                "application_ref": app_dict["ref"],
+                "export_type": export_request["export_type"],
+                "reason": export_request["reason"],
+                "included_sections": export_request["include_sections"],
+                "redaction_level": export_request["redaction_level"],
+                "actor_id": user.get("sub"),
+                "actor_email": user.get("email", ""),
+                "actor_role": user.get("role"),
+                "result": "requested",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            self._audit_export_attempt(user, app_dict["ref"], request_audit, db=db)
+
+            try:
+                zip_bytes, export_metadata = build_evidence_pack_zip(
+                    db,
+                    app_dict,
+                    export_request,
+                    user,
+                    exported_at=datetime.now(timezone.utc),
+                )
+            except ExportGenerationError as exc:
+                self._audit_export_attempt(
+                    user,
+                    app_dict["ref"],
+                    dict(request_audit, result="failure", failure_reason=str(exc)),
+                    db=db,
+                    action="evidence_pack_export_failed",
+                )
+                return self.error(str(exc), 503)
+            except Exception as exc:
+                logger.exception("evidence_pack_export_generation_failed app_ref=%s", app_dict["ref"])
+                self._audit_export_attempt(
+                    user,
+                    app_dict["ref"],
+                    dict(request_audit, result="failure", failure_reason=str(exc)[:300]),
+                    db=db,
+                    action="evidence_pack_export_failed",
+                )
+                return self.error("Evidence pack export failed", 500)
+
+            self._audit_export_attempt(
+                user,
+                app_dict["ref"],
+                dict(
+                    request_audit,
+                    result="success",
+                    file_count=export_metadata.get("file_count"),
+                    pack_sha256=export_metadata.get("zip_sha256"),
+                    document_retrieval_failures=export_metadata.get("document_retrieval_failures", []),
+                ),
+                db=db,
+                action="evidence_pack_export_completed",
+            )
+
+            filename = export_download_filename(app_dict["ref"])
+            self.set_header("Content-Type", "application/zip")
+            self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.set_header("Content-Length", str(len(zip_bytes)))
+            self.set_header("X-Evidence-Pack-SHA256", export_metadata.get("zip_sha256", ""))
+            self.write(zip_bytes)
+            self.finish()
+        finally:
+            db.close()
+
+
 class ApplicationNotesHandler(BaseHandler):
     """GET/POST /api/applications/:id/notes — internal officer notes."""
     def get(self, app_id):
@@ -24751,6 +24913,7 @@ def make_app():
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
+        (r"/api/applications/([^/]+)/export-pack", ApplicationExportPackHandler),
         (r"/api/applications/([^/]+)/evidence-pack", ApplicationEvidencePackHandler),
         (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
         (r"/api/applications/([^/]+)/officer-corrections", ControlledPrescreeningCorrectionHandler),
