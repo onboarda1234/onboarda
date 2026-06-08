@@ -15985,7 +15985,7 @@ function applicationAlertsSeverityTone(severity) {
   return { bg: 'rgba(100, 116, 139, 0.12)', color: '#475569' };
 }
 
-function renderApplicationAlertsDetailTab() {
+function renderApplicationAlertsDetailTab(context) {
   var container = document.getElementById('detail-tab-alerts');
   var app = currentApp;
   if (!container) return;
@@ -15993,7 +15993,12 @@ function renderApplicationAlertsDetailTab() {
     container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Application alerts are unavailable until an application is loaded.</div>';
     return;
   }
+  var summary = (context && context.summary) || context || null;
   var alerts = (app && Array.isArray(app.monitoringAlerts)) ? app.monitoringAlerts.slice() : [];
+  var activeLifecycleItems = ((summary && summary.active) || {}).items || [];
+  var activeEddItems = activeLifecycleItems.filter(function(item) {
+    return item && item.type === 'edd' && !item.linked_periodic_review_id;
+  });
   alerts.sort(function(a, b) {
     var left = String((b && (b.discovered_at || b.created_at || '')) || '');
     var right = String((a && (a.discovered_at || a.created_at || '')) || '');
@@ -16030,6 +16035,9 @@ function renderApplicationAlertsDetailTab() {
         '</div>';
       }).join('')
     : '<div style="padding:18px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No active alerts linked to this application.</div>';
+  var eddLifecycleBody = activeEddItems.length
+    ? activeEddItems.map(lifecycleDetailItemRow).join('')
+    : '<div style="padding:18px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No active non-review EDD or lifecycle investigation work is linked to this application.</div>';
 
   container.innerHTML =
     '<div class="lifecycle-detail-root">' +
@@ -16047,12 +16055,32 @@ function renderApplicationAlertsDetailTab() {
       lifecycleDetailMetric('Linked alerts', String(alerts.length), alerts.length ? 'blue' : 'slate') +
       lifecycleDetailMetric('High / critical', String(highRiskCount), highRiskCount ? 'amber' : 'green') +
       lifecycleDetailMetric('Media alerts', String(mediaCount), mediaCount ? 'blue' : 'slate') +
+      lifecycleDetailMetric('Active EDD', String(activeEddItems.length), activeEddItems.length ? 'amber' : 'green') +
       lifecycleDetailMetric('Primary source', alerts[0] ? (alerts[0].provider || alerts[0].discovered_via || 'Recorded signal') : 'No linked alerts', 'slate') +
     '</div>' +
     '<div class="lifecycle-section-stack">' +
       lifecycleDetailCard('Linked Alerts', 'Linked monitoring, media, and risk signals for this application using existing alert data only.', body, '#2557d6') +
+      lifecycleDetailCard('Active EDD / Lifecycle Work', 'Non-review investigation and lifecycle owner-workflow items for this application. Periodic-review-linked work remains in Periodic Reviews.', eddLifecycleBody, '#6d28d9') +
     '</div>' +
     '</div>';
+}
+
+async function loadApplicationAlertsDetailTab(force) {
+  var container = document.getElementById('detail-tab-alerts');
+  var app = currentApp;
+  if (!container) return;
+  if (!app || !app.id) {
+    renderApplicationAlertsDetailTab(null);
+    return;
+  }
+  container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading alerts and lifecycle work…</div>';
+  try {
+    var summary = await fetchLifecycleApplicationSummary(app.id, !!force);
+    renderApplicationAlertsDetailTab({ summary: summary });
+  } catch (err) {
+    console.warn('Application alerts lifecycle summary load failed:', err);
+    renderApplicationAlertsDetailTab({ summary: null });
+  }
 }
 
 function renderLifecycleDetailTab(context) {
@@ -16062,14 +16090,13 @@ function renderLifecycleDetailTab(context) {
   var active = ((summary.active || {}).items) || [];
   var historical = ((summary.historical || {}).items) || [];
   var activeReview = context && context.reviewDetail;
+  var activeReviewItems = active.filter(function(item) { return item && item.type === 'review'; });
+  var activeNonReviewCount = active.filter(function(item) { return item && item.type !== 'review'; }).length;
   var setupReviewDetail = activeReview || (context && context.setupReviewDetail) || null;
   var activeReviewProjection = activeReview && activeReview.projection ? activeReview.projection : null;
   var setupReviewProjection = activeReviewProjection || (setupReviewDetail && setupReviewDetail.projection) || (context && context.reviewSetup) || null;
   var activeReviewItem = context && context.activeReviewItem ? context.activeReviewItem : null;
   var currentReviewActive = !!activeReview;
-  var activeWorkItems = currentReviewActive ? active.filter(function(item) {
-    return !(item && item.type === 'review' && String(item.id) === String(activeReview && activeReview.id));
-  }) : active;
   var workspace = (activeReview && activeReview.periodic_review_workspace) || {};
   var readiness = workspace.readiness || {};
   var documentsSummary = workspace.documents_summary || {};
@@ -16080,7 +16107,7 @@ function renderLifecycleDetailTab(context) {
   }) || null;
   var metricsRow = '<div class="lifecycle-metrics-grid">' +
     lifecycleDetailMetric('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'None active', activeReview ? 'purple' : 'slate') +
-    lifecycleDetailMetric('Active items', String((((summary.active || {}).counts) || {}).total || 0), 'blue') +
+    lifecycleDetailMetric('Active reviews', String(activeReviewItems.length), activeReviewItems.length ? 'purple' : 'slate') +
     lifecycleDetailMetric('Status', String((activeReview && activeReview.status_label) || readiness.label || 'No active review'), (readiness.blocker_count || 0) ? 'amber' : 'green') +
     lifecycleDetailMetric('Missing documents', String(documentsSummary.missing_count || 0), (documentsSummary.missing_count || 0) ? 'amber' : 'green') +
     lifecycleDetailMetric('Docs pending review', String(documentsSummary.review_required_count || 0), (documentsSummary.review_required_count || 0) ? 'amber' : 'green') +
@@ -16099,9 +16126,17 @@ function renderLifecycleDetailTab(context) {
     reviewContextBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">Completed ' + escapeHtml(lifecycleFormatDate(lastCompletedReview.completed_at || lastCompletedReview.state_changed_at || lastCompletedReview.created_at)) + ' · ' + escapeHtml(lastCompletedReview.status_label || 'Historical / Superseded') + '</div>';
   }
 
-  var activeWorkBody = activeWorkItems.length
-    ? activeWorkItems.map(lifecycleDetailItemRow).join('')
-    : '<div style="font-size:12px;color:var(--text2);">No related lifecycle work is currently linked to this client.</div>';
+  var noActiveReviewBody = '<div style="font-size:12px;color:var(--text2);line-height:1.6;">No active periodic review is open for this application. Periodic Reviews shows the review workflow, review evidence, readiness, decision, risk reassessment, and review history only.</div>' +
+    (activeNonReviewCount
+      ? '<div style="margin-top:12px;padding:12px;border:1px solid rgba(37,99,235,0.18);border-radius:12px;background:rgba(37,99,235,0.06);font-size:12px;color:#153a7d;line-height:1.5;">' +
+          '<strong>Active non-review work exists:</strong> ' + escapeHtml(String(activeNonReviewCount)) + ' monitoring alert or EDD item(s) are actioned from Alerts, Monitoring Alerts, or EDD owner workflows.' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">' +
+            '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'alerts\')">Open Alerts tab</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open Monitoring Alerts</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="showView(\'edd\')">Open EDD queue</button>' +
+          '</div>' +
+        '</div>'
+      : '');
   var clientAttestationBody = activeReview
     ? renderLifecycleClientAttestationPanel(activeReview, activeReviewProjection)
     : '<div style="font-size:12px;color:var(--text2);">No active periodic review attestation is available.</div>';
@@ -16140,7 +16175,7 @@ function renderLifecycleDetailTab(context) {
     : '<div style="font-size:12px;color:var(--text2);">No historical periodic reviews yet.</div>';
   var currentReviewCardHtml = currentReviewActive
     ? lifecycleDetailCard('Review Overview', 'Officer-facing periodic review cockpit for the active review.', overviewBody, '#4f46e5')
-    : lifecycleDetailCard('Related Lifecycle Work', 'Monitoring, EDD, or other linked lifecycle items that remain outside the current periodic-review owner workflow.', activeWorkBody, '#2563eb');
+    : lifecycleDetailCard('No Active Periodic Review', 'This tab is reserved for review-specific workflow. Non-review alerts and EDD remain in their owner surfaces.', noActiveReviewBody, '#475569');
 
   container.innerHTML =
     '<div class="lifecycle-detail-root">' +
@@ -17801,7 +17836,7 @@ function switchDetailTab(tab) {
   });
   if (tab === 'supervisor') loadSupervisorForApp();
   if (tab === 'lifecycle') loadLifecycleDetailTab();
-  if (tab === 'alerts') renderApplicationAlertsDetailTab();
+  if (tab === 'alerts') loadApplicationAlertsDetailTab();
   if (tab === 'activity') { loadActivityLog(); loadNotes(); }
 }
 
