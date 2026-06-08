@@ -148,6 +148,9 @@ def test_officer_correction_history_safe_parsing_and_pep_rendering():
           }]
         };
         renderOfficerCorrectionHistory(app);
+        assert(document.elements['detail-officer-corrections'].innerHTML.includes('Expand'), 'history should collapse by default');
+        currentApp = app;
+        toggleOfficerCorrectionHistory();
         const rendered = document.elements['detail-officer-corrections'].innerHTML;
         assert(rendered.includes('Field corrected:'), 'history should label the corrected field');
         assert(rendered.includes('John Harbor - Verified PEP status'), 'history should include readable person and field');
@@ -160,6 +163,77 @@ def test_officer_correction_history_safe_parsing_and_pep_rendering():
         assert(!rendered.includes('raw JSON'), 'history must not expose raw JSON labels');
         assert(!rendered.includes('{&quot;') && !rendered.includes('internal'), 'history must not render nested JSON internals');
         console.log(JSON.stringify({ ok: true }));
+        """
+    )
+    assert _run_node(_officer_runtime_js(html, scenario))["ok"] is True
+
+
+def test_officer_correction_history_collapsed_summary_toggle_and_secure_values():
+    html = _read_backoffice()
+    encrypted_blob = "gAAAAABqLongEncryptedValueThatMustNeverRenderInOfficerCorrectionHistory0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    scenario = textwrap.dedent(
+        f"""
+        document.elements['detail-officer-corrections'] = {{ innerHTML: '' }};
+        currentApp = {{
+          ubos: currentApp.ubos,
+          directors: currentApp.directors,
+          intermediaries: [],
+          officerCorrections: [
+            {{
+              id: 10,
+              target_type: 'ubo',
+              subject_type: 'ubo',
+              target_id: 'ubo-1',
+              field_scope: 'nationality',
+              before_state: {{ nationality: 'Mauritius' }},
+              after_state: {{ nationality: 'Singapore' }},
+              corrected_by_name: 'Older Officer',
+              corrected_at: '2026-05-12 14:13:21',
+              correction_reason: 'Older correction',
+              downstream_state: {{ risk_impact: 'Risk recomputed: no change' }}
+            }},
+            {{
+              id: 11,
+              target_type: 'ubo',
+              subject_type: 'ubo',
+              target_id: 'ubo-1',
+              field_scope: 'nationality',
+              before_state: {{ nationality: '{encrypted_blob}' }},
+              after_state: {{ nationality: 'Iran' }},
+              corrected_by_name: 'Aisha Sudally',
+              corrected_at: '2026-06-08 09:20:00',
+              correction_reason: 'Passport evidence confirms nationality',
+              downstream_state: {{ risk_impact: 'Risk recomputed: 55.0 / HIGH -> 70.0 / VERY_HIGH' }}
+            }}
+          ]
+        }};
+
+        OFFICER_CORRECTION_HISTORY_EXPANDED = false;
+        renderOfficerCorrectionHistory(currentApp);
+        let rendered = document.elements['detail-officer-corrections'].innerHTML;
+        assert(rendered.includes('Corrections'), 'collapsed summary should label correction count');
+        assert(rendered.includes('>2<'), 'collapsed summary should show correction count');
+        assert(rendered.includes('John Harbor - Nationality'), 'summary should show latest corrected field / party');
+        assert(rendered.includes('Aisha Sudally'), 'summary should show latest officer');
+        assert(rendered.includes('2026-06-08 09:20:00'), 'summary should show latest date');
+        assert(rendered.includes('Risk recomputed: 55.0 / HIGH -&gt; 70.0 / VERY_HIGH'), 'summary should show latest risk impact');
+        assert(rendered.includes('Expand'), 'collapsed summary should expose Expand toggle');
+        assert(!rendered.includes('Before:'), 'collapsed view must hide full before/after detail');
+        assert(!rendered.includes('{encrypted_blob}'), 'collapsed view must not show encrypted values');
+
+        toggleOfficerCorrectionHistory();
+        rendered = document.elements['detail-officer-corrections'].innerHTML;
+        assert(rendered.includes('Collapse'), 'expanded view should expose Collapse toggle');
+        assert(rendered.includes('Before:</strong> Previous value unavailable / securely stored'), 'encrypted before value should be redacted');
+        assert(rendered.includes('After:</strong> Iran'), 'expanded view should preserve readable after value');
+        assert(!rendered.includes('{encrypted_blob}'), 'expanded view must not show encrypted values');
+        assert(rendered.indexOf('Aisha Sudally') < rendered.indexOf('Older Officer'), 'expanded history should remain newest-first');
+
+        toggleOfficerCorrectionHistory();
+        rendered = document.elements['detail-officer-corrections'].innerHTML;
+        assert(rendered.includes('Expand'), 'collapsed view should restore Expand toggle');
+        assert(!rendered.includes('Before:'), 'collapsed view should hide details after collapsing');
+        console.log(JSON.stringify({{ ok: true }}));
         """
     )
     assert _run_node(_officer_runtime_js(html, scenario))["ok"] is True
