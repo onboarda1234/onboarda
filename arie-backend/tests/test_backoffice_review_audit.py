@@ -396,6 +396,62 @@ class TestApplicationAuditLogEndpoint:
         assert "/audit-log" in html
         assert "loadActivityLog" in html
 
+    def test_frontend_audit_trail_has_enterprise_presentation_helpers(self):
+        """Application Detail audit trail must render structured rows with collapsed technical detail."""
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            html = f.read()
+        assert "function classifyAuditEvent" in html
+        assert "function buildAuditSummary" in html
+        assert "function renderAuditEventCard" in html
+        assert "Show technical details" in html
+        assert "Copy technical details" in html
+        assert "audit-filter-chip" in html
+        assert "data-audit-category" in html
+
+    def test_frontend_audit_filter_chips_are_available(self):
+        """Audit trail filters must be client-side and include the required category set."""
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            html = f.read()
+        assert "DETAIL_AUDIT_FILTERS" in html
+        for category in ["All", "Risk", "Screening", "Documents", "Memo", "EDD", "Governance", "Decision", "System"]:
+            assert f"'{category}'" in html
+        assert "function setAuditTrailFilter" in html
+        assert "boApiCall('GET', '/applications/' + app.id + '/audit-log?limit=100')" in html
+
+    def test_frontend_does_not_render_detail_inline_by_default(self):
+        """Raw audit detail should be shown only in the technical details panel."""
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            html = f.read()
+        activity_start = html.index("// ACTIVITY LOG — Real audit trail from backend")
+        activity_end = html.index("// NOTES — Internal officer notes from backend", activity_start)
+        activity_region = html[activity_start:activity_end]
+        assert "escapeHtml(e.detail || '')" not in activity_region
+        assert "buildAuditTechnicalPayload" in activity_region
+        assert '<pre class="audit-tech-pre"' in activity_region
+
+    def test_empty_internal_notes_state_is_compact(self):
+        """Empty notes must not render a tall blank block."""
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            html = f.read()
+        notes_start = html.index("async function loadNotes()")
+        notes_end = html.index("var decisionRecordsLoadedFor", notes_start)
+        notes_region = html[notes_start:notes_end]
+        assert "notes-empty-state" in notes_region
+        assert "No internal notes yet." in notes_region
+        assert "padding:16px;text-align:center;font-size:12px;color:var(--text3);" not in notes_region
+
 
 # ═══════════════════════════════════════════════════════════
 # C. NOTES — Real persistence
