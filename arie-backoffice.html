@@ -5435,7 +5435,10 @@ function showView(name, navItem) {
   if (name === 'change-mgmt') {
     renderChangeMgmt();
   }
-  if (name === 'cases') renderCases();
+  if (name === 'cases') {
+    renderCases();
+    loadCaseWorklist({ force: true });
+  }
   if (name === 'kpis') renderKPIDashboard();
   if (name === 'reg-intel') {
     renderRegIntel();
@@ -13474,43 +13477,16 @@ function loadCMStats() {
 
 var activeCaseTab = 'my-assigned';
 var activeCaseWorkFilter = 'all';
-
-function currentUserId() {
-  return currentUser ? String(currentUser.id || currentUser.sub || '') : '';
-}
-
-function isPreApprovalCase(app) {
-  return app.status === 'Pre-Approval Review' || app.status === 'pre_approval_review';
-}
-
-function isAssignedToCurrentUser(app) {
-  var userId = currentUserId();
-  return !!userId && String(app.assignedId || '') === userId;
-}
-
-function isWorkAssignedToCurrentUser(assignedId, assignedName) {
-  var userId = currentUserId();
-  var userEmail = currentUser ? String(currentUser.email || '').toLowerCase() : '';
-  var userName = currentUser ? String(currentUser.name || '').toLowerCase() : '';
-  var id = String(assignedId || '');
-  var name = String(assignedName || '').toLowerCase();
-  return !!((userId && id === userId) || (userEmail && id.toLowerCase() === userEmail) || (userName && name === userName));
-}
-
-function caseWorkDueState(dateValue, statusValue) {
-  var status = String(statusValue || '').toLowerCase();
-  if (status.indexOf('overdue') >= 0) return 'overdue';
-  if (status.indexOf('due soon') >= 0) return 'due_soon';
-  if (!dateValue || dateValue === '—') return '';
-  var due = new Date(String(dateValue) + 'T00:00:00Z');
-  if (isNaN(due.getTime())) return '';
-  var today = new Date();
-  var todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  var diffDays = Math.floor((due.getTime() - todayUtc) / 86400000);
-  if (diffDays < 0) return 'overdue';
-  if (diffDays <= 30) return 'due_soon';
-  return '';
-}
+var CASE_WORKLIST_STATE = {
+  status: 'idle',
+  items: [],
+  counts: { all: 0, applications: 0, periodic_reviews: 0, pre_approval: 0, overdue: 0, due_soon: 0 },
+  pagination: { limit: 100, offset: 0, total: 0 },
+  error: '',
+  q: ''
+};
+var CASE_WORKLIST_REQUEST_ID = 0;
+var CASE_WORKLIST_SEARCH_TIMER = null;
 
 function caseWorkTypeChip(type) {
   var label = type === 'periodic_review' ? 'Periodic Review' : 'Application';
@@ -13524,85 +13500,120 @@ function caseWorkStatusBadge(item) {
     : statusBadge(item.status);
 }
 
-function buildCaseWorkItems() {
-  var items = [];
-  APPLICATIONS.forEach(function(app) {
-    if (!isAssignedToCurrentUser(app)) return;
-    items.push({
-      type: 'application',
-      filterType: 'applications',
-      ref: app.ref,
-      client: app.company,
-      riskHtml: riskBadgeForRecord(app),
-      status: app.status,
-      assigned: app.assigned || 'Unassigned',
-      due: app.date || '—',
-      dueState: isPreApprovalCase(app) ? 'pre_approval' : '',
-      action: "openAppDetail(" + JSON.stringify(app.ref) + ")"
-    });
-  });
-  PERIODIC_REVIEWS.forEach(function(review) {
-    if (!isWorkAssignedToCurrentUser(review.assignedOfficerId, review.assignedOfficerName)) return;
-    var dueState = caseWorkDueState(review.nextDue, review.status);
-    items.push({
-      type: 'periodic_review',
-      filterType: 'periodic_reviews',
-      ref: review.ref || ('Review #' + review.id),
-      reviewId: review.id,
-      client: review.client || 'Periodic review',
-      riskHtml: riskBadge(review.risk),
-      status: review.status || 'Due',
-      assigned: review.assignedOfficerName || review.assignedOfficerId || 'Unassigned',
-      due: review.nextDue || '—',
-      dueState: dueState,
-      action: "openCasePeriodicReview(" + JSON.stringify(review.ref || "") + ")"
-    });
-  });
-  return items;
+function caseWorkPath() {
+  var params = new URLSearchParams();
+  params.set('filter', activeCaseWorkFilter || 'all');
+  params.set('assigned_to_me', 'true');
+  params.set('limit', String(CASE_WORKLIST_STATE.pagination.limit || 100));
+  params.set('offset', String(CASE_WORKLIST_STATE.pagination.offset || 0));
+  if (CASE_WORKLIST_STATE.q) params.set('q', CASE_WORKLIST_STATE.q);
+  return '/case-management/worklist?' + params.toString();
 }
 
-function caseWorkItemMatchesFilter(item) {
-  if (activeCaseWorkFilter === 'all') return true;
-  if (activeCaseWorkFilter === 'overdue') return item.dueState === 'overdue';
-  if (activeCaseWorkFilter === 'due_soon') return item.dueState === 'due_soon';
-  if (activeCaseWorkFilter === 'pre_approval') return item.dueState === 'pre_approval';
-  return item.filterType === activeCaseWorkFilter;
+function loadCaseWorklist(options) {
+  options = options || {};
+  if (!BO_AUTH_TOKEN) return Promise.resolve(false);
+  CASE_WORKLIST_REQUEST_ID += 1;
+  var requestId = CASE_WORKLIST_REQUEST_ID;
+  CASE_WORKLIST_STATE.status = 'loading';
+  CASE_WORKLIST_STATE.error = '';
+  renderCases();
+  return boApiCall('GET', caseWorkPath(), null, {
+    suppressAuthReset: true,
+    sessionId: options.sessionId || getCurrentBoSessionId()
+  }).then(function(payload) {
+    if (requestId !== CASE_WORKLIST_REQUEST_ID) return false;
+    CASE_WORKLIST_STATE.items = Array.isArray(payload.items) ? payload.items : [];
+    CASE_WORKLIST_STATE.counts = payload.counts || CASE_WORKLIST_STATE.counts;
+    CASE_WORKLIST_STATE.pagination = payload.pagination || CASE_WORKLIST_STATE.pagination;
+    CASE_WORKLIST_STATE.status = 'ready';
+    CASE_WORKLIST_STATE.error = '';
+    renderCases();
+    return true;
+  }).catch(function(err) {
+    if (requestId !== CASE_WORKLIST_REQUEST_ID) return false;
+    CASE_WORKLIST_STATE.status = 'failed';
+    CASE_WORKLIST_STATE.error = (err && err.message) || 'Could not load assigned work.';
+    CASE_WORKLIST_STATE.items = [];
+    CASE_WORKLIST_STATE.counts = { all: 0, applications: 0, periodic_reviews: 0, pre_approval: 0, overdue: 0, due_soon: 0 };
+    renderCases();
+    console.warn('Could not load case management worklist:', err);
+    return false;
+  });
 }
 
-function openCasePeriodicReview(ref) {
-  if (!ref) {
-    showToast('Periodic review is missing an application reference', 'error');
+function retryCaseWorklist() {
+  loadCaseWorklist({ force: true });
+}
+
+function queueCaseWorklistSearch(q) {
+  CASE_WORKLIST_STATE.q = String(q || '').trim();
+  CASE_WORKLIST_STATE.pagination.offset = 0;
+  if (CASE_WORKLIST_SEARCH_TIMER) clearTimeout(CASE_WORKLIST_SEARCH_TIMER);
+  CASE_WORKLIST_SEARCH_TIMER = setTimeout(function() {
+    loadCaseWorklist({ force: true });
+  }, 250);
+}
+
+function openCaseWorkItem(index) {
+  var item = CASE_WORKLIST_STATE.items[index];
+  if (!item) {
+    showToast('Assigned work item is no longer available', 'error');
     return;
   }
-  openAppDetail(ref);
-  setTimeout(function() { switchDetailTab('lifecycle'); }, 0);
+  var target = item.open_target || {};
+  var appRef = target.application_reference || item.application_id || item.reference;
+  if (!appRef) {
+    showToast('Assigned work item is missing an application reference', 'error');
+    return;
+  }
+  if (target.kind === 'periodic_review_workspace') {
+    openAppDetail(appRef, { initialTab: 'lifecycle' });
+    return;
+  }
+  if (target.kind === 'pre_approval') {
+    openAppDetail(appRef, { initialTab: 'overview' });
+    return;
+  }
+  openAppDetail(appRef);
 }
 
 function renderCases() {
   var tbody = document.getElementById('cases-body');
   tbody.innerHTML = '';
-  var items = buildCaseWorkItems();
-  var visibleItems = items.filter(caseWorkItemMatchesFilter);
   var countEl = document.getElementById('case-work-count');
-  if (countEl) countEl.textContent = visibleItems.length + ' assigned';
-  if (!visibleItems.length) {
+  var count = CASE_WORKLIST_STATE.counts && CASE_WORKLIST_STATE.counts[activeCaseWorkFilter] != null
+    ? CASE_WORKLIST_STATE.counts[activeCaseWorkFilter]
+    : CASE_WORKLIST_STATE.pagination.total;
+  if (countEl) countEl.textContent = CASE_WORKLIST_STATE.status === 'loading' ? 'Loading…' : (Number(count || 0) + ' assigned');
+  if (CASE_WORKLIST_STATE.status === 'loading') {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">Loading assigned work…</td></tr>';
+    return;
+  }
+  if (CASE_WORKLIST_STATE.status === 'failed') {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--red);padding:18px;">Failed to load assigned work. ' +
+      '<button class="btn btn-outline btn-sm" onclick="retryCaseWorklist()" style="margin-left:8px;">Retry</button>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(CASE_WORKLIST_STATE.error || '') + '</div></td></tr>';
+    return;
+  }
+  if (!CASE_WORKLIST_STATE.items.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">No assigned work matches this filter.</td></tr>';
     return;
   }
-  visibleItems.forEach(function(item) {
+  CASE_WORKLIST_STATE.items.forEach(function(item, idx) {
     var tr = document.createElement('tr');
-    if (item.dueState === 'pre_approval') {
+    if (item.open_target && item.open_target.kind === 'pre_approval') {
       tr.style.background = 'rgba(217,119,6,0.06)';
     }
     tr.innerHTML =
       '<td>' + caseWorkTypeChip(item.type) + '</td>' +
-      '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(item.ref) + '</td>' +
-      '<td>' + escapeHtml(item.client) + '</td>' +
-      '<td>' + item.riskHtml + '</td>' +
+      '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(item.reference || '') + '</td>' +
+      '<td>' + escapeHtml(item.client || '') + '</td>' +
+      '<td>' + riskBadge(item.risk_level || '') + '</td>' +
       '<td>' + caseWorkStatusBadge(item) + '</td>' +
-      '<td style="font-size:12px;">' + escapeHtml(item.assigned) + '</td>' +
-      '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(item.due) + '</td>' +
-      '<td><button class="btn btn-outline btn-sm" onclick="' + item.action + '">Open</button></td>';
+      '<td style="font-size:12px;">' + escapeHtml(item.assigned_to || 'Unassigned') + '</td>' +
+      '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(item.due_date || item.last_activity_at || '—') + '</td>' +
+      '<td><button class="btn btn-outline btn-sm" onclick="openCaseWorkItem(' + idx + ')">Open</button></td>';
     tbody.appendChild(tr);
   });
 }
@@ -17781,9 +17792,10 @@ function switchCaseTab(tab, btn) {
 
 function setCaseWorkFilter(filter, btn) {
   activeCaseWorkFilter = filter || 'all';
+  CASE_WORKLIST_STATE.pagination.offset = 0;
   document.querySelectorAll('#view-cases .case-work-filter').forEach(function(t) { t.classList.remove('active'); });
   if (btn) btn.classList.add('active');
-  renderCases();
+  loadCaseWorklist({ force: true });
 }
 
 function switchDetailTab(tab) {
@@ -20095,6 +20107,11 @@ function handleGlobalSearch(q) {
     var queueSearch = document.getElementById('screening-queue-search');
     if (queueSearch && queueSearch.value !== query) queueSearch.value = query;
     queueScreeningQueueSearch();
+    return;
+  }
+  var casesView = document.getElementById('view-cases');
+  if (casesView && casesView.classList.contains('active')) {
+    queueCaseWorklistSearch(query);
     return;
   }
   var appSearch = document.getElementById('applications-search');
