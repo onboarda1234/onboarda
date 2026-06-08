@@ -135,8 +135,9 @@ def test_backoffice_screening_queue_sidebar_alias_and_audit_formatters_exist():
     assert "showView('screening-queue',this)" in html
     assert "if (name === 'screening-queue') name = 'screening';" in show_view_region
     assert "renderScreening({ force: SCREENING_QUEUE_DIRTY || !SCREENING_QUEUE.rows.length })" in show_view_region
-    assert "function renderScreeningAuditEntry" in html
-    assert "Technical audit details" in activity_region
+    assert "function renderAuditEventCard" in html
+    assert "function buildAuditSummary" in html
+    assert "Show technical details" in activity_region
     assert "Screening Review Completed" in activity_region
     assert "screeningAuditSourceLabel" in activity_region
     assert "screeningQueueSignalBadge(row.watchlist_status, row)" in render_screening_region

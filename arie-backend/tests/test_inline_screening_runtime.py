@@ -838,7 +838,7 @@ def _show_view_runtime_js(html):
 def _activity_log_runtime_js(html):
     region = _extract_between(
         html,
-        "function safeParseAuditDetail(detail) {",
+        "var DETAIL_AUDIT_FILTERS =",
         "// ═══════════════════════════════════════════════════════════\n// NOTES",
     )
     return "\n".join(
@@ -848,6 +848,8 @@ def _activity_log_runtime_js(html):
                 var currentApp = { id: 11 };
                 var BO_AUTH_TOKEN = 'token';
                 var container = { innerHTML: '' };
+                var window = { _currentDetailApp: null };
+                function renderCaseCommandCentre() {}
                 function escapeHtml(value) {
                   return String(value == null ? '' : value)
                     .replace(/&/g, '&amp;')
@@ -855,6 +857,26 @@ def _activity_log_runtime_js(html):
                     .replace(/>/g, '&gt;')
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;');
+                }
+                function firstMeaningfulDetailValue() {
+                  for (let i = 0; i < arguments.length; i++) {
+                    const value = arguments[i];
+                    if (value == null) continue;
+                    if (Array.isArray(value) && value.length) return value;
+                    if (typeof value === 'string' && value.trim() === '') continue;
+                    if (value !== '') return value;
+                  }
+                  return '';
+                }
+                function formatNestedObject(obj) {
+                  const parts = [];
+                  Object.keys(obj || {}).forEach((key) => {
+                    const val = obj[key];
+                    if (val == null || val === '') return;
+                    if (typeof val === 'object') parts.push(key.replace(/_/g, ' ') + ': ' + JSON.stringify(val));
+                    else parts.push(key.replace(/_/g, ' ') + ': ' + val);
+                  });
+                  return parts.length ? parts.join(' | ') : '—';
                 }
                 async function boApiCall() {
                   return {
@@ -874,6 +896,29 @@ def _activity_log_runtime_js(html):
                         user_name: 'Aisha Sudally',
                         user_role: 'co',
                         timestamp: '2026-05-31T14:22:00Z'
+                      },
+                      {
+                        action: 'Risk Recomputed',
+                        detail: 'Reason: officer correction. Score: 48→72, Level: MEDIUM→HIGH',
+                        before_state: JSON.stringify({ risk_score: 48, risk_level: 'MEDIUM' }),
+                        after_state: JSON.stringify({ risk_score: 72, risk_level: 'HIGH' }),
+                        user_name: 'Risk Engine',
+                        user_role: 'system',
+                        timestamp: '2026-05-31T14:20:00Z'
+                      },
+                      {
+                        action: 'edd_routing.evaluated',
+                        detail: JSON.stringify({ route: 'edd', triggers: ['risk_score'], policy_version: 'v1' }),
+                        user_name: 'Routing Policy',
+                        user_role: 'system',
+                        timestamp: '2026-05-31T14:18:00Z'
+                      },
+                      {
+                        action: 'Unexpected Vendor Event',
+                        detail: JSON.stringify({ provider_id: 'raw-provider-123', unsafe: '<script>alert(1)</script>' }),
+                        user_name: 'System',
+                        user_role: 'system',
+                        timestamp: '2026-05-31T14:15:00Z'
                       },
                       {
                         action: 'Status Change',
@@ -897,7 +942,13 @@ def _activity_log_runtime_js(html):
             textwrap.dedent(
                 """
                 loadActivityLog(currentApp).then(function() {
-                  console.log(JSON.stringify({ html: container.innerHTML }));
+                  const allHtml = container.innerHTML;
+                  const firstCardVisible = allHtml.split('<details')[0];
+                  setAuditTrailFilter('Risk');
+                  const riskHtml = container.innerHTML;
+                  setAuditTrailFilter('System');
+                  const systemHtml = container.innerHTML;
+                  console.log(JSON.stringify({ html: allHtml, firstCardVisible, riskHtml, systemHtml }));
                 }).catch(function(err) {
                   console.error(err);
                   process.exit(1);
@@ -1215,8 +1266,22 @@ class TestInlineScreeningRuntime:
         html = _read_backoffice()
         result = _run_node(_activity_log_runtime_js(html))
         assert "Screening Review Completed" in result["html"]
-        assert "Subject:</strong> John Harbor" in result["html"]
+        assert "Screening review completed for John Harbor" in result["html"]
         assert "No Match" in result["html"]
-        assert "Technical audit details" in result["html"]
-        assert "application_detail_screening_tab" in result["html"]
+        assert "Show technical details" in result["html"]
+        assert "Copy technical details" in result["html"]
         assert "Status Change" in result["html"]
+        assert "raw-provider-123" not in result["firstCardVisible"]
+
+    def test_activity_log_filters_and_unknown_fallback_are_safe(self):
+        html = _read_backoffice()
+        result = _run_node(_activity_log_runtime_js(html))
+        assert 'data-filter="Risk"' in result["html"]
+        assert "Risk score changed from 48 to 72; level changed from MEDIUM to HIGH." in result["html"]
+        assert "EDD routing evaluated; route selected: edd." in result["html"]
+        assert "Unexpected Vendor Event" in result["html"]
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in result["html"]
+        assert "Risk score changed from 48 to 72" in result["riskHtml"]
+        assert "Screening Review Completed" not in result["riskHtml"]
+        assert "Unexpected Vendor Event" in result["systemHtml"]
+        assert "Risk Recomputed" not in result["systemHtml"]

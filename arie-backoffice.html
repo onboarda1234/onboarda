@@ -87,6 +87,35 @@ a { color:var(--brand); text-decoration:none; }
 .card:hover { box-shadow:var(--shadow-md); }
 .card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
 .card-title { font-size:15px; font-weight:700; }
+.audit-filter-bar { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
+.audit-filter-chip { border:1px solid var(--border1); background:var(--surface2); color:var(--text2); border-radius:999px; padding:5px 10px; font-size:11px; font-weight:700; cursor:pointer; }
+.audit-filter-chip.active { border-color:var(--brand); background:var(--brand-dim); color:var(--brand); }
+.audit-event-list { display:flex; flex-direction:column; gap:10px; }
+.audit-event-card { border:1px solid #dfe7f2; border-left:4px solid #64748b; border-radius:8px; background:var(--surface); padding:12px 14px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }
+.audit-event-card.risk { border-left-color:#d97706; }
+.audit-event-card.screening { border-left-color:#2563eb; }
+.audit-event-card.documents { border-left-color:#0f766e; }
+.audit-event-card.memo { border-left-color:#7c3aed; }
+.audit-event-card.edd { border-left-color:#9333ea; }
+.audit-event-card.governance { border-left-color:#475569; }
+.audit-event-card.decision { border-left-color:#16a34a; }
+.audit-event-card.system { border-left-color:#94a3b8; }
+.audit-event-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+.audit-event-title-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+.audit-event-title { font-size:13px; font-weight:800; color:var(--text1); line-height:1.35; }
+.audit-chip { display:inline-flex; align-items:center; border-radius:999px; padding:2px 8px; font-size:10px; font-weight:800; line-height:1.4; text-transform:uppercase; letter-spacing:.03em; border:1px solid transparent; white-space:nowrap; }
+.audit-chip.category { background:#f8fafc; border-color:#e2e8f0; color:#475569; }
+.audit-chip.status { background:var(--blue-bg); border-color:rgba(37,99,235,.18); color:var(--blue); }
+.audit-chip.status.accepted, .audit-chip.status.approved, .audit-chip.status.pass, .audit-chip.status.complete, .audit-chip.status.cleared { background:var(--green-bg); border-color:rgba(22,163,74,.18); color:var(--green); }
+.audit-chip.status.rejected, .audit-chip.status.failed, .audit-chip.status.fail, .audit-chip.status.error { background:var(--red-bg); border-color:rgba(220,38,38,.18); color:var(--red); }
+.audit-chip.status.pending, .audit-chip.status.warning, .audit-chip.status.warn, .audit-chip.status.high { background:var(--amber-bg); border-color:rgba(217,119,6,.2); color:var(--amber); }
+.audit-event-meta { font-size:11px; color:var(--text3); line-height:1.45; text-align:right; }
+.audit-event-summary { margin-top:8px; font-size:12px; color:var(--text2); line-height:1.55; overflow-wrap:anywhere; }
+.audit-tech-details { margin-top:10px; border-top:1px solid var(--border1); padding-top:8px; }
+.audit-tech-details summary { cursor:pointer; color:var(--brand); font-size:11px; font-weight:800; list-style-position:inside; }
+.audit-tech-copy { margin:8px 0 8px; border:1px solid var(--border1); border-radius:6px; background:var(--surface2); color:var(--text2); padding:4px 8px; font-size:11px; font-weight:700; cursor:pointer; }
+.audit-tech-pre { max-height:340px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; padding:10px 12px; background:#0f172a; border-radius:8px; color:#e2e8f0; font-size:11px; line-height:1.55; }
+.notes-empty-state { padding:8px 10px; border:1px dashed var(--border1); border-radius:8px; background:var(--surface2); color:var(--text3); font-size:12px; line-height:1.4; }
 
 /* ── Tables ── */
 .data-table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -17808,6 +17837,10 @@ function switchDetailTab(tab) {
 // ═══════════════════════════════════════════════════════════
 // ACTIVITY LOG — Real audit trail from backend
 // ═══════════════════════════════════════════════════════════
+var DETAIL_AUDIT_FILTERS = ['All', 'Risk', 'Screening', 'Documents', 'Memo', 'EDD', 'Governance', 'Decision', 'System'];
+var detailAuditFilter = 'All';
+var detailAuditEntries = [];
+
 function safeParseAuditDetail(detail) {
   if (!detail) return null;
   if (typeof detail === 'object') return detail;
@@ -17816,6 +17849,96 @@ function safeParseAuditDetail(detail) {
   } catch (err) {
     return null;
   }
+}
+
+function safeStringifyAuditValue(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') {
+    var parsed = safeParseAuditDetail(value);
+    if (parsed) return JSON.stringify(parsed, null, 2);
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (err) {
+    return String(value);
+  }
+}
+
+function auditValueFromAliases() {
+  for (var i = 0; i < arguments.length; i += 2) {
+    var source = arguments[i];
+    var keys = arguments[i + 1] || [];
+    if (!source || typeof source !== 'object') continue;
+    for (var k = 0; k < keys.length; k++) {
+      var value = source[keys[k]];
+      if (value != null && String(value).trim() !== '') return value;
+    }
+  }
+  return '';
+}
+
+function cleanAuditText(value, maxLength) {
+  var text = value == null ? '' : String(value);
+  var parsed = safeParseAuditDetail(text);
+  if (parsed) text = formatNestedObject(parsed);
+  text = text
+    .replace(/[{}"]/g, ' ')
+    .replace(/[_:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return 'No summary detail recorded.';
+  var limit = maxLength || 180;
+  return text.length > limit ? text.slice(0, limit - 1).trim() + '…' : text;
+}
+
+function titleCaseAuditAction(action) {
+  var text = String(action || 'Audit Event').replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return 'Audit Event';
+  return text.replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+}
+
+function normalizeAuditStatusLabel(value) {
+  var text = String(value || '').trim();
+  if (!text) return '';
+  return text.replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+}
+
+function auditStatusClass(value) {
+  var normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  if (!normalized) return '';
+  if (normalized.indexOf('false-positive') >= 0) return 'cleared';
+  if (normalized.indexOf('confirm') >= 0 || normalized.indexOf('accepted') >= 0) return 'accepted';
+  if (normalized.indexOf('reject') >= 0 || normalized.indexOf('fail') >= 0 || normalized.indexOf('error') >= 0) return 'rejected';
+  if (normalized.indexOf('pending') >= 0 || normalized.indexOf('warn') >= 0 || normalized.indexOf('high') >= 0) return 'pending';
+  return normalized;
+}
+
+function classifyAuditEvent(entry, detail, beforeState, afterState) {
+  var combined = [
+    entry && entry.action,
+    entry && entry.detail,
+    entry && entry.target,
+    safeStringifyAuditValue(detail),
+    safeStringifyAuditValue(beforeState),
+    safeStringifyAuditValue(afterState)
+  ].join(' ').toLowerCase();
+  if (/(risk recomputed|risk correction|risk score|risk level|recompute|risk_recomputed)/.test(combined)) return 'Risk';
+  if (/(screening review|screening\.review_disposition|false positive|false_positive|escalat|follow-up|follow up)/.test(combined)) return 'Screening';
+  if (/(edd routing|edd_routing|edd case|enhanced due diligence|formal investigation)/.test(combined)) return 'EDD';
+  if (/(memo generated|memo approved|memo stale|memo addendum|compliance memo|memo_)/.test(combined)) return 'Memo';
+  if (/(document upload|document verification|evidence upload|document evidence|uploaded document|upload)/.test(combined)) return 'Documents';
+  if (/(approve|approval|reject|more info|request info|override|pre-approval|pre approval|decision)/.test(combined)) return 'Decision';
+  if (/(supervisor|governance attempt|ai governance|signoff|sign-off|four-eyes|four eyes)/.test(combined)) return 'Governance';
+  return 'System';
+}
+
+function deriveAuditStatus(entry, detail, beforeState, afterState) {
+  return auditValueFromAliases(
+    detail, ['outcome', 'status', 'severity', 'result', 'response_status', 'disposition', 'disposition_code', 'route', 'risk_level', 'final_risk_level'],
+    afterState, ['risk_level', 'final_risk_level', 'status', 'review_status', 'decision'],
+    beforeState, []
+  );
 }
 
 function screeningAuditSourceLabel(sourceSurface) {
@@ -17843,28 +17966,176 @@ function screeningAuditFourEyesLabel(status) {
   return status || 'Not recorded';
 }
 
-function renderScreeningAuditEntry(entry) {
-  var detail = safeParseAuditDetail(entry.detail);
-  if (!detail) return '';
-  var ts = (entry.timestamp || '').replace('T', ' ').slice(0, 19);
-  var actor = entry.user_name || entry.user_id || 'System';
-  var role = entry.user_role || '';
-  var raw = typeof entry.detail === 'string' ? entry.detail : JSON.stringify(detail, null, 2);
-  return '<div class="activity-item" style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
-    '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">Screening Review Completed</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;font-size:12px;color:var(--text2);line-height:1.5;">' +
-      '<div><strong>Subject:</strong> ' + escapeHtml(detail.subject_name || detail.subject || 'Not recorded') + '</div>' +
-      '<div><strong>Subject type:</strong> ' + escapeHtml(String(detail.subject_type || 'Not recorded').replace(/_/g, ' ')) + '</div>' +
-      '<div><strong>Disposition:</strong> ' + escapeHtml(screeningAuditDispositionLabel(detail)) + '</div>' +
-      '<div><strong>Reviewer:</strong> ' + escapeHtml(actor) + (role ? ' · ' + escapeHtml(role) : '') + '</div>' +
-      '<div><strong>Source:</strong> ' + escapeHtml(screeningAuditSourceLabel(detail.source_surface)) + '</div>' +
-      '<div><strong>Four-eyes status:</strong> ' + escapeHtml(screeningAuditFourEyesLabel(detail.four_eyes_status)) + '</div>' +
-      '<div><strong>Evidence reference:</strong> ' + escapeHtml(detail.evidence_reference || 'Not recorded') + '</div>' +
-      '<div><strong>Timestamp:</strong> ' + escapeHtml(ts || 'Not recorded') + '</div>' +
+function buildAuditSummary(entry, detail, beforeState, afterState, category) {
+  var action = String(entry && entry.action || '');
+  var actionLower = action.toLowerCase();
+  var detailAction = detail && detail.action ? String(detail.action) : '';
+
+  if (action === 'edd_routing.evaluated' || actionLower.indexOf('edd_routing.evaluated') >= 0) {
+    var route = auditValueFromAliases(detail, ['route', 'selected_route', 'decision']);
+    return 'EDD routing evaluated; route selected: ' + (route ? String(route).replace(/_/g, ' ') : 'not recorded') + '.';
+  }
+
+  if (action === 'Risk Recomputed' || actionLower.indexOf('risk recomputed') >= 0) {
+    var oldScore = auditValueFromAliases(beforeState, ['risk_score', 'score'], detail, ['old_score', 'previous_score', 'from_score']);
+    var newScore = auditValueFromAliases(afterState, ['risk_score', 'score'], detail, ['new_score', 'current_score', 'to_score']);
+    var oldLevel = auditValueFromAliases(beforeState, ['risk_level', 'final_risk_level'], detail, ['old_level', 'previous_level', 'from_level']);
+    var newLevel = auditValueFromAliases(afterState, ['risk_level', 'final_risk_level'], detail, ['new_level', 'current_level', 'to_level']);
+    if (oldScore || newScore || oldLevel || newLevel) {
+      return 'Risk score changed from ' + (oldScore || 'not recorded') + ' to ' + (newScore || 'not recorded') +
+        '; level changed from ' + (oldLevel || 'not recorded') + ' to ' + (newLevel || 'not recorded') + '.';
+    }
+  }
+
+  if (action === 'Governance Attempt' && detailAction === 'screening.review_disposition') {
+    return 'Screening disposition submitted from ' + screeningAuditSourceLabel(detail.source_surface || detail.source) +
+      '; outcome: ' + (detail.outcome || detail.status || 'not recorded') + '.';
+  }
+
+  if (action === 'Screening Review' || actionLower.indexOf('screening review') >= 0) {
+    var subject = auditValueFromAliases(detail, ['subject_name', 'subject', 'name']);
+    return 'Screening review completed for ' + (subject || 'the selected subject') +
+      '; disposition: ' + screeningAuditDispositionLabel(detail || {}) + '.';
+  }
+
+  if (category === 'Memo') {
+    return cleanAuditText(firstMeaningfulDetailValue(detail && (detail.reason || detail.message || detail.summary), entry.detail), 180);
+  }
+
+  if (category === 'Documents') {
+    var docName = auditValueFromAliases(detail, ['document_name', 'filename', 'file_name', 'document_type']);
+    var docStatus = auditValueFromAliases(detail, ['status', 'verification_status', 'result']);
+    if (docName || docStatus) return 'Document evidence ' + (docName ? '"' + docName + '" ' : '') + (docStatus ? 'recorded with status: ' + docStatus + '.' : 'recorded.');
+  }
+
+  if (category === 'Decision') {
+    var decision = auditValueFromAliases(detail, ['decision', 'outcome', 'status'], afterState, ['decision', 'status']);
+    if (decision) return 'Decision event recorded; outcome: ' + String(decision).replace(/_/g, ' ') + '.';
+  }
+
+  return cleanAuditText(firstMeaningfulDetailValue(detail && (detail.summary || detail.message || detail.reason), entry && entry.detail, entry && entry.action), 180);
+}
+
+function buildAuditTechnicalPayload(entry, detail, beforeState, afterState) {
+  return {
+    id: entry && entry.id,
+    action: entry && entry.action,
+    target: entry && entry.target,
+    actor: {
+      user_id: entry && entry.user_id,
+      user_name: entry && entry.user_name,
+      user_role: entry && entry.user_role
+    },
+    timestamp: entry && entry.timestamp,
+    ip_address: entry && entry.ip_address,
+    detail: detail || entry && entry.detail || null,
+    before_state: beforeState || entry && entry.before_state || null,
+    after_state: afterState || entry && entry.after_state || null
+  };
+}
+
+function renderAuditEventCard(entry, idx) {
+  var detail = safeParseAuditDetail(entry && entry.detail);
+  var beforeState = safeParseAuditDetail(entry && entry.before_state);
+  var afterState = safeParseAuditDetail(entry && entry.after_state);
+  var category = classifyAuditEvent(entry || {}, detail, beforeState, afterState);
+  var status = deriveAuditStatus(entry || {}, detail, beforeState, afterState);
+  var action = titleCaseAuditAction(entry && entry.action);
+  if (String(entry && entry.action || '') === 'Screening Review') action = 'Screening Review Completed';
+  var summary = buildAuditSummary(entry || {}, detail, beforeState, afterState, category);
+  var ts = (entry && entry.timestamp || '').replace('T', ' ').slice(0, 19) || 'Timestamp not recorded';
+  var actor = entry && (entry.user_name || entry.user_id) || 'System';
+  var role = entry && entry.user_role ? ' · ' + entry.user_role : '';
+  var techId = 'audit-technical-' + idx;
+  var technical = safeStringifyAuditValue(buildAuditTechnicalPayload(entry || {}, detail, beforeState, afterState));
+  var statusChip = status ? '<span class="audit-chip status ' + escapeHtml(auditStatusClass(status)) + '">' + escapeHtml(normalizeAuditStatusLabel(status)) + '</span>' : '';
+
+  return '<div class="audit-event-card ' + escapeHtml(category.toLowerCase()) + '" data-audit-category="' + escapeHtml(category) + '">' +
+    '<div class="audit-event-header">' +
+      '<div class="audit-event-title-row">' +
+        '<span class="audit-event-title">' + escapeHtml(action) + '</span>' +
+        '<span class="audit-chip category">' + escapeHtml(category) + '</span>' +
+        statusChip +
+      '</div>' +
+      '<div class="audit-event-meta">' + escapeHtml(actor + role) + '<br>' + escapeHtml(ts) + '</div>' +
     '</div>' +
-    '<div style="font-size:12px;color:var(--text2);margin-top:8px;line-height:1.6;"><strong>Rationale:</strong> ' + escapeHtml(detail.rationale || detail.notes || 'Not recorded') + '</div>' +
-    '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--text3);">Technical audit details</summary><pre style="margin-top:8px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;font-size:11px;color:var(--text2);white-space:pre-wrap;">' + escapeHtml(raw) + '</pre></details>' +
+    '<div class="audit-event-summary">' + escapeHtml(summary) + '</div>' +
+    '<details class="audit-tech-details">' +
+      '<summary>Show technical details</summary>' +
+      '<button type="button" class="audit-tech-copy" onclick="copyAuditTechnicalDetails(this.nextElementSibling.id)">Copy technical details</button>' +
+      '<pre class="audit-tech-pre" id="' + escapeHtml(techId) + '">' + escapeHtml(technical) + '</pre>' +
+    '</details>' +
   '</div>';
+}
+
+function renderAuditFilterBar(entries) {
+  var counts = { All: entries.length };
+  entries.forEach(function(entry) {
+    var detail = safeParseAuditDetail(entry && entry.detail);
+    var beforeState = safeParseAuditDetail(entry && entry.before_state);
+    var afterState = safeParseAuditDetail(entry && entry.after_state);
+    var category = classifyAuditEvent(entry || {}, detail, beforeState, afterState);
+    counts[category] = (counts[category] || 0) + 1;
+  });
+  return '<div class="audit-filter-bar" role="group" aria-label="Audit event filters">' +
+    DETAIL_AUDIT_FILTERS.map(function(filter) {
+      var count = counts[filter] || 0;
+      var active = detailAuditFilter === filter ? ' active' : '';
+      return '<button type="button" class="audit-filter-chip' + active + '" data-filter="' + escapeHtml(filter) + '" onclick="setAuditTrailFilter(this.dataset.filter)">' +
+        escapeHtml(filter) + ' <span style="font-weight:600;color:var(--text3);">(' + count + ')</span></button>';
+    }).join('') +
+  '</div>';
+}
+
+function renderAuditTrailEntries() {
+  var container = document.getElementById('detail-activity');
+  if (!container) return;
+  var entries = Array.isArray(detailAuditEntries) ? detailAuditEntries : [];
+  if (!entries.length) {
+    container.innerHTML = '<div style="padding:32px;text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📋</div><div style="font-size:13px;color:var(--text2);">No audit trail entries yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Actions taken on this application will appear here.</div></div>';
+    return;
+  }
+  var filtered = entries.filter(function(entry) {
+    if (detailAuditFilter === 'All') return true;
+    var detail = safeParseAuditDetail(entry && entry.detail);
+    var beforeState = safeParseAuditDetail(entry && entry.before_state);
+    var afterState = safeParseAuditDetail(entry && entry.after_state);
+    return classifyAuditEvent(entry || {}, detail, beforeState, afterState) === detailAuditFilter;
+  });
+  var body = filtered.length
+    ? '<div class="audit-event-list">' + filtered.map(renderAuditEventCard).join('') + '</div>'
+    : '<div class="notes-empty-state">No audit events match this filter.</div>';
+  container.innerHTML = renderAuditFilterBar(entries) + body;
+}
+
+function setAuditTrailFilter(filter) {
+  detailAuditFilter = DETAIL_AUDIT_FILTERS.indexOf(filter) >= 0 ? filter : 'All';
+  renderAuditTrailEntries();
+}
+
+function copyAuditTechnicalDetails(elementId) {
+  var el = document.getElementById(elementId);
+  if (!el) return;
+  var text = el.textContent || '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() { showToast('Technical details copied'); }).catch(function() {});
+    return;
+  }
+  var textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'readonly');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand('copy');
+    showToast('Technical details copied');
+  } catch (err) {
+    showToast('Copy failed. Select the technical details manually.', 'error');
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 async function loadActivityLog(appOverride) {
@@ -17879,37 +18150,9 @@ async function loadActivityLog(appOverride) {
   container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading audit trail…</div>';
   try {
     var data = await boApiCall('GET', '/applications/' + app.id + '/audit-log?limit=100');
-    var entries = data.entries || [];
-    if (entries.length === 0) {
-      container.innerHTML = '<div style="padding:32px;text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📋</div><div style="font-size:13px;color:var(--text2);">No audit trail entries yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Actions taken on this application will appear here.</div></div>';
-      return;
-    }
-    var html = entries.map(function(e) {
-      if (String(e.action || '').trim() === 'Screening Review') {
-        var screeningHtml = renderScreeningAuditEntry(e);
-        if (screeningHtml) return screeningHtml;
-      }
-      var icon = '🔵';
-      var action = e.action || '';
-      if (action.indexOf('Status') >= 0) icon = '🔄';
-      else if (action.indexOf('Assign') >= 0 || action.indexOf('Reassign') >= 0) icon = '👤';
-      else if (action.indexOf('Memo') >= 0 || action.indexOf('Generate') >= 0) icon = '📝';
-      else if (action.indexOf('Approve') >= 0) icon = '✅';
-      else if (action.indexOf('Reject') >= 0) icon = '❌';
-      else if (action.indexOf('Note') >= 0) icon = '💬';
-      else if (action.indexOf('Document') >= 0 || action.indexOf('Upload') >= 0) icon = '📄';
-      var ts = (e.timestamp || '').replace('T', ' ').slice(0, 19);
-      var actor = e.user_name || e.user_id || 'System';
-      var role = e.user_role ? ' (' + escapeHtml(e.user_role) + ')' : '';
-      return '<div class="activity-item" style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">' +
-        '<div style="font-size:16px;flex-shrink:0;width:24px;text-align:center;">' + icon + '</div>' +
-        '<div style="flex:1;min-width:0;">' +
-          '<div style="font-size:12px;font-weight:600;color:var(--text1);">' + escapeHtml(action) + '</div>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(e.detail || '') + '</div>' +
-          '<div style="font-size:10px;color:var(--text3);margin-top:3px;">' + escapeHtml(actor) + role + ' · ' + escapeHtml(ts) + '</div>' +
-        '</div></div>';
-    }).join('');
-    container.innerHTML = html;
+    detailAuditEntries = data.entries || [];
+    detailAuditFilter = 'All';
+    renderAuditTrailEntries();
   } catch (err) {
     container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--red);font-size:12px;">Failed to load audit trail: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
     if (window._currentDetailApp && window._currentDetailApp.id === app.id) renderCaseCommandCentre(window._currentDetailApp);
@@ -17929,7 +18172,7 @@ async function loadNotes() {
     var data = await boApiCall('GET', '/applications/' + app.id + '/notes');
     var notes = data.notes || [];
     if (notes.length === 0) {
-      container.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:var(--text3);">No internal notes yet.</div>';
+      container.innerHTML = '<div class="notes-empty-state">No internal notes yet.</div>';
       return;
     }
     container.innerHTML = notes.map(function(n) {
