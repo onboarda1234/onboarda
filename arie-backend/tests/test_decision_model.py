@@ -378,6 +378,25 @@ class TestBuildFromApplicationDecision:
         assert record["risk_level"] == "HIGH"
         assert "risk:HIGH" in record["key_flags"]
         assert record["extra"]["decision_reason"] == "All checks passed"
+        assert record["extra"]["authoritative_risk_score"] == 55.0
+        assert record["extra"]["authoritative_risk_level"] == "HIGH"
+        assert record["extra"]["risk_source"] == "applications.risk_score"
+
+    def test_final_risk_level_is_decision_record_authority(self, sample_app, sample_user):
+        sample_app["risk_level"] = "MEDIUM"
+        sample_app["final_risk_level"] = "VERY_HIGH"
+        sample_app["risk_score"] = 70
+
+        record = build_from_application_decision(
+            app=sample_app,
+            decision="approve",
+            decision_reason="Final elevated risk controls satisfied",
+            user=sample_user,
+        )
+
+        assert record["risk_level"] == "VERY_HIGH"
+        assert "risk:VERY_HIGH" in record["key_flags"]
+        assert record["extra"]["authoritative_risk_score"] == 70
 
     def test_override_flagged(self, sample_app, sample_user):
         record = build_from_application_decision(

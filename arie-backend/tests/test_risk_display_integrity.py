@@ -230,6 +230,23 @@ class TestBackendRiskIntegrityMetadata:
         assert 'risk_level = app["risk_level"] or "MEDIUM"' not in src
         assert 'risk_score = app["risk_score"] or 0' not in src
 
+    def test_backend_pdf_export_checks_memo_risk_staleness_before_rendering(self):
+        src = _server_source()
+        pdf_start = src.index("class MemoPDFDownloadHandler")
+        pdf_end = src.index("class MemoSupervisorHandler", pdf_start)
+        pdf_src = src[pdf_start:pdf_end]
+
+        assert "_ensure_memo_fresh_or_mark_stale(" in pdf_src
+        assert 'context="memo_pdf_export"' in pdf_src
+        assert "PDF export blocked: Compliance memo is stale" in pdf_src
+        assert "authoritative_case_risk" in pdf_src
+
+    def test_reports_export_effective_final_risk_level(self):
+        src = _server_source()
+
+        assert "COALESCE(a.final_risk_level, a.risk_level) AS risk_level" in src
+        assert '("risk_level", "COALESCE(a.final_risk_level, a.risk_level) = ?")' in src
+
     def test_shared_approval_gate_rejects_missing_authoritative_risk(self):
         from security_hardening import _approval_risk_integrity_error
 

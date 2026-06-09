@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("ENVIRONMENT", "testing")
@@ -193,7 +194,7 @@ def test_memo_treats_score_level_mismatch_as_unrated():
     assert "not yet risk-rated" in memo["sections"]["executive_summary"]["content"]
 
 
-def test_pdf_generator_fails_closed_without_canonical_risk(monkeypatch):
+def test_pdf_generator_uses_authoritative_application_risk_over_legacy_memo(monkeypatch):
     import pdf_generator
 
     captured = {}
@@ -219,13 +220,72 @@ def test_pdf_generator_fails_closed_without_canonical_risk(monkeypatch):
         },
     }
 
-    pdf = pdf_generator.generate_memo_pdf(memo, _app())
+    pdf = pdf_generator.generate_memo_pdf(
+        memo,
+        _app(
+            ref="ARF-2026-900289",
+            risk_level="VERY_HIGH",
+            final_risk_level="VERY_HIGH",
+            risk_score=70,
+            risk_computed_at="2026-06-09T08:00:00Z",
+        ),
+    )
+
+    assert pdf == b"%PDF-fake"
+    assert "Authoritative Case Risk Score" in captured["html"]
+    assert "70/100" in captured["html"]
+    assert "2026-06-09T08:00:00Z" in captured["html"]
+    assert "VERY_HIGH" in captured["html"]
+    assert "50/100" not in captured["html"]
+
+
+def test_authoritative_risk_metadata_is_json_serializable_with_datetime():
+    from server import _application_authoritative_risk_metadata
+
+    metadata = _application_authoritative_risk_metadata(_app(
+        risk_level="VERY_HIGH",
+        final_risk_level="VERY_HIGH",
+        risk_score=70,
+        risk_computed_at=datetime(2026, 6, 8, 10, 7, 49, tzinfo=timezone.utc),
+        risk_config_version=datetime(2026, 4, 13, 11, 21, 30, tzinfo=timezone.utc),
+    ))
+
+    encoded = json.dumps(metadata, sort_keys=True)
+
+    assert '"score": 70.0' in encoded
+    assert metadata["calculated_at"] == "2026-06-08T10:07:49+00:00"
+    assert metadata["risk_config_version"] == "2026-04-13T11:21:30+00:00"
+
+
+def test_pdf_generator_fails_closed_when_no_authoritative_risk_exists(monkeypatch):
+    import pdf_generator
+
+    captured = {}
+
+    class FakeHTML:
+        def __init__(self, string):
+            captured["html"] = string
+
+        def write_pdf(self):
+            return b"%PDF-fake"
+
+    class FakeWeasyPrint:
+        HTML = FakeHTML
+
+    monkeypatch.setattr(pdf_generator, "_get_weasyprint", lambda: FakeWeasyPrint)
+    memo = {
+        "sections": {"executive_summary": {"content": "Legacy memo blob."}},
+        "metadata": {"risk_rating": "MEDIUM", "risk_score": 50},
+    }
+
+    pdf = pdf_generator.generate_memo_pdf(
+        memo,
+        _app(risk_level=None, final_risk_level=None, risk_score=None),
+    )
 
     assert pdf == b"%PDF-fake"
     assert "NOT YET RATED" in captured["html"]
     assert "Not yet scored" in captured["html"]
-    assert ">MEDIUM<" not in captured["html"]
-    assert "50/100" not in captured["html"]
 
 
 def test_screening_source_summary_marks_simulated_report():

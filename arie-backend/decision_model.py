@@ -284,7 +284,8 @@ def build_from_application_decision(
 
     # Build key flags from application context
     key_flags = []
-    risk_level = app.get("risk_level")
+    risk_level = app.get("final_risk_level") or app.get("risk_level")
+    risk_score = app.get("final_risk_score") if app.get("final_risk_score") not in (None, "") else app.get("risk_score")
     if risk_level in ("HIGH", "VERY_HIGH"):
         key_flags.append(f"risk:{risk_level}")
     if override_ai:
@@ -311,6 +312,9 @@ def build_from_application_decision(
         override_reason=override_reason if override_ai else None,
         extra={
             "decision_reason": decision_reason,
+            "authoritative_risk_score": risk_score,
+            "authoritative_risk_level": risk_level,
+            "risk_source": "applications.risk_score",
         },
     )
 
@@ -356,6 +360,8 @@ def build_from_supervisor_verdict(
     else:
         decision_type = "escalate_edd"
 
+    risk_level = app.get("final_risk_level") or app.get("risk_level")
+    risk_score = app.get("final_risk_score") if app.get("final_risk_score") not in (None, "") else app.get("risk_score")
     return build_decision_record(
         application_ref=app.get("ref", ""),
         decision_type=decision_type,
@@ -364,7 +370,7 @@ def build_from_supervisor_verdict(
             "user_id": user.get("sub", user.get("id", "")),
             "role": user.get("role", ""),
         },
-        risk_level=app.get("risk_level"),
+        risk_level=risk_level,
         confidence_score=confidence,
         key_flags=key_flags,
         override_flag=False,
@@ -373,6 +379,9 @@ def build_from_supervisor_verdict(
             "contradiction_count": contradiction_count,
             "can_approve": can_approve,
             "recommendation": supervisor_result.get("recommendation", ""),
+            "authoritative_risk_score": risk_score,
+            "authoritative_risk_level": risk_level,
+            "risk_source": "applications.risk_score",
         },
     )
 
