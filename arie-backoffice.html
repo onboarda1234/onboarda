@@ -7464,11 +7464,29 @@ function renderStoredRiskComputationHtml(app) {
   }).join('');
 
   var storedScoreDisplay = computation.storedScore === null ? 'Not yet scored' : computation.storedScore.toFixed(1);
+  var recomputedScoreDisplay = computation.recomputedScore === null ? '—' : computation.recomputedScore.toFixed(1);
+  var scoreDelta = computation.storedScore === null || computation.recomputedScore === null
+    ? null
+    : Math.round((computation.recomputedScore - computation.storedScore) * 10) / 10;
+  var scoreDeltaDisplay = scoreDelta === null ? '—' : ((scoreDelta > 0 ? '+' : '') + scoreDelta.toFixed(1));
+  function riskScoreTile(label, value, helper, color) {
+    return '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface1);">' +
+      '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:var(--text3);">' + escapeHtml(label) + '</div>' +
+      '<div style="font-size:30px;line-height:1.1;font-weight:800;color:' + color + ';margin-top:6px;">' + escapeHtml(value) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(helper) + '</div>' +
+    '</div>';
+  }
+  var scoreSummaryHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px;">' +
+    riskScoreTile('Authoritative score', storedScoreDisplay, 'Persisted application score', 'var(--text1)') +
+    riskScoreTile('Latest recomputed score', recomputedScoreDisplay, 'Using current risk config', 'var(--text1)') +
+    riskScoreTile('Delta', scoreDeltaDisplay, 'Recomputed minus authoritative', (scoreDelta !== null && Math.abs(scoreDelta) > 0.2) ? '#d97706' : 'var(--green)') +
+  '</div>';
   var driftHtml = computation.drift !== null && computation.drift > 0.2
-    ? '<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(217,119,6,0.25);border-radius:8px;background:rgba(217,119,6,0.06);font-size:11px;color:var(--text2);">Stored application score (' + escapeHtml(computation.storedScore.toFixed(1)) + ') differs from the current config recomputation (' + escapeHtml(computation.recomputedScore.toFixed(1)) + '). This usually means the live risk weights changed after the application was scored. The stored application score remains the authoritative value for this case.</div>'
+    ? '<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(217,119,6,0.25);border-radius:8px;background:rgba(217,119,6,0.06);font-size:11px;color:var(--text2);"><strong>Score delta detected.</strong> Stored score remains authoritative; recomputed score reflects current config.</div>'
     : '';
 
   return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
+    scoreSummaryHtml +
     '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
       '<thead><tr><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weight</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Stored Score</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weighted Contribution</th></tr></thead>' +
       '<tbody>' + rowsHtml + '</tbody>' +
@@ -7943,12 +7961,64 @@ function partyCorrectionStatus(app, party) {
   };
 }
 
-function partyScreeningPepDisplay(party) {
+function pepYesNoFromValue(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'object') {
+    return pepYesNoFromValue(value.client_declared_pep) ||
+      pepYesNoFromValue(value.declared_pep) ||
+      pepYesNoFromValue(value.is_pep) ||
+      pepYesNoFromValue(value.pep);
+  }
+  if (value === true || value === 1) return 'Yes';
+  if (value === false || value === 0) return 'No';
+  var normalized = String(value).trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.indexOf('not captured') >= 0 || normalized.indexOf('not verified') >= 0 || normalized === 'unknown' || normalized === 'pending') return null;
+  if (normalized === 'no' || normalized === 'false' || normalized === '0' || normalized === 'not_pep' || normalized === 'declared_no' || normalized.indexOf('no pep') >= 0) return 'No';
+  if (normalized === 'yes' || normalized === 'true' || normalized === '1' || normalized === 'confirmed_pep' || normalized === 'declared_yes' || normalized.indexOf('declared pep') >= 0 || normalized.indexOf('client-declared pep') >= 0 || normalized.indexOf('confirmed pep') >= 0) return 'Yes';
+  return null;
+}
+
+function partyClientDeclaredPepDisplay(party) {
   party = party || {};
-  if (party.screening_confirmed_pep === true || party.screening_confirmed_pep === 'Yes') return 'Screening-confirmed PEP';
-  if (party.screening_confirmed_pep === false || party.screening_confirmed_pep === 'No') return 'Screening did not confirm PEP';
-  if (party.screening_status || party.screening_pep_status) return normalizeDetailValue(party.screening_pep_status || party.screening_status);
-  return 'Not available';
+  var declaration = (party.pep_declaration && typeof party.pep_declaration === 'object') ? party.pep_declaration : {};
+  return pepYesNoFromValue(party.client_declared_pep) ||
+    pepYesNoFromValue(party.declared_pep) ||
+    pepYesNoFromValue(declaration.client_declared_pep) ||
+    pepYesNoFromValue(declaration.declared_pep) ||
+    pepYesNoFromValue(party.client_declared_pep_display) ||
+    pepYesNoFromValue(party.pep) ||
+    'Not captured';
+}
+
+function clientDeclaredPepQuestionValue(app, psData) {
+  psData = psData || {};
+  var explicit = pepYesNoFromValue(detailValueFromAliases(psData, [
+    'client_declared_pep',
+    'declared_pep',
+    'has_pep',
+    'has_peps',
+    'pep',
+    'is_pep',
+    'politically_exposed_person',
+    'politically_exposed_persons',
+    'has_politically_exposed_persons'
+  ])) || pepYesNoFromValue(psData.pep_declaration);
+  if (explicit) return explicit;
+  var parties = []
+    .concat((app && app.directors) || [])
+    .concat((app && app.ubos) || [])
+    .concat((app && app.intermediaries) || [])
+    .concat(psData.directors || [])
+    .concat(psData.ubos || [])
+    .concat(psData.intermediaries || []);
+  var sawNo = false;
+  for (var i = 0; i < parties.length; i++) {
+    var pep = partyClientDeclaredPepDisplay(parties[i]);
+    if (pep === 'Yes') return 'Yes';
+    if (pep === 'No') sawNo = true;
+  }
+  return sawNo ? 'No' : 'Not captured';
 }
 
 function renderPartyFact(label, value, missingLabel) {
@@ -7966,11 +8036,6 @@ function renderPartyCard(party, partyType, app) {
   var ownershipValue = partyType === 'director' ? 'N/A' : party.pct;
   var nationalityLabel = partyType === 'intermediary' ? 'Jurisdiction' : 'Nationality';
   var nationalityValue = partyType === 'intermediary' ? party.jurisdiction : party.nat;
-  var declaredPep = party.client_declared_pep_display || normalizePepDisplay(party.pep);
-  var verifiedPep = party.officer_verified_pep_display || 'Not verified yet';
-  var screeningPep = partyScreeningPepDisplay(party);
-  var pepDeclaration = (party.pep_declaration && typeof party.pep_declaration === 'object') ? party.pep_declaration : {};
-  var relationshipType = firstMeaningfulDetailValue(party.relationship_type, party.relationshipType, pepDeclaration.relationship_type, 'N/A');
   return '<div class="party-review-card" style="padding:12px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
     '<div style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div>' +
@@ -7988,33 +8053,41 @@ function renderPartyCard(party, partyType, app) {
       renderPartyFact(nationalityLabel, nationalityValue, 'Missing') +
       renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing') +
       renderPartyFact('Ownership', ownershipValue === 'N/A' ? 'N/A' : normalizeDetailValue(ownershipValue) + '%', partyType === 'director' ? 'N/A' : 'Missing') +
-    '</div>' +
-    '<div style="padding:8px 10px;border:1px solid rgba(245,158,11,0.35);border-radius:8px;background:#fffbeb;">' +
-      '<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">PEP / Screening Status</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">' +
-        renderPartyFact('Client-declared PEP', declaredPep, 'Not captured') +
-        renderPartyFact('Officer-verified PEP', verifiedPep, 'Not verified yet') +
-        renderPartyFact('Screening-confirmed PEP', screeningPep, 'Not available') +
-        renderPartyFact('Relationship type', relationshipType, 'N/A') +
-      '</div>' +
+      renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured') +
     '</div>' +
   '</div>';
 }
 
 function renderPartySection(app) {
-  var html = '<div style="font-size:12px;font-weight:700;margin-bottom:8px;">Directors</div>';
-  html += app.directors.length ? app.directors.map(function(d) {
-    return renderPartyCard(d, 'director', app);
-  }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No directors persisted.</div>';
-  html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px;">Ultimate Beneficial Owners</div>';
-  html += app.ubos.length ? app.ubos.map(function(u) {
-    return renderPartyCard(u, 'ubo', app);
-  }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No UBOs persisted.</div>';
-  html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px;">Intermediary Shareholders</div>';
-  html += app.intermediaries.length ? app.intermediaries.map(function(i) {
-    return renderPartyCard(i, 'intermediary', app);
-  }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No intermediary shareholders persisted.</div>';
-  return html;
+  var directors = (app && app.directors) || [];
+  var ubos = (app && app.ubos) || [];
+  var intermediaries = (app && app.intermediaries) || [];
+  function renderPartySubsection(title, items, partyType, emptyText) {
+    return '<div style="font-size:12px;font-weight:700;margin:12px 0 8px;">' + escapeHtml(title) + '</div>' +
+      (items.length ? items.map(function(item) {
+        return renderPartyCard(item, partyType, app);
+      }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' + escapeHtml(emptyText) + '</div>');
+  }
+  var html = renderPartySubsection('Directors', directors, 'director', 'No directors persisted.');
+  html += renderPartySubsection('Ultimate Beneficial Owners', ubos, 'ubo', 'No UBOs persisted.');
+  html += renderPartySubsection('Intermediary Shareholders', intermediaries, 'intermediary', 'No intermediary shareholders persisted.');
+  return '<div class="prescreen-collapsible-card party-review-accordion" id="party-review-accordion-card">' +
+    '<details id="party-review-accordion" open>' +
+      '<summary>' +
+        '<div class="prescreen-collapsible-copy">' +
+          '<div class="prescreen-collapsible-title">Related Parties</div>' +
+          '<div class="prescreen-collapsible-subtitle">Directors, UBOs, and intermediary shareholders.</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap;">' +
+          '<span class="badge draft">Directors: ' + escapeHtml(String(directors.length)) + '</span>' +
+          '<span class="badge draft">UBOs: ' + escapeHtml(String(ubos.length)) + '</span>' +
+          '<span class="badge draft">Intermediaries: ' + escapeHtml(String(intermediaries.length)) + '</span>' +
+          '<span class="prescreen-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>' +
+        '</div>' +
+      '</summary>' +
+      '<div class="prescreen-collapsible-body">' + html + '</div>' +
+    '</details>' +
+  '</div>';
 }
 
 function openPartyCorrectionModal(partyType, partyId) {
@@ -8173,6 +8246,7 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Financial Forecast', value: formatFinancialForecast(psData.financial_forecast) },
     // ── Management ──
     { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) },
+    { label: 'PEP', value: clientDeclaredPepQuestionValue(app, psData) },
     // ── Referral ──
     { key: 'introduction_method', label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']), riskRelevant: true },
     { key: 'referrer_name', label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) }
