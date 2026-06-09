@@ -1969,6 +1969,18 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
 </div>
 
+<div class="view" id="view-monitoring-alert-detail">
+  <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;flex-wrap:wrap;">
+    <div>
+      <button class="btn btn-outline btn-sm" onclick="backToMonitoringAlerts()" style="margin-bottom:12px;">Back to Monitoring Alerts</button>
+      <h3 id="monitoring-alert-detail-title" style="font-size:18px;font-weight:800;margin-bottom:4px;">Monitoring Alert</h3>
+      <p id="monitoring-alert-detail-subtitle" style="font-size:13px;color:var(--text3);">Loading alert detail...</p>
+    </div>
+    <div id="monitoring-alert-detail-actions" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+  </div>
+  <div id="monitoring-alert-detail-body" style="display:grid;gap:16px;"></div>
+</div>
+
 <!-- ═══════════════ LIFECYCLE (PR-B) ═══════════════ -->
 <!-- Unified operator queue over monitoring alerts, periodic reviews and EDD cases. -->
 <!-- Reads /api/lifecycle/queue?include=<active|historical|legacy_unmapped>. -->
@@ -3898,6 +3910,8 @@ function resetBackofficeSessionData() {
   MONITORING_ALERTS = [];
   MONITORING_ALERTS_LOAD_ERROR = null;
   MONITORING_ALERT_SUBTAB = 'all';
+  MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [], loading: false, error: '' };
+  MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = false;
   PERIODIC_REVIEWS = [];
   MONITORING_AGENTS = [];
   MONITORING_DASHBOARD = null;
@@ -4145,7 +4159,10 @@ function normalizeMonitoringAlert(raw) {
     severityKey: severityKey,
     severity: monitoringAlertSeverityLabel(severityKey),
     agent: normalizeDetectedBy(raw || {}, type),
-    owner: raw.assigned_officer_name || raw.owner_name || raw.assigned_name || raw.assigned_officer || raw.assigned_to || 'Unassigned',
+    ownerId: raw.owner_id || raw.reviewed_by || raw.assigned_officer || raw.assigned_to || '',
+    owner: raw.assigned_officer_name || raw.owner_name || raw.assigned_name || raw.owner_email || raw.assigned_officer || raw.assigned_to || 'Unassigned',
+    applicationRef: raw.application_ref || raw.ref || '',
+    applicationCompanyName: raw.application_company_name || '',
     rawStatusKey: monitoringCanonicalToken(raw.status || 'open'),
     statusKey: statusKey,
     status: monitoringAlertStatusLabel(statusKey),
@@ -5468,6 +5485,8 @@ var MONITORING_ALERTS = [];
 // Populated from API or left empty until monitoring data loads.
 var MONITORING_ALERTS_LOAD_ERROR = null;
 var MONITORING_ALERT_SUBTAB = 'all';
+var MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [], loading: false, error: '' };
+var MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = false;
 
 var PERIODIC_REVIEWS = [];
 // Populated from API or left empty until review data loads.
@@ -5640,7 +5659,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
   var globalSearch = document.getElementById('global-search');
   if (globalSearch) globalSearch.placeholder = name === 'screening' ? 'Search screening queue...' : 'Search applications, clients...';
@@ -5686,6 +5705,9 @@ function showView(name, navItem) {
     ensureMonitoringDataLoaded().then(function(loaded) {
       renderMonitoring();
     });
+  }
+  if (name === 'monitoring-alert-detail') {
+    renderMonitoringAlertDetailView();
   }
   if (name === 'lifecycle') {
     renderLifecycle();
@@ -16807,23 +16829,7 @@ async function prcAlertRouteEDD() {
 // review detail surfaces.
 async function openAlertDetailById(alertId) {
   if (alertId == null) return;
-  try {
-    // Prefer the in-memory list (already loaded for the monitoring
-    // table) to avoid a redundant API call. Fall back to GET /:id.
-    var found = null;
-    if (typeof MONITORING_ALERTS !== 'undefined' && MONITORING_ALERTS && MONITORING_ALERTS.length) {
-      for (var i = 0; i < MONITORING_ALERTS.length; i++) {
-        if (String(MONITORING_ALERTS[i].id) === String(alertId)) { found = MONITORING_ALERTS[i]; break; }
-      }
-    }
-    if (!found) {
-      var raw = await boApiCall('GET', '/monitoring/alerts/' + encodeURIComponent(alertId));
-      found = normalizeMonitoringAlert(raw);
-    }
-    showAlertDetail(found);
-  } catch(err) {
-    showToast('Failed to open alert: ' + (err.message || 'unknown error'), 'error');
-  }
+  openMonitoringAlertDetail(alertId);
 }
 
 async function openReviewDetailById(reviewId) {
@@ -17364,6 +17370,431 @@ function monitoringAlertMatchesSubtab(alert) {
   return true;
 }
 
+function monitoringDetailCard(title, body, extraStyle) {
+  return '<section style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:16px;' + (extraStyle || '') + '">' +
+    '<h4 style="font-size:14px;font-weight:800;margin:0 0 12px;color:var(--text1);">' + escapeHtml(title) + '</h4>' +
+    body +
+  '</section>';
+}
+
+function monitoringInfoGrid(rows) {
+  var html = (rows || []).filter(function(row) {
+    return row && row[1] !== null && row[1] !== undefined && String(row[1]).trim() !== '';
+  }).map(function(row) {
+    return '<div style="min-width:0;">' +
+      '<div style="font-size:11px;text-transform:uppercase;color:var(--text3);font-weight:700;margin-bottom:3px;">' + escapeHtml(row[0]) + '</div>' +
+      '<div style="font-size:13px;color:var(--text1);overflow-wrap:anywhere;">' + row[1] + '</div>' +
+    '</div>';
+  }).join('');
+  return html ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px 16px;">' + html + '</div>' : '<div style="font-size:13px;color:var(--text3);">No details available.</div>';
+}
+
+function monitoringTextValue(value, fallback) {
+  var text = String(value == null ? '' : value).trim();
+  return escapeHtml(text || fallback || 'Not available');
+}
+
+function monitoringProviderLabel(alert, ref) {
+  var provider = (alert && (alert.provider || alert.detected_by)) || (ref && ref.provider) || '';
+  provider = String(provider || '').trim();
+  if (!provider) return 'Not available';
+  if (provider.toLowerCase() === 'complyadvantage') return 'ComplyAdvantage';
+  return provider.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+}
+
+function monitoringAlertMatchCount(alert, ref) {
+  var direct = ref && (ref.match_count || ref.matches_count || ref.total_matches || ref.number_of_matches);
+  if (direct != null && direct !== '') return String(direct);
+  var summary = String((alert && alert.summary) || '');
+  var m = summary.match(/surfaced\s+(\d+)\s+match/i);
+  return m ? m[1] : '';
+}
+
+function monitoringAlertTopIndicator(alert, ref) {
+  var direct = ref && (ref.top_indicator || ref.risk_indicator || ref.indicator || ref.alert_type);
+  if (direct) return String(direct).replace(/_/g, ' ');
+  var summary = String((alert && alert.summary) || '');
+  var m = summary.match(/top indicator:\s*([^.;]+?)(?:\s+for\s+customer|$)/i);
+  return m ? m[1].replace(/_/g, ' ') : '';
+}
+
+function monitoringAlertSubjectName(alert, ref) {
+  var subject = (ref && ref.screening_subject) || {};
+  return subject.full_name || subject.name || subject.entity_name || subject.company_name ||
+    ref.subject_name || ref.matched_name || ref.customer_name || '';
+}
+
+function monitoringAlertRelationship(alert, ref) {
+  var subject = (ref && ref.screening_subject) || {};
+  var raw = String(subject.relationship || subject.role || subject.kind || ref.subject_scope || ref.subject_type || '').toLowerCase();
+  var personKey = String(subject.person_key || ref.person_key || '').toLowerCase();
+  if (raw.indexOf('entity') >= 0 || raw.indexOf('company') >= 0 || raw.indexOf('business') >= 0) return 'Company';
+  if (personKey.indexOf('ubo') >= 0 || raw.indexOf('ubo') >= 0) return 'UBO';
+  if (personKey.indexOf('shareholder') >= 0 || raw.indexOf('shareholder') >= 0) return 'Shareholder';
+  if (personKey.indexOf('intermediary') >= 0 || raw.indexOf('intermediary') >= 0) return 'Intermediary';
+  if (personKey.indexOf('dir') >= 0 || raw.indexOf('director') >= 0 || raw === 'subject' || raw === 'person') return 'Director / associated person';
+  return 'Unknown';
+}
+
+function monitoringAlertSourceTitle(ref) {
+  return ref && (ref.media_title || ref.title || ref.source_title || ref.source_name || ref.alert_identifier || '');
+}
+
+function monitoringAlertEvidenceHtml(alert) {
+  var raw = (alert && alert.raw) || alert || {};
+  var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
+  if (alert.typeKey === 'adverse_media' || alert.typeKey === 'pep_change' || alert.typeKey === 'sanctions_change') {
+    var availableRows = monitoringInfoGrid([
+      ['Matched subject name', monitoringTextValue(monitoringAlertSubjectName(raw, ref), 'Not available')],
+      ['Relationship to client', monitoringTextValue(monitoringAlertRelationship(raw, ref), 'Unknown')],
+      ['Provider', monitoringTextValue(monitoringProviderLabel(raw, ref), 'Not available')],
+      ['Number of matches', monitoringTextValue(monitoringAlertMatchCount(raw, ref), 'Not available')],
+      ['Top risk indicator', monitoringTextValue(monitoringAlertTopIndicator(raw, ref), 'Not available')],
+      ['Source title / reference', monitoringTextValue(monitoringAlertSourceTitle(ref) || raw.source_reference, 'Not available')],
+      ['Match confidence', monitoringTextValue(ref.match_confidence || ref.confidence || ref.match_score, 'Not available')],
+      ['Date detected', monitoringTextValue(raw.discovered_at || raw.created_at || alert.date, 'Not available')]
+    ]);
+    var hasProviderEvidence = !!(ref.media_title || ref.media_url || ref.media_snippet || ref.title || ref.match_confidence || ref.confidence || ref.match_score);
+    return availableRows +
+      (!hasProviderEvidence ? '<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:13px;color:var(--text2);">Detailed provider match evidence is not available in this alert payload.</div>' : '') +
+      '<div style="margin-top:12px;font-size:13px;color:var(--text2);line-height:1.55;"><strong>Why this matters:</strong> Screening-change alerts may indicate adverse media, PEP, sanctions, or watchlist exposure requiring human review before risk acceptance.</div>';
+  }
+  if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') {
+    var expiryDate = ref.expiry_date || ref.expires_at || ref.document_expiry || raw.expiry_date || '';
+    var daysLabel = 'Not available';
+    if (expiryDate) {
+      var ts = Date.parse(expiryDate);
+      if (isFinite(ts)) {
+        var days = Math.ceil((ts - Date.now()) / 86400000);
+        daysLabel = days < 0 ? Math.abs(days) + ' days overdue' : days + ' days until expiry';
+      }
+    }
+    return monitoringInfoGrid([
+      ['Document type', monitoringTextValue(ref.document_type || ref.doc_type || raw.document_type || alert.type, 'Not available')],
+      ['Document owner', monitoringTextValue(ref.document_owner || ref.owner || ref.person_name || raw.document_owner, 'Not available')],
+      ['Expiry date', monitoringTextValue(expiryDate, 'Not available')],
+      ['Days overdue / until expiry', monitoringTextValue(daysLabel, 'Not available')],
+      ['Current status', monitoringTextValue(alert.status, 'Not available')],
+      ['Recommended next action', 'Confirm whether an updated document is already on file or record intent to request an update. Client upload/request workflow is out of scope for this sprint.']
+    ]);
+  }
+  return '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + monitoringTextValue(alert.detail || raw.summary, 'No issue detail available.') + '</div>';
+}
+
+function monitoringComplianceImpact(alert) {
+  if (!alert) return 'Assess whether this alert changes the client risk profile or requires escalation.';
+  if (alert.typeKey === 'adverse_media') return 'Potential adverse media can affect client suitability, ongoing monitoring frequency, EDD need, and risk acceptance evidence.';
+  if (alert.typeKey === 'pep_change') return 'PEP changes may require senior approval, enhanced due diligence, source-of-wealth review, and risk-profile reassessment.';
+  if (alert.typeKey === 'sanctions_change') return 'Sanctions or watchlist changes may require immediate escalation, account restrictions, and regulatory reporting assessment.';
+  if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') return 'Expired or missing refresh evidence weakens KYC reliance and may block continued relationship approval until remediated or waived.';
+  if (alert.typeKey === 'risk_drift') return 'Risk drift indicates the existing client profile may no longer reflect current activity or control expectations.';
+  return 'The alert should be reviewed and dispositioned with evidence so the monitoring record remains auditable.';
+}
+
+function monitoringRecommendedNextStep(alert) {
+  if (!alert) return 'Start review, select an outcome, and record the decision rationale.';
+  if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') return 'Start review, confirm document status, then request update intent, mark already updated, waive with reason, or escalate overdue item.';
+  if (alert.typeKey === 'risk_drift') return 'Start review, decide whether the risk profile needs updating, and route to EDD or SCO if material.';
+  if (alert.typeKey === 'adverse_media' || alert.typeKey === 'pep_change' || alert.typeKey === 'sanctions_change') return 'Start review, inspect evidence, determine materiality, and either dismiss with rationale, route to EDD, escalate to SCO, update risk profile, or request more information.';
+  return 'Start review and record a clear outcome with supporting note where material.';
+}
+
+function monitoringOutcomeOptions(alert) {
+  var type = alert && alert.typeKey;
+  if (type === 'document_expiry' || type === 'missing_document_refresh') {
+    return [['request_updated_document', 'Request updated document'], ['mark_already_updated', 'Mark as already updated'], ['waive_with_reason', 'Waive with reason'], ['escalate_overdue_item', 'Escalate overdue item']];
+  }
+  if (type === 'risk_drift') {
+    return [['no_material_impact', 'No material impact'], ['update_risk_profile', 'Update risk profile'], ['route_to_edd', 'Route to EDD'], ['escalate_to_sco', 'Escalate to SCO'], ['request_further_information', 'Request further information']];
+  }
+  return [['false_positive', 'False positive'], ['no_material_impact', 'No material impact'], ['route_to_edd', 'Route to EDD'], ['escalate_to_sco', 'Escalate to SCO'], ['update_risk_profile', 'Update risk profile'], ['request_further_information', 'Request further information']];
+}
+
+function monitoringOutcomeRequiresNote(alert, outcome) {
+  if (!outcome) return false;
+  if (['false_positive','waive_with_reason','escalate_to_sco','route_to_edd','update_risk_profile','escalate_overdue_item'].indexOf(outcome) >= 0) return true;
+  if (alert && (alert.severityKey === 'high' || alert.severityKey === 'critical')) return true;
+  if (['adverse_media','pep_change','sanctions_change'].indexOf((alert || {}).typeKey) >= 0 && ['false_positive','no_material_impact'].indexOf(outcome) >= 0) return true;
+  return false;
+}
+
+function monitoringAlertIsTerminal(alert) {
+  return ['dismissed','resolved','waived','routed_to_edd'].indexOf((alert || {}).statusKey) >= 0 || (alert && alert.rawStatusKey === 'routed_to_review');
+}
+
+function renderMonitoringDecisionSection(alert) {
+  if (monitoringAlertIsTerminal(alert)) {
+    return monitoringDetailCard('Officer Decision', '<div style="font-size:13px;color:var(--text3);">This alert is already in a terminal or downstream-routed state. Decisions are read-only from this view.</div>');
+  }
+  var options = monitoringOutcomeOptions(alert).map(function(opt) {
+    return '<option value="' + escapeHtml(opt[0]) + '">' + escapeHtml(opt[1]) + '</option>';
+  }).join('');
+  return monitoringDetailCard('Officer Decision',
+    '<div style="display:grid;gap:12px;">' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-start-review-btn" onclick="startMonitoringAlertReview()">Start Review</button><span style="font-size:12px;color:var(--text3);">Step 1 of 4</span></div>' +
+      '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:start;">' +
+        '<div><div class="form-label">Choose Outcome</div><select class="form-select" id="monitoring-alert-outcome" onchange="updateMonitoringDecisionNoteHint()"><option value="">Select outcome</option>' + options + '</select></div>' +
+        '<div><div class="form-label">Add Note <span id="monitoring-alert-note-required" style="color:var(--red);display:none;">*</span></div><textarea class="form-input" id="monitoring-alert-decision-note" rows="4" placeholder="Record the rationale, evidence considered, and next operational step."></textarea><div id="monitoring-alert-decision-hint" style="font-size:11px;color:var(--text3);margin-top:4px;">Notes are mandatory for material outcomes and high/critical alerts.</div></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-save-decision-btn" onclick="saveMonitoringAlertDecision()">Save Decision</button><span id="monitoring-alert-decision-result" style="font-size:12px;"></span></div>' +
+    '</div>'
+  );
+}
+
+function renderMonitoringAssignmentSection(alert) {
+  var role = currentUser && currentUser.role;
+  var canAssignOthers = role === 'admin' || role === 'sco';
+  var users = USERS.filter(function(u) { return !u.status || u.status === 'active'; });
+  var opts = users.map(function(u) {
+    var label = (u.name || u.email || u.id) + (u.role ? ' — ' + (ROLE_LABELS[u.role] || u.role) : '');
+    return '<option value="' + escapeHtml(u.id) + '">' + escapeHtml(label) + '</option>';
+  }).join('');
+  var currentOwner = alert.owner && alert.owner !== 'Unassigned' ? alert.owner : 'Unassigned';
+  if (monitoringAlertIsTerminal(alert)) {
+    return monitoringDetailCard('Assignment', monitoringInfoGrid([['Current owner', monitoringTextValue(currentOwner, 'Unassigned')]]) + '<div style="font-size:12px;color:var(--text3);margin-top:10px;">Assignment is read-only because this alert is terminal or already routed downstream.</div>');
+  }
+  return monitoringDetailCard('Assignment',
+    '<div style="display:grid;gap:12px;">' +
+      monitoringInfoGrid([['Current owner', monitoringTextValue(currentOwner, 'Unassigned')], ['Permission', monitoringTextValue(canAssignOthers ? 'Can assign to another officer' : 'Can assign to self only', '')]]) +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-outline btn-sm" onclick="assignMonitoringAlertToSelf()">Assign to me</button>' +
+        (canAssignOthers ? '<button class="btn btn-outline btn-sm" onclick="loadMonitoringAssignmentUsers()">Refresh officer list</button>' : '') + '</div>' +
+      (canAssignOthers ? '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:end;"><div><div class="form-label">Officer</div><select class="form-select" id="monitoring-alert-assignee"><option value="">Select officer</option>' + opts + '</select></div><div><div class="form-label">Assignment note</div><input class="form-input" id="monitoring-alert-assignment-note" placeholder="Optional reason or context for reassignment" /></div><div><button class="btn btn-primary btn-sm" onclick="saveMonitoringAlertAssignment()">Save assignment</button></div></div>' : '<div style="font-size:12px;color:var(--text3);">Assign-to-officer is restricted to Administrator and Senior CO roles by the existing permission model.</div>') +
+      '<div id="monitoring-alert-assignment-result" style="font-size:12px;"></div>' +
+    '</div>'
+  );
+}
+
+function renderMonitoringDownstreamLinks(alert) {
+  var links = [];
+  if (alert.applicationId) links.push('<button class="btn btn-outline btn-sm" onclick="openAppDetail(' + JSON.stringify(alert.applicationId) + ')">Open related application</button>');
+  if (alert.linked_periodic_review_id != null) links.push('<button class="btn btn-outline btn-sm" onclick="openReviewDetailById(' + JSON.stringify(alert.linked_periodic_review_id) + ')">Open periodic review #' + escapeHtml(String(alert.linked_periodic_review_id)) + '</button>');
+  if (alert.linked_edd_case_id != null) links.push('<button class="btn btn-outline btn-sm" onclick="openEDDDetail(' + JSON.stringify(alert.linked_edd_case_id) + ')">Open EDD case #' + escapeHtml(String(alert.linked_edd_case_id)) + '</button>');
+  return monitoringDetailCard('Downstream Links', links.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + links.join('') + '</div>' : '<div style="font-size:13px;color:var(--text3);">No downstream review or EDD case is linked yet.</div>');
+}
+
+function monitoringAuditLabel(action) {
+  var map = {
+    'monitoring.alert.review_started': 'Review started', 'monitoring.alert.assigned': 'Assigned', 'monitoring.alert.false_positive': 'False positive saved', 'monitoring.alert.no_material_impact': 'No material impact saved', 'monitoring.alert.routed_to_edd': 'Routed to EDD', 'monitoring.alert.escalated_to_sco': 'Escalated to SCO', 'monitoring.alert.risk_profile_update_required': 'Risk profile update required', 'monitoring.alert.further_information_requested': 'Further information requested', 'monitoring.alert.document_update_requested': 'Document update requested', 'monitoring.alert.document_already_updated': 'Document already updated', 'monitoring.alert.document_waived': 'Document waived', 'monitoring.alert.overdue_document_escalated': 'Overdue item escalated', 'monitoring.alert.dismissed': 'Dismissed', 'monitoring.alert.triaged': 'Review started'
+  };
+  return map[action] || String(action || 'Audit event').replace(/\./g, ' ').replace(/_/g, ' ');
+}
+
+function renderMonitoringAuditHistory(alert, history) {
+  var created = alert.raw && (alert.raw.created_at || alert.raw.discovered_at);
+  var rows = [];
+  if (created) rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="font-weight:700;font-size:13px;">Alert created</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(created).replace('T', ' ').slice(0, 19)) + '</div></div>');
+  (history || []).forEach(function(item) {
+    var detail = item.detail || '';
+    try {
+      var parsed = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      if (parsed && parsed.note) detail = parsed.note;
+      else if (parsed && parsed.outcome) detail = String(parsed.outcome).replace(/_/g, ' ');
+      else if (parsed && parsed.new_owner_name) detail = 'Assigned to ' + parsed.new_owner_name + (parsed.note ? ' — ' + parsed.note : '');
+    } catch(e) {}
+    rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div style="font-weight:700;font-size:13px;">' + escapeHtml(monitoringAuditLabel(item.action)) + '</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(item.timestamp || '').replace('T', ' ').slice(0, 19)) + '</div></div><div style="font-size:12px;color:var(--text3);margin-top:3px;">' + escapeHtml(item.user_name || item.user_id || 'System') + (item.user_role ? ' · ' + escapeHtml(ROLE_LABELS[item.user_role] || item.user_role) : '') + '</div>' + (detail ? '<div style="font-size:12px;color:var(--text2);margin-top:6px;white-space:pre-wrap;">' + escapeHtml(String(detail)) + '</div>' : '') + '</div>');
+  });
+  return monitoringDetailCard('Audit History', rows.length ? rows.join('') : '<div style="font-size:13px;color:var(--text3);">No audit events are available for this alert yet.</div>');
+}
+
+function renderMonitoringTechnicalDetails(alert) {
+  var raw = (alert && alert.raw) || {};
+  var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
+  var idRows = monitoringInfoGrid([
+    ['Alert ID', monitoringTextValue(raw.id || alert.id, '')],
+    ['Application ID', monitoringTextValue(raw.application_id || alert.applicationId, '')],
+    ['Provider case ID', monitoringTextValue(raw.case_identifier || ref.case_identifier, '')],
+    ['Provider alert ID', monitoringTextValue(ref.alert_identifier || raw.provider_alert_id, '')],
+    ['Normalized record ID', monitoringTextValue(ref.normalized_record_id, '')],
+    ['Backfill run ID', monitoringTextValue(raw.backfill_run_id, '')]
+  ]);
+  return '<details style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 16px;"><summary style="cursor:pointer;font-size:14px;font-weight:800;color:var(--text1);">Technical Details</summary><div style="margin-top:12px;">' + idRows + '</div><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw alert payload</div><pre style="margin-top:6px;max-height:260px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(raw, null, 2)) + '</pre></details>';
+}
+
+function renderMonitoringAlertDetailView() {
+  var title = document.getElementById('monitoring-alert-detail-title');
+  var subtitle = document.getElementById('monitoring-alert-detail-subtitle');
+  var body = document.getElementById('monitoring-alert-detail-body');
+  if (!body) return;
+  var state = MONITORING_ALERT_DETAIL || {};
+  if (state.loading) {
+    if (title) title.textContent = 'Monitoring Alert';
+    if (subtitle) subtitle.textContent = 'Loading alert detail...';
+    body.innerHTML = '<div style="padding:18px;color:var(--text3);">Loading alert detail...</div>';
+    return;
+  }
+  if (state.error) {
+    if (title) title.textContent = 'Monitoring Alert';
+    if (subtitle) subtitle.textContent = 'Unable to load alert detail';
+    body.innerHTML = monitoringDetailCard('Alert Detail Error', '<div style="font-size:13px;color:var(--red);">' + escapeHtml(state.error) + '</div>');
+    return;
+  }
+  var alert = state.normalized;
+  if (!alert) {
+    if (title) title.textContent = 'Monitoring Alert';
+    if (subtitle) subtitle.textContent = 'No alert selected';
+    body.innerHTML = '<div style="padding:18px;color:var(--text3);">Open an alert from Monitoring Alerts.</div>';
+    return;
+  }
+  var raw = alert.raw || {};
+  if (title) title.textContent = alert.type + ' — ' + (alert.client || 'Unmapped client');
+  if (subtitle) subtitle.textContent = 'Alert #' + alert.id + ' · ' + alert.status + ' · ' + alert.severity;
+  var statusBadge = '<span class="badge ' + monitoringStatusBadgeClass(alert.statusKey) + '">' + escapeHtml(alert.status) + '</span>';
+  var severityBadge = '<span class="badge ' + monitoringSeverityBadgeClass(alert.severityKey) + '">' + escapeHtml(alert.severity) + '</span>';
+  body.innerHTML =
+    monitoringDetailCard('Alert Summary', monitoringInfoGrid([
+      ['Client name', monitoringTextValue(alert.client, 'Unmapped client')],
+      ['Application reference', monitoringTextValue(alert.applicationRef || alert.applicationId, 'Not available')],
+      ['Alert type', monitoringTextValue(alert.type, 'Other')],
+      ['Severity', severityBadge],
+      ['Status', statusBadge],
+      ['Owner', monitoringTextValue(alert.owner, 'Unassigned')],
+      ['Date detected', monitoringTextValue(raw.discovered_at || raw.created_at || alert.date, 'Not available')],
+      ['Age / due status', monitoringTextValue(monitoringAlertAgeDueLabel(alert), 'Not available')],
+      ['Source / provider', monitoringTextValue(monitoringProviderLabel(raw, parseMonitoringSourceReference(raw.source_reference)), 'Not available')],
+      ['Related application', alert.applicationId ? '<button class="btn btn-outline btn-sm" onclick="openAppDetail(' + JSON.stringify(alert.applicationId) + ')">Open application</button>' : 'Not available']
+    ])) +
+    monitoringDetailCard('Issue / Evidence', monitoringAlertEvidenceHtml(alert)) +
+    monitoringDetailCard('Compliance Impact', '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(monitoringComplianceImpact(alert)) + '</div>') +
+    monitoringDetailCard('Recommended Next Step', '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>') +
+    renderMonitoringAssignmentSection(alert) +
+    renderMonitoringDecisionSection(alert) +
+    renderMonitoringDownstreamLinks(alert) +
+    renderMonitoringAuditHistory(alert, state.auditHistory || []) +
+    renderMonitoringTechnicalDetails(alert);
+  updateMonitoringDecisionNoteHint();
+}
+
+async function openMonitoringAlertDetail(alertOrId) {
+  var alertId = (alertOrId && typeof alertOrId === 'object') ? alertOrId.id : alertOrId;
+  if (!alertId) { showToast('Alert is missing an id', 'error'); return; }
+  if (window.history && window.location.hash !== '#monitoring-alerts/' + alertId) {
+    window.history.replaceState(null, '', '#monitoring-alerts/' + encodeURIComponent(alertId));
+  }
+  MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [], loading: true, error: '' };
+  showView('monitoring-alert-detail');
+  try {
+    var raw = await boApiCall('GET', '/monitoring/alerts/' + encodeURIComponent(alertId));
+    MONITORING_ALERT_DETAIL.alert = raw;
+    MONITORING_ALERT_DETAIL.normalized = normalizeMonitoringAlert(raw);
+    MONITORING_ALERT_DETAIL.auditHistory = raw.audit_history || [];
+    MONITORING_ALERT_DETAIL.loading = false;
+    MONITORING_ALERT_DETAIL.error = '';
+    renderMonitoringAlertDetailView();
+  } catch(err) {
+    MONITORING_ALERT_DETAIL.loading = false;
+    MONITORING_ALERT_DETAIL.error = err.message || 'Failed to load alert detail.';
+    renderMonitoringAlertDetailView();
+  }
+}
+
+async function refreshMonitoringAlertDetail() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var alertId = alert.id;
+  await openMonitoringAlertDetail(alertId);
+  await ensureMonitoringDataLoaded({ force: true });
+  renderMonitoringAlerts();
+}
+
+function backToMonitoringAlerts() {
+  if (window.history) window.history.replaceState(null, '', '#monitoring');
+  showView('monitoring');
+}
+
+async function startMonitoringAlertReview() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var btn = document.getElementById('monitoring-start-review-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, { action: 'start_review' });
+    showToast('Review started');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    showToast('Start review failed: ' + (err.message || 'Unknown error'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Start Review'; }
+  }
+}
+
+function updateMonitoringDecisionNoteHint() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  var outcomeEl = document.getElementById('monitoring-alert-outcome');
+  var requiredEl = document.getElementById('monitoring-alert-note-required');
+  var hintEl = document.getElementById('monitoring-alert-decision-hint');
+  var outcome = outcomeEl ? outcomeEl.value : '';
+  var required = monitoringOutcomeRequiresNote(alert, outcome);
+  if (requiredEl) requiredEl.style.display = required ? '' : 'none';
+  if (hintEl) hintEl.textContent = required ? 'A note is required before this outcome can be saved.' : 'Notes are optional for this outcome unless additional rationale is useful.';
+}
+
+async function saveMonitoringAlertDecision() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var outcomeEl = document.getElementById('monitoring-alert-outcome');
+  var noteEl = document.getElementById('monitoring-alert-decision-note');
+  var resultEl = document.getElementById('monitoring-alert-decision-result');
+  var outcome = outcomeEl ? outcomeEl.value : '';
+  var note = noteEl ? noteEl.value.trim() : '';
+  if (!outcome) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">Choose an outcome.</span>'; return; }
+  if (monitoringOutcomeRequiresNote(alert, outcome) && !note) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">A note is required for this outcome.</span>'; return; }
+  var btn = document.getElementById('monitoring-save-decision-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, { action: 'save_decision', outcome: outcome, note: note });
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Decision saved.</span>';
+    showToast('Alert decision saved');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Save failed') + '</span>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Decision'; }
+  }
+}
+
+async function loadMonitoringAssignmentUsers() {
+  var role = currentUser && currentUser.role;
+  if (role !== 'admin' && role !== 'sco') return;
+  try {
+    await loadUsersFromAPI();
+    MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = true;
+    renderMonitoringAlertDetailView();
+  } catch(err) {
+    var el = document.getElementById('monitoring-alert-assignment-result');
+    if (el) el.innerHTML = '<span style="color:var(--red);">Could not load officers: ' + escapeHtml(err.message || 'unknown error') + '</span>';
+  }
+}
+
+async function assignMonitoringAlertToSelf() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, { action: 'assign', assignee_id: currentUser && currentUser.id, assignment_note: 'Self-assigned from alert detail' });
+    showToast('Alert assigned to you');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    showToast('Assignment failed: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function saveMonitoringAlertAssignment() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var assigneeEl = document.getElementById('monitoring-alert-assignee');
+  var noteEl = document.getElementById('monitoring-alert-assignment-note');
+  var resultEl = document.getElementById('monitoring-alert-assignment-result');
+  var assigneeId = assigneeEl ? assigneeEl.value : '';
+  if (!assigneeId) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">Select an officer.</span>'; return; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, { action: 'assign', assignee_id: assigneeId, assignment_note: noteEl ? noteEl.value.trim() : '' });
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Assignment saved.</span>';
+    showToast('Alert assignment saved');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Assignment failed') + '</span>';
+  }
+}
+
 function renderMonitoringAlerts() {
   var tbody = document.getElementById('monitoring-alerts-body');
   if (!tbody) return;
@@ -17392,7 +17823,7 @@ function renderMonitoringAlerts() {
     var tr = document.createElement('tr');
     var severityColor = monitoringSeverityBadgeClass(alert.severityKey);
     var statusBadgeClass = monitoringStatusBadgeClass(alert.statusKey);
-    tr.onclick = function() { showAlertDetail(alert); };
+    tr.onclick = function() { openMonitoringAlertDetail(alert.id); };
     var clientTitle = alert.clientTitle ? ' title="' + escapeHtml(alert.clientTitle) + '"' : '';
     var owner = alert.owner || 'Unassigned';
     var ageDue = monitoringAlertAgeDueLabel(alert);
@@ -17408,7 +17839,7 @@ function renderMonitoringAlerts() {
     if (openBtn) {
       openBtn.onclick = function(event) {
         event.stopPropagation();
-        showAlertDetail(alert);
+        openMonitoringAlertDetail(alert.id);
       };
     }
     tbody.appendChild(tr);
@@ -20885,6 +21316,11 @@ function applyBackofficeHashRoute() {
   }
   if (route.view === 'monitoring') {
     showView('monitoring');
+    return true;
+  }
+  if (route.view.indexOf('monitoring-alerts/') === 0) {
+    var alertId = route.view.split('/')[1];
+    if (alertId) openMonitoringAlertDetail(decodeURIComponent(alertId));
     return true;
   }
   return false;

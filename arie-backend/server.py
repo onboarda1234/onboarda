@@ -17345,23 +17345,33 @@ class MonitoringAlertCreateHandler(BaseHandler):
         try:
             # Exclude fixture-linked alerts by default (application_id NOT LIKE 'f1xed%')
             fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
-            query = f"SELECT * FROM monitoring_alerts WHERE {fx_excl}"
+            query = f"""
+                SELECT ma.*,
+                       u.full_name AS owner_name,
+                       u.email AS owner_email,
+                       app.ref AS application_ref,
+                       app.company_name AS application_company_name
+                  FROM monitoring_alerts ma
+             LEFT JOIN users u ON ma.reviewed_by = u.id
+             LEFT JOIN applications app ON ma.application_id = app.id
+                 WHERE {fx_excl.replace("application_id", "ma.application_id")}
+            """
             params = list(fx_params)
 
             if severity:
-                query += " AND severity = ?"
+                query += " AND ma.severity = ?"
                 params.append(severity)
             if alert_type:
-                query += " AND alert_type = ?"
+                query += " AND ma.alert_type = ?"
                 params.append(alert_type)
             if status_filter:
-                query += " AND status = ?"
+                query += " AND ma.status = ?"
                 params.append(status_filter)
             if client_id:
-                query += " AND application_id = ?"
+                query += " AND ma.application_id = ?"
                 params.append(client_id)
 
-            query += " ORDER BY created_at DESC"
+            query += " ORDER BY ma.created_at DESC"
             alerts = db.execute(query, params).fetchall()
 
             result = [dict(a) for a in alerts]
@@ -20515,6 +20525,147 @@ class ClientStatusLookupHandler(BaseHandler):
 # MONITORING ENDPOINTS (Ongoing Monitoring)
 # ══════════════════════════════════════════════════════════
 
+MONITORING_DECISION_OUTCOMES = {
+    "false_positive": {
+        "status": "dismissed",
+        "officer_action": "false_positive",
+        "audit_action": "monitoring.alert.false_positive",
+        "dismissal_reason": "false_positive",
+        "note_required": True,
+    },
+    "no_material_impact": {
+        "status": "resolved",
+        "officer_action": "no_material_impact",
+        "audit_action": "monitoring.alert.no_material_impact",
+        "note_required": False,
+    },
+    "route_to_edd": {
+        "status": "routed_to_edd",
+        "officer_action": "route_to_edd",
+        "audit_action": "monitoring.alert.routed_to_edd",
+        "note_required": True,
+        "route": "edd",
+    },
+    "escalate_to_sco": {
+        "status": "escalated",
+        "officer_action": "escalate_to_sco",
+        "audit_action": "monitoring.alert.escalated_to_sco",
+        "note_required": True,
+    },
+    "update_risk_profile": {
+        "status": "in_review",
+        "officer_action": "update_risk_profile",
+        "audit_action": "monitoring.alert.risk_profile_update_required",
+        "note_required": True,
+    },
+    "request_further_information": {
+        "status": "in_review",
+        "officer_action": "request_further_information",
+        "audit_action": "monitoring.alert.further_information_requested",
+        "note_required": False,
+    },
+    "request_updated_document": {
+        "status": "document_requested",
+        "officer_action": "request_updated_document",
+        "audit_action": "monitoring.alert.document_update_requested",
+        "note_required": False,
+    },
+    "mark_already_updated": {
+        "status": "resolved",
+        "officer_action": "mark_already_updated",
+        "audit_action": "monitoring.alert.document_already_updated",
+        "note_required": False,
+    },
+    "waive_with_reason": {
+        "status": "waived",
+        "officer_action": "waive_with_reason",
+        "audit_action": "monitoring.alert.document_waived",
+        "note_required": True,
+    },
+    "escalate_overdue_item": {
+        "status": "escalated",
+        "officer_action": "escalate_overdue_item",
+        "audit_action": "monitoring.alert.overdue_document_escalated",
+        "note_required": True,
+    },
+}
+
+
+def _monitoring_alert_get(db, alert_id):
+    return db.execute(
+        """
+        SELECT ma.*,
+               u.full_name AS owner_name,
+               u.email AS owner_email,
+               app.ref AS application_ref,
+               app.company_name AS application_company_name
+          FROM monitoring_alerts ma
+     LEFT JOIN users u ON ma.reviewed_by = u.id
+     LEFT JOIN applications app ON ma.application_id = app.id
+         WHERE ma.id = ?
+        """,
+        (alert_id,),
+    ).fetchone()
+
+
+def _monitoring_alert_audit_history(db, alert_id):
+    rows = db.execute(
+        """
+        SELECT id, timestamp, user_id, user_name, user_role, action, target,
+               detail, before_state, after_state
+          FROM audit_log
+         WHERE target = ?
+            OR target = ?
+         ORDER BY timestamp ASC, id ASC
+        """,
+        (f"monitoring_alert:{alert_id}", f"Monitoring Alert {alert_id}"),
+    ).fetchall()
+    history = []
+    for row in rows:
+        item = dict(row)
+        for key in ("before_state", "after_state"):
+            value = item.get(key)
+            if value:
+                try:
+                    item[key] = json.loads(value)
+                except Exception:
+                    item[key] = value
+        history.append(item)
+    return history
+
+
+def _monitoring_alert_owner_label(db, owner_id):
+    if not owner_id:
+        return "Unassigned"
+    row = db.execute(
+        "SELECT full_name, email FROM users WHERE id = ? LIMIT 1",
+        (owner_id,),
+    ).fetchone()
+    if not row:
+        return str(owner_id)
+    return row.get("full_name") or row.get("email") or str(owner_id)
+
+
+def _monitoring_alert_assignment_allowed(user, assignee_id):
+    actor_id = str((user or {}).get("sub") or "")
+    role = str((user or {}).get("role") or "").lower()
+    if not assignee_id or str(assignee_id) == actor_id:
+        return role in ("admin", "sco", "co")
+    return role in ("admin", "sco")
+
+
+def _monitoring_alert_action_note_required(alert, outcome):
+    cfg = MONITORING_DECISION_OUTCOMES.get(outcome) or {}
+    severity = str((alert or {}).get("severity") or "").strip().lower()
+    alert_type = str((alert or {}).get("alert_type") or "").strip().lower()
+    material_type = any(token in alert_type for token in ("media", "pep", "sanction"))
+    return bool(
+        cfg.get("note_required")
+        or severity in ("high", "critical")
+        or (outcome in ("false_positive", "no_material_impact") and material_type)
+    )
+
+
 class MonitoringAlertDetailHandler(BaseHandler):
     """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
     def get(self, alert_id):
@@ -20523,12 +20674,16 @@ class MonitoringAlertDetailHandler(BaseHandler):
             return
 
         db = get_db()
-        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
+        alert = _monitoring_alert_get(db, alert_id)
         if not alert:
             db.close()
             return self.error("Alert not found", 404)
 
         result = dict(alert)
+        result["owner_id"] = result.get("reviewed_by")
+        result["owner_name"] = result.get("owner_name") or _monitoring_alert_owner_label(db, result.get("reviewed_by"))
+        result["assigned_officer_name"] = result["owner_name"]
+        result["audit_history"] = _monitoring_alert_audit_history(db, alert_id)
         db.close()
         self.success(result)
 
@@ -20536,8 +20691,10 @@ class MonitoringAlertDetailHandler(BaseHandler):
         """Update alert state and route it to a downstream object.
 
         PR-02 supported actions:
+          - start_review
           - triage
           - assign
+          - save_decision
           - dismiss              (requires `dismissal_reason`)
           - route_to_periodic_review
           - route_to_edd
@@ -20558,13 +20715,14 @@ class MonitoringAlertDetailHandler(BaseHandler):
         # Back-compat aliases. Kept narrow so legacy callers still work
         # while new explicit verbs are the documented contract.
         legacy_alias = {
+            "start_review": "start_review",
             "escalate": "route_to_edd",
             "trigger_review": "route_to_periodic_review",
         }
         canonical_action = legacy_alias.get(action, action)
 
         valid_actions = [
-            "triage", "assign", "dismiss",
+            "start_review", "triage", "assign", "save_decision", "dismiss",
             "route_to_periodic_review", "route_to_edd",
         ]
         valid_for_error = valid_actions + list(legacy_alias.keys())
@@ -20578,15 +20736,204 @@ class MonitoringAlertDetailHandler(BaseHandler):
 
         db = get_db()
         try:
+            alert_before_row = _monitoring_alert_get(db, alert_id)
+            if not alert_before_row:
+                return self.error("Alert not found", 404)
+            alert_before = dict(alert_before_row)
             try:
-                if canonical_action == "triage":
+                if canonical_action == "start_review":
+                    prior_status = alert_before.get("status") or "open"
+                    if str(prior_status).lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
+                        return self.error("Cannot start review for an alert that is already terminal.", 409)
+                    note = str(data.get("note") or data.get("reason") or "").strip()
+                    payload = {
+                        "started_by": user.get("sub", ""),
+                        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "note": note,
+                    }
+                    db.execute(
+                        """
+                        UPDATE monitoring_alerts
+                           SET status = ?,
+                               officer_action = ?,
+                               officer_notes = ?,
+                               triaged_at = COALESCE(triaged_at, CURRENT_TIMESTAMP),
+                               reviewed_at = CURRENT_TIMESTAMP,
+                               reviewed_by = COALESCE(reviewed_by, ?)
+                         WHERE id = ?
+                        """,
+                        (
+                            "in_review",
+                            "start_review",
+                            json.dumps(payload, sort_keys=True),
+                            user.get("sub", ""),
+                            alert_id,
+                        ),
+                    )
+                    self.log_audit(
+                        user,
+                        "monitoring.alert.review_started",
+                        f"monitoring_alert:{alert_id}",
+                        json.dumps({"alert_id": alert_id, "note": note}, sort_keys=True),
+                        db=db,
+                        before_state={"status": prior_status},
+                        after_state={"status": "in_review"},
+                        commit=False,
+                    )
+                    db.commit()
+                    result = {"alert_id": alert_id, "status": "in_review"}
+                elif canonical_action == "triage":
                     result = mr.triage_alert(
                         db, alert_id, user=user, audit_writer=self.log_audit,
                     )
                 elif canonical_action == "assign":
-                    result = mr.assign_alert(
-                        db, alert_id, user=user, audit_writer=self.log_audit,
+                    if str(alert_before.get("status") or "").lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
+                        return self.error("Cannot assign an alert that is already terminal.", 409)
+                    requested_assignee = (
+                        data.get("assignee_id")
+                        or data.get("assigned_to")
+                        or data.get("officer_id")
+                        or user.get("sub", "")
                     )
+                    requested_assignee = str(requested_assignee or "").strip()
+                    if not _monitoring_alert_assignment_allowed(user, requested_assignee):
+                        reason_text = (
+                            "Assignment blocked: only Administrator and Senior CO roles can assign "
+                            "monitoring alerts to another officer."
+                        )
+                        self.log_governance_attempt(
+                            user,
+                            "monitoring.alert.assignment",
+                            f"monitoring_alert:{alert_id}",
+                            "rejected",
+                            403,
+                            reason_text,
+                            {"assignee_id": requested_assignee},
+                            db=db,
+                        )
+                        return self.error(reason_text, 403)
+                    assignee = db.execute(
+                        "SELECT id, full_name, email, role, status FROM users WHERE id = ?",
+                        (requested_assignee,),
+                    ).fetchone()
+                    if not assignee:
+                        return self.error("Assigned officer not found", 404)
+                    if str(assignee.get("status") or "active").lower() != "active":
+                        return self.error("Assigned officer is not active", 400)
+                    previous_owner = alert_before.get("reviewed_by")
+                    new_owner = assignee["id"]
+                    assignment_note = str(data.get("assignment_note") or data.get("note") or data.get("reason") or "").strip()
+                    assignment_payload = {
+                        "alert_id": alert_id,
+                        "application_id": alert_before.get("application_id"),
+                        "previous_owner": previous_owner,
+                        "previous_owner_name": _monitoring_alert_owner_label(db, previous_owner),
+                        "new_owner": new_owner,
+                        "new_owner_name": assignee.get("full_name") or assignee.get("email") or new_owner,
+                        "assigned_by": user.get("sub", ""),
+                        "assigned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "note": assignment_note,
+                    }
+                    db.execute(
+                        """
+                        UPDATE monitoring_alerts
+                           SET status = ?,
+                               officer_action = ?,
+                               officer_notes = ?,
+                               reviewed_by = ?,
+                               reviewed_at = CURRENT_TIMESTAMP,
+                               assigned_at = CURRENT_TIMESTAMP
+                         WHERE id = ?
+                        """,
+                        (
+                            "assigned",
+                            "assign",
+                            json.dumps(assignment_payload, sort_keys=True),
+                            new_owner,
+                            alert_id,
+                        ),
+                    )
+                    self.log_audit(
+                        user,
+                        "monitoring.alert.assigned",
+                        f"monitoring_alert:{alert_id}",
+                        json.dumps(assignment_payload, default=str, sort_keys=True),
+                        db=db,
+                        before_state={"status": alert_before.get("status"), "owner": previous_owner},
+                        after_state={"status": "assigned", "owner": new_owner},
+                        commit=False,
+                    )
+                    db.commit()
+                    result = {"alert_id": alert_id, "status": "assigned", "owner_id": new_owner}
+                elif canonical_action == "save_decision":
+                    if str(alert_before.get("status") or "").lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
+                        return self.error("Cannot save a new decision for an alert that is already terminal.", 409)
+                    outcome = str(data.get("outcome") or "").strip()
+                    note = str(data.get("note") or data.get("reason") or "").strip()
+                    if outcome not in MONITORING_DECISION_OUTCOMES:
+                        return self.error(
+                            "Invalid outcome. Must be one of: "
+                            + ", ".join(sorted(MONITORING_DECISION_OUTCOMES.keys())),
+                            400,
+                        )
+                    if _monitoring_alert_action_note_required(alert_before, outcome) and not note:
+                        return self.error("A decision note is required for this alert outcome.", 400)
+                    cfg = MONITORING_DECISION_OUTCOMES[outcome]
+                    if cfg.get("route") == "edd":
+                        result = mr.route_alert_to_edd(
+                            db, alert_id,
+                            trigger_notes=note,
+                            priority=data.get("priority"),
+                            user=user, audit_writer=self.log_audit,
+                        )
+                    elif cfg.get("dismissal_reason"):
+                        result = mr.dismiss_alert(
+                            db, alert_id,
+                            dismissal_reason=cfg["dismissal_reason"],
+                            dismissal_notes=note,
+                            user=user, audit_writer=self.log_audit,
+                        )
+                    else:
+                        decision_payload = {
+                            "alert_id": alert_id,
+                            "application_id": alert_before.get("application_id"),
+                            "outcome": outcome,
+                            "note": note,
+                            "decided_by": user.get("sub", ""),
+                            "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        }
+                        db.execute(
+                            """
+                            UPDATE monitoring_alerts
+                               SET status = ?,
+                                   officer_action = ?,
+                                   officer_notes = ?,
+                                   reviewed_at = CURRENT_TIMESTAMP,
+                                   reviewed_by = COALESCE(reviewed_by, ?),
+                                   resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
+                             WHERE id = ?
+                            """,
+                            (
+                                cfg["status"],
+                                cfg["officer_action"],
+                                json.dumps(decision_payload, sort_keys=True),
+                                user.get("sub", ""),
+                                cfg["status"],
+                                alert_id,
+                            ),
+                        )
+                        self.log_audit(
+                            user,
+                            cfg["audit_action"],
+                            f"monitoring_alert:{alert_id}",
+                            json.dumps(decision_payload, default=str, sort_keys=True),
+                            db=db,
+                            before_state={"status": alert_before.get("status"), "officer_action": alert_before.get("officer_action")},
+                            after_state={"status": cfg["status"], "officer_action": cfg["officer_action"], "outcome": outcome},
+                            commit=False,
+                        )
+                        db.commit()
+                        result = {"alert_id": alert_id, "status": cfg["status"], "outcome": outcome}
                 elif canonical_action == "dismiss":
                     dismissal_reason = data.get("dismissal_reason")
                     if not dismissal_reason:
@@ -20630,6 +20977,8 @@ class MonitoringAlertDetailHandler(BaseHandler):
                 "result": result,
                 # Back-compat field for existing UI consumers.
                 "new_status": result.get("status"),
+                "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
+                "audit_history": _monitoring_alert_audit_history(db, alert_id),
             })
         finally:
             db.close()
