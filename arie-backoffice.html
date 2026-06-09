@@ -1122,9 +1122,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="stat-card-change" id="dash-mon-docs-expiring-note">From monitoring dashboard</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-label">Active Monitoring Alerts</div>
+      <div class="stat-card-label">High-risk applications</div>
       <div class="stat-card-value" style="color:var(--text3);" id="dash-mon-alerts">0</div>
-      <div class="stat-card-change" id="dash-mon-alerts-note">Live monitoring alerts</div>
+      <div class="stat-card-change" id="dash-mon-alerts-note">Monitoring dashboard risk metric</div>
     </div>
     <div class="stat-card">
       <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring')">View Monitoring Alerts →</button>
@@ -1900,51 +1900,61 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Alerts Tab -->
   <div id="monitoring-alerts-tab">
-    <!-- PR-C Scope D: existing "raw" tiles kept for backward compatibility; new
-         "Active lifecycle work" tile is the source of truth going forward.
-         Existing tile data sources are unchanged — only the labels are
-         clarified so counters no longer read as authoritative. -->
     <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-card-label">Active Monitoring (raw)</div><div class="stat-card-value" style="color:var(--green);" id="mon-stat-active">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Open Monitoring Alerts (raw)</div><div class="stat-card-value" style="color:var(--amber);" id="mon-stat-open">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Critical (raw)</div><div class="stat-card-value" style="color:var(--red);" id="mon-stat-critical">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Reviews Due (raw)</div><div class="stat-card-value" style="color:var(--blue);" id="mon-stat-reviews">0</div></div>
-      <div class="stat-card" title="Same source as Lifecycle tab Active count: /api/lifecycle/queue?include=active (counts.total).">
-        <div class="stat-card-label">Active Lifecycle Work</div>
-        <div class="stat-card-value" style="color:#7c3aed;" id="mon-stat-lifecycle-active">—</div>
-      </div>
+      <div class="stat-card"><div class="stat-card-label">Open Alerts</div><div class="stat-card-value" style="color:var(--amber);" id="mon-stat-open">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">High / Critical</div><div class="stat-card-value" style="color:var(--red);" id="mon-stat-high-critical">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Document Expiry</div><div class="stat-card-value" style="color:var(--blue);" id="mon-stat-document-expiry">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Risk Drift</div><div class="stat-card-value" style="color:var(--green);" id="mon-stat-risk-drift">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Escalated</div><div class="stat-card-value" style="color:#7c3aed;" id="mon-stat-escalated">0</div></div>
     </div>
 
-    <div style="display:flex;gap:10px;margin-bottom:16px;">
+    <div class="tab-bar" style="margin-bottom:16px;">
+      <div class="tab active" data-monitoring-alert-tab="all" onclick="setMonitoringAlertSubtab('all',this)">All Alerts</div>
+      <div class="tab" data-monitoring-alert-tab="screening" onclick="setMonitoringAlertSubtab('screening',this)">Adverse Media / Screening Changes</div>
+      <div class="tab" data-monitoring-alert-tab="document_expiry" onclick="setMonitoringAlertSubtab('document_expiry',this)">Document Expiry</div>
+      <div class="tab" data-monitoring-alert-tab="risk_drift" onclick="setMonitoringAlertSubtab('risk_drift',this)">Risk Drift</div>
+      <div class="tab" data-monitoring-alert-tab="escalated" onclick="setMonitoringAlertSubtab('escalated',this)">Escalated</div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
       <select class="form-select" style="width:auto;" id="alert-severity-filter" onchange="renderMonitoringAlerts()">
         <option value="">All Severities</option>
-        <option value="Critical">Critical</option>
-        <option value="High">High</option>
-        <option value="Medium">Medium</option>
-        <option value="Low">Low</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
       </select>
       <select class="form-select" style="width:auto;" id="alert-type-filter" onchange="renderMonitoringAlerts()">
         <option value="">All Alert Types</option>
-        <option value="Sanctions Match">Sanctions Match</option>
-        <option value="PEP Status Change">PEP Status Change</option>
-        <option value="Adverse Media">Adverse Media</option>
-        <option value="Registry Change">Registry Change</option>
-        <option value="Risk Drift">Risk Drift</option>
-        <option value="Regulatory Impact">Regulatory Impact</option>
+        <option value="adverse_media">Adverse Media</option>
+        <option value="pep_change">PEP Change</option>
+        <option value="sanctions_change">Sanctions Change</option>
+        <option value="document_expiry">Document Expiry</option>
+        <option value="missing_document_refresh">Missing Document Refresh</option>
+        <option value="risk_drift">Risk Drift</option>
+        <option value="unusual_activity">Unusual Activity</option>
+        <option value="regulatory_impact">Regulatory Impact</option>
+        <option value="other">Other</option>
       </select>
       <select class="form-select" style="width:auto;" id="alert-status-filter" onchange="renderMonitoringAlerts()">
         <option value="">All Statuses</option>
-        <option value="Open">Open</option>
-        <option value="Reviewed">Reviewed</option>
-        <option value="Dismissed">Dismissed</option>
-        <option value="Escalated">Escalated</option>
+        <option value="open">Open</option>
+        <option value="in_review">In Review</option>
+        <option value="assigned">Assigned</option>
+        <option value="document_requested">Document Requested</option>
+        <option value="client_uploaded">Client Uploaded</option>
+        <option value="escalated">Escalated</option>
+        <option value="routed_to_edd">Routed to EDD</option>
+        <option value="dismissed">Dismissed</option>
+        <option value="resolved">Resolved</option>
+        <option value="waived">Waived</option>
       </select>
     </div>
 
     <div class="card" style="padding:0;overflow:hidden;">
       <table class="data-table">
         <thead>
-          <tr><th>Date</th><th>Client</th><th>Alert Type</th><th>Severity</th><th>Detected By</th><th>Status</th><th>Actions</th></tr>
+          <tr><th>Date</th><th>Client</th><th>Alert</th><th>Severity</th><th>Owner</th><th>Status</th><th>Age / Due</th><th>Action</th></tr>
         </thead>
         <tbody id="monitoring-alerts-body"></tbody>
       </table>
@@ -3886,6 +3896,8 @@ function resetBackofficeSessionData() {
   CHANGE_MGMT_APPLICATIONS_PROMISE = null;
   CHANGE_MGMT_APPLICATIONS_ERROR = '';
   MONITORING_ALERTS = [];
+  MONITORING_ALERTS_LOAD_ERROR = null;
+  MONITORING_ALERT_SUBTAB = 'all';
   PERIODIC_REVIEWS = [];
   MONITORING_AGENTS = [];
   MONITORING_DASHBOARD = null;
@@ -3930,53 +3942,217 @@ function fixtureScenarioCodeFromRef(sourceReference) {
   return m ? ('SCEN-' + m[1]) : null;
 }
 
+var MONITORING_ALERT_TYPE_LABELS = {
+  adverse_media: 'Adverse Media',
+  pep_change: 'PEP Change',
+  sanctions_change: 'Sanctions Change',
+  document_expiry: 'Document Expiry',
+  missing_document_refresh: 'Missing Document Refresh',
+  risk_drift: 'Risk Drift',
+  unusual_activity: 'Unusual Activity',
+  regulatory_impact: 'Regulatory Impact',
+  other: 'Other'
+};
+var MONITORING_ALERT_STATUS_LABELS = {
+  open: 'Open',
+  in_review: 'In Review',
+  assigned: 'Assigned',
+  document_requested: 'Document Requested',
+  client_uploaded: 'Client Uploaded',
+  escalated: 'Escalated',
+  routed_to_edd: 'Routed to EDD',
+  dismissed: 'Dismissed',
+  resolved: 'Resolved',
+  waived: 'Waived'
+};
+var MONITORING_ALERT_SEVERITY_LABELS = {
+  critical: 'Critical',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low'
+};
+
+function monitoringCanonicalToken(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
 function normalizeAlertType(raw) {
-  var direct = String(raw.alert_type || raw.type || '').trim();
-  if (direct && direct.toLowerCase() !== 'fixture') return direct;
-  var s = String(raw.summary || '').toLowerCase();
-  if (s.indexOf('sanction') >= 0) return 'Sanctions Match';
-  if (s.indexOf('adverse media') >= 0) return 'Adverse Media';
-  if (s.indexOf('outstanding alert') >= 0 || s.indexOf('drift') >= 0) return 'Risk Drift';
-  if (s.indexOf('name collision') >= 0 || s.indexOf('legacy free-text') >= 0) return 'Name Match';
-  return 'Monitoring Alert';
+  raw = raw || {};
+  var direct = monitoringCanonicalToken(raw.alert_type || raw.type || raw.alertType || '');
+  var summary = String(raw.summary || raw.detail || '').toLowerCase();
+  var source = direct || monitoringCanonicalToken(summary);
+  if (source === 'fixture') source = monitoringCanonicalToken(summary);
+
+  if (['media','adversemedia','adverse_media','adverse_media_alert','negative_news','news'].indexOf(source) >= 0 || summary.indexOf('adverse media') >= 0) return 'adverse_media';
+  if (['pep','pep_change','pep_status_change','pep_monitoring','pep_status'].indexOf(source) >= 0 || summary.indexOf('pep') >= 0) return 'pep_change';
+  if (source.indexOf('sanction') >= 0 || source.indexOf('watchlist') >= 0 || summary.indexOf('sanction') >= 0) return 'sanctions_change';
+  if (['document_expiry','document_expired','document_expiring','document_expiring_soon','document_health','expiry','expired'].indexOf(source) >= 0 || summary.indexOf('document expir') >= 0) return 'document_expiry';
+  if (['document_expiry_missing','missing_document','missing_document_refresh','document_refresh','document_refresh_due','missing_docs','kyc_refresh_missing'].indexOf(source) >= 0 || summary.indexOf('missing document') >= 0 || summary.indexOf('document refresh') >= 0) return 'missing_document_refresh';
+  if (source.indexOf('risk_drift') >= 0 || source.indexOf('drift') >= 0 || summary.indexOf('risk drift') >= 0 || summary.indexOf('outstanding alert') >= 0) return 'risk_drift';
+  if (source.indexOf('unusual') >= 0 || source.indexOf('activity') >= 0 || source.indexOf('transaction') >= 0 || source.indexOf('velocity') >= 0) return 'unusual_activity';
+  if (source.indexOf('regulatory') >= 0 || source.indexOf('regulation') >= 0 || source.indexOf('reg_intel') >= 0) return 'regulatory_impact';
+  return 'other';
+}
+
+function monitoringAlertTypeLabel(typeKey) {
+  return MONITORING_ALERT_TYPE_LABELS[typeKey] || MONITORING_ALERT_TYPE_LABELS.other;
 }
 
 function normalizeDetectedBy(raw, normalizedType) {
   var direct = String(raw.detected_by || '').trim();
   if (direct && direct.toLowerCase() !== 'fixture_seed') return direct;
-  if (normalizedType === 'Sanctions Match') return 'Sanctions Screening Agent';
-  if (normalizedType === 'Adverse Media') return 'Adverse Media Agent';
-  if (normalizedType === 'Risk Drift') return 'Behaviour & Risk Drift Agent';
+  if (normalizedType === 'sanctions_change') return 'Sanctions Screening Agent';
+  if (normalizedType === 'adverse_media') return 'Adverse Media Agent';
+  if (normalizedType === 'pep_change') return 'PEP Monitoring Agent';
+  if (normalizedType === 'risk_drift') return 'Behaviour & Risk Drift Agent';
+  if (normalizedType === 'document_expiry' || normalizedType === 'missing_document_refresh') return 'Document Monitoring Agent';
   return 'Ongoing Compliance Review Agent';
 }
 
-function normalizeAlertStatusLabel(status) {
-  var s = String(status || '').toLowerCase();
+function normalizeAlertStatus(status) {
+  var s = monitoringCanonicalToken(status || 'open');
   var map = {
-    open: 'Open',
-    triaged: 'Triaged',
-    assigned: 'Assigned',
-    dismissed: 'Dismissed',
-    routed_to_review: 'Routed to Review',
-    routed_to_edd: 'Routed to EDD',
-    in_review: 'In Review'
+    new: 'open',
+    opened: 'open',
+    open: 'open',
+    triaged: 'in_review',
+    review: 'in_review',
+    reviewed: 'resolved',
+    inreview: 'in_review',
+    in_review: 'in_review',
+    routed_to_review: 'in_review',
+    route_to_review: 'in_review',
+    assigned: 'assigned',
+    assignee: 'assigned',
+    document_requested: 'document_requested',
+    documents_requested: 'document_requested',
+    client_document_requested: 'document_requested',
+    requested: 'document_requested',
+    client_uploaded: 'client_uploaded',
+    uploaded: 'client_uploaded',
+    escalated: 'escalated',
+    escalated_to_edd: 'routed_to_edd',
+    routed_edd: 'routed_to_edd',
+    routed_to_edd: 'routed_to_edd',
+    dismissed: 'dismissed',
+    closed_dismissed: 'dismissed',
+    resolved: 'resolved',
+    resolved_no_change: 'resolved',
+    closed: 'resolved',
+    waived: 'waived',
+    waiver: 'waived'
   };
-  return map[s] || (s ? (s.charAt(0).toUpperCase() + s.slice(1)) : 'Open');
+  return map[s] || (MONITORING_ALERT_STATUS_LABELS[s] ? s : 'open');
+}
+
+function normalizeAlertStatusLabel(status) {
+  return MONITORING_ALERT_STATUS_LABELS[normalizeAlertStatus(status)] || MONITORING_ALERT_STATUS_LABELS.open;
+}
+
+function normalizeAlertSeverity(severity) {
+  var s = monitoringCanonicalToken(severity || 'medium');
+  if (s === 'urgent' || s === 'very_high' || s === 'veryhigh') return 'critical';
+  if (s === 'critical' || s === 'high' || s === 'medium' || s === 'low') return s;
+  return 'medium';
+}
+
+function monitoringAlertSeverityLabel(severityKey) {
+  return MONITORING_ALERT_SEVERITY_LABELS[severityKey] || MONITORING_ALERT_SEVERITY_LABELS.medium;
+}
+
+function monitoringAlertStatusLabel(statusKey) {
+  return MONITORING_ALERT_STATUS_LABELS[statusKey] || MONITORING_ALERT_STATUS_LABELS.open;
+}
+
+function isMonitoringUuidLike(value) {
+  var s = String(value || '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
+
+function findApplicationForMonitoringAlert(alertLike) {
+  if (!alertLike) return null;
+  if (typeof APPLICATIONS === 'undefined' || !APPLICATIONS) return null;
+  var appId = alertLike.applicationId || alertLike.application_id || alertLike.ref || '';
+  var clientId = alertLike.clientId || alertLike.client_id || alertLike.client_name || '';
+  for (var i = 0; i < APPLICATIONS.length; i++) {
+    var app = APPLICATIONS[i];
+    if (!app) continue;
+    if (appId && (String(app.id) === String(appId) || String(app.ref) === String(appId))) return app;
+    if (clientId && (String(app.id) === String(clientId) || String(app.ref) === String(clientId))) return app;
+  }
+  return null;
+}
+
+function monitoringAlertClientDisplay(alertLike) {
+  alertLike = alertLike || {};
+  var app = findApplicationForMonitoringAlert(alertLike);
+  var candidates = app
+    ? [app.company, app.companyName, app.client, alertLike.company_name, alertLike.client_company_name, alertLike.clientName, alertLike.client_name]
+    : [alertLike.company_name, alertLike.client_company_name, alertLike.clientName, alertLike.client_name];
+  for (var i = 0; i < candidates.length; i++) {
+    var value = String(candidates[i] || '').trim();
+    if (value && !isMonitoringUuidLike(value)) return value;
+  }
+  return 'Unmapped client';
+}
+
+function monitoringAlertClientTitle(alertLike) {
+  alertLike = alertLike || {};
+  var ids = [];
+  ['applicationId','application_id','clientId','client_id','client_name','source_reference','provider_alert_id','id'].forEach(function(key) {
+    if (alertLike && alertLike[key]) ids.push(key + ': ' + alertLike[key]);
+  });
+  return ids.length ? ids.join(' | ') : '';
+}
+
+function monitoringAlertAgeDueLabel(alert) {
+  var due = alert && (alert.dueDate || alert.due_date || alert.review_due_at);
+  if (due) return 'Due ' + String(due).split('T')[0].split(' ')[0];
+  var date = alert && alert.date;
+  if (!date) return '—';
+  var ts = Date.parse(date);
+  if (!isFinite(ts)) return date;
+  var days = Math.max(0, Math.floor((Date.now() - ts) / 86400000));
+  return days === 0 ? 'Today' : (days + 'd');
+}
+
+function monitoringSeverityBadgeClass(severityKey) {
+  return { critical: 'very-high', high: 'high', medium: 'medium', low: 'low' }[severityKey] || 'medium';
+}
+
+function monitoringStatusBadgeClass(statusKey) {
+  if (statusKey === 'open' || statusKey === 'in_review' || statusKey === 'assigned' || statusKey === 'document_requested' || statusKey === 'client_uploaded') return 'pending';
+  if (statusKey === 'escalated') return 'high';
+  if (statusKey === 'dismissed' || statusKey === 'waived') return 'draft';
+  if (statusKey === 'resolved' || statusKey === 'routed_to_edd') return 'approved';
+  return 'in-review';
 }
 
 function normalizeMonitoringAlert(raw) {
+  raw = raw || {};
   var type = normalizeAlertType(raw || {});
+  var statusKey = normalizeAlertStatus(raw.status || 'open');
+  var severityKey = normalizeAlertSeverity(raw.severity || 'medium');
   return {
+    raw: raw || {},
     id: raw.id,
+    applicationId: raw.application_id || raw.applicationId || '',
     date: (raw.created_at || '').split('T')[0].split(' ')[0],
-    client: raw.client_name || '',
-    type: type,
-    severity: raw.severity || 'Medium',
+    client: monitoringAlertClientDisplay(raw || {}),
+    clientTitle: monitoringAlertClientTitle(raw || {}),
+    typeKey: type,
+    type: monitoringAlertTypeLabel(type),
+    severityKey: severityKey,
+    severity: monitoringAlertSeverityLabel(severityKey),
     agent: normalizeDetectedBy(raw || {}, type),
-    status: normalizeAlertStatusLabel(raw.status || 'open'),
+    owner: raw.assigned_officer_name || raw.owner_name || raw.assigned_name || raw.assigned_officer || raw.assigned_to || 'Unassigned',
+    rawStatusKey: monitoringCanonicalToken(raw.status || 'open'),
+    statusKey: statusKey,
+    status: monitoringAlertStatusLabel(statusKey),
     source: raw.source_reference || '',
     detail: raw.summary || '',
     recommendation: raw.ai_recommendation || '',
+    dueDate: raw.due_date || raw.review_due_at || '',
     linked_periodic_review_id: raw.linked_periodic_review_id,
     linked_edd_case_id: raw.linked_edd_case_id,
     officer_action: raw.officer_action || null,
@@ -4370,13 +4546,17 @@ async function loadFromAPI() {
 
   try { await loadAuditTrail({ silent: true }); } catch(e) {}
 
-  await safeLoadModule('Monitoring alerts', async function() {
+  var monitoringAlertsLoaded = await safeLoadModule('Monitoring alerts', async function() {
     MONITORING_ALERTS = [];
+    MONITORING_ALERTS_LOAD_ERROR = null;
     var alertsResp = await boApiCall('GET', '/monitoring/alerts');
     if (alertsResp.alerts) {
       MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
     }
   }, failures);
+  if (!monitoringAlertsLoaded) {
+    MONITORING_ALERTS_LOAD_ERROR = new Error('Monitoring alerts failed to load during dashboard bootstrap');
+  }
 
   await safeLoadModule('Periodic reviews', async function() {
     PERIODIC_REVIEWS = [];
@@ -4472,7 +4652,7 @@ async function loadFromAPI() {
 
   BACKOFFICE_LAST_LOAD_FAILURES = failures.slice();
   SUPPORT_DATA_STATE = 'ready';
-  MONITORING_DATA_STATE = 'ready';
+  MONITORING_DATA_STATE = monitoringAlertsLoaded ? 'ready' : 'failed';
   if (failures.length) {
     showDashboardLoadWarning(failures);
     return false;
@@ -4754,11 +4934,13 @@ function ensureScreeningQueueLoaded(options) {
 
 function loadMonitoringDataFromAPI(options) {
   MONITORING_DATA_STATE = 'loading';
+  MONITORING_ALERTS_LOAD_ERROR = null;
   return Promise.all([
     boApiCall('GET', '/monitoring/alerts', null, options).then(function(alertsResp) {
       MONITORING_ALERTS = (alertsResp.alerts || []).filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
     }).catch(function(e) {
       MONITORING_ALERTS = [];
+      MONITORING_ALERTS_LOAD_ERROR = e;
       console.warn('Could not load monitoring alerts:', e);
     }),
     boApiCall('GET', '/monitoring/reviews', null, options).then(function(reviewsResp) {
@@ -4796,9 +4978,9 @@ function loadMonitoringDataFromAPI(options) {
       console.warn('Could not load monitoring dashboard stats:', e);
     })
   ]).then(function() {
-    MONITORING_DATA_STATE = 'ready';
+    MONITORING_DATA_STATE = MONITORING_ALERTS_LOAD_ERROR ? 'failed' : 'ready';
     updateDashboardMonitoringStats();
-    return true;
+    return !MONITORING_ALERTS_LOAD_ERROR;
   }).catch(function(e) {
     MONITORING_DATA_STATE = 'failed';
     updateDashboardMonitoringStats();
@@ -5284,6 +5466,8 @@ var AUDIT_LOG = [];
 // ═══════════════════════════════════════════════════════════
 var MONITORING_ALERTS = [];
 // Populated from API or left empty until monitoring data loads.
+var MONITORING_ALERTS_LOAD_ERROR = null;
+var MONITORING_ALERT_SUBTAB = 'all';
 
 var PERIODIC_REVIEWS = [];
 // Populated from API or left empty until review data loads.
@@ -5495,9 +5679,12 @@ function showView(name, navItem) {
   }
   if (name === 'monitoring') {
     switchMonitoringTab('alerts');
+    if (MONITORING_DATA_STATE === 'idle' && !MONITORING_ALERTS.length) {
+      MONITORING_DATA_STATE = 'loading';
+    }
     renderMonitoring();
     ensureMonitoringDataLoaded().then(function(loaded) {
-      if (loaded) renderMonitoring();
+      renderMonitoring();
     });
   }
   if (name === 'lifecycle') {
@@ -5784,7 +5971,7 @@ function updateDashboardMonitoringStats() {
     return;
   }
   var openAlerts = MONITORING_ALERTS.filter(function(a) {
-    return normalizeStatusKey(a.status) === 'open';
+    return a.statusKey === 'open' || normalizeStatusKey(a.status) === 'open';
   }).length;
   var filesDue = MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.files_due === 'number'
     ? MONITORING_DASHBOARD.files_due
@@ -5795,17 +5982,19 @@ function updateDashboardMonitoringStats() {
   var docsExpiring = MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.docs_expiring === 'number'
     ? MONITORING_DASHBOARD.docs_expiring
     : 0;
-  var alertsCount = MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.alerts === 'number'
+  var highRiskApplications = MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.high_risk_applications === 'number'
+    ? MONITORING_DASHBOARD.high_risk_applications
+    : MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.alerts === 'number'
     ? MONITORING_DASHBOARD.alerts
     : openAlerts;
 
   var el;
   el = document.getElementById('dash-mon-files-due'); if (el) el.textContent = filesDue;
   el = document.getElementById('dash-mon-docs-expiring'); if (el) el.textContent = docsExpiring;
-  el = document.getElementById('dash-mon-alerts'); if (el) el.textContent = alertsCount;
+  el = document.getElementById('dash-mon-alerts'); if (el) el.textContent = highRiskApplications;
   el = document.getElementById('dash-mon-files-due-note'); if (el) el.textContent = filesDue > 0 ? 'Reviews due soon or overdue' : 'No due reviews currently loaded';
   el = document.getElementById('dash-mon-docs-expiring-note'); if (el) el.textContent = docsExpiring > 0 ? 'Expiring documents need follow-up' : 'No expiring documents reported';
-  el = document.getElementById('dash-mon-alerts-note'); if (el) el.textContent = alertsCount > 0 ? openAlerts + ' open alert(s) in monitoring' : 'No active monitoring alerts';
+  el = document.getElementById('dash-mon-alerts-note'); if (el) el.textContent = highRiskApplications > 0 ? 'High-risk applications; monitoring alerts open: ' + openAlerts : 'No high-risk applications reported';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -16422,8 +16611,15 @@ var PRC_DISMISSAL_REASONS = [
 // Terminal/non-actionable alert statuses (mirror monitoring_routing
 // STATUS_* vocabulary). "Open" alerts here are those still routable.
 function prcAlertIsRoutable(status) {
-  var s = String(status || '').toLowerCase();
-  return s === 'open' || s === 'triaged' || s === 'assigned' || s === 'in_review' || s === 'in review';
+  var s = normalizeAlertStatus(status);
+  return s === 'open' || s === 'in_review' || s === 'assigned';
+}
+
+function setMonitoringAlertStatus(alert, status) {
+  if (!alert) return;
+  alert.rawStatusKey = monitoringCanonicalToken(status);
+  alert.statusKey = normalizeAlertStatus(status);
+  alert.status = monitoringAlertStatusLabel(alert.statusKey);
 }
 
 // Standard confirmation wording (per PR-C brief — verbatim).
@@ -16456,7 +16652,7 @@ function prcButtonsBusy(ids, busy) {
 // ── Scope A: Alert detail — structured lifecycle actions ─────────
 function prcAlertActionsMarkup(alert) {
   if (!alert || !alert.id) return '';
-  if (!prcAlertIsRoutable(alert.status)) {
+  if (!prcAlertIsRoutable(alert.statusKey || alert.status)) {
     return '<div class="detail-section" style="margin-top:16px;">' +
       '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Lifecycle actions</div>' +
       '<div style="font-size:12px;color:var(--text3);">This alert is in a terminal state (' + escapeHtml(String(alert.status || '')) + ') and cannot be routed. Status changes are read-only.</div>' +
@@ -16506,7 +16702,7 @@ async function prcAlertTriage() {
   try {
     var resp = await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, { action: 'triage' });
     var newStatus = (resp && resp.new_status) || 'triaged';
-    currentAlertRef.status = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+    setMonitoringAlertStatus(currentAlertRef, newStatus);
     prcAlertShowResult('Alert triaged (status: ' + newStatus + ')');
     try { renderMonitoringAlerts(); } catch(e) {}
   } catch(err) {
@@ -16522,7 +16718,7 @@ async function prcAlertAssign() {
   try {
     var resp = await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, { action: 'assign' });
     var newStatus = (resp && resp.new_status) || 'assigned';
-    currentAlertRef.status = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+    setMonitoringAlertStatus(currentAlertRef, newStatus);
     prcAlertShowResult('Alert assigned (status: ' + newStatus + ')');
     try { renderMonitoringAlerts(); } catch(e) {}
   } catch(err) {
@@ -16546,7 +16742,7 @@ async function prcAlertDismiss() {
       dismissal_reason: reason,
       dismissal_notes: notes || null
     });
-    currentAlertRef.status = 'Dismissed';
+    setMonitoringAlertStatus(currentAlertRef, 'dismissed');
     prcAlertShowResult('Alert dismissed (' + reason + ')' + (notes ? ' — ' + notes : ''));
     try { renderMonitoringAlerts(); } catch(e) {}
   } catch(err) {
@@ -16566,7 +16762,7 @@ async function prcAlertRouteReview() {
     var result = (resp && resp.result) || {};
     var reviewId = result.periodic_review_id;
     var reused = !!result.reused;
-    currentAlertRef.status = 'Routed_review';
+    setMonitoringAlertStatus(currentAlertRef, 'routed_to_review');
     currentAlertRef.linked_periodic_review_id = reviewId;
     if (reviewId != null) {
       prcAlertShowResult(prcRoutingConfirmation('review', reviewId, reused));
@@ -16589,7 +16785,7 @@ async function prcAlertRouteEDD() {
     var result = (resp && resp.result) || {};
     var eddId = result.edd_case_id;
     var reused = !!result.reused;
-    currentAlertRef.status = 'Routed_edd';
+    setMonitoringAlertStatus(currentAlertRef, 'routed_to_edd');
     currentAlertRef.linked_edd_case_id = eddId;
     if (eddId != null) {
       prcAlertShowResult(prcRoutingConfirmation('edd', eddId, reused));
@@ -16669,28 +16865,6 @@ function prcChipHtml(label, kind, id) {
   var onclick = handler ? ' onclick="event.stopPropagation();' + handler + '(' + JSON.stringify(id) + ')"' : '';
   var cursor = handler ? ';cursor:pointer;text-decoration:underline dotted;' : '';
   return '<span class="badge ' + cls + '" style="font-family:monospace;' + cursor + '" title="Open ' + escapeHtml(kind) + ' detail"' + onclick + '>' + escapeHtml(label) + '</span>';
-}
-
-// ── Scope D: Active Lifecycle Work tile counter ──────────────────
-// KPI truth reconciliation: the Monitoring page's "Active Lifecycle
-// Work" tile must never disagree with the Lifecycle queue's active
-// count. Both now read from the same endpoint with the same filter
-// (`/lifecycle/queue?include=active`) and use `counts.total`, which
-// is the authoritative count the queue tab also renders in its
-// "Active" pill.
-async function loadActiveLifecycleWorkTile() {
-  var el = document.getElementById('mon-stat-lifecycle-active');
-  if (!el) return;
-  try {
-    var resp = await boApiCall('GET', '/lifecycle/queue?include=active');
-    var items = (resp && resp.items) || [];
-    var counts = (resp && resp.counts) || {};
-    var total = (typeof counts.total === 'number') ? counts.total : items.length;
-    el.textContent = String(total);
-  } catch(err) {
-    el.textContent = '—';
-    console.warn('Active lifecycle work tile failed:', err);
-  }
 }
 
 // ── Scope B: Review detail visibility (read-only) ────────────────
@@ -17049,38 +17223,21 @@ function renderPrcEDDDetailSection(eddCase, materialised) {
 }
 
 function renderMonitoring() {
-  // Use list-derived values so counter cards stay coherent with rows.
-  var activeClientSet = {};
-  MONITORING_ALERTS.forEach(function(a) {
-    if (a && a.client) activeClientSet[String(a.client)] = true;
-  });
-  PERIODIC_REVIEWS.forEach(function(r) {
-    if (r && r.client) activeClientSet[String(r.client)] = true;
-  });
-  var activeMonitoring = Object.keys(activeClientSet).length;
-  // Open Alerts: count of monitoring alerts with Open status
-  var openAlerts = MONITORING_ALERTS.filter(function(a) { return a.status === 'Open'; }).length;
-  // Critical: count of Critical severity alerts that are Open
-  var criticalAlerts = MONITORING_ALERTS.filter(function(a) { return a.severity === 'Critical' && a.status === 'Open'; }).length;
-  // Reviews Due: monitoring only surfaces signals; Lifecycle owns review work.
-  var reviewsDue = PERIODIC_REVIEWS.filter(function(r) {
-    var state = monitoringReviewDueState(r);
-    return state === 'due' || state === 'overdue' || !!(r && r.isBlocked);
-  }).length;
+  var openAlerts = MONITORING_ALERTS.filter(function(a) { return a.statusKey === 'open'; }).length;
+  var highCriticalAlerts = MONITORING_ALERTS.filter(function(a) { return a.severityKey === 'high' || a.severityKey === 'critical'; }).length;
+  var documentExpiryAlerts = MONITORING_ALERTS.filter(function(a) { return a.typeKey === 'document_expiry' || a.typeKey === 'missing_document_refresh'; }).length;
+  var riskDriftAlerts = MONITORING_ALERTS.filter(function(a) { return a.typeKey === 'risk_drift'; }).length;
+  var escalatedAlerts = MONITORING_ALERTS.filter(function(a) { return a.statusKey === 'escalated'; }).length;
 
   var el;
-  el = document.getElementById('mon-stat-active'); if (el) el.textContent = activeMonitoring;
   el = document.getElementById('mon-stat-open'); if (el) el.textContent = openAlerts;
-  el = document.getElementById('mon-stat-critical'); if (el) el.textContent = criticalAlerts;
-  el = document.getElementById('mon-stat-reviews'); if (el) el.textContent = reviewsDue;
+  el = document.getElementById('mon-stat-high-critical'); if (el) el.textContent = highCriticalAlerts;
+  el = document.getElementById('mon-stat-document-expiry'); if (el) el.textContent = documentExpiryAlerts;
+  el = document.getElementById('mon-stat-risk-drift'); if (el) el.textContent = riskDriftAlerts;
+  el = document.getElementById('mon-stat-escalated'); if (el) el.textContent = escalatedAlerts;
   updateDashboardMonitoringStats();
-  // PR-C Scope D — authoritative lifecycle-work counter; uses the
-  // unified queue endpoint so officers see the real number of alert
-  // items in the active lifecycle bucket, not the raw dashboard count.
-  loadActiveLifecycleWorkTile();
 
   renderMonitoringAlerts();
-  renderPeriodicReviews();
   renderMonitoringAgents();
 }
 
@@ -17185,40 +17342,81 @@ function switchMonitoringTab(tab, btn) {
   if (tab === 'agents') document.getElementById('monitoring-agents-tab').style.display = 'block';
 }
 
+function setMonitoringAlertSubtab(tab, btn) {
+  MONITORING_ALERT_SUBTAB = tab || 'all';
+  var host = document.getElementById('monitoring-alerts-tab');
+  if (host) {
+    host.querySelectorAll('[data-monitoring-alert-tab]').forEach(function(t) { t.classList.remove('active'); });
+  }
+  if (btn) btn.classList.add('active');
+  renderMonitoringAlerts();
+}
+
+function monitoringAlertMatchesSubtab(alert) {
+  if (MONITORING_ALERT_SUBTAB === 'screening') {
+    return ['adverse_media','pep_change','sanctions_change'].indexOf(alert.typeKey) >= 0;
+  }
+  if (MONITORING_ALERT_SUBTAB === 'document_expiry') {
+    return alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh';
+  }
+  if (MONITORING_ALERT_SUBTAB === 'risk_drift') return alert.typeKey === 'risk_drift';
+  if (MONITORING_ALERT_SUBTAB === 'escalated') return alert.statusKey === 'escalated';
+  return true;
+}
+
 function renderMonitoringAlerts() {
   var tbody = document.getElementById('monitoring-alerts-body');
+  if (!tbody) return;
   var severityFilter = document.getElementById('alert-severity-filter').value;
   var typeFilter = document.getElementById('alert-type-filter').value;
   var statusFilter = document.getElementById('alert-status-filter').value;
 
   tbody.innerHTML = '';
+  if (MONITORING_DATA_STATE === 'loading' && !MONITORING_ALERTS.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">Loading monitoring alerts...</td></tr>';
+    return;
+  }
+  if (MONITORING_ALERTS_LOAD_ERROR) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#991b1b;padding:18px;">Monitoring alerts could not be loaded. Retry the page or contact support if this continues.</td></tr>';
+    return;
+  }
   var rendered = 0;
   MONITORING_ALERTS.forEach(function(alert) {
-    if (severityFilter && alert.severity !== severityFilter) return;
-    if (typeFilter && alert.type !== typeFilter) return;
-    if (statusFilter && alert.status !== statusFilter) return;
+    alert.client = monitoringAlertClientDisplay(alert.raw || alert);
+    alert.clientTitle = monitoringAlertClientTitle(alert.raw || alert);
+    if (!monitoringAlertMatchesSubtab(alert)) return;
+    if (severityFilter && alert.severityKey !== severityFilter) return;
+    if (typeFilter && alert.typeKey !== typeFilter) return;
+    if (statusFilter && alert.statusKey !== statusFilter) return;
 
     var tr = document.createElement('tr');
-    var severityColor = { 'Critical':'red', 'High':'amber', 'Medium':'blue', 'Low':'green' }[alert.severity] || 'gray';
-    var statusBadgeClass = (function() {
-      if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review') return 'pending';
-      if (alert.status === 'Dismissed') return 'draft';
-      if (alert.status === 'Routed to Review' || alert.status === 'Routed to EDD' || alert.status === 'Reviewed') return 'approved';
-      return 'in-review';
-    })();
+    var severityColor = monitoringSeverityBadgeClass(alert.severityKey);
+    var statusBadgeClass = monitoringStatusBadgeClass(alert.statusKey);
     tr.onclick = function() { showAlertDetail(alert); };
+    var clientTitle = alert.clientTitle ? ' title="' + escapeHtml(alert.clientTitle) + '"' : '';
+    var owner = alert.owner || 'Unassigned';
+    var ageDue = monitoringAlertAgeDueLabel(alert);
     tr.innerHTML = '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(alert.date) + '</td>' +
-      '<td>' + escapeHtml(alert.client) + '</td>' +
+      '<td' + clientTitle + '>' + escapeHtml(alert.client || 'Unmapped client') + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(alert.type) + '</td>' +
       '<td><span class="badge ' + severityColor + '" style="font-size:11px;">' + escapeHtml(alert.severity) + '</span></td>' +
-      '<td style="font-size:12px;">' + escapeHtml(alert.agent.replace(' Agent','')) + '</td>' +
+      '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
       '<td><span class="badge ' + statusBadgeClass + '" style="font-size:11px;">' + escapeHtml(alert.status) + '</span></td>' +
-      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();viewAlert(\'' + escapeHtml(alert.date) + '\',\'' + escapeHtml(alert.client).replace(/'/g,"\\'") + '\')">View</button></td>';
+      '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(ageDue) + '</td>' +
+      '<td><button class="btn btn-sm btn-outline" type="button">Open</button></td>';
+    var openBtn = tr.querySelector('button');
+    if (openBtn) {
+      openBtn.onclick = function(event) {
+        event.stopPropagation();
+        showAlertDetail(alert);
+      };
+    }
     tbody.appendChild(tr);
     rendered++;
   });
   if (!rendered) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:18px;">No monitoring alerts match the current filters.</td></tr>';
+    var msg = MONITORING_ALERTS.length ? 'No monitoring alerts match the current filters.' : 'No monitoring alerts found.';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">' + escapeHtml(msg) + '</td></tr>';
   }
 }
 
@@ -17546,32 +17744,27 @@ function renderAlertDismissalSection(alert) {
 
 function showAlertDetail(alert) {
   currentAlertRef = alert;
-  var statusClass = (function() {
-    if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review') return 'pending';
-    if (alert.status === 'Dismissed') return 'draft';
-    if (alert.status === 'Reviewed' || alert.status === 'Routed to Review' || alert.status === 'Routed to EDD') return 'approved';
-    return 'in-review';
-  })();
+  var statusClass = monitoringStatusBadgeClass(alert.statusKey || normalizeAlertStatus(alert.status));
   var html = '<div class="detail-section">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Alert Summary</div>' +
-    '<div class="detail-row"><span class="label">Date</span><span class="value">' + alert.date + '</span></div>' +
-    '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + alert.client + '</span></div>' +
-    '<div class="detail-row"><span class="label">Alert Type</span><span class="value">' + alert.type + '</span></div>' +
-    '<div class="detail-row"><span class="label">Severity</span><span class="value"><span class="badge ' + (alert.severity === 'Critical' ? 'very-high' : alert.severity === 'High' ? 'high' : alert.severity === 'Medium' ? 'medium' : 'low') + '">' + alert.severity + '</span></span></div>' +
-    '<div class="detail-row"><span class="label">Detected By</span><span class="value">' + alert.agent + '</span></div>' +
-    '<div class="detail-row"><span class="label">Source</span><span class="value">' + alert.source + '</span></div>' +
-    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + statusClass + '">' + alert.status + '</span></span></div>' +
+    '<div class="detail-row"><span class="label">Date</span><span class="value">' + escapeHtml(alert.date || '') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + escapeHtml(alert.client || 'Unmapped client') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Alert Type</span><span class="value">' + escapeHtml(alert.type || 'Other') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Severity</span><span class="value"><span class="badge ' + monitoringSeverityBadgeClass(alert.severityKey || normalizeAlertSeverity(alert.severity)) + '">' + escapeHtml(alert.severity || 'Medium') + '</span></span></div>' +
+    '<div class="detail-row"><span class="label">Detected By</span><span class="value">' + escapeHtml(alert.agent || '') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Source</span><span class="value">' + escapeHtml(alert.source || '') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + statusClass + '">' + escapeHtml(alert.status || 'Open') + '</span></span></div>' +
     renderAlertDownstreamChipsRow(alert) +
     '</div><div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Finding Details</div>' +
-    '<div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--text2);">' + alert.detail + '</div>' +
+    '<div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--text2);">' + escapeHtml(alert.detail || '') + '</div>' +
     '</div>' +
     renderAlertDismissalSection(alert) +
     '<div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Recommended Action</div>' +
     '<div style="padding:12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--amber);">' +
-    (alert.severity === 'Critical' ? '🚨 <strong>IMMEDIATE ACTION REQUIRED.</strong> Escalate to Senior Compliance Officer and initiate enhanced monitoring. Consider filing SAR if confirmed.' :
-     alert.severity === 'High' ? '⚠️ <strong>Priority review required.</strong> Assess compliance impact within 24 hours. Consider requesting additional documentation from client.' :
+    (alert.severityKey === 'critical' ? '🚨 <strong>IMMEDIATE ACTION REQUIRED.</strong> Escalate to Senior Compliance Officer and initiate enhanced monitoring. Consider filing SAR if confirmed.' :
+     alert.severityKey === 'high' ? '⚠️ <strong>Priority review required.</strong> Assess compliance impact within 24 hours. Consider requesting additional documentation from client.' :
      '📋 Review client information and assess potential compliance impact. Document findings and update risk profile if warranted.') +
     '</div></div>';
 
@@ -17582,14 +17775,14 @@ function showAlertDetail(alert) {
   var escBtn = document.getElementById('alert-modal-escalate-btn');
   var dimBtn = document.getElementById('alert-modal-dismiss-btn');
   var sarBtn = document.getElementById('alert-modal-sar-btn');
-  if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review') {
+  if (['open','in_review','assigned'].indexOf(alert.statusKey || normalizeAlertStatus(alert.status)) >= 0) {
     escBtn.style.display = ''; dimBtn.style.display = '';
   } else {
     escBtn.style.display = 'none'; dimBtn.style.display = 'none';
   }
   // Show SAR button only for Critical/High severity alerts that are Open or Escalated
   if (sarBtn) {
-    var showSar = (alert.severity === 'Critical' || alert.severity === 'High') && (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review' || alert.status === 'Escalated');
+    var showSar = (alert.severityKey === 'critical' || alert.severityKey === 'high') && ['open','in_review','assigned','escalated'].indexOf(alert.statusKey || normalizeAlertStatus(alert.status)) >= 0;
     sarBtn.style.display = showSar ? '' : 'none';
   }
 
@@ -17613,7 +17806,7 @@ async function escalateAlertFromModal() {
       action: 'escalate',
       reason: 'Escalated to Senior Compliance Officer'
     });
-    currentAlertRef.status = 'Escalated';
+    setMonitoringAlertStatus(currentAlertRef, 'escalated');
     renderMonitoringAlerts();
     closeModal('modal-alert-detail');
     showToast('Alert escalated to Senior Compliance Officer');
@@ -17629,7 +17822,7 @@ async function dismissAlertFromModal() {
       action: 'dismiss',
       reason: 'Reviewed and closed'
     });
-    currentAlertRef.status = 'Reviewed';
+    setMonitoringAlertStatus(currentAlertRef, 'resolved');
     renderMonitoringAlerts();
     closeModal('modal-alert-detail');
     showToast('Alert marked as reviewed');
