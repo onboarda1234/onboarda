@@ -189,8 +189,28 @@ def test_monitoring_alert_detail_renders_structured_provider_evidence_without_fa
     assert "source_name" in evidence
     assert "publication_date" in evidence
     assert "match_confidence" in evidence
+    assert "Evidence status" in evidence
+    assert "Evidence fetched" in evidence
+    assert "Provider case ID" in evidence
+    assert "Provider risk / match ID" in evidence
     assert "Source article link not available from ComplyAdvantage payload." in evidence
     assert "target=\"_blank\"" in evidence
+
+
+def test_monitoring_alert_audit_history_renders_readable_metadata_not_json():
+    html = _html()
+    readable = _function_region(html, "monitoringAuditReadableDetail", "renderMonitoringAuditHistory")
+    history = _function_region(html, "renderMonitoringAuditHistory", "renderMonitoringTechnicalDetails")
+    technical = _function_region(html, "renderMonitoringTechnicalDetails", "renderMonitoringAlertDetailView")
+
+    assert "JSON.parse(detail)" in readable
+    assert "Decision saved:" in readable
+    assert "Assigned from " in readable
+    assert "Status updated:" in readable
+    assert "Detailed provider evidence is not available for this alert." in readable
+    assert "JSON.stringify" not in history
+    assert "Raw audit metadata" in technical
+    assert "JSON.stringify(auditHistory || [], null, 2)" in technical
 
 
 def test_monitoring_alert_decision_and_assignment_controls_are_simplified():
