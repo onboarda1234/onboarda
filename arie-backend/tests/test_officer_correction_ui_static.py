@@ -363,15 +363,15 @@ def test_pr410c_party_card_and_dropdown_static_contract():
     assert "function renderPartySection" in html
     assert "Correct party details" in html
     assert "Review screening" in html
-    assert "PEP / Screening Status" in html
+    assert "PEP / Screening Status" not in party_card
+    assert "renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured')" in party_card
     assert "Client-declared PEP" in html
-    assert "Officer-verified PEP" in html
-    assert "Screening-confirmed PEP" in html
-    assert "Relationship type" in party_card
+    assert "Officer-verified PEP" not in party_card
+    assert "Screening-confirmed PEP" not in party_card
+    assert "Relationship type" not in party_card
     assert "Missing" in html
     assert "Not captured" in html
     assert "Not verified yet" in html
-    assert "Not available" in html
     assert "N/A" in html
     assert "Corrected" in party_card
     assert "No correction" in party_card
@@ -389,16 +389,29 @@ def test_party_card_pep_display_is_consolidated_without_structured_duplicate():
     html = _read_backoffice()
     party_card = _extract_function(html, "renderPartyCard")
 
-    assert party_card.count("PEP / Screening Status") == 1
+    assert "PEP / Screening Status" not in party_card
     assert "Structured PEP declaration" not in html
     assert "renderPepDeclarationDetailsHtml" not in party_card
-    assert "Client-declared PEP" in party_card
-    assert "Officer-verified PEP" in party_card
-    assert "Screening-confirmed PEP" in party_card
-    assert "Relationship type" in party_card
+    assert "renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured')" in party_card
+    assert "Client-declared PEP" not in party_card
+    assert "Officer-verified PEP" not in party_card
+    assert "Screening-confirmed PEP" not in party_card
+    assert "Relationship type" not in party_card
     assert "renderPartyFact('Role'" in party_card
     assert "renderPartyFact(nationalityLabel" in party_card
     assert "renderPartyFact('Date of Birth'" in party_card
     assert "renderPartyFact('Ownership'" in party_card
     assert "openPartyCorrectionModal" in party_card
     assert "Correct party details" in party_card
+
+
+def test_party_section_groups_party_types_in_default_open_accordion():
+    html = _read_backoffice()
+    party_section = _extract_function(html, "renderPartySection")
+
+    assert 'id="party-review-accordion" open' in party_section
+    assert "Directors: " in party_section
+    assert "UBOs: " in party_section
+    assert "Intermediaries: " in party_section
+    assert "Directors, UBOs, and intermediary shareholders." in party_section
+    assert "renderPartyCard(item, partyType, app)" in party_section
