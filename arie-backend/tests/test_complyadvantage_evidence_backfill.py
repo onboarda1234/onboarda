@@ -2,7 +2,7 @@ import json
 import sqlite3
 
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
-from screening_complyadvantage.evidence_backfill import backfill_monitoring_alert_evidence
+from screening_complyadvantage.evidence_backfill import _candidate_alerts, backfill_monitoring_alert_evidence
 
 
 def _db():
@@ -220,3 +220,26 @@ def test_backfill_dry_run_reports_would_update_without_persisting():
     assert result["alerts_would_update"] == 1
     assert result["evidence_rows_inserted"] == 0
     assert conn.execute("SELECT COUNT(*) AS count FROM monitoring_alert_evidence").fetchone()["count"] == 0
+
+
+def test_candidate_query_parameterizes_provider_wildcard_for_postgres_wrapper():
+    class RecordingDB:
+        def __init__(self):
+            self.sql = ""
+            self.params = ()
+
+        def execute(self, sql, params=()):
+            self.sql = sql
+            self.params = params
+            return self
+
+        def fetchall(self):
+            return []
+
+    db = RecordingDB()
+
+    _candidate_alerts(db, limit=25, alert_ids=None)
+
+    assert "LIKE ?" in db.sql
+    assert "LIKE '%complyadvantage%'" not in db.sql
+    assert db.params[-2:] == ("%complyadvantage%", 25)

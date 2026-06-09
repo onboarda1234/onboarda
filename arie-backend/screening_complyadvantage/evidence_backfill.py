@@ -244,9 +244,10 @@ def _candidate_alerts(db, *, limit, alert_ids):
             AND (
                 LOWER(COALESCE(ma.provider, '')) = 'complyadvantage'
                 OR LOWER(COALESCE(ma.detected_by, '')) = 'complyadvantage'
-                OR LOWER(COALESCE(ma.source_reference, '')) LIKE '%complyadvantage%'
+                OR LOWER(COALESCE(ma.source_reference, '')) LIKE ?
             )
         """
+        params.append(f"%{COMPLYADVANTAGE_PROVIDER_NAME}%")
     params.append(int(limit))
     return db.execute(
         f"""
