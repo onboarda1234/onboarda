@@ -30,14 +30,13 @@ def _extract_function(html, name):
 def test_export_pack_button_is_in_application_review_topbar_after_reassign():
     html = _read(BACKOFFICE_PATH)
     topbar_start = html.index('id="case-management-actions-topbar"')
-    topbar_end = html.index('id="internal-note"', topbar_start)
+    topbar_end = html.index("</div>", topbar_start)
     topbar = html[topbar_start:topbar_end]
 
     assert 'id="btn-reassign"' in topbar
     assert 'id="btn-export-pack"' in topbar
     assert 'onclick="openExportPackModal()"' in topbar
     assert topbar.index('id="btn-reassign"') < topbar.index('id="btn-export-pack"')
-    assert topbar.index('id="btn-export-pack"') < html.index('id="internal-note"', topbar_start)
 
 
 def test_export_pack_frontend_permission_guard_matches_backend_roles():
@@ -158,7 +157,8 @@ def test_export_pack_does_not_add_portal_surface():
 def test_application_review_shell_controls_still_render_near_export_button():
     html = _read(BACKOFFICE_PATH)
     assert 'id="btn-open-officer-correction"' in html
-    assert 'id="internal-note"' in html
+    assert 'id="btn-export-pack"' in html
+    assert 'id="internal-note"' not in html
     assert "Periodic Reviews" in html
     assert "Alerts" in html
     assert "function loadApplicationAlertsDetailTab(force)" in html
