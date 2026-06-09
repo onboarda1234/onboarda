@@ -82,7 +82,7 @@ def test_periodic_review_cleanup_text_removes_internal_banner_and_old_linkage_st
 
     assert "Periodic Reviews owns the review cockpit." not in html
     assert "Lifecycle: 1 active linked item" not in html
-    assert "Related monitoring alert" in html
+    assert "Related monitoring alert" not in html
 
 
 def test_periodic_review_decision_panel_has_required_fields_and_no_internal_copy():

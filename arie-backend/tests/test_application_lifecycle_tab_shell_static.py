@@ -32,6 +32,41 @@ def test_application_detail_tabs_include_periodic_reviews_and_alerts_in_required
     assert ">Alerts</button>" in tabs_html
 
 
+def test_application_review_action_bar_and_overview_do_not_duplicate_notes_or_lifecycle_work():
+    html = _read_backoffice()
+    topbar_start = html.index("<!-- Top bar: back button + action buttons (horizontal) -->")
+    topbar_end = html.index('<div id="detail-case-command-centre">', topbar_start)
+    topbar_html = html[topbar_start:topbar_end]
+
+    assert "showView('applications')" in topbar_html
+    assert 'id="btn-approve"' in topbar_html
+    assert 'id="btn-reject"' in topbar_html
+    assert 'id="btn-rmi"' in topbar_html
+    assert 'id="btn-open-officer-correction"' in topbar_html
+    assert 'id="btn-override"' in topbar_html
+    assert "escalateCase()" in topbar_html
+    assert 'id="btn-reassign"' in topbar_html
+    assert 'id="internal-note"' not in topbar_html
+    assert 'placeholder="Add note..."' not in topbar_html
+    assert "addNote()" not in topbar_html
+
+    overview_start = html.index('id="detail-tab-overview"')
+    overview_end = html.index('id="detail-tab-kyc-docs"', overview_start)
+    overview_html = html[overview_start:overview_end]
+    assert 'id="detail-lifecycle-summary"' in overview_html
+    assert "Related lifecycle items" not in html
+    assert "Related monitoring alert" not in html
+    assert "Review lifecycle" not in html
+    assert "overview-compact-lifecycle" not in html
+
+    renderer_start = html.index("function renderLifecycleApplicationSummary(resp)")
+    renderer_end = html.index("function periodicReviewBaselineLegacyOptions", renderer_start)
+    renderer_html = html[renderer_start:renderer_end]
+    assert "renderCaseCommandCentre(window._currentDetailApp)" in renderer_html
+    assert "container.innerHTML = '';" in renderer_html
+    assert "lifecycleObjectLabel(item)" not in renderer_html
+
+
 def test_lifecycle_tab_shell_sections_match_prs4_workspace():
     html = _read_backoffice()
     assert 'id="detail-tab-lifecycle"' in html
@@ -220,7 +255,7 @@ def test_periodic_review_cleanup_removes_internal_banner_and_linked_item_wording
     assert "Lifecycle: 1 active linked item" not in html
     assert "Periodic Reviews owns the review cockpit." not in html
     assert "Lifecycle:" not in html or "Lifecycle: 1 active linked item" not in html
-    assert "Related monitoring alert" in html
+    assert "Related monitoring alert" not in html
 
 
 def test_lifecycle_queue_rows_are_launchpad_deep_links_to_application_lifecycle():

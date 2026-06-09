@@ -180,9 +180,6 @@ a { color:var(--brand); text-decoration:none; }
 .overview-collapsible-card summary::-webkit-details-marker { display:none; }
 .overview-collapsible-hint { font-size:11px; font-weight:500; color:var(--text3); }
 .overview-collapsible-body { padding:0 14px 14px; }
-.overview-compact-lifecycle { margin:0 0 12px; padding:10px 14px; border:1px solid #dfe7f2; border-radius:12px; background:#fbfdff; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
-.overview-compact-lifecycle-copy { font-size:12px; color:var(--text2); line-height:1.45; }
-.overview-compact-lifecycle-copy strong { color:var(--text1); }
 .prescreen-collapsible-card { border:1px solid #d6ddf7; border-radius:14px; background:#fbfcff; overflow:hidden; box-shadow:0 8px 20px rgba(99,102,241,0.06); }
 .prescreen-collapsible-card details { background:inherit; }
 .prescreen-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:14px 16px; }
@@ -1267,10 +1264,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <button class="btn btn-outline btn-sm" id="btn-reassign" onclick="reassignCase()" style="font-size:11px;">👤 Reassign</button>
     </div>
 
-    <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
-      <input type="text" id="internal-note" placeholder="Add note..." style="width:180px;font-size:11px;padding:6px 10px;border:1px solid var(--border1);border-radius:var(--radius-sm);" />
-      <button class="btn btn-outline btn-sm" onclick="addNote()" style="font-size:11px;">💬 Note</button>
-    </div>
   </div>
 
   <div id="detail-case-command-centre"></div>
@@ -13955,7 +13948,7 @@ function renderLifecycleRows(items, include) {
 async function loadLifecycleApplicationSummary(applicationId) {
   var container = document.getElementById('detail-lifecycle-summary');
   if (!container || !applicationId) return;
-  container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Loading lifecycle summary…</div>';
+  container.innerHTML = '';
   try {
     var resp = await fetchLifecycleApplicationSummary(applicationId);
     detailLifecycleSummaryOverview = {
@@ -13971,9 +13964,7 @@ async function loadLifecycleApplicationSummary(applicationId) {
     detailLifecycleSummaryOverview = null;
     var baselineContainer = document.getElementById('detail-periodic-review-baseline');
     if (baselineContainer) baselineContainer.innerHTML = '';
-    container.innerHTML = err && err.status === 403
-      ? '<div style="font-size:11px;color:var(--text3);">Lifecycle summary is restricted for this role.</div>'
-      : '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
+    container.innerHTML = '';
   }
 }
 
@@ -13996,32 +13987,13 @@ function renderLifecycleApplicationSummary(resp) {
   if (!container) return;
   var activeItems = ((resp && resp.active) || {}).items || [];
   var activeCount = ((resp && resp.active && resp.active.counts) || {}).total || activeItems.length || 0;
+  container.innerHTML = '';
   if (!activeCount || !activeItems.length) {
-    container.innerHTML = '';
     if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
       renderCaseCommandCentre(window._currentDetailApp);
     }
     return;
   }
-
-  var labels = [];
-  activeItems.forEach(function(item) {
-    var label = lifecycleObjectLabel(item);
-    if (labels.indexOf(label) < 0) labels.push(label);
-  });
-  var visibleLabels = labels.slice(0, 3);
-  var moreCount = Math.max(labels.length - visibleLabels.length, 0);
-  var labelText = visibleLabels.join(', ');
-  if (moreCount > 0) labelText += ' +' + moreCount + ' more';
-  var summaryLabel = activeCount === 1 && labels.length === 1 && /^Alert #/i.test(labels[0] || '')
-    ? 'Related monitoring alert'
-    : 'Related lifecycle items';
-
-  container.innerHTML =
-    '<div class="overview-compact-lifecycle">' +
-      '<div class="overview-compact-lifecycle-copy"><strong>' + escapeHtml(summaryLabel) + ':</strong> ' + escapeHtml(labelText) + '</div>' +
-      '<button class="btn btn-outline btn-sm" onclick="activateCaseCommandTarget(\'lifecycle\',\'detail-tab-lifecycle\')">Review lifecycle</button>' +
-    '</div>';
   if (window._currentDetailApp && detailLifecycleSummaryOverview && detailLifecycleSummaryOverview.applicationId === window._currentDetailApp.id) {
     renderCaseCommandCentre(window._currentDetailApp);
   }
