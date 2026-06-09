@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -96,11 +97,7 @@ def _backfill_one_alert(db, alert: dict[str, Any], *, ca_client, dry_run, fetch_
     alert_id = _row_value(alert, "id")
     application_id = _row_value(alert, "application_id")
     source_reference = _safe_json_loads(_row_value(alert, "source_reference") or "{}")
-    case_identifier = _first_non_empty(
-        _row_value(alert, "case_identifier"),
-        source_reference.get("case_identifier"),
-        source_reference.get("case_id"),
-    )
+    case_identifier = _provider_case_identifier(alert, source_reference)
     alert_identifier = _first_non_empty(
         source_reference.get("alert_identifier"),
         source_reference.get("alert_id"),
@@ -132,7 +129,7 @@ def _backfill_one_alert(db, alert: dict[str, Any], *, ca_client, dry_run, fetch_
         if normalized_report:
             result["source"] = "stored_normalized_report"
         evidence_rows = _extract_rows(normalized_report, case_identifier=case_identifier, alert_identifier=alert_identifier)
-        if not evidence_rows and fetch_live_details and ca_client and case_identifier:
+        if not evidence_rows and fetch_live_details and ca_client and _valid_provider_case_identifier(case_identifier):
             emit_operational(
                 "detail_fetch_attempted",
                 trace_id=trace_id,
@@ -280,8 +277,10 @@ def _stored_normalized_report(db, alert, source_reference):
         if parsed:
             return parsed
     application_id = _row_value(alert, "application_id")
-    case_identifier = _first_non_empty(_row_value(alert, "case_identifier"), source_reference.get("case_identifier"))
+    case_identifier = _provider_case_identifier(alert, source_reference)
     if not application_id:
+        return None
+    if not _valid_provider_case_identifier(case_identifier):
         return None
     rows = db.execute(
         """
@@ -295,7 +294,7 @@ def _stored_normalized_report(db, alert, source_reference):
     ).fetchall()
     for row in rows:
         parsed = _normalized_from_row(row)
-        if parsed and (not case_identifier or case_identifier in json.dumps(parsed, default=str)):
+        if parsed and case_identifier in json.dumps(parsed, default=str):
             return parsed
     return None
 
@@ -361,7 +360,7 @@ def _persist_evidence_rows(db, alert, evidence_rows):
 def _persist_marker_if_needed(db, alert, source_reference, status, reason, *, dry_run):
     if dry_run:
         return 0
-    case_identifier = _first_non_empty(_row_value(alert, "case_identifier"), source_reference.get("case_identifier"))
+    case_identifier = _provider_case_identifier(alert, source_reference)
     alert_identifier = _first_non_empty(source_reference.get("alert_identifier"), source_reference.get("alert_id"))
     entry = {
         "provider": COMPLYADVANTAGE_PROVIDER_NAME,
@@ -465,6 +464,21 @@ def _is_compliance_provider_alert(alert, source_reference):
         source_reference.get("detected_by"),
     ]
     return any(COMPLYADVANTAGE_PROVIDER_NAME in str(value or "").strip().lower() for value in values)
+
+
+def _provider_case_identifier(alert, source_reference):
+    return _first_non_empty(
+        _row_value(alert, "case_identifier"),
+        source_reference.get("case_identifier"),
+        source_reference.get("case_id"),
+    )
+
+
+def _valid_provider_case_identifier(value):
+    return bool(value and re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        str(value).strip(),
+    ))
 
 
 def _normalized_from_row(row):

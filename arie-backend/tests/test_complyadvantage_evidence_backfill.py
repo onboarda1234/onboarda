@@ -187,13 +187,55 @@ def test_backfill_marks_unavailable_when_provider_truth_has_no_evidence():
     assert row["source_url_unavailable_reason"] == "Detailed provider evidence is not available for this alert."
 
 
+def test_backfill_does_not_attach_same_application_evidence_to_non_provider_case_id():
+    conn = _db()
+    _insert_normalized(conn, _normalized_report())
+    cur = conn.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (provider, case_identifier, application_id, client_name, alert_type, severity, detected_by, summary, source_reference)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            None,
+            None,
+            "app-1",
+            "Manual audit alert",
+            "media",
+            "high",
+            COMPLYADVANTAGE_PROVIDER_NAME,
+            "Manual audit alert",
+            json.dumps({
+                "provider": COMPLYADVANTAGE_PROVIDER_NAME,
+                "case_id": "AUDIT-SPRINT2-CASE-20260609T145509Z",
+                "alert_identifier": "AUDIT-SPRINT2-20260609T145509Z",
+            }),
+        ),
+    )
+    alert_id = cur.lastrowid
+
+    result = backfill_monitoring_alert_evidence(conn, dry_run=False, limit=10, trace_id="test-ca1b")
+
+    assert result["evidence_rows_unavailable"] == 1
+    rows = conn.execute("SELECT evidence_status, case_identifier, evidence_type FROM monitoring_alert_evidence WHERE monitoring_alert_id = ?", (alert_id,)).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["evidence_status"] == "unavailable"
+    assert rows[0]["evidence_type"] == "provider_evidence_status"
+    assert rows[0]["case_identifier"] == "AUDIT-SPRINT2-CASE-20260609T145509Z"
+
+
 def test_backfill_records_safe_failure_when_live_detail_fetch_fails():
     class FailingClient:
         def get(self, path, params=None):
             raise RuntimeError("provider unavailable")
 
     conn = _db()
-    alert_id = _insert_alert(conn, normalized_record_id=None)
+    alert_id = _insert_alert(
+        conn,
+        normalized_record_id=None,
+        case_identifier="019ea5c2-9a39-7dfc-84dc-2910efe3e976",
+        alert_identifier="019ea5c2-987d-797d-877e-53748602391f",
+    )
 
     result = backfill_monitoring_alert_evidence(
         conn,
