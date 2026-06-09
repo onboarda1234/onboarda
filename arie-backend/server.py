@@ -17218,6 +17218,7 @@ class MonitoringDashboardHandler(BaseHandler):
             "files_due": 0,
             "docs_expiring": 0,
             "alerts": 0,
+            "high_risk_applications": 0,
             "clients_under_review": 0,
             "high_risk_alerts": [],
             "periodic_review_due": 0
@@ -17238,6 +17239,7 @@ class MonitoringDashboardHandler(BaseHandler):
             fx_params,
         ).fetchone()["c"]
         stats["alerts"] = high_risk
+        stats["high_risk_applications"] = high_risk
 
         # Get recent high-risk applications for alert summary (excluding fixtures)
         recent_alerts = db.execute(f"""
