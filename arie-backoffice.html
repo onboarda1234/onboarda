@@ -1265,6 +1265,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
     <div id="case-management-actions-topbar" style="display:none;align-items:center;gap:6px;">
       <button class="btn btn-outline btn-sm" id="btn-reassign" onclick="reassignCase()" style="font-size:11px;">👤 Reassign</button>
+      <button class="btn btn-outline btn-sm" id="btn-export-pack" onclick="openExportPackModal()" style="font-size:11px;">Export Pack</button>
     </div>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
@@ -3099,6 +3100,53 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-reassign')">Cancel</button>
       <button class="btn btn-primary" onclick="confirmReassign()">Reassign</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ EXPORT PACK MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-export-pack">
+  <div class="modal" style="width:640px;max-width:calc(100vw - 32px);">
+    <div class="modal-header"><h3>Generate Evidence Pack</h3><button class="modal-close" onclick="closeModal('modal-export-pack')">&times;</button></div>
+    <div class="modal-body">
+      <div id="export-pack-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:12px;line-height:1.5;"></div>
+      <div class="form-group">
+        <div class="form-label">Export type</div>
+        <select class="form-select" id="export-pack-type">
+          <option value="regulator">Regulator Pack</option>
+          <option value="auditor">Auditor Pack</option>
+          <option value="bank_partner">Bank / Partner Pack</option>
+          <option value="internal_case">Internal Case Pack</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Reason for export</div>
+        <textarea class="form-input" rows="3" id="export-pack-reason" placeholder="Example: Requested by regulator, auditor, bank partner, or internal review." style="resize:vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Include sections</div>
+        <div id="export-pack-sections" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;font-size:12px;color:var(--text2);">
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="client_submission" checked /> Client submission</label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="documents" checked /> Uploaded documents</label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="risk_assessment" checked /> Risk assessment</label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="screening_summary" checked /> Screening summary</label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="compliance_memo" checked /> Compliance memo</label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="officer_corrections" checked /> Officer corrections</label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" value="audit_trail" checked /> Audit trail</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Redaction level</div>
+        <select class="form-select" id="export-pack-redaction">
+          <option value="full_internal">Full internal</option>
+          <option value="external_redacted">External redacted</option>
+        </select>
+      </div>
+      <div style="font-size:11px;color:var(--text3);line-height:1.5;">Export pack generation is restricted to admin and senior compliance roles. The backend remains authoritative for permissions and audit.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="export-pack-cancel-btn" onclick="closeModal('modal-export-pack')">Cancel</button>
+      <button class="btn btn-primary" id="export-pack-submit-btn" onclick="submitExportPack()">Generate ZIP</button>
     </div>
   </div>
 </div>
@@ -5281,6 +5329,11 @@ function assertPermission(permissionId) {
   return true;
 }
 
+function canExportEvidencePack() {
+  var role = String(currentUserRole() || '').toLowerCase();
+  return role === 'admin' || role === 'sco';
+}
+
 function setDetailActionVisibility(id, visible) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -5293,6 +5346,7 @@ function syncApplicationActionPermissions(app) {
   var isPreApproval = (app.statusRaw === 'pre_approval_review' || app.status === 'Pre-Approval Review');
   var canSubmitPreApproval = hasPermission('approve_high_very_high');
   var canReassignCases = hasPermission('assign_reassign_cases');
+  var canExportPacks = canExportEvidencePack();
   var preApprovalCard = document.getElementById('pre-approval-actions-topbar');
   var standardCard = document.getElementById('standard-actions-topbar');
   var caseManagementCard = document.getElementById('case-management-actions-topbar');
@@ -5302,11 +5356,12 @@ function syncApplicationActionPermissions(app) {
   setDetailActionVisibility('btn-preapproval-reject', canSubmitPreApproval);
   setDetailActionVisibility('btn-preapproval-rmi', canSubmitPreApproval);
   setDetailActionVisibility('btn-reassign', canReassignCases);
+  setDetailActionVisibility('btn-export-pack', canExportPacks);
 
   if (preApprovalNotes) preApprovalNotes.style.display = canSubmitPreApproval ? '' : 'none';
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval && canSubmitPreApproval ? 'flex' : 'none';
   if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
-  if (caseManagementCard) caseManagementCard.style.display = canReassignCases ? 'flex' : 'none';
+  if (caseManagementCard) caseManagementCard.style.display = (canReassignCases || canExportPacks) ? 'flex' : 'none';
 }
 
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
@@ -19920,6 +19975,7 @@ async function confirmDecision() {
 }
 
 var pendingNotificationType = '';
+var EXPORT_PACK_GENERATING = false;
 
 var NOTIF_TYPE_MAP = {
   'Approve': 'approved',
@@ -20099,6 +20155,164 @@ async function reassignCase() {
   if (!assertPermission('assign_reassign_cases')) return;
   document.getElementById('modal-reassign').classList.add('open');
 }
+
+function setExportPackError(message) {
+  var el = document.getElementById('export-pack-error');
+  if (!el) return;
+  if (!message) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function setExportPackGenerating(isGenerating) {
+  EXPORT_PACK_GENERATING = !!isGenerating;
+  var submitBtn = document.getElementById('export-pack-submit-btn');
+  var cancelBtn = document.getElementById('export-pack-cancel-btn');
+  if (submitBtn) {
+    submitBtn.disabled = EXPORT_PACK_GENERATING;
+    submitBtn.textContent = EXPORT_PACK_GENERATING ? 'Generating...' : 'Generate ZIP';
+  }
+  if (cancelBtn) cancelBtn.disabled = EXPORT_PACK_GENERATING;
+}
+
+function resetExportPackForm() {
+  var typeEl = document.getElementById('export-pack-type');
+  var reasonEl = document.getElementById('export-pack-reason');
+  var redactionEl = document.getElementById('export-pack-redaction');
+  if (typeEl) typeEl.value = 'regulator';
+  if (reasonEl) reasonEl.value = '';
+  if (redactionEl) redactionEl.value = 'full_internal';
+  document.querySelectorAll('#export-pack-sections input[type="checkbox"]').forEach(function(cb) {
+    cb.checked = true;
+  });
+  setExportPackError('');
+  setExportPackGenerating(false);
+}
+
+function collectExportPackSections() {
+  return Array.prototype.slice.call(document.querySelectorAll('#export-pack-sections input[type="checkbox"]:checked')).map(function(cb) {
+    return cb.value;
+  });
+}
+
+function exportPackFallbackFilename(app) {
+  var ref = String((app && app.ref) || (app && app.id) || 'application').replace(/[^A-Za-z0-9_-]+/g, '_');
+  return 'RegMind_Evidence_Pack_' + (ref || 'application') + '.zip';
+}
+
+async function readExportPackError(res) {
+  if (res.status === 403) return 'You do not have permission to export evidence packs.';
+  var fallback = 'Evidence pack export failed. Please try again or contact support.';
+  try {
+    var contentType = (res.headers.get('Content-Type') || '').toLowerCase();
+    if (contentType.indexOf('application/json') >= 0) {
+      var data = await res.json();
+      return data.error || data.message || fallback;
+    }
+    var text = await res.text();
+    return text && text.length < 240 ? text : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function openExportPackModal() {
+  if (!currentApp) {
+    showToast('No application selected for export.', 'warn');
+    return;
+  }
+  if (!canExportEvidencePack()) {
+    showToast('You do not have permission to export evidence packs.', 'error');
+    return;
+  }
+  resetExportPackForm();
+  document.getElementById('modal-export-pack').classList.add('open');
+  var reasonEl = document.getElementById('export-pack-reason');
+  if (reasonEl) setTimeout(function() { reasonEl.focus(); }, 50);
+}
+
+async function submitExportPack() {
+  if (EXPORT_PACK_GENERATING) return;
+  if (!currentApp) {
+    setExportPackError('No application is selected for export.');
+    return;
+  }
+  if (!canExportEvidencePack()) {
+    setExportPackError('You do not have permission to export evidence packs.');
+    return;
+  }
+  if (!BO_AUTH_TOKEN) {
+    setExportPackError('Sign in again before generating an evidence pack.');
+    return;
+  }
+  var reasonEl = document.getElementById('export-pack-reason');
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  var includeSections = collectExportPackSections();
+  if (!reason) {
+    setExportPackError('Reason for export is required.');
+    if (reasonEl) reasonEl.focus();
+    return;
+  }
+  if (!includeSections.length) {
+    setExportPackError('Select at least one include section.');
+    return;
+  }
+
+  var payload = {
+    export_type: document.getElementById('export-pack-type').value,
+    reason: reason,
+    include_sections: includeSections,
+    redaction_level: document.getElementById('export-pack-redaction').value
+  };
+  var appId = currentApp.id || currentApp.ref;
+  var headers = {
+    'Authorization': 'Bearer ' + BO_AUTH_TOKEN,
+    'Content-Type': 'application/json'
+  };
+  var csrf = getCookieValue('csrf_token');
+  if (csrf) headers['X-CSRF-Token'] = csrf;
+
+  setExportPackError('');
+  setExportPackGenerating(true);
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + encodeURIComponent(appId) + '/export-pack', {
+      method: 'POST',
+      credentials: 'include',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+    if (res.status === 401) {
+      showToast('Your session has expired. Please sign in again.', 'warning');
+      clearBoAuthState();
+      showLoginScreen();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) {
+      throw new Error(await readExportPackError(res));
+    }
+    var blob = await res.blob();
+    var url = window.URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = getFilenameFromContentDisposition(res.headers.get('Content-Disposition')) || exportPackFallbackFilename(currentApp);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function() { window.URL.revokeObjectURL(url); }, 1000);
+    closeModal('modal-export-pack');
+    showToast('Evidence pack ZIP generated.', 'success');
+  } catch (e) {
+    if (e && e.message === 'Session expired') return;
+    setExportPackError(e && e.message ? e.message : 'Evidence pack export failed. Please try again.');
+  } finally {
+    setExportPackGenerating(false);
+  }
+}
+
 async function confirmReassign() {
   if (!currentApp) return;
   await ensureRolePermissionsLoaded();
@@ -20242,6 +20456,7 @@ function closeModal(id) {
   if (id === 'modal-decision-reason') setDecisionError('');
   if (id === 'modal-rmi-request') setRMIError('');
   if (id === 'modal-officer-correction') setOfficerCorrectionError('');
+  if (id === 'modal-export-pack') setExportPackError('');
   if (id === 'modal-screening-disposition') {
     setScreeningDispositionError('');
     pendingScreeningDisposition = null;
