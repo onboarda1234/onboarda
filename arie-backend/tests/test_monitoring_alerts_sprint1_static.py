@@ -120,6 +120,8 @@ def test_monitoring_alerts_client_display_does_not_primary_render_uuid():
     assert "Unmapped client" in client_display
     assert "findApplicationForMonitoringAlert" in client_display
     assert "!isMonitoringUuidLike(value)" in client_display
+    assert "[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" in client_display
+    assert "[1-5][0-9a-f]{3}" not in client_display
     assert "alert.client = monitoringAlertClientDisplay(alert.raw || alert)" in render
     assert "title=\"" in render
 
