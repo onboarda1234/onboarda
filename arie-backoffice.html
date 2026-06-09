@@ -17440,10 +17440,37 @@ function monitoringAlertSourceTitle(ref) {
   return ref && (ref.media_title || ref.title || ref.source_title || ref.source_name || ref.alert_identifier || '');
 }
 
+function monitoringAlertProviderEvidenceRows(raw) {
+  var evidence = Array.isArray(raw && raw.provider_evidence) ? raw.provider_evidence : [];
+  if (!evidence.length) return '';
+  return evidence.map(function(item, idx) {
+    var sourceUrl = item.source_url || item.provider_case_url || '';
+    var sourceValue = sourceUrl
+      ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(sourceUrl) + '</a>'
+      : escapeHtml(item.source_url_unavailable_reason || 'Source article link not available from ComplyAdvantage payload.');
+    return '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);margin-top:' + (idx ? '8px' : '12px') + ';">' +
+      '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-bottom:8px;">Provider evidence ' + escapeHtml(String(idx + 1)) + '</div>' +
+      monitoringInfoGrid([
+        ['Matched subject', monitoringTextValue(item.matched_subject_name, 'Not available')],
+        ['Relationship', monitoringTextValue(item.relationship_to_client, 'Unknown')],
+        ['Match category', monitoringTextValue(item.match_category || item.evidence_type, 'Not available')],
+        ['Risk indicator', monitoringTextValue(item.risk_indicator, 'Not available')],
+        ['Confidence', monitoringTextValue(item.match_confidence, 'Not available')],
+        ['Source title', monitoringTextValue(item.source_title, 'Not available')],
+        ['Publication / source', monitoringTextValue(item.source_name, 'Not available')],
+        ['Publication date', monitoringTextValue(item.publication_date, 'Not available')],
+        ['Article / source link', sourceValue],
+        ['Snippet / summary', monitoringTextValue(item.snippet, 'Not available')]
+      ]) +
+    '</div>';
+  }).join('');
+}
+
 function monitoringAlertEvidenceHtml(alert) {
   var raw = (alert && alert.raw) || alert || {};
   var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
   if (alert.typeKey === 'adverse_media' || alert.typeKey === 'pep_change' || alert.typeKey === 'sanctions_change') {
+    var providerEvidenceRows = monitoringAlertProviderEvidenceRows(raw);
     var availableRows = monitoringInfoGrid([
       ['Matched subject name', monitoringTextValue(monitoringAlertSubjectName(raw, ref), 'Not available')],
       ['Relationship to client', monitoringTextValue(monitoringAlertRelationship(raw, ref), 'Unknown')],
@@ -17454,8 +17481,9 @@ function monitoringAlertEvidenceHtml(alert) {
       ['Match confidence', monitoringTextValue(ref.match_confidence || ref.confidence || ref.match_score, 'Not available')],
       ['Date detected', monitoringTextValue(raw.discovered_at || raw.created_at || alert.date, 'Not available')]
     ]);
-    var hasProviderEvidence = !!(ref.media_title || ref.media_url || ref.media_snippet || ref.title || ref.match_confidence || ref.confidence || ref.match_score);
+    var hasProviderEvidence = !!(providerEvidenceRows || ref.media_title || ref.media_url || ref.media_snippet || ref.title || ref.match_confidence || ref.confidence || ref.match_score);
     return availableRows +
+      providerEvidenceRows +
       (!hasProviderEvidence ? '<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:13px;color:var(--text2);">Detailed provider match evidence is not available in this alert payload.</div>' : '') +
       '<div style="margin-top:12px;font-size:13px;color:var(--text2);line-height:1.55;"><strong>Why this matters:</strong> Screening-change alerts may indicate adverse media, PEP, sanctions, or watchlist exposure requiring human review before risk acceptance.</div>';
   }

@@ -8,6 +8,7 @@ from screening_config import get_active_provider_name
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_storage import persist_normalized_report
 
+from .evidence import evidence_hash, extract_monitoring_evidence
 from .normalizer import ScreeningApplicationContext
 from .observability import accepts_keyword, emit_audit, emit_metric as _emit_metric, emit_operational
 from .subscriptions import update_monitoring_subscription_event
@@ -26,6 +27,7 @@ async def process_complyadvantage_webhook(
     envelope,
     *,
     trace_id=None,
+    webhook_id=None,
     db_factory=None,
     client_factory=None,
     fetch_normalized=fetch_webhook_single_pass,
@@ -39,6 +41,99 @@ async def process_complyadvantage_webhook(
     case_identifier = envelope.case_identifier
     webhook_type = getattr(envelope, "webhook_type", "none")
     processing_started = time.monotonic()
+    final_outcome = "failure"
+    best_effort_failed = False
+    webhook_claimed = False
+
+    db = db_factory()
+    try:
+        claim = _claim_webhook_delivery(
+            db,
+            webhook_id=webhook_id,
+            webhook_type=webhook_type,
+            case_identifier=case_identifier,
+            customer_identifier=customer_identifier,
+            trace_id=trace_id,
+        )
+        webhook_claimed = claim.get("claimed", False)
+        if claim.get("duplicate"):
+            emit_metric(
+                "webhook_duplicate_ignored",
+                metric_name="WebhookDuplicateIgnored",
+                trace_id=trace_id,
+                component="webhook_storage",
+                outcome="duplicate",
+                webhook_type=webhook_type,
+                case_identifier=case_identifier,
+            )
+            emit_operational(
+                "ca_webhook_duplicate_ignored",
+                trace_id=trace_id,
+                component="webhook_storage",
+                outcome="duplicate",
+                webhook_type=webhook_type,
+                case_identifier=case_identifier,
+                customer_identifier=customer_identifier,
+            )
+            return {"status": "duplicate_ignored", "webhook_id": webhook_id}
+    finally:
+        _close(db)
+
+    try:
+        return await _process_claimed_webhook(
+            envelope,
+            trace_id=trace_id,
+            webhook_id=webhook_id,
+            db_factory=db_factory,
+            client_factory=client_factory,
+            fetch_normalized=fetch_normalized,
+            persist_report=persist_report,
+            agent_executor=agent_executor,
+            processing_started=processing_started,
+            webhook_claimed=webhook_claimed,
+        )
+    except Exception as exc:
+        if webhook_claimed:
+            db = db_factory()
+            try:
+                _finish_webhook_delivery(
+                    db,
+                    webhook_id,
+                    status="failed",
+                    result="exception",
+                    failure_reason=exc.__class__.__name__,
+                )
+            finally:
+                _close(db)
+        emit_metric(
+            "webhook_processing_failed",
+            metric_name="WebhookProcessingFailed",
+            trace_id=trace_id,
+            component="webhook_storage",
+            outcome="failure",
+            webhook_type=webhook_type,
+            case_identifier=case_identifier,
+        )
+        raise
+
+
+async def _process_claimed_webhook(
+    envelope,
+    *,
+    trace_id=None,
+    webhook_id=None,
+    db_factory,
+    client_factory,
+    fetch_normalized,
+    persist_report,
+    agent_executor=None,
+    processing_started=None,
+    webhook_claimed=False,
+):
+    customer_identifier = getattr(envelope.customer, "identifier", None)
+    case_identifier = envelope.case_identifier
+    webhook_type = getattr(envelope, "webhook_type", "none")
+    processing_started = processing_started or time.monotonic()
     final_outcome = "failure"
     best_effort_failed = False
 
@@ -78,6 +173,12 @@ async def process_complyadvantage_webhook(
             outcome="skipped",
             webhook_type=webhook_type,
         )
+        if webhook_claimed:
+            db = db_factory()
+            try:
+                _finish_webhook_delivery(db, webhook_id, status="failed", result="subscription_missing", failure_reason="subscription_missing")
+            finally:
+                _close(db)
         return {"status": "subscription_missing"}
     if subscription == "ambiguous":
         logger.error(
@@ -96,6 +197,12 @@ async def process_complyadvantage_webhook(
             outcome="failure",
             webhook_type=webhook_type,
         )
+        if webhook_claimed:
+            db = db_factory()
+            try:
+                _finish_webhook_delivery(db, webhook_id, status="failed", result="subscription_ambiguous", failure_reason="subscription_ambiguous")
+            finally:
+                _close(db)
         return {"status": "subscription_ambiguous"}
 
     # Step 2 — Pure compute: build ScreeningApplicationContext from subscription.
@@ -104,7 +211,37 @@ async def process_complyadvantage_webhook(
     # Step 3 — Read-only: fetch-back through shared three-layer helpers.
     client = client_factory()
     fetch_started = time.monotonic()
-    normalized_report = _call_fetch_normalized(fetch_normalized, client, envelope, application_context, trace_id)
+    emit_metric(
+        "detail_fetch_attempted",
+        metric_name="DetailFetchAttempted",
+        trace_id=trace_id,
+        component="webhook_storage",
+        outcome="attempted",
+        webhook_type=webhook_type,
+        case_identifier=case_identifier,
+    )
+    try:
+        normalized_report = _call_fetch_normalized(fetch_normalized, client, envelope, application_context, trace_id)
+    except Exception:
+        emit_metric(
+            "detail_fetch_failed",
+            metric_name="DetailFetchFailed",
+            trace_id=trace_id,
+            component="webhook_storage",
+            outcome="failure",
+            webhook_type=webhook_type,
+            case_identifier=case_identifier,
+        )
+        raise
+    emit_metric(
+        "detail_fetch_succeeded",
+        metric_name="DetailFetchSucceeded",
+        trace_id=trace_id,
+        component="webhook_storage",
+        outcome="success",
+        webhook_type=webhook_type,
+        case_identifier=case_identifier,
+    )
     normalized_report.setdefault("application_id", application_context.application_id)
     emit_metric(
         "webhook_step_result",
@@ -219,7 +356,14 @@ async def process_complyadvantage_webhook(
         # Step 7 — BEST-EFFORT (failure logs + metric, sequence continues): upsert monitoring_alerts.
         try:
             step_started = time.monotonic()
-            _upsert_monitoring_alert(db, alert_row)
+            monitoring_alert_id, created = _upsert_monitoring_alert(db, alert_row)
+            evidence_count = _persist_monitoring_alert_evidence(
+                db,
+                monitoring_alert_id,
+                application_context.application_id,
+                alert_row,
+                normalized_report,
+            )
             _commit(db)
             emit_metric(
                 "monitoring_alerts_write_success",
@@ -228,6 +372,16 @@ async def process_complyadvantage_webhook(
                 component="webhook_storage",
                 outcome="success",
                 step="monitoring_alert_write",
+            )
+            emit_metric(
+                "alert_created" if created else "alert_updated",
+                metric_name="MonitoringAlertCreated" if created else "MonitoringAlertUpdated",
+                trace_id=trace_id,
+                component="webhook_storage",
+                outcome="success",
+                case_identifier=case_identifier,
+                monitoring_alert_id=monitoring_alert_id,
+                evidence_count=evidence_count,
             )
             emit_metric(
                 "webhook_step_result",
@@ -248,6 +402,8 @@ async def process_complyadvantage_webhook(
                 application_id=application_context.application_id,
                 client_id=application_context.client_id,
                 normalized_record_id=normalized_record_id,
+                monitoring_alert_id=monitoring_alert_id,
+                evidence_count=evidence_count,
                 webhook_type=webhook_type,
                 case_identifier=case_identifier,
                 customer_identifier=customer_identifier,
@@ -442,6 +598,21 @@ async def process_complyadvantage_webhook(
         normalized_record_id=normalized_record_id,
         duration_ms=_elapsed_ms(processing_started),
     )
+    if webhook_claimed:
+        db = db_factory()
+        try:
+            _finish_webhook_delivery(db, webhook_id, status="processed", result=final_outcome, failure_reason="")
+        finally:
+            _close(db)
+    emit_metric(
+        "webhook_processed",
+        metric_name="WebhookProcessed",
+        trace_id=trace_id,
+        component="webhook_storage",
+        outcome=final_outcome,
+        webhook_type=webhook_type,
+        case_identifier=case_identifier,
+    )
     return {"status": "processed", "normalized_record_id": normalized_record_id}
 
 
@@ -473,6 +644,10 @@ def _application_context_from_subscription(row):
 
 
 def _upsert_monitoring_alert(db, row):
+    before = db.execute(
+        "SELECT id FROM monitoring_alerts WHERE provider = ? AND case_identifier = ?",
+        (row["provider"], row["case_identifier"]),
+    ).fetchone()
     db.execute(
         """
         INSERT INTO monitoring_alerts
@@ -504,6 +679,140 @@ def _upsert_monitoring_alert(db, row):
             row["status"],
         ),
     )
+    after = db.execute(
+        "SELECT id FROM monitoring_alerts WHERE provider = ? AND case_identifier = ?",
+        (row["provider"], row["case_identifier"]),
+    ).fetchone()
+    return _row_value(after, "id"), before is None
+
+
+def _persist_monitoring_alert_evidence(db, monitoring_alert_id, application_id, alert_row, normalized_report):
+    evidence_rows = extract_monitoring_evidence(
+        normalized_report,
+        case_identifier=alert_row.get("case_identifier"),
+        alert_identifier=_source_reference_value(alert_row, "alert_identifier"),
+    )
+    count = 0
+    for entry in evidence_rows:
+        row_hash = evidence_hash(entry)
+        db.execute(
+            """
+            INSERT INTO monitoring_alert_evidence
+                (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+                 match_identifier, risk_identifier, profile_identifier, evidence_type,
+                 matched_subject_name, relationship_to_client, match_category, risk_indicator,
+                 match_confidence, source_title, source_name, source_url, source_url_available,
+                 source_url_unavailable_reason, publication_date, snippet, provider_case_url,
+                 evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(monitoring_alert_id, evidence_hash)
+            DO UPDATE SET
+                application_id = EXCLUDED.application_id,
+                matched_subject_name = EXCLUDED.matched_subject_name,
+                relationship_to_client = EXCLUDED.relationship_to_client,
+                match_category = EXCLUDED.match_category,
+                risk_indicator = EXCLUDED.risk_indicator,
+                match_confidence = EXCLUDED.match_confidence,
+                source_title = EXCLUDED.source_title,
+                source_name = EXCLUDED.source_name,
+                source_url = EXCLUDED.source_url,
+                source_url_available = EXCLUDED.source_url_available,
+                source_url_unavailable_reason = EXCLUDED.source_url_unavailable_reason,
+                publication_date = EXCLUDED.publication_date,
+                snippet = EXCLUDED.snippet,
+                provider_case_url = EXCLUDED.provider_case_url,
+                evidence_json = EXCLUDED.evidence_json,
+                raw_provider_reference = EXCLUDED.raw_provider_reference,
+                evidence_status = EXCLUDED.evidence_status,
+                fetched_at = EXCLUDED.fetched_at,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                monitoring_alert_id,
+                application_id,
+                entry.get("provider"),
+                entry.get("case_identifier"),
+                entry.get("alert_identifier"),
+                entry.get("match_identifier"),
+                entry.get("risk_identifier"),
+                entry.get("profile_identifier"),
+                entry.get("evidence_type"),
+                entry.get("matched_subject_name"),
+                entry.get("relationship_to_client"),
+                entry.get("match_category"),
+                entry.get("risk_indicator"),
+                str(entry.get("match_confidence") or ""),
+                entry.get("source_title"),
+                entry.get("source_name"),
+                entry.get("source_url"),
+                bool(entry.get("source_url_available")),
+                entry.get("source_url_unavailable_reason"),
+                entry.get("publication_date"),
+                entry.get("snippet"),
+                entry.get("provider_case_url"),
+                _json(entry.get("evidence_json") or {}),
+                _json(entry.get("raw_provider_reference") or {}),
+                entry.get("evidence_status") or "fetched",
+                row_hash,
+                entry.get("fetched_at"),
+            ),
+        )
+        count += 1
+    return count
+
+
+def _claim_webhook_delivery(db, *, webhook_id, webhook_type, case_identifier, customer_identifier, trace_id):
+    if not webhook_id:
+        return {"claimed": False, "duplicate": False}
+    existing = db.execute(
+        "SELECT processing_status FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
+        (webhook_id,),
+    ).fetchone()
+    if existing:
+        db.execute(
+            """
+            UPDATE complyadvantage_webhook_deliveries
+               SET last_seen_at = CURRENT_TIMESTAMP,
+                   duplicate_count = COALESCE(duplicate_count, 0) + 1,
+                   webhook_type = COALESCE(NULLIF(webhook_type, ''), ?),
+                   case_identifier = COALESCE(NULLIF(case_identifier, ''), ?),
+                   customer_identifier = COALESCE(NULLIF(customer_identifier, ''), ?),
+                   trace_id = COALESCE(NULLIF(trace_id, ''), ?)
+             WHERE webhook_id = ?
+            """,
+            (webhook_type, case_identifier, customer_identifier, trace_id, webhook_id),
+        )
+        _commit(db)
+        return {"claimed": False, "duplicate": True}
+    db.execute(
+        """
+        INSERT INTO complyadvantage_webhook_deliveries
+            (webhook_id, webhook_type, case_identifier, customer_identifier, processing_status,
+             processing_result, trace_id, first_received_at, last_seen_at)
+        VALUES (?, ?, ?, ?, 'processing', '', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (webhook_id, webhook_type, case_identifier, customer_identifier, trace_id),
+    )
+    _commit(db)
+    return {"claimed": True, "duplicate": False}
+
+
+def _finish_webhook_delivery(db, webhook_id, *, status, result, failure_reason=""):
+    if not webhook_id:
+        return
+    db.execute(
+        """
+        UPDATE complyadvantage_webhook_deliveries
+           SET processing_status = ?,
+               processing_result = ?,
+               failure_reason = ?,
+               processed_at = CURRENT_TIMESTAMP,
+               last_seen_at = CURRENT_TIMESTAMP
+         WHERE webhook_id = ?
+        """,
+        (status, result, failure_reason, webhook_id),
+    )
+    _commit(db)
 
 
 def _default_db_factory():
@@ -515,6 +824,31 @@ def _call_fetch_normalized(fetch_normalized, client, envelope, application_conte
     if accepts_keyword(fetch_normalized, "trace_id"):
         return fetch_normalized(client, envelope, application_context, trace_id=trace_id)
     return fetch_normalized(client, envelope, application_context)
+
+
+def _source_reference_value(alert_row, key):
+    import json
+    try:
+        ref = json.loads(alert_row.get("source_reference") or "{}")
+    except Exception:
+        ref = {}
+    return ref.get(key)
+
+
+def _json(value):
+    import json
+    return json.dumps(value, default=str, sort_keys=True)
+
+
+def _row_value(row, key):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except Exception:
+        return row[0]
 
 
 def _default_agent_executor():

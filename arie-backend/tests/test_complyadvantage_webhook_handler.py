@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from screening_complyadvantage.models.webhooks import CACaseCreatedWebhook
 from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler, _verify_signature
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "complyadvantage")
+STANDARD_SECRET = base64.b64encode(b"1" * 32).decode("ascii")
 
 
 def _fixture(name):
@@ -25,20 +27,21 @@ def _legacy_signed(body, secret="fixture-secret"):
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
-def _standard_signed(body, secret="fixture-secret", webhook_id="msg-fixture", webhook_timestamp="1700000000"):
+def _standard_signed(body, secret=STANDARD_SECRET, webhook_id="msg-fixture", webhook_timestamp=None):
+    webhook_timestamp = webhook_timestamp or str(int(time.time()))
     signed_content = b".".join([webhook_id.encode("utf-8"), webhook_timestamp.encode("utf-8"), body])
-    return base64.b64encode(hmac.new(secret.encode("utf-8"), signed_content, hashlib.sha256).digest()).decode("ascii")
+    return base64.b64encode(hmac.new(base64.b64decode(secret), signed_content, hashlib.sha256).digest()).decode("ascii")
 
 
 def _call_handler(
     payload,
     *,
-    secret="fixture-secret",
+    secret=STANDARD_SECRET,
     signature=None,
     include_signature=True,
     signature_scheme="standard",
     webhook_id="msg-fixture",
-    webhook_timestamp="1700000000",
+    webhook_timestamp=None,
     environment="development",
     storage_callback=None,
     request_id=None,
@@ -61,17 +64,18 @@ def _call_handler(
 def _call_handler_body(
     body,
     *,
-    secret="fixture-secret",
+    secret=STANDARD_SECRET,
     signature=None,
     include_signature=True,
     signature_scheme="standard",
     webhook_id="msg-fixture",
-    webhook_timestamp="1700000000",
+    webhook_timestamp=None,
     environment="development",
     storage_callback=None,
     request_id=None,
 ):
     headers = {}
+    webhook_timestamp = webhook_timestamp or str(int(time.time()))
     if include_signature:
         if signature_scheme == "standard":
             headers["webhook-id"] = webhook_id
@@ -120,15 +124,16 @@ def _call_handler_body(
 
 def test_verify_signature_success_and_failure(monkeypatch):
     body = b'{"webhook_type":"CASE_CREATED"}'
-    monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", "fixture-secret")
+    timestamp = str(int(time.time()))
+    monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", STANDARD_SECRET)
     valid_headers = HTTPHeaders({
         "webhook-id": "msg-fixture",
-        "webhook-timestamp": "1700000000",
-        "webhook-signature": f"v1,{_standard_signed(body)}",
+        "webhook-timestamp": timestamp,
+        "webhook-signature": f"v1,{_standard_signed(body, webhook_timestamp=timestamp)}",
     })
     invalid_headers = HTTPHeaders({
         "webhook-id": "msg-fixture",
-        "webhook-timestamp": "1700000000",
+        "webhook-timestamp": timestamp,
         "webhook-signature": "v1,bad",
     })
     assert _verify_signature(body, valid_headers) is True
@@ -271,10 +276,11 @@ def test_invalid_standard_webhooks_signature_returns_401_without_spawn():
 def test_standard_webhooks_accepts_any_matching_rotation_signature():
     payload = _fixture("webhook_case_created.json")
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
-    signature = f"v1,bad v1,{_standard_signed(body)}"
+    timestamp = str(int(time.time()))
+    signature = f"v1,bad v1,{_standard_signed(body, webhook_timestamp=timestamp)}"
     fake_loop = MagicMock()
     with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
-        handler = _call_handler(payload, signature=signature)
+        handler = _call_handler(payload, signature=signature, webhook_timestamp=timestamp)
 
     assert handler._status_code == 202
     fake_loop.spawn_callback.assert_called_once()
@@ -292,6 +298,46 @@ def test_standard_webhooks_verifies_exact_raw_body_bytes():
 
     assert handler._status_code == 401
     fake_loop.spawn_callback.assert_not_called()
+
+
+def test_standard_webhooks_rejects_stale_timestamp():
+    payload = _fixture("webhook_case_created.json")
+    stale = str(int(time.time()) - 3600)
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(payload, webhook_timestamp=stale)
+
+    assert handler._status_code == 401
+    fake_loop.spawn_callback.assert_not_called()
+
+
+def test_standard_webhooks_rejects_non_base64_secret(monkeypatch):
+    body = b'{"webhook_type":"CASE_CREATED"}'
+    timestamp = str(int(time.time()))
+    monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", "fixture-secret")
+    headers = HTTPHeaders({
+        "webhook-id": "msg-fixture",
+        "webhook-timestamp": timestamp,
+        "webhook-signature": f"v1,{_standard_signed(body, webhook_timestamp=timestamp)}",
+    })
+
+    assert _verify_signature(body, headers) is False
+
+
+def test_standard_webhooks_uses_constant_time_compare(monkeypatch):
+    body = b'{"webhook_type":"CASE_CREATED"}'
+    timestamp = str(int(time.time()))
+    monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", STANDARD_SECRET)
+    headers = HTTPHeaders({
+        "webhook-id": "msg-fixture",
+        "webhook-timestamp": timestamp,
+        "webhook-signature": f"v1,{_standard_signed(body, webhook_timestamp=timestamp)}",
+    })
+    compare = MagicMock(side_effect=hmac.compare_digest)
+    monkeypatch.setattr("screening_complyadvantage.webhook_handler.hmac.compare_digest", compare)
+
+    assert _verify_signature(body, headers) is True
+    assert compare.called
 
 
 def test_legacy_signature_remains_temporarily_supported_without_standard_headers():
@@ -320,7 +366,7 @@ def test_bad_signature_returns_401_without_spawn_or_body(caplog):
     assert handler._status_code == 401
     assert b"".join(handler._write_buffer) == b""
     fake_loop.spawn_callback.assert_not_called()
-    assert "signature_invalid" in caplog.text
+    assert "signature_status=invalid" in caplog.text
     assert "bad-signature" not in caplog.text
     assert "fixture-secret" not in caplog.text
 
@@ -375,7 +421,7 @@ def test_malformed_json_returns_400_without_spawn_or_body(caplog):
     fake_loop = MagicMock()
     with caplog.at_level(logging.WARNING, logger="screening_complyadvantage.webhook_handler"):
         with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
-            handler = _call_handler_body(b'{"webhook_type": "CASE_CREATED"', secret="fixture-secret")
+            handler = _call_handler_body(b'{"webhook_type": "CASE_CREATED"')
 
     assert handler._status_code == 400
     assert b"".join(handler._write_buffer) == b""

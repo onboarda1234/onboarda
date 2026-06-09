@@ -20666,6 +20666,35 @@ def _monitoring_alert_action_note_required(alert, outcome):
     )
 
 
+def _monitoring_alert_provider_evidence(db, alert_id):
+    try:
+        rows = db.execute(
+            """
+            SELECT provider, case_identifier, alert_identifier, match_identifier,
+                   risk_identifier, profile_identifier, evidence_type,
+                   matched_subject_name, relationship_to_client, match_category,
+                   risk_indicator, match_confidence, source_title, source_name,
+                   source_url, source_url_available, source_url_unavailable_reason,
+                   publication_date, snippet, provider_case_url, evidence_json,
+                   raw_provider_reference, evidence_status, fetched_at
+              FROM monitoring_alert_evidence
+             WHERE monitoring_alert_id = ?
+             ORDER BY id ASC
+            """,
+            (alert_id,),
+        ).fetchall()
+    except Exception:
+        return []
+    evidence = []
+    for row in rows:
+        item = dict(row)
+        item["source_url_available"] = bool(item.get("source_url_available"))
+        item["evidence_json"] = safe_json_loads(item.get("evidence_json") or "{}")
+        item["raw_provider_reference"] = safe_json_loads(item.get("raw_provider_reference") or "{}")
+        evidence.append(item)
+    return evidence
+
+
 class MonitoringAlertDetailHandler(BaseHandler):
     """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
     def get(self, alert_id):
@@ -20683,6 +20712,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["owner_id"] = result.get("reviewed_by")
         result["owner_name"] = result.get("owner_name") or _monitoring_alert_owner_label(db, result.get("reviewed_by"))
         result["assigned_officer_name"] = result["owner_name"]
+        result["provider_evidence"] = _monitoring_alert_provider_evidence(db, alert_id)
         result["audit_history"] = _monitoring_alert_audit_history(db, alert_id)
         db.close()
         self.success(result)

@@ -182,6 +182,17 @@ def test_monitoring_alert_detail_keeps_raw_payload_collapsed():
     assert "Raw alert payload" not in evidence
 
 
+def test_monitoring_alert_detail_renders_structured_provider_evidence_without_fake_links():
+    html = _html()
+    evidence = _function_region(html, "monitoringAlertProviderEvidenceRows", "monitoringAlertEvidenceHtml")
+    assert "source_title" in evidence
+    assert "source_name" in evidence
+    assert "publication_date" in evidence
+    assert "match_confidence" in evidence
+    assert "Source article link not available from ComplyAdvantage payload." in evidence
+    assert "target=\"_blank\"" in evidence
+
+
 def test_monitoring_alert_decision_and_assignment_controls_are_simplified():
     html = _html()
     decision = _function_region(html, "renderMonitoringDecisionSection", "renderMonitoringAssignmentSection")
