@@ -279,6 +279,12 @@ def _canonical_risk_score(value):
     return score
 
 
+def _risk_metadata_json_value(value):
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
 def _application_risk_snapshot(app_row):
     """Truthful risk snapshot for copying into downstream workflow rows.
 
@@ -331,8 +337,10 @@ def _application_authoritative_risk_metadata(app_row):
             if app.get("final_risk_level") not in (None, "")
             else "applications.risk_level"
         ),
-        "calculated_at": app.get("risk_computed_at") or app.get("updated_at"),
-        "risk_config_version": app.get("risk_config_version"),
+        "calculated_at": _risk_metadata_json_value(
+            app.get("risk_computed_at") or app.get("updated_at")
+        ),
+        "risk_config_version": _risk_metadata_json_value(app.get("risk_config_version")),
     }
 
 
@@ -19475,7 +19483,9 @@ class MemoPDFDownloadHandler(BaseHandler):
         metadata["authoritative_case_risk"] = authoritative_risk
         metadata["risk_source"] = authoritative_risk.get("source")
         metadata["risk_calculated_at"] = authoritative_risk.get("calculated_at")
-        metadata["memo_generated_at"] = metadata.get("memo_generated_at") or memo_row.get("created_at")
+        metadata["memo_generated_at"] = _risk_metadata_json_value(
+            metadata.get("memo_generated_at") or memo_row.get("created_at")
+        )
         if authoritative_risk.get("available"):
             metadata["canonical_risk"] = {
                 **(metadata.get("canonical_risk") or {}),
