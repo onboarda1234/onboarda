@@ -17451,6 +17451,11 @@ function monitoringAlertProviderEvidenceRows(raw) {
     return '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);margin-top:' + (idx ? '8px' : '12px') + ';">' +
       '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-bottom:8px;">Provider evidence ' + escapeHtml(String(idx + 1)) + '</div>' +
       monitoringInfoGrid([
+        ['Evidence status', monitoringTextValue(item.evidence_status, 'Not available')],
+        ['Evidence fetched', monitoringTextValue(item.fetched_at, 'Not available')],
+        ['Provider case ID', monitoringTextValue(item.case_identifier, 'Not available')],
+        ['Provider alert ID', monitoringTextValue(item.alert_identifier, 'Not available')],
+        ['Provider risk / match ID', monitoringTextValue(item.risk_identifier || item.match_identifier || item.profile_identifier, 'Not available')],
         ['Matched subject', monitoringTextValue(item.matched_subject_name, 'Not available')],
         ['Relationship', monitoringTextValue(item.relationship_to_client, 'Unknown')],
         ['Match category', monitoringTextValue(item.match_category || item.evidence_type, 'Not available')],
@@ -17602,9 +17607,37 @@ function renderMonitoringDownstreamLinks(alert) {
 
 function monitoringAuditLabel(action) {
   var map = {
-    'monitoring.alert.review_started': 'Review started', 'monitoring.alert.assigned': 'Assigned', 'monitoring.alert.false_positive': 'False positive saved', 'monitoring.alert.no_material_impact': 'No material impact saved', 'monitoring.alert.routed_to_edd': 'Routed to EDD', 'monitoring.alert.escalated_to_sco': 'Escalated to SCO', 'monitoring.alert.risk_profile_update_required': 'Risk profile update required', 'monitoring.alert.further_information_requested': 'Further information requested', 'monitoring.alert.document_update_requested': 'Document update requested', 'monitoring.alert.document_already_updated': 'Document already updated', 'monitoring.alert.document_waived': 'Document waived', 'monitoring.alert.overdue_document_escalated': 'Overdue item escalated', 'monitoring.alert.dismissed': 'Dismissed', 'monitoring.alert.triaged': 'Review started'
+    'monitoring.alert.review_started': 'Review started', 'monitoring.alert.assigned': 'Assigned', 'monitoring.alert.false_positive': 'False positive saved', 'monitoring.alert.no_material_impact': 'No material impact saved', 'monitoring.alert.routed_to_edd': 'Routed to EDD', 'monitoring.alert.escalated_to_sco': 'Escalated to SCO', 'monitoring.alert.risk_profile_update_required': 'Risk profile update required', 'monitoring.alert.further_information_requested': 'Further information requested', 'monitoring.alert.document_update_requested': 'Document update requested', 'monitoring.alert.document_already_updated': 'Document already updated', 'monitoring.alert.document_waived': 'Document waived', 'monitoring.alert.overdue_document_escalated': 'Overdue item escalated', 'monitoring.alert.dismissed': 'Dismissed', 'monitoring.alert.triaged': 'Review started',
+    'monitoring.alert.evidence_fetch_succeeded': 'Evidence fetch succeeded', 'monitoring.alert.evidence_unavailable': 'Evidence unavailable from provider', 'monitoring.alert.webhook_duplicate_ignored': 'Webhook duplicate ignored'
   };
   return map[action] || String(action || 'Audit event').replace(/\./g, ' ').replace(/_/g, ' ');
+}
+
+function monitoringAuditReadableDetail(item) {
+  var detail = item && item.detail;
+  if (!detail) return '';
+  var parsed = null;
+  if (typeof detail === 'string') {
+    try { parsed = JSON.parse(detail); } catch(e) {}
+  } else if (typeof detail === 'object') {
+    parsed = detail;
+  }
+  if (!parsed || typeof parsed !== 'object') return String(detail);
+  var action = String((item && item.action) || '');
+  if (parsed.previous_owner_name || parsed.new_owner_name || parsed.previous_owner || parsed.new_owner) {
+    var fromOwner = parsed.previous_owner_name || parsed.previous_owner || 'Unassigned';
+    var toOwner = parsed.new_owner_name || parsed.new_owner || 'Unassigned';
+    return 'Assigned from ' + fromOwner + ' to ' + toOwner + (parsed.note ? ' — ' + parsed.note : '');
+  }
+  if (parsed.outcome) return 'Decision saved: ' + String(parsed.outcome).replace(/_/g, ' ');
+  if (parsed.note) return String(parsed.note);
+  if (parsed.status) return 'Status updated: ' + String(parsed.status).replace(/_/g, ' ');
+  if (parsed.reason) return String(parsed.reason).replace(/_/g, ' ');
+  if (parsed.failure_reason) return 'Provider operation failed: ' + String(parsed.failure_reason).replace(/_/g, ' ');
+  if (parsed.evidence_status === 'fetched' || action.indexOf('evidence_fetch_succeeded') >= 0) return 'Structured provider evidence was fetched and stored.';
+  if (parsed.evidence_status === 'unavailable' || action.indexOf('evidence_unavailable') >= 0) return 'Detailed provider evidence is not available for this alert.';
+  if (parsed.duplicate_count) return 'Duplicate provider delivery ignored.';
+  return '';
 }
 
 function renderMonitoringAuditHistory(alert, history) {
@@ -17612,19 +17645,13 @@ function renderMonitoringAuditHistory(alert, history) {
   var rows = [];
   if (created) rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="font-weight:700;font-size:13px;">Alert created</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(created).replace('T', ' ').slice(0, 19)) + '</div></div>');
   (history || []).forEach(function(item) {
-    var detail = item.detail || '';
-    try {
-      var parsed = typeof detail === 'string' ? JSON.parse(detail) : detail;
-      if (parsed && parsed.note) detail = parsed.note;
-      else if (parsed && parsed.outcome) detail = String(parsed.outcome).replace(/_/g, ' ');
-      else if (parsed && parsed.new_owner_name) detail = 'Assigned to ' + parsed.new_owner_name + (parsed.note ? ' — ' + parsed.note : '');
-    } catch(e) {}
+    var detail = monitoringAuditReadableDetail(item);
     rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div style="font-weight:700;font-size:13px;">' + escapeHtml(monitoringAuditLabel(item.action)) + '</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(item.timestamp || '').replace('T', ' ').slice(0, 19)) + '</div></div><div style="font-size:12px;color:var(--text3);margin-top:3px;">' + escapeHtml(item.user_name || item.user_id || 'System') + (item.user_role ? ' · ' + escapeHtml(ROLE_LABELS[item.user_role] || item.user_role) : '') + '</div>' + (detail ? '<div style="font-size:12px;color:var(--text2);margin-top:6px;white-space:pre-wrap;">' + escapeHtml(String(detail)) + '</div>' : '') + '</div>');
   });
   return monitoringDetailCard('Audit History', rows.length ? rows.join('') : '<div style="font-size:13px;color:var(--text3);">No audit events are available for this alert yet.</div>');
 }
 
-function renderMonitoringTechnicalDetails(alert) {
+function renderMonitoringTechnicalDetails(alert, auditHistory) {
   var raw = (alert && alert.raw) || {};
   var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
   var idRows = monitoringInfoGrid([
@@ -17635,7 +17662,7 @@ function renderMonitoringTechnicalDetails(alert) {
     ['Normalized record ID', monitoringTextValue(ref.normalized_record_id, '')],
     ['Backfill run ID', monitoringTextValue(raw.backfill_run_id, '')]
   ]);
-  return '<details style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 16px;"><summary style="cursor:pointer;font-size:14px;font-weight:800;color:var(--text1);">Technical Details</summary><div style="margin-top:12px;">' + idRows + '</div><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw alert payload</div><pre style="margin-top:6px;max-height:260px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(raw, null, 2)) + '</pre></details>';
+  return '<details style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 16px;"><summary style="cursor:pointer;font-size:14px;font-weight:800;color:var(--text1);">Technical Details</summary><div style="margin-top:12px;">' + idRows + '</div><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw alert payload</div><pre style="margin-top:6px;max-height:260px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(raw, null, 2)) + '</pre><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw audit metadata</div><pre style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(auditHistory || [], null, 2)) + '</pre></details>';
 }
 
 function renderMonitoringAlertDetailView() {
@@ -17688,7 +17715,7 @@ function renderMonitoringAlertDetailView() {
     renderMonitoringDecisionSection(alert) +
     renderMonitoringDownstreamLinks(alert) +
     renderMonitoringAuditHistory(alert, state.auditHistory || []) +
-    renderMonitoringTechnicalDetails(alert);
+    renderMonitoringTechnicalDetails(alert, state.auditHistory || []);
   updateMonitoringDecisionNoteHint();
 }
 
