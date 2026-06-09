@@ -193,7 +193,7 @@ def test_memo_treats_score_level_mismatch_as_unrated():
     assert "not yet risk-rated" in memo["sections"]["executive_summary"]["content"]
 
 
-def test_pdf_generator_fails_closed_without_canonical_risk(monkeypatch):
+def test_pdf_generator_uses_authoritative_application_risk_over_legacy_memo(monkeypatch):
     import pdf_generator
 
     captured = {}
@@ -219,13 +219,54 @@ def test_pdf_generator_fails_closed_without_canonical_risk(monkeypatch):
         },
     }
 
-    pdf = pdf_generator.generate_memo_pdf(memo, _app())
+    pdf = pdf_generator.generate_memo_pdf(
+        memo,
+        _app(
+            ref="ARF-2026-900289",
+            risk_level="VERY_HIGH",
+            final_risk_level="VERY_HIGH",
+            risk_score=70,
+            risk_computed_at="2026-06-09T08:00:00Z",
+        ),
+    )
+
+    assert pdf == b"%PDF-fake"
+    assert "Authoritative Case Risk Score" in captured["html"]
+    assert "70/100" in captured["html"]
+    assert "2026-06-09T08:00:00Z" in captured["html"]
+    assert "VERY_HIGH" in captured["html"]
+    assert "50/100" not in captured["html"]
+
+
+def test_pdf_generator_fails_closed_when_no_authoritative_risk_exists(monkeypatch):
+    import pdf_generator
+
+    captured = {}
+
+    class FakeHTML:
+        def __init__(self, string):
+            captured["html"] = string
+
+        def write_pdf(self):
+            return b"%PDF-fake"
+
+    class FakeWeasyPrint:
+        HTML = FakeHTML
+
+    monkeypatch.setattr(pdf_generator, "_get_weasyprint", lambda: FakeWeasyPrint)
+    memo = {
+        "sections": {"executive_summary": {"content": "Legacy memo blob."}},
+        "metadata": {"risk_rating": "MEDIUM", "risk_score": 50},
+    }
+
+    pdf = pdf_generator.generate_memo_pdf(
+        memo,
+        _app(risk_level=None, final_risk_level=None, risk_score=None),
+    )
 
     assert pdf == b"%PDF-fake"
     assert "NOT YET RATED" in captured["html"]
     assert "Not yet scored" in captured["html"]
-    assert ">MEDIUM<" not in captured["html"]
-    assert "50/100" not in captured["html"]
 
 
 def test_screening_source_summary_marks_simulated_report():

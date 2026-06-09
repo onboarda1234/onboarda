@@ -245,11 +245,48 @@ def _decision_badge(decision: str) -> str:
     return f'<span class="decision-badge {css_class}">{_esc(d)}</span>'
 
 
-def _pdf_risk_display(metadata: Dict) -> tuple[str, str]:
-    """Return risk badge and score text, failing closed for legacy memo blobs."""
+def _normalise_pdf_risk_level(value: Any) -> Optional[str]:
+    level = str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
+    return level if level in _VALID_RISK_LEVELS else None
+
+
+def _normalise_pdf_risk_score(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score < 0 or score > 100:
+        return None
+    return score
+
+
+def _score_text(score: float) -> str:
+    return str(int(score)) if score.is_integer() else str(round(score, 2))
+
+
+def _application_pdf_risk_display(application: Optional[Dict]) -> tuple[Optional[str], Optional[float], Optional[str]]:
+    app = application or {}
+    level = _normalise_pdf_risk_level(app.get("final_risk_level")) or _normalise_pdf_risk_level(app.get("risk_level"))
+    score = _normalise_pdf_risk_score(
+        app.get("final_risk_score") if app.get("final_risk_score") not in (None, "") else app.get("risk_score")
+    )
+    if level and level != "LOW" and score == 0:
+        score = None
+    calculated_at = app.get("risk_computed_at") or app.get("updated_at") or app.get("submitted_at")
+    return level, score, calculated_at
+
+
+def _pdf_risk_display(metadata: Dict, application: Optional[Dict] = None) -> tuple[str, str, str]:
+    """Return authoritative risk badge, score text, and timestamp."""
+    app_level, app_score, app_calculated_at = _application_pdf_risk_display(application)
+    if app_level and app_score is not None:
+        return app_level, f"{_score_text(app_score)}/100", str(app_calculated_at or "Not recorded")
+
     canonical_risk = metadata.get("canonical_risk") if isinstance(metadata.get("canonical_risk"), dict) else None
     if not canonical_risk or canonical_risk.get("available") is not True:
-        return "NOT_RATED", "Not yet scored"
+        return "NOT_RATED", "Not yet scored", "Not recorded"
 
     level = (
         metadata.get("display_risk_rating")
@@ -257,19 +294,21 @@ def _pdf_risk_display(metadata: Dict) -> tuple[str, str]:
         or metadata.get("risk_rating")
         or metadata.get("aggregated_risk")
     )
-    level = str(level or "").strip().upper().replace(" ", "_").replace("-", "_")
+    level = _normalise_pdf_risk_level(level)
     score = metadata.get("display_risk_score")
     if score in (None, ""):
         score = canonical_risk.get("score")
 
-    try:
-        numeric_score = float(score)
-    except (TypeError, ValueError):
-        return "NOT_RATED", "Not yet scored"
-    if level not in _VALID_RISK_LEVELS or numeric_score < 0 or numeric_score > 100:
-        return "NOT_RATED", "Not yet scored"
-    score_text = str(int(numeric_score)) if numeric_score.is_integer() else str(round(numeric_score, 2))
-    return level, f"{score_text}/100"
+    numeric_score = _normalise_pdf_risk_score(score)
+    if not level or numeric_score is None:
+        return "NOT_RATED", "Not yet scored", "Not recorded"
+    calculated_at = (
+        metadata.get("risk_calculated_at")
+        or canonical_risk.get("calculated_at")
+        or canonical_risk.get("risk_computed_at")
+        or "Not recorded"
+    )
+    return level, f"{_score_text(numeric_score)}/100", str(calculated_at)
 
 
 def _render_section_content(content: Any) -> str:
@@ -411,10 +450,11 @@ def generate_memo_pdf(
 
     sections = memo_data.get("sections", {})
     metadata = memo_data.get("metadata", {})
-    risk_level, risk_score_display = _pdf_risk_display(metadata)
+    risk_level, risk_score_display, risk_calculated_at = _pdf_risk_display(metadata, application)
     decision = metadata.get("approval_recommendation", "REVIEW")
     confidence = metadata.get("confidence_level", 0)
     memo_version = metadata.get("memo_version", "1.0")
+    memo_generated_at = metadata.get("memo_generated_at") or metadata.get("generated_at")
 
     app_ref = application.get("ref", "N/A")
     company_name = application.get("company_name", "Unknown Entity")
@@ -423,6 +463,7 @@ def generate_memo_pdf(
     entity_type = application.get("entity_type", "N/A")
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    memo_generated_display = memo_generated_at or now
 
     # Content hash for immutability verification
     content_hash = hashlib.sha256(json.dumps(memo_data, sort_keys=True).encode()).hexdigest()[:16]
@@ -443,11 +484,13 @@ def generate_memo_pdf(
     <td class="label">Sector</td><td>{_esc(sector)}</td></tr>
 <tr><td class="label">Entity Type</td><td>{_esc(entity_type)}</td>
     <td class="label">Risk Rating</td><td>{_risk_badge(risk_level)}</td></tr>
-<tr><td class="label">Risk Score</td><td>{_esc(risk_score_display)}</td>
+    <tr><td class="label">Authoritative Case Risk Score</td><td>{_esc(risk_score_display)}</td>
     <td class="label">Confidence</td><td>{_esc(round(confidence * 100, 1) if isinstance(confidence, (int, float)) else confidence)}%</td></tr>
-<tr><td class="label">Decision</td><td colspan="3">{_decision_badge(decision)}</td></tr>
-<tr><td class="label">Memo Version</td><td>{_esc(memo_version)}</td>
-    <td class="label">Generated</td><td>{_esc(now)}</td></tr>
+    <tr><td class="label">Risk Calculated At</td><td>{_esc(risk_calculated_at)}</td>
+    <td class="label">Memo Generated At</td><td>{_esc(memo_generated_display)}</td></tr>
+    <tr><td class="label">Decision</td><td colspan="3">{_decision_badge(decision)}</td></tr>
+    <tr><td class="label">Memo Version</td><td>{_esc(memo_version)}</td>
+    <td class="label">PDF Generated</td><td>{_esc(now)}</td></tr>
 """
 
     if approved_by:

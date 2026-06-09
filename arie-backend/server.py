@@ -307,6 +307,125 @@ def _application_risk_snapshot(app_row):
     return level, score
 
 
+def _application_authoritative_risk_metadata(app_row):
+    """Return the authoritative case risk snapshot from applications.* fields."""
+    if not app_row:
+        return {
+            "available": False,
+            "level": None,
+            "score": None,
+            "source": "applications",
+        }
+    try:
+        app = dict(app_row)
+    except Exception:
+        app = app_row
+    level, score = _application_risk_snapshot(app)
+    return {
+        "available": bool(level and score is not None),
+        "level": level,
+        "score": score,
+        "source": "applications.risk_score",
+        "level_source": (
+            "applications.final_risk_level"
+            if app.get("final_risk_level") not in (None, "")
+            else "applications.risk_level"
+        ),
+        "calculated_at": app.get("risk_computed_at") or app.get("updated_at"),
+        "risk_config_version": app.get("risk_config_version"),
+    }
+
+
+def _normalised_risk_pair(level, score):
+    norm_level = _canonical_risk_level(level)
+    norm_score = _canonical_risk_score(score)
+    if norm_level and norm_level != "LOW" and norm_score == 0:
+        norm_score = None
+    return norm_level, norm_score
+
+
+def _memo_metadata_risk_snapshot(memo_data):
+    """Extract the risk snapshot stored in memo_data.metadata, if present."""
+    if not isinstance(memo_data, dict):
+        return {"available": False, "level": None, "score": None, "present": False}
+    metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
+    canonical = metadata.get("canonical_risk") if isinstance(metadata.get("canonical_risk"), dict) else {}
+    level = (
+        metadata.get("display_risk_rating")
+        or canonical.get("level")
+        or metadata.get("risk_rating")
+        or metadata.get("aggregated_risk")
+    )
+    score = metadata.get("display_risk_score")
+    if score in (None, ""):
+        score = canonical.get("score")
+    if score in (None, ""):
+        score = metadata.get("risk_score")
+    norm_level, norm_score = _normalised_risk_pair(level, score)
+    present = any(
+        value not in (None, "", {}, [])
+        for value in (
+            metadata.get("display_risk_rating"),
+            metadata.get("display_risk_score"),
+            metadata.get("risk_rating"),
+            metadata.get("risk_score"),
+            metadata.get("canonical_risk"),
+        )
+    )
+    return {
+        "available": bool(norm_level and norm_score is not None),
+        "level": norm_level,
+        "score": norm_score,
+        "present": present,
+        "calculated_at": (
+            metadata.get("risk_calculated_at")
+            or canonical.get("calculated_at")
+            or canonical.get("risk_computed_at")
+        ),
+    }
+
+
+def _memo_risk_snapshot_mismatch(app_row, memo_row):
+    """Return staleness details when memo risk no longer matches application truth."""
+    if not app_row or not memo_row:
+        return None
+    app_risk = _application_authoritative_risk_metadata(app_row)
+    if not app_risk.get("available"):
+        return None
+    try:
+        memo_data = safe_json_loads((dict(memo_row)).get("memo_data") or "{}")
+    except Exception:
+        return {
+            "trigger": "memo_risk_snapshot_unreadable",
+            "reason": "Memo risk snapshot could not be read; regenerate the memo before approval or PDF export.",
+            "before_state": {"memo_risk": "unreadable"},
+            "after_state": {"application_risk": app_risk},
+        }
+    memo_risk = _memo_metadata_risk_snapshot(memo_data)
+    if not memo_risk.get("present"):
+        return None
+    if not memo_risk.get("available"):
+        return {
+            "trigger": "memo_risk_snapshot_unavailable",
+            "reason": "Memo risk snapshot is missing or invalid; regenerate the memo before approval or PDF export.",
+            "before_state": {"memo_risk": memo_risk},
+            "after_state": {"application_risk": app_risk},
+        }
+    scores_match = abs(float(memo_risk["score"]) - float(app_risk["score"])) < 0.0001
+    levels_match = memo_risk["level"] == app_risk["level"]
+    if scores_match and levels_match:
+        return None
+    return {
+        "trigger": "memo_risk_snapshot_mismatch",
+        "reason": (
+            "Memo risk snapshot no longer matches the authoritative application risk score. "
+            "Regenerate the memo before approval or PDF export."
+        ),
+        "before_state": {"memo_risk": memo_risk},
+        "after_state": {"application_risk": app_risk},
+    }
+
+
 _RISK_REQUIRED_APPLICATION_STATUSES = (
     "submitted", "prescreening_submitted", "pricing_review", "pricing_accepted",
     "pre_approval_review", "pre_approved", "kyc_documents", "kyc_submitted",
@@ -11854,7 +11973,7 @@ _REPORT_APPLICATION_SELECT_COLUMNS = (
     "a.ref AS ref",
     "a.company_name AS company_name",
     "a.status AS status",
-    "a.risk_level AS risk_level",
+    "COALESCE(a.final_risk_level, a.risk_level) AS risk_level",
     "a.risk_score AS risk_score",
     "a.country AS country",
     "a.sector AS sector",
@@ -11897,7 +12016,7 @@ def _report_scope_from_request(handler, user):
         ("date_from", "a.created_at >= ?"),
         ("date_to", "a.created_at <= ?"),
         ("status", "a.status = ?"),
-        ("risk_level", "a.risk_level = ?"),
+        ("risk_level", "COALESCE(a.final_risk_level, a.risk_level) = ?"),
         ("jurisdiction", "a.country = ?"),
         ("entity_type", "a.entity_type = ?"),
         ("assigned_to", "a.assigned_to = ?"),
@@ -11906,7 +12025,7 @@ def _report_scope_from_request(handler, user):
         value = filters.get(key)
         if value:
             if key == "risk_level" and str(value).strip().upper() == "UNKNOWN":
-                conditions.append("(a.risk_level IS NULL OR a.risk_level='' OR a.risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))")
+                conditions.append("(COALESCE(a.final_risk_level, a.risk_level) IS NULL OR COALESCE(a.final_risk_level, a.risk_level)='' OR COALESCE(a.final_risk_level, a.risk_level) NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))")
                 continue
             conditions.append(clause)
             params.append(value)
@@ -17313,7 +17432,9 @@ class MonitoringAlertCreateHandler(BaseHandler):
 _MEMO_APP_FINGERPRINT_FIELDS = (
     "id", "ref", "company_name", "brn", "country", "sector", "entity_type",
     "source_of_funds", "expected_volume", "ownership_structure", "risk_level",
-    "risk_score", "risk_escalations", "operating_countries",
+    "final_risk_level", "base_risk_level", "risk_score", "final_risk_score",
+    "risk_dimensions", "risk_escalations", "risk_computed_at", "risk_config_version",
+    "operating_countries",
     "incorporation_date", "business_activity", "assigned_to",
     "prescreening_data", "screening_reviews",
 )
@@ -17450,6 +17571,17 @@ def _memo_staleness_view(app_row, memo_row):
             "trigger": row.get("stale_trigger") or "memo_marked_stale",
             "marked_at": row.get("stale_marked_at"),
             "reasons": reasons,
+        }
+    risk_mismatch = _memo_risk_snapshot_mismatch(app_row, row)
+    if risk_mismatch:
+        reason = risk_mismatch["reason"]
+        trigger = risk_mismatch["trigger"]
+        return {
+            "is_stale": True,
+            "reason": reason,
+            "trigger": trigger,
+            "marked_at": None,
+            "reasons": reasons or [{"trigger": trigger, "reason": reason}],
         }
     if _memo_timestamp_stale(app_row, row):
         reason = "Application input data changed after the latest memo was generated."
@@ -17991,6 +18123,20 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["memo_version"] = "v" + str(next_version)
         memo["metadata"]["model_version"] = "v1.1"
         memo["metadata"]["build"] = get_build_metadata()
+        authoritative_risk = _application_authoritative_risk_metadata(app)
+        memo["metadata"]["authoritative_case_risk"] = authoritative_risk
+        memo["metadata"]["risk_calculated_at"] = authoritative_risk.get("calculated_at")
+        memo["metadata"]["risk_source"] = authoritative_risk.get("source")
+        memo["metadata"]["memo_generated_at"] = datetime.now(timezone.utc).isoformat()
+        if authoritative_risk.get("available"):
+            memo["metadata"]["canonical_risk"] = {
+                **(memo["metadata"].get("canonical_risk") or {}),
+                **authoritative_risk,
+            }
+            memo["metadata"]["display_risk_rating"] = authoritative_risk.get("level")
+            memo["metadata"]["display_risk_score"] = authoritative_risk.get("score")
+            memo["metadata"]["risk_rating"] = authoritative_risk.get("level")
+            memo["metadata"]["risk_score"] = authoritative_risk.get("score")
 
         # Store memo in compliance_memos table.  EDD findings, closure
         # evidence, and enhanced-requirement review metadata can include native
@@ -19300,15 +19446,48 @@ class MemoPDFDownloadHandler(BaseHandler):
             db.close()
             return self.error("No compliance memo found. Generate a memo first.", 404)
 
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_pdf_export",
+        )
+        if stale.get("is_stale"):
+            db.commit()
+            db.close()
+            return self.error(
+                "PDF export blocked: Compliance memo is stale: "
+                + stale.get("reason", "Regenerate the memo before PDF export."),
+                409,
+            )
+
         # Parse memo data
         try:
             memo_data = safe_json_loads(memo_row["memo_data"])
         except (json.JSONDecodeError, TypeError):
             db.close()
             return self.error("Memo data is corrupt or unparseable.", 500)
+        memo_data = dict(memo_data or {})
+        metadata = dict(memo_data.get("metadata") or {})
+        authoritative_risk = _application_authoritative_risk_metadata(app)
+        metadata["authoritative_case_risk"] = authoritative_risk
+        metadata["risk_source"] = authoritative_risk.get("source")
+        metadata["risk_calculated_at"] = authoritative_risk.get("calculated_at")
+        metadata["memo_generated_at"] = metadata.get("memo_generated_at") or memo_row.get("created_at")
+        if authoritative_risk.get("available"):
+            metadata["canonical_risk"] = {
+                **(metadata.get("canonical_risk") or {}),
+                **authoritative_risk,
+            }
+            metadata["display_risk_rating"] = authoritative_risk.get("level")
+            metadata["display_risk_score"] = authoritative_risk.get("score")
+            metadata["risk_rating"] = authoritative_risk.get("level")
+            metadata["risk_score"] = authoritative_risk.get("score")
+        memo_data["metadata"] = metadata
 
         # Build validation/supervisor context from memo metadata
-        metadata = memo_data.get("metadata", {})
         validation_result = {
             "validation_status": memo_row.get("validation_status") or metadata.get("validation_status", "pending"),
             "quality_score": memo_row.get("quality_score") or metadata.get("quality_score", 0),
@@ -19372,6 +19551,9 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "validation_status": validation_result.get("validation_status"),
                 "quality_score": validation_result.get("quality_score"),
                 "supervisor_status": supervisor_result.get("verdict"),
+                "authoritative_case_risk": authoritative_risk,
+                "risk_source": authoritative_risk.get("source"),
+                "risk_calculated_at": authoritative_risk.get("calculated_at"),
                 "generated_at": pdf_generated_at,
             })
             db.execute(
@@ -19753,8 +19935,9 @@ class ApplicationDecisionHandler(BaseHandler):
 
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
+            approval_risk_level, approval_risk_score = _application_risk_snapshot(app)
             # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
-            if user.get("role") == "co" and app["risk_level"] in ("HIGH", "VERY_HIGH"):
+            if user.get("role") == "co" and approval_risk_level in ("HIGH", "VERY_HIGH"):
                 reason = (
                     "Approval blocked: Compliance Officers cannot approve HIGH or VERY_HIGH risk applications. "
                     "Only Admin or Senior Compliance Officer roles may approve at this risk level."
@@ -19812,7 +19995,7 @@ class ApplicationDecisionHandler(BaseHandler):
                 return self.error(reason, 400)
 
             # ── EX-06: Dual-approval for high-risk cases using structured fields ──
-            if app["risk_level"] in ("HIGH", "VERY_HIGH"):
+            if approval_risk_level in ("HIGH", "VERY_HIGH"):
                 can_approve, dual_error = ApprovalGateValidator.validate_high_risk_dual_approval(app, user, db)
                 if not can_approve:
                     # Distinguish: same-officer retry vs genuine first approval
@@ -19982,10 +20165,12 @@ class ApplicationDecisionHandler(BaseHandler):
 
         _after = {"status": new_status, "decision": decision, "decision_reason": decision_reason,
                   "override_ai": override_ai, "rmi_request_id": rmi_request_id,
+                  "risk_level": _application_risk_snapshot(app)[0],
+                  "risk_score": _application_risk_snapshot(app)[1],
                   "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
                   "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
                   "decision_by": user.get("sub"),
-                  "first_approver_id": app.get("first_approver_id") if app.get("risk_level") in ("HIGH", "VERY_HIGH") else None,
+                  "first_approver_id": app.get("first_approver_id") if _application_risk_snapshot(app)[0] in ("HIGH", "VERY_HIGH") else None,
                   "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None}
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),

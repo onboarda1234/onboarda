@@ -64,10 +64,10 @@ def _insert_gate_ready_app(db):
     return app_id, ref
 
 
-def _insert_approved_memo(db, app_id, *, created_at=None, raw_output_hash=None):
+def _insert_approved_memo(db, app_id, *, created_at=None, raw_output_hash=None, memo_metadata=None):
     memo_data = {
         "ai_source": "deterministic",
-        "metadata": {"ai_source": "deterministic"},
+        "metadata": {"ai_source": "deterministic", **(memo_metadata or {})},
         "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
     }
     db.execute(
@@ -215,3 +215,59 @@ def test_input_timestamp_staleness_is_persisted_when_memo_approval_checks_freshn
     ).fetchone()
     assert audit is not None
     assert "application_inputs_changed_after_memo" in audit["detail"]
+
+
+def test_risk_snapshot_mismatch_marks_memo_stale_and_blocks_approval(db):
+    from security_hardening import ApprovalGateValidator
+    from server import _ensure_memo_fresh_or_mark_stale
+
+    app_id, ref = _insert_gate_ready_app(db)
+    db.execute(
+        """
+        UPDATE applications
+        SET risk_score = 70,
+            risk_level = 'VERY_HIGH',
+            final_risk_level = 'VERY_HIGH',
+            risk_computed_at = '2026-06-09T08:00:00Z'
+        WHERE id = ?
+        """,
+        (app_id,),
+    )
+    _insert_approved_memo(
+        db,
+        app_id,
+        memo_metadata={
+            "canonical_risk": {"available": True, "level": "MEDIUM", "score": 42},
+            "display_risk_rating": "MEDIUM",
+            "display_risk_score": 42,
+            "risk_rating": "MEDIUM",
+            "risk_score": 42,
+        },
+    )
+
+    stale = _ensure_memo_fresh_or_mark_stale(
+        db,
+        _app(db, app_id),
+        _latest_memo(db, app_id),
+        actor={"sub": "admin001", "name": "Admin", "role": "admin"},
+        ip_address="127.0.0.1",
+        context="memo_approval",
+    )
+    db.commit()
+
+    assert stale["is_stale"] is True
+    assert stale["trigger"] == "memo_risk_snapshot_mismatch"
+    memo_after = _latest_memo(db, app_id)
+    assert memo_after["is_stale"] in (1, True)
+    assert memo_after["stale_trigger"] == "memo_risk_snapshot_mismatch"
+
+    allowed, msg = ApprovalGateValidator.validate_approval(_app(db, app_id), db)
+    assert allowed is False
+    assert "stale" in msg.lower()
+
+    audit = db.execute(
+        "SELECT detail FROM audit_log WHERE target = ? AND action = 'Memo Marked Stale' ORDER BY id DESC LIMIT 1",
+        (ref,),
+    ).fetchone()
+    assert audit is not None
+    assert "memo_risk_snapshot_mismatch" in audit["detail"]

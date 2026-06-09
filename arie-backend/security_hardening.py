@@ -997,7 +997,11 @@ class ApprovalGateValidator:
             - (True, "") when a different officer already recorded first approval
         """
         try:
-            risk_level = app.get('risk_level', '').upper()
+            risk_level = (
+                _canonical_approval_risk_level(app.get('final_risk_level'))
+                or _canonical_approval_risk_level(app.get('risk_level'))
+                or ''
+            )
 
             # Only enforce dual approval for high-risk applications
             if risk_level not in ['HIGH', 'VERY_HIGH']:
