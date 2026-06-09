@@ -109,7 +109,7 @@ def test_monitoring_alerts_render_uses_keys_and_has_truthful_empty_states():
     assert "alert.severityKey !== severityFilter" in render
     assert "alert.typeKey !== typeFilter" in render
     assert "alert.statusKey !== statusFilter" in render
-    assert "showAlertDetail(alert)" in render
+    assert "openMonitoringAlertDetail(alert.id)" in render
 
 
 def test_monitoring_alerts_client_display_does_not_primary_render_uuid():
@@ -135,3 +135,64 @@ def test_dashboard_monitoring_metric_is_not_mislabelled_as_alerts():
     assert "high_risk_applications" in html
     assert '"high_risk_applications": 0' in server
     assert 'stats["high_risk_applications"] = high_risk' in server
+
+
+def test_monitoring_alerts_open_uses_full_page_detail_view_not_modal():
+    html = _html()
+    detail_view = _view_region(html, "view-monitoring-alert-detail", "view-lifecycle")
+    render = _function_region(html, "renderMonitoringAlerts", "renderPeriodicReviews")
+    opener = _function_region(html, "openMonitoringAlertDetail", "refreshMonitoringAlertDetail")
+
+    assert 'id="view-monitoring-alert-detail"' in detail_view
+    assert "Back to Monitoring Alerts" in detail_view
+    assert "openMonitoringAlertDetail(alert.id)" in render
+    assert "showAlertDetail(alert)" not in render
+    assert "showView('monitoring-alert-detail')" in opener
+    assert "#monitoring-alerts/" in opener
+
+
+def test_monitoring_alert_detail_has_required_sprint2_sections():
+    html = _html()
+    renderer = _function_region(html, "renderMonitoringAlertDetailView", "openMonitoringAlertDetail")
+
+    for label in [
+        "Alert Summary",
+        "Issue / Evidence",
+        "Compliance Impact",
+        "Recommended Next Step",
+        "Assignment",
+        "Officer Decision",
+        "Downstream Links",
+        "Audit History",
+        "Technical Details",
+    ]:
+        assert label in renderer or label in html
+
+
+def test_monitoring_alert_detail_keeps_raw_payload_collapsed():
+    html = _html()
+    technical = _function_region(html, "renderMonitoringTechnicalDetails", "renderMonitoringAlertDetailView")
+    evidence = _function_region(html, "monitoringAlertEvidenceHtml", "monitoringComplianceImpact")
+
+    assert "<details" in technical
+    assert "<summary" in technical
+    assert "Raw alert payload" in technical
+    assert "JSON.stringify(raw, null, 2)" in technical
+    assert "Detailed provider match evidence is not available in this alert payload." in evidence
+    assert "Raw alert payload" not in evidence
+
+
+def test_monitoring_alert_decision_and_assignment_controls_are_simplified():
+    html = _html()
+    decision = _function_region(html, "renderMonitoringDecisionSection", "renderMonitoringAssignmentSection")
+    assignment = _function_region(html, "renderMonitoringAssignmentSection", "renderMonitoringDownstreamLinks")
+
+    assert "Start Review" in decision
+    assert "Choose Outcome" in decision
+    assert "Save Decision" in decision
+    assert "Triage" not in decision
+    assert "Mark as Reviewed" not in decision
+
+    assert "Assign to me" in assignment
+    assert "Save assignment" in assignment
+    assert "Assign-to-officer is restricted to Administrator and Senior CO" in assignment
