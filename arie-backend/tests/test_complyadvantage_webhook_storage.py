@@ -77,6 +77,53 @@ def _db():
         );
         CREATE UNIQUE INDEX uq_screening_normalized_app_provider_hash
             ON screening_reports_normalized(application_id, provider, source_screening_report_hash);
+        CREATE TABLE complyadvantage_webhook_deliveries (
+            webhook_id TEXT PRIMARY KEY,
+            first_received_at TEXT DEFAULT (datetime('now')),
+            last_seen_at TEXT DEFAULT (datetime('now')),
+            duplicate_count INTEGER NOT NULL DEFAULT 0,
+            webhook_type TEXT,
+            case_identifier TEXT,
+            customer_identifier TEXT,
+            processing_status TEXT NOT NULL DEFAULT 'processing',
+            processing_result TEXT,
+            failure_reason TEXT,
+            trace_id TEXT,
+            processed_at TEXT
+        );
+        CREATE TABLE monitoring_alert_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            monitoring_alert_id INTEGER NOT NULL,
+            application_id TEXT,
+            provider TEXT NOT NULL,
+            case_identifier TEXT,
+            alert_identifier TEXT,
+            match_identifier TEXT,
+            risk_identifier TEXT,
+            profile_identifier TEXT,
+            evidence_type TEXT,
+            matched_subject_name TEXT,
+            relationship_to_client TEXT,
+            match_category TEXT,
+            risk_indicator TEXT,
+            match_confidence TEXT,
+            source_title TEXT,
+            source_name TEXT,
+            source_url TEXT,
+            source_url_available INTEGER DEFAULT 0,
+            source_url_unavailable_reason TEXT,
+            publication_date TEXT,
+            snippet TEXT,
+            provider_case_url TEXT,
+            evidence_json TEXT,
+            raw_provider_reference TEXT,
+            evidence_status TEXT DEFAULT 'fetched',
+            evidence_hash TEXT NOT NULL,
+            fetched_at TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(monitoring_alert_id, evidence_hash)
+        );
         """
     )
     conn.execute(
@@ -136,6 +183,42 @@ def _normalized_for_context(context, hash_value="hash-scoped"):
     }
 
 
+def _normalized_with_media_evidence(hash_value="hash-media-evidence"):
+    return {
+        "provider": COMPLYADVANTAGE_PROVIDER_NAME,
+        "source_screening_report_hash": hash_value,
+        "subject_scope": "entity",
+        "provider_specific": {
+            COMPLYADVANTAGE_PROVIDER_NAME: {
+                "subject_scope": "entity",
+                "screening_subject": {"kind": "entity", "scope": "entity"},
+                "matches": [{
+                    "profile_identifier": "profile-1",
+                    "risk_id": "risk-1",
+                    "profile": {
+                        "company": {"names": {"values": [{"name": "Sprint Two Client Ltd"}]}},
+                        "match_details": {"match_score": 0.91, "matched_name": "Sprint Two Client Ltd"},
+                    },
+                    "rollups": {"has_adverse_media_hit": True},
+                    "indicators": [{
+                        "type": "CAMediaIndicator",
+                        "taxonomy_key": "r_adverse_media_general",
+                        "taxonomy_label": "Adverse Media",
+                        "value": {
+                            "title": "Regulatory enforcement article",
+                            "url": "https://example.test/article",
+                            "publication_date": "2026-05-01",
+                            "source_name": "Example News",
+                            "snippets": [{"text": "Example adverse media snippet"}],
+                        },
+                    }],
+                }],
+                "workflows": {"strict": {"alerts": [{"identifier": "alert-1"}]}},
+            }
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_process_sequence_writes_normalized_alert_subscription_and_agent(monkeypatch):
     conn = _db()
@@ -152,6 +235,7 @@ async def test_process_sequence_writes_normalized_alert_subscription_and_agent(m
         client_factory=lambda: object(),
         fetch_normalized=lambda client, envelope, context: _normalized(),
         agent_executor=agent,
+        webhook_id="wh-sequence-1",
     )
 
     assert result["status"] == "processed"
@@ -163,6 +247,9 @@ async def test_process_sequence_writes_normalized_alert_subscription_and_agent(m
     assert sub["monitoring_event_count"] == 1
     assert sub["last_webhook_type"] == "CASE_ALERT_LIST_UPDATED"
     agent.assert_called_once_with("app-1", {"db_path": "/tmp/test.db"})
+    delivery = conn.execute("SELECT processing_status, processing_result FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?", ("wh-sequence-1",)).fetchone()
+    assert delivery["processing_status"] == "processed"
+    assert delivery["processing_result"] == "success"
 
 
 @pytest.mark.asyncio
@@ -285,11 +372,11 @@ async def test_double_fire_idempotency_dedups_rows_but_counts_each_delivery(monk
         "fetch_normalized": lambda client, envelope, context: _normalized("hash-double-fire"),
     }
 
-    first = await process_complyadvantage_webhook(_envelope(), **kwargs)
-    second = await process_complyadvantage_webhook(_envelope(), **kwargs)
+    first = await process_complyadvantage_webhook(_envelope(), webhook_id="wh-double-fire", **kwargs)
+    second = await process_complyadvantage_webhook(_envelope(), webhook_id="wh-double-fire", **kwargs)
 
     assert first["status"] == "processed"
-    assert second["status"] == "processed"
+    assert second["status"] == "duplicate_ignored"
     assert conn.execute("SELECT COUNT(*) FROM screening_reports_normalized").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM monitoring_alerts").fetchone()[0] == 1
     sub = conn.execute(
@@ -297,5 +384,51 @@ async def test_double_fire_idempotency_dedups_rows_but_counts_each_delivery(monk
         "FROM screening_monitoring_subscriptions WHERE customer_identifier = ?",
         ("cust-1",),
     ).fetchone()
-    assert sub["monitoring_event_count"] == 2
+    assert sub["monitoring_event_count"] == 1
     assert sub["last_webhook_type"] == "CASE_ALERT_LIST_UPDATED"
+    delivery = conn.execute("SELECT duplicate_count FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?", ("wh-double-fire",)).fetchone()
+    assert delivery["duplicate_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_media_evidence_is_persisted_with_alert(monkeypatch):
+    conn = _db()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+
+    result = await process_complyadvantage_webhook(
+        _envelope(),
+        webhook_id="wh-media-evidence",
+        db_factory=lambda: NoCloseDB(conn),
+        client_factory=lambda: object(),
+        fetch_normalized=lambda client, envelope, context: _normalized_with_media_evidence(),
+    )
+
+    assert result["status"] == "processed"
+    alert = conn.execute("SELECT id FROM monitoring_alerts WHERE provider = ?", (COMPLYADVANTAGE_PROVIDER_NAME,)).fetchone()
+    evidence = conn.execute("SELECT * FROM monitoring_alert_evidence WHERE monitoring_alert_id = ?", (alert["id"],)).fetchone()
+    assert evidence is not None
+    assert evidence["evidence_type"] == "adverse_media"
+    assert evidence["matched_subject_name"] == "Sprint Two Client Ltd"
+    assert evidence["source_title"] == "Regulatory enforcement article"
+    assert evidence["source_url"] == "https://example.test/article"
+
+
+@pytest.mark.asyncio
+async def test_missing_article_link_stores_honest_limitation(monkeypatch):
+    conn = _db()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+    report = _normalized_with_media_evidence("hash-no-link")
+    report["provider_specific"][COMPLYADVANTAGE_PROVIDER_NAME]["matches"][0]["indicators"][0]["value"].pop("url")
+
+    await process_complyadvantage_webhook(
+        _envelope(),
+        webhook_id="wh-no-link",
+        db_factory=lambda: NoCloseDB(conn),
+        client_factory=lambda: object(),
+        fetch_normalized=lambda client, envelope, context: report,
+    )
+
+    evidence = conn.execute("SELECT source_url, source_url_available, source_url_unavailable_reason FROM monitoring_alert_evidence").fetchone()
+    assert evidence["source_url"] is None
+    assert evidence["source_url_available"] == 0
+    assert "not available from ComplyAdvantage payload" in evidence["source_url_unavailable_reason"]

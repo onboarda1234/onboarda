@@ -95,6 +95,8 @@ def _seed_monitoring_users_and_alerts(conn):
         )
     except Exception:
         conn.execute("INSERT OR IGNORE INTO applications (id, status) VALUES (?, ?)", ("app_s2", "approved"))
+    conn.execute("DELETE FROM monitoring_alert_evidence WHERE monitoring_alert_id IN (?, ?)", (9201, 9202))
+    conn.execute("DELETE FROM monitoring_alerts WHERE id IN (?, ?)", (9201, 9202))
     conn.execute(
         """
         INSERT INTO monitoring_alerts
@@ -115,6 +117,43 @@ def _seed_monitoring_users_and_alerts(conn):
             "complyadvantage",
             "case-s2",
             "manual",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO monitoring_alert_evidence
+            (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+             risk_identifier, profile_identifier, evidence_type, matched_subject_name,
+             relationship_to_client, match_category, risk_indicator, match_confidence,
+             source_title, source_name, source_url, source_url_available, publication_date,
+             snippet, evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            9201,
+            "app_s2",
+            "complyadvantage",
+            "case-s2",
+            "alert-s2",
+            "risk-s2",
+            "profile-s2",
+            "adverse_media",
+            "Sprint Two Client Ltd",
+            "Company",
+            "Adverse Media",
+            "Adverse Media",
+            "0.92",
+            "Provider article title",
+            "Provider News",
+            "",
+            0,
+            "2026-05-01",
+            "Provider snippet",
+            json.dumps({"indicator": {"type": "CAMediaIndicator"}}),
+            json.dumps({"risk_identifier": "risk-s2"}),
+            "fetched",
+            "hash-s2-evidence",
+            "2026-06-09T00:00:00Z",
         ),
     )
     conn.execute(
@@ -172,6 +211,9 @@ def test_alert_detail_returns_owner_application_and_audit_history(monitoring_api
     assert body["application_company_name"] == "Sprint Two Client Ltd"
     assert body["owner_name"] == "Admin S2"
     assert any(item["action"] == "monitoring.alert.review_started" for item in body["audit_history"])
+    assert body["provider_evidence"][0]["source_title"] == "Provider article title"
+    assert body["provider_evidence"][0]["source_url_available"] is False
+    assert body["provider_evidence"][0]["raw_provider_reference"]["risk_identifier"] == "risk-s2"
 
 
 def test_material_outcome_requires_note_server_side(monitoring_api_server):

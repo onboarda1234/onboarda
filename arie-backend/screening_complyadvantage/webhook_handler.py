@@ -12,12 +12,14 @@ jobs can repair inconsistent state.
 """
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import time
 
 import tornado.ioloop
 from pydantic import ValidationError
@@ -37,6 +39,7 @@ _STANDARD_WEBHOOK_ID_HEADER = "webhook-id"
 _STANDARD_WEBHOOK_TIMESTAMP_HEADER = "webhook-timestamp"
 _STANDARD_WEBHOOK_SIGNATURE_HEADER = "webhook-signature"
 _KNOWN_TYPES = {"CASE_CREATED", "CASE_ALERT_LIST_UPDATED"}
+_DEFAULT_TIMESTAMP_TOLERANCE_SECONDS = 300
 
 
 class ComplyAdvantageWebhookHandler(BaseHandler):
@@ -49,18 +52,21 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
         body = self.request.body
         trace_id = inbound_trace_id(self.request.headers.get("X-Request-ID"))
         signature_status = _signature_status(body, self.request.headers)
-        if signature_status == "invalid":
+        if signature_status in ("invalid", "malformed", "stale"):
+            event_name = "webhook_timestamp_stale" if signature_status == "stale" else "webhook_signature_invalid"
             logger.warning(
-                "ca_webhook_signature signature_mode=strict signature_invalid=true body_len=%d",
+                "ca_webhook_signature signature_mode=strict signature_status=%s body_len=%d",
+                signature_status,
                 len(body),
             )
             emit_metric(
-                "webhook_signature_failure",
+                event_name,
                 metric_name="WebhookSignatureFailures",
                 trace_id=trace_id,
                 component="webhook_handler",
                 outcome="failure",
                 signature_mode="strict",
+                signature_status=signature_status,
                 body_len=len(body),
             )
             emit_metric(
@@ -112,6 +118,15 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             )
         else:
             logger.info("ca_webhook_signature signature_mode=strict signature_valid=true body_len=%d", len(body))
+            emit_metric(
+                "webhook_signature_valid",
+                metric_name="WebhookSignatureValid",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="success",
+                signature_mode="strict",
+                body_len=len(body),
+            )
         emit_operational(
             "ca_webhook_received",
             trace_id=trace_id,
@@ -228,11 +243,17 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             customer_identifier=getattr(envelope.customer, "identifier", None),
         )
         self.set_status(202)
-        tornado.ioloop.IOLoop.current().spawn_callback(self._process_webhook_async, envelope, trace_id=trace_id)
+        webhook_id = _standard_webhook_id(self.request.headers)
+        tornado.ioloop.IOLoop.current().spawn_callback(
+            self._process_webhook_async,
+            envelope,
+            trace_id=trace_id,
+            webhook_id=webhook_id,
+        )
 
-    async def _process_webhook_async(self, envelope, trace_id=None):
+    async def _process_webhook_async(self, envelope, trace_id=None, webhook_id=None):
         try:
-            await _call_storage_callback(self._storage_callback, envelope, trace_id)
+            await _call_storage_callback(self._storage_callback, envelope, trace_id, webhook_id)
         except Exception:
             logger.error(
                 "ca_webhook_async_processing_failure webhook_type=%s case_identifier=%s",
@@ -264,25 +285,50 @@ def _verify_legacy_signature(body, signature, secret):
     return hmac.compare_digest(expected, signature or "")
 
 
-def _verify_standard_webhook_signature(body, headers, secret):
+def _verify_standard_webhook_signature(body, headers, secret, *, now=None, tolerance_seconds=None):
+    return _standard_webhook_signature_status(
+        body,
+        headers,
+        secret,
+        now=now,
+        tolerance_seconds=tolerance_seconds,
+    ) == "valid"
+
+
+def _standard_webhook_signature_status(body, headers, secret, *, now=None, tolerance_seconds=None):
     webhook_id = _header_value(headers, _STANDARD_WEBHOOK_ID_HEADER)
     timestamp = _header_value(headers, _STANDARD_WEBHOOK_TIMESTAMP_HEADER)
     signature_header = _header_value(headers, _STANDARD_WEBHOOK_SIGNATURE_HEADER)
     if not (webhook_id and timestamp and signature_header):
-        return False
+        return "malformed"
+    try:
+        timestamp_int = int(timestamp)
+    except (TypeError, ValueError):
+        return "malformed"
+    tolerance = _timestamp_tolerance_seconds() if tolerance_seconds is None else int(tolerance_seconds)
+    current = int(time.time() if now is None else now)
+    if abs(current - timestamp_int) > tolerance:
+        return "stale"
+    try:
+        key = base64.b64decode(secret, validate=True)
+    except (binascii.Error, ValueError):
+        return "malformed"
+    if len(key) != 32:
+        return "malformed"
     signed_content = b".".join([
         webhook_id.encode("utf-8"),
         timestamp.encode("utf-8"),
         body,
     ])
     expected = base64.b64encode(
-        hmac.new(secret.encode("utf-8"), signed_content, hashlib.sha256).digest()
+        hmac.new(key, signed_content, hashlib.sha256).digest()
     ).decode("ascii")
-    return any(
+    matched = any(
         hmac.compare_digest(expected, signature)
         for version, signature in _standard_signature_entries(signature_header)
         if version == "v1" and signature
     )
+    return "valid" if matched else "invalid"
 
 
 def _standard_signature_entries(signature_header):
@@ -313,10 +359,25 @@ def _header_value(headers, name):
 def _signature_status(body, headers):
     secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
     if secret:
+        if _has_standard_webhook_headers(headers):
+            return _standard_webhook_signature_status(body, headers, secret)
         return "valid" if _verify_signature(body, headers) else "invalid"
     if _environment() in ("staging", "production"):
         return "deployed_secret_missing"
     return "disabled_non_production"
+
+
+def _standard_webhook_id(headers):
+    return _header_value(headers, _STANDARD_WEBHOOK_ID_HEADER) if _has_standard_webhook_headers(headers) else None
+
+
+def _timestamp_tolerance_seconds():
+    raw = os.environ.get("COMPLYADVANTAGE_WEBHOOK_TOLERANCE_SECONDS", "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMESTAMP_TOLERANCE_SECONDS
+    return value if value > 0 else _DEFAULT_TIMESTAMP_TOLERANCE_SECONDS
 
 
 def _environment():
@@ -327,14 +388,21 @@ def _metric_signature_mode(signature_status):
     return {
         "valid": "strict",
         "invalid": "strict",
+        "malformed": "strict",
+        "stale": "strict",
         "deployed_secret_missing": "deployed_fail_closed",
         "disabled_non_production": "sandbox_fail_open",
     }.get(signature_status, "strict")
 
 
-async def _call_storage_callback(callback, envelope, trace_id):
+async def _call_storage_callback(callback, envelope, trace_id, webhook_id=None):
+    kwargs = {}
     if accepts_keyword(callback, "trace_id"):
-        return await callback(envelope, trace_id=trace_id)
+        kwargs["trace_id"] = trace_id
+    if accepts_keyword(callback, "webhook_id"):
+        kwargs["webhook_id"] = webhook_id
+    if kwargs:
+        return await callback(envelope, **kwargs)
     return await callback(envelope)
 
 
