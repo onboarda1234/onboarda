@@ -151,22 +151,23 @@ def test_monitoring_alerts_open_uses_full_page_detail_view_not_modal():
     assert "#monitoring-alerts/" in opener
 
 
-def test_monitoring_alert_detail_has_required_sprint2_sections():
+def test_monitoring_alert_detail_has_required_ma2c_sections():
     html = _html()
     renderer = _function_region(html, "renderMonitoringAlertDetailView", "openMonitoringAlertDetail")
 
     for label in [
-        "Alert Summary",
+        "Header / Summary",
         "Issue / Evidence",
-        "Compliance Impact",
-        "Recommended Next Step",
-        "Assignment",
-        "Officer Decision",
-        "Downstream Links",
+        "Officer Action",
         "Audit History",
         "Technical Details",
     ]:
         assert label in renderer or label in html
+
+    assert "monitoringDetailCard('Compliance Impact'" not in renderer
+    assert "monitoringDetailCard('Recommended Next Step'" not in renderer
+    assert "monitoringDetailCard('Assignment'" not in renderer
+    assert "monitoringDetailCard('Downstream Links'" not in renderer
 
 
 def test_monitoring_alert_detail_keeps_raw_payload_collapsed():
@@ -175,26 +176,34 @@ def test_monitoring_alert_detail_keeps_raw_payload_collapsed():
     evidence = _function_region(html, "monitoringAlertEvidenceHtml", "monitoringComplianceImpact")
 
     assert "<details" in technical
+    assert "data-monitoring-technical-details" in technical
     assert "<summary" in technical
     assert "Raw alert payload" in technical
+    assert "Raw provider evidence" in technical
     assert "JSON.stringify(raw, null, 2)" in technical
+    assert "JSON.stringify(providerEvidence, null, 2)" in technical
     assert "Detailed provider match evidence is not available in this alert payload." in evidence
     assert "Raw alert payload" not in evidence
+    assert "JSON.stringify" not in evidence
 
 
-def test_monitoring_alert_detail_renders_structured_provider_evidence_without_fake_links():
+def test_monitoring_alert_detail_renders_compact_provider_evidence_without_fake_links():
     html = _html()
     evidence = _function_region(html, "monitoringAlertProviderEvidenceRows", "monitoringAlertEvidenceHtml")
-    assert "source_title" in evidence
-    assert "source_name" in evidence
-    assert "publication_date" in evidence
     assert "match_confidence" in evidence
+    assert 'data-monitoring-provider-evidence-card="true"' in evidence
     assert "Evidence status" in evidence
-    assert "Evidence fetched" in evidence
     assert "Provider case ID" in evidence
-    assert "Provider risk / match ID" in evidence
+    assert "Provider alert ID" in evidence
+    assert "Category / risk indicator" in evidence
+    assert "Source link" in evidence
     assert "Source article link not available from ComplyAdvantage payload." in evidence
     assert "target=\"_blank\"" in evidence
+    assert "Evidence fetched" not in evidence
+    assert "Matched subject" not in evidence
+    assert "source_title" not in evidence
+    assert "publication_date" not in evidence
+    assert "Raw alert payload" not in evidence
 
 
 def test_monitoring_alert_audit_history_renders_readable_metadata_not_json():
@@ -220,10 +229,38 @@ def test_monitoring_alert_decision_and_assignment_controls_are_simplified():
 
     assert "Start Review" in decision
     assert "Choose Outcome" in decision
+    assert "Add Note" in decision
     assert "Save Decision" in decision
+    assert "Suggested action:" in decision
+    assert "Officer Action" in decision
     assert "Triage" not in decision
     assert "Mark as Reviewed" not in decision
 
+    assert 'data-monitoring-assignment-row="true"' in assignment
+    assert "Owner:" in assignment
+    assert "Assign to:" in assignment
     assert "Assign to me" in assignment
-    assert "Save assignment" in assignment
-    assert "Assign-to-officer is restricted to Administrator and Senior CO" in assignment
+    assert "Assign</button>" in assignment
+    assert "Add note" in assignment
+    assert "Refresh officer list" not in assignment
+    assert "Permission" not in assignment
+    assert "Save assignment" not in assignment
+    assert "monitoringDetailCard('Assignment'" not in assignment
+
+
+def test_monitoring_alert_open_application_prefers_ref_and_handles_missing_link():
+    html = _html()
+    target_region = _function_region(html, "monitoringAlertApplicationTarget", "openMonitoringAlertApplication")
+    open_region = _function_region(html, "openMonitoringAlertApplication", "monitoringAlertApplicationActionHtml")
+    action_region = _function_region(html, "monitoringAlertApplicationActionHtml", "renderMonitoringDownstreamLinks")
+    renderer = _function_region(html, "renderMonitoringAlertDetailView", "openMonitoringAlertDetail")
+
+    assert "alert.applicationRef || raw.application_ref || raw.ref || alert.applicationId || raw.application_id" in target_region
+    assert "fetchApplicationDetail(target)" in open_region
+    assert "renderAuthoritativeAppDetail(detailApp, { initialTab: 'overview' })" in open_region
+    assert "Application link unavailable for this alert." in open_region
+    assert "Application link unavailable for this alert." in action_region
+    assert "disabled title=\"Application link unavailable for this alert.\"" in action_region
+    assert 'id="monitoring-open-application-btn"' in action_region
+    assert "openMonitoringAlertApplication()" in action_region
+    assert "openAppDetail(" not in renderer
