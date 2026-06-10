@@ -11618,6 +11618,7 @@ function screeningQueueEvidenceReadinessPanel(row) {
   var providers = screeningEvidenceArrayText(summary.providers) || formatProviderName(row.provider || row.source || '');
   var partialMessage = summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : '');
   var missingSourceMessage = summary.source_url_unavailable_message || (items.some(function(item) { return !item.source_url; }) ? 'Source link not available from provider payload.' : '');
+  var qualityReason = summary.evidence_quality_reason || evidence.evidence_quality_reason || '';
   var summaryRows = evidenceInfoGrid([
     ['Client / application', (row.company_name || '') + (row.application_ref ? ' (' + row.application_ref + ')' : '')],
     ['Subject', row.subject_name],
@@ -11643,6 +11644,7 @@ function screeningQueueEvidenceReadinessPanel(row) {
       '<div>' +
         '<div style="font-size:13px;font-weight:800;color:var(--text1);">Screening Summary</div>' +
         '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Evidence readiness: ' + escapeHtml(qualityLabel) + '</div>' +
+        (qualityReason ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(qualityReason) + '</div>' : '') +
       '</div>' +
       '<span class="badge ' + screeningQueueEvidenceStatusClass(qualityLabel) + '">' + escapeHtml(qualityLabel) + '</span>' +
     '</div>' +

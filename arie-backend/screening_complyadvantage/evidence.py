@@ -59,7 +59,15 @@ def _entry_from_match(match: dict[str, Any], indicator: dict[str, Any], case_ide
                       alert_identifier: str | None, fetched_at: str) -> dict[str, Any]:
     value = indicator.get("value") if isinstance(indicator.get("value"), dict) else {}
     match_details = _match_details(match.get("profile"))
-    source_url = _first_non_empty(value.get("url"), value.get("source_url"), _nested(value, "canonical_url", "url"))
+    source_metadata = value.get("source_metadata") if isinstance(value.get("source_metadata"), dict) else {}
+    source_url = _first_non_empty(
+        value.get("url"),
+        value.get("source_url"),
+        value.get("raw_url"),
+        _nested(value, "canonical_url", "url"),
+        _nested(value, "source", "url"),
+        source_metadata.get("url"),
+    )
     entry = {
         "provider": COMPLYADVANTAGE_PROVIDER_NAME,
         "case_identifier": case_identifier,
@@ -81,12 +89,34 @@ def _entry_from_match(match: dict[str, Any], indicator: dict[str, Any], case_ide
             match.get("match_score"),
             match.get("confidence"),
         ),
-        "source_title": _first_non_empty(value.get("title"), value.get("headline"), value.get("name")),
-        "source_name": _first_non_empty(value.get("source_name"), value.get("publisher"), value.get("source_type")),
+        "source_title": _first_non_empty(
+            value.get("title"),
+            value.get("headline"),
+            value.get("name"),
+            value.get("list_name"),
+            value.get("authority"),
+            value.get("position"),
+        ),
+        "source_name": _first_non_empty(
+            value.get("source_name"),
+            value.get("publisher"),
+            value.get("source_type"),
+            source_metadata.get("source_name"),
+            source_metadata.get("source_identifier"),
+            source_metadata.get("source_type"),
+            value.get("authority"),
+            value.get("list_name"),
+        ),
         "source_url": source_url,
         "source_url_available": bool(source_url),
         "source_url_unavailable_reason": "" if source_url else SOURCE_LINK_UNAVAILABLE,
-        "publication_date": _first_non_empty(value.get("publication_date"), value.get("published_at"), value.get("date")),
+        "publication_date": _first_non_empty(
+            value.get("publication_date"),
+            value.get("published_at"),
+            value.get("date"),
+            value.get("start_date"),
+            value.get("active_start_date"),
+        ),
         "snippet": _snippet(value),
         "provider_case_url": "",
         "raw_provider_reference": {
@@ -201,7 +231,13 @@ def _snippet(value: dict[str, Any]) -> str:
         if isinstance(first, dict):
             return str(first.get("text") or "")
         return str(first)
-    return str(_first_non_empty(value.get("snippet"), value.get("summary")) or "")
+    return str(_first_non_empty(
+        value.get("snippet"),
+        value.get("summary"),
+        value.get("reason"),
+        value.get("position"),
+        value.get("status"),
+    ) or "")
 
 
 def _nested(value: dict[str, Any], *keys: str) -> Any:

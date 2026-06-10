@@ -15141,6 +15141,22 @@ def _screening_provider_evidence(results):
 _SCREENING_EVIDENCE_SOURCE_UNAVAILABLE = "Source link not available from provider payload."
 _SCREENING_EVIDENCE_PARTIAL = "Detailed provider evidence is partial or unavailable for this screening result."
 
+_SCREENING_EVIDENCE_REASON_LABELS = {
+    "available_decision_grade": "Decision-grade provider evidence is available.",
+    "linked_ca_provider_evidence": "Evidence linked from CA provider evidence.",
+    "provider_did_not_return_source_link": "Provider did not return source link.",
+    "missing_provider_case_identifier": "Missing provider case identifier.",
+    "missing_provider_identifiers": "Missing provider identifiers.",
+    "provider_payload_lacks_detail": "Provider payload does not include detailed evidence fields.",
+    "legacy_screening_row_no_evidence": "Evidence not available for legacy screening row.",
+    "screening_failed_before_evidence": "Provider screening failed before detailed evidence was available.",
+    "screening_not_complete_no_evidence": "Provider screening is not complete, so detailed evidence is not available yet.",
+    "clear_no_hit_source_detail_not_applicable": "Provider screening completed with no hits; source/article evidence is not applicable.",
+    "no_provider_evidence_rows_linked": "No provider evidence row could be safely linked.",
+    "evidence_fetch_failed": "Evidence fetch failed.",
+    "unavailable": "Detailed provider evidence is unavailable for this screening result.",
+}
+
 
 def _screening_evidence_text(value):
     if value in (None, "", [], {}):
@@ -15210,6 +15226,47 @@ def _screening_evidence_score(item):
         item.get("similarity"),
         item.get("match_strength"),
     )
+
+
+def _screening_evidence_row_provider(row):
+    parts = [
+        (row or {}).get("provider"),
+        (row or {}).get("source"),
+        (row or {}).get("screening_mode"),
+        (row or {}).get("provider_mode"),
+    ]
+    parts.extend((row or {}).get("entity_context") or [])
+    for evidence in (row or {}).get("provider_evidence") or []:
+        if isinstance(evidence, dict):
+            parts.extend([
+                evidence.get("provider"),
+                evidence.get("source"),
+                evidence.get("provider_case_identifier"),
+                evidence.get("provider_risk_identifier"),
+            ])
+    blob = _screening_evidence_norm(" ".join(_screening_evidence_text(part) for part in parts))
+    if "complyadvantage" in blob or "comply advantage" in blob:
+        return "complyadvantage"
+    if "sumsub" in blob:
+        return "sumsub"
+    if "opencorporates" in blob or "open corporates" in blob:
+        return "opencorporates"
+    return ""
+
+
+def _screening_evidence_linking_method(link_strategy, item=None):
+    strategy = _screening_evidence_norm(link_strategy)
+    item = item if isinstance(item, dict) else {}
+    if item.get("evidence_status") == "failed" or strategy == "failed":
+        return "failed"
+    if strategy.startswith("exact ") or strategy.startswith("exact_"):
+        return "exact_identifier"
+    if "same application provider subject category" in strategy or "conservative" in strategy:
+        return "conservative_subject_match"
+    if strategy == "stored screening result" or strategy == "stored_screening_result":
+        ids = _screening_evidence_provider_ids(item)
+        return "exact_identifier" if any(ids.values()) else "unavailable"
+    return "unavailable"
 
 
 def _screening_evidence_provider_ids(item):
@@ -15294,12 +15351,109 @@ def _screening_evidence_quality(items, row):
     if any(status == "failed" for status in statuses):
         return "failed"
     if not items:
-        return "failed" if (row or {}).get("status_key") == "failed" else "unavailable"
+        return "unavailable"
     if statuses and all(status == "available" for status in statuses):
         return "available"
     if any(status in ("available", "partial") for status in statuses):
         return "partial"
     return "unavailable"
+
+
+def _screening_evidence_reason_code(row, items, *, linked_count=0, monitoring_evidence_count=0):
+    row = row or {}
+    items = [item for item in items or [] if isinstance(item, dict)]
+    if any(item.get("evidence_status") == "failed" for item in items):
+        return "evidence_fetch_failed"
+    if linked_count:
+        if any(item.get("evidence_status") == "available" for item in items):
+            return "linked_ca_provider_evidence"
+    if not items:
+        status_key = _screening_evidence_norm(row.get("status_key"))
+        provider = _screening_evidence_row_provider(row)
+        try:
+            hits = int(row.get("total_hits") or 0)
+        except (TypeError, ValueError):
+            hits = 0
+        if status_key == "clear" and hits == 0:
+            return "clear_no_hit_source_detail_not_applicable"
+        if status_key == "failed":
+            return "screening_failed_before_evidence"
+        if status_key in ("not started", "awaiting screening", "screening in progress", "screening pending", "screening pending provider"):
+            return "screening_not_complete_no_evidence"
+        if provider in ("", "unknown"):
+            return "legacy_screening_row_no_evidence"
+        if monitoring_evidence_count:
+            return "no_provider_evidence_rows_linked"
+        return "unavailable"
+
+    ids_present = any(any(_screening_evidence_provider_ids(item).values()) for item in items)
+    case_present = any(_screening_evidence_provider_ids(item).get("case") for item in items)
+    has_detail = any(
+        item.get("source_name")
+        or item.get("source_title")
+        or item.get("source_url")
+        or item.get("publication_date")
+        or item.get("snippet")
+        or item.get("match_score")
+        for item in items
+    )
+    if not ids_present:
+        return "missing_provider_identifiers"
+    if not case_present:
+        return "missing_provider_case_identifier"
+    if not has_detail:
+        return "provider_payload_lacks_detail"
+    if any(not item.get("source_url") for item in items):
+        return "provider_did_not_return_source_link"
+    if all(item.get("evidence_status") == "available" for item in items):
+        return "available_decision_grade"
+    return "unavailable"
+
+
+def _screening_evidence_reason_label(code):
+    return _SCREENING_EVIDENCE_REASON_LABELS.get(code or "", _SCREENING_EVIDENCE_REASON_LABELS["unavailable"])
+
+
+def _screening_evidence_diagnostics(row, items, *, evidence_status, reason_code, monitoring_evidence_count, linked_count, link_notes):
+    row = row or {}
+    items = [item for item in items or [] if isinstance(item, dict)]
+    identifier_presence = {
+        "case": any(item.get("provider_case_id") for item in items),
+        "alert": any(item.get("provider_alert_id") for item in items),
+        "risk": any(item.get("provider_risk_id") for item in items),
+        "match": any(item.get("provider_match_id") or item.get("match_id") for item in items),
+        "profile": any(item.get("provider_profile_id") for item in items),
+    }
+    field_presence = {
+        "snippet": any(item.get("snippet") for item in items),
+        "source_name": any(item.get("source_name") for item in items),
+        "source_title": any(item.get("source_title") for item in items),
+        "source_url": any(item.get("source_url") for item in items),
+        "publication_date": any(item.get("publication_date") for item in items),
+        "match_score": any(item.get("match_score") for item in items),
+    }
+    provider = _screening_evidence_row_provider(row)
+    item_providers = sorted({item.get("provider") for item in items if item.get("provider")})
+    return {
+        "provider": item_providers[0] if len(item_providers) == 1 else (provider or "unknown"),
+        "subject_type": _screening_evidence_subject_type(row.get("subject_type")),
+        "category": sorted({item.get("category") for item in items if item.get("category")}),
+        "canonical_status": row.get("status_key"),
+        "has_provider_evidence_row": bool(items),
+        "monitoring_evidence_candidate_count": monitoring_evidence_count,
+        "linked_provider_evidence_count": linked_count,
+        "identifier_presence": identifier_presence,
+        "missing_identifier_types": sorted(key for key, present in identifier_presence.items() if not present),
+        "field_presence": field_presence,
+        "evidence_status": evidence_status,
+        "failure_reason": reason_code,
+        "quality_reason": _screening_evidence_reason_label(reason_code),
+        "linking_methods": sorted({
+            _screening_evidence_linking_method(note)
+            for note in (link_notes or [])
+            if _screening_evidence_linking_method(note) != "unavailable"
+        }) or ["unavailable"],
+    }
 
 
 def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=None):
@@ -15348,6 +15502,7 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
     }
     item["evidence_status"] = _screening_evidence_item_status(item)
     item["evidence_quality_label"] = _screening_evidence_status_label(item["evidence_status"])
+    item["linking_method"] = _screening_evidence_linking_method(item["link_strategy"], item)
     return item
 
 
@@ -15482,6 +15637,11 @@ def _monitoring_evidence_to_candidate(item):
     ref = item.get("alert_source_reference_json") or {}
     raw_ref = item.get("raw_provider_reference") or {}
     evidence_json = item.get("evidence_json") or {}
+    evidence_json_detail = _screening_media_detail_from_payload(evidence_json)
+    indicator = evidence_json.get("indicator") if isinstance(evidence_json.get("indicator"), dict) else {}
+    indicator_value = indicator.get("value") if isinstance(indicator.get("value"), dict) else {}
+    indicator_detail = _screening_media_detail_from_payload(indicator_value)
+    source_metadata = indicator_value.get("source_metadata") if isinstance(indicator_value.get("source_metadata"), dict) else {}
     return {
         "provider": item.get("provider"),
         "case_identifier": item.get("case_identifier") or ref.get("case_identifier"),
@@ -15496,13 +15656,50 @@ def _monitoring_evidence_to_candidate(item):
         "severity": item.get("severity"),
         "risk_indicator": item.get("risk_indicator"),
         "match_confidence": item.get("match_confidence"),
-        "source_title": item.get("source_title") or evidence_json.get("title"),
-        "source_name": item.get("source_name") or evidence_json.get("source_name"),
-        "source_url": item.get("source_url"),
+        "source_title": _first_non_empty(
+            item.get("source_title"),
+            evidence_json.get("title"),
+            indicator_detail.get("title"),
+            evidence_json_detail.get("title"),
+            indicator_value.get("list_name"),
+            indicator_value.get("authority"),
+        ),
+        "source_name": _first_non_empty(
+            item.get("source_name"),
+            evidence_json.get("source_name"),
+            indicator_value.get("source_name"),
+            indicator_value.get("publisher"),
+            indicator_value.get("source_type"),
+            source_metadata.get("source_name"),
+            source_metadata.get("source_identifier"),
+            indicator_value.get("authority"),
+            indicator_value.get("list_name"),
+        ),
+        "source_url": _first_non_empty(
+            item.get("source_url"),
+            evidence_json.get("source_url"),
+            indicator_detail.get("url"),
+            evidence_json_detail.get("url"),
+        ),
         "source_url_available": bool(item.get("source_url_available") and item.get("source_url")),
         "source_url_unavailable_reason": item.get("source_url_unavailable_reason"),
-        "publication_date": item.get("publication_date") or evidence_json.get("publication_date"),
-        "snippet": item.get("snippet") or item.get("alert_summary"),
+        "publication_date": _first_non_empty(
+            item.get("publication_date"),
+            evidence_json.get("publication_date"),
+            indicator_value.get("publication_date"),
+            indicator_value.get("published_at"),
+            indicator_value.get("date"),
+            indicator_value.get("start_date"),
+            indicator_value.get("active_start_date"),
+        ),
+        "snippet": _first_non_empty(
+            item.get("snippet"),
+            indicator_detail.get("snippet"),
+            evidence_json_detail.get("snippet"),
+            indicator_value.get("reason"),
+            indicator_value.get("position"),
+            item.get("alert_summary"),
+        ),
         "provider_case_url": item.get("provider_case_url"),
         "evidence_status": item.get("evidence_status"),
         "fetched_at": item.get("fetched_at"),
@@ -15632,6 +15829,13 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         existing_provider_keys.add(marker)
 
     evidence_status = _screening_evidence_quality(evidence_items, row)
+    reason_code = _screening_evidence_reason_code(
+        row,
+        evidence_items,
+        linked_count=len(linked_provider_evidence),
+        monitoring_evidence_count=len(monitoring_evidence or []),
+    )
+    reason_label = _screening_evidence_reason_label(reason_code)
     source_url_count = sum(1 for item in evidence_items if item.get("source_url"))
     unavailable_source_count = sum(1 for item in evidence_items if not item.get("source_url"))
     categories = sorted({item.get("category") for item in evidence_items if item.get("category")})
@@ -15644,6 +15848,13 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         "source_url_unavailable_count": unavailable_source_count,
         "source_url_unavailable_message": _SCREENING_EVIDENCE_SOURCE_UNAVAILABLE if unavailable_source_count else "",
         "partial_evidence_message": _screening_evidence_required_message(evidence_status),
+        "evidence_quality_reason": reason_label,
+        "evidence_failure_reason": reason_code,
+        "linking_method": sorted({
+            item.get("linking_method")
+            for item in evidence_items
+            if item.get("linking_method")
+        })[0] if evidence_items else ("failed" if reason_code == "evidence_fetch_failed" else "unavailable"),
         "categories": categories,
         "providers": providers,
         "provider_case_ids": sorted({item.get("provider_case_id") for item in evidence_items if item.get("provider_case_id")}),
@@ -15661,6 +15872,15 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
             "linked_ca_1b_evidence_count": len(linked_provider_evidence),
             "link_strategies": sorted(set(link_notes)),
             "legacy_provider_evidence_count": len([item for item in evidence_items if item.get("evidence_source") == "screening_result"]),
+            "diagnostics": _screening_evidence_diagnostics(
+                row,
+                evidence_items,
+                evidence_status=evidence_status,
+                reason_code=reason_code,
+                monitoring_evidence_count=len(monitoring_evidence or []),
+                linked_count=len(linked_provider_evidence),
+                link_notes=link_notes,
+            ),
         },
     }
     return row
