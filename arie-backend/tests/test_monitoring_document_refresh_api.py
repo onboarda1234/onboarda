@@ -176,6 +176,50 @@ def _auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+class _FakeCursor:
+    def __init__(self, *, one=None, many=None):
+        self._one = one
+        self._many = many or []
+
+    def fetchone(self):
+        return self._one
+
+    def fetchall(self):
+        return self._many
+
+
+class _NotificationInsertDb:
+    def __init__(self):
+        self.insert_params = None
+
+    def execute(self, sql, params=()):
+        if "SELECT id, documents_list" in sql:
+            return _FakeCursor(many=[])
+        if "INSERT INTO client_notifications" in sql:
+            self.insert_params = params
+            return _FakeCursor()
+        if "SELECT * FROM client_notifications" in sql:
+            return _FakeCursor(one={"id": 991, "read_status": self.insert_params[6]})
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+def test_updated_document_notification_uses_boolean_read_status_parameter():
+    from monitoring_document_refresh import _insert_client_notification
+
+    db = _NotificationInsertDb()
+    row = _insert_client_notification(
+        db,
+        {"application_id": "app_m3", "application_client_id": "client_m3"},
+        {"id": 9301},
+        "Updated Passport required",
+        "Please upload an updated copy.",
+        "2026-06-24",
+    )
+
+    assert db.insert_params[6] is False
+    assert row["read_status"] is False
+
+
 def _request_updated_document(base_url, token):
     return requests.patch(
         f"{base_url}/api/monitoring/alerts/9301",

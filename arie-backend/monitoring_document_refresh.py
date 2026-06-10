@@ -361,7 +361,7 @@ def _insert_client_notification(db, alert, requirement, label, message, due_date
         """
         INSERT INTO client_notifications
             (application_id, client_id, notification_type, title, message, documents_list, read_status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
         """,
         (
             app_id,
@@ -370,6 +370,7 @@ def _insert_client_notification(db, alert, requirement, label, message, due_date
             "Updated document required",
             message,
             json.dumps(documents_list, sort_keys=True),
+            False,
         ),
     )
     row = db.execute("SELECT * FROM client_notifications ORDER BY id DESC LIMIT 1").fetchone()
