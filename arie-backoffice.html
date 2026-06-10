@@ -17587,33 +17587,36 @@ function monitoringAlertSourceTitle(ref) {
   return ref && (ref.media_title || ref.title || ref.source_title || ref.source_name || ref.alert_identifier || '');
 }
 
+function monitoringAlertSourceUrl(ref) {
+  return ref && (ref.media_url || ref.source_url || ref.url || (ref.canonical_url && ref.canonical_url.url) || '');
+}
+
 function monitoringAlertProviderEvidenceRows(raw) {
   var evidence = Array.isArray(raw && raw.provider_evidence) ? raw.provider_evidence : [];
   if (!evidence.length) return '';
   return evidence.map(function(item, idx) {
     var sourceUrl = item.source_url || item.provider_case_url || '';
     var sourceValue = sourceUrl
-      ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(sourceUrl) + '</a>'
+      ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">Open source</a>'
       : escapeHtml(item.source_url_unavailable_reason || 'Source article link not available from ComplyAdvantage payload.');
-    return '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);margin-top:' + (idx ? '8px' : '12px') + ';">' +
-      '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-bottom:8px;">Provider evidence ' + escapeHtml(String(idx + 1)) + '</div>' +
+    var category = item.match_category || item.evidence_type || '';
+    var risk = item.risk_indicator || '';
+    var categoryRisk = [category, risk].filter(Boolean).join(' / ');
+    var snippet = String(item.snippet || '').trim();
+    return '<div data-monitoring-provider-evidence-card="true" style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);margin-top:' + (idx ? '8px' : '10px') + ';">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px;">' +
+        '<div style="font-size:12px;font-weight:800;color:var(--text1);">Provider evidence ' + escapeHtml(String(idx + 1)) + '</div>' +
+        '<span class="badge draft">' + escapeHtml(item.evidence_status || 'partial') + '</span>' +
+      '</div>' +
       monitoringInfoGrid([
         ['Evidence status', monitoringTextValue(item.evidence_status, 'Not available')],
-        ['Evidence fetched', monitoringTextValue(item.fetched_at, 'Not available')],
         ['Provider case ID', monitoringTextValue(item.case_identifier, 'Not available')],
         ['Provider alert ID', monitoringTextValue(item.alert_identifier, 'Not available')],
-        ['Provider risk / match ID', monitoringTextValue(item.risk_identifier || item.match_identifier || item.profile_identifier, 'Not available')],
-        ['Matched subject', monitoringTextValue(item.matched_subject_name, 'Not available')],
-        ['Relationship', monitoringTextValue(item.relationship_to_client, 'Unknown')],
-        ['Match category', monitoringTextValue(item.match_category || item.evidence_type, 'Not available')],
-        ['Risk indicator', monitoringTextValue(item.risk_indicator, 'Not available')],
+        ['Category / risk indicator', monitoringTextValue(categoryRisk, 'Not available')],
         ['Confidence', monitoringTextValue(item.match_confidence, 'Not available')],
-        ['Source title', monitoringTextValue(item.source_title, 'Not available')],
-        ['Publication / source', monitoringTextValue(item.source_name, 'Not available')],
-        ['Publication date', monitoringTextValue(item.publication_date, 'Not available')],
-        ['Article / source link', sourceValue],
-        ['Snippet / summary', monitoringTextValue(item.snippet, 'Not available')]
+        ['Source link', sourceValue]
       ]) +
+      (snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">' + escapeHtml(snippet) + '</div>' : '') +
     '</div>';
   }).join('');
 }
@@ -17623,13 +17626,18 @@ function monitoringAlertEvidenceHtml(alert) {
   var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
   if (alert.typeKey === 'adverse_media' || alert.typeKey === 'pep_change' || alert.typeKey === 'sanctions_change') {
     var providerEvidenceRows = monitoringAlertProviderEvidenceRows(raw);
+    var sourceUrl = monitoringAlertSourceUrl(ref);
+    var sourceLinkAvailability = sourceUrl
+      ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">Open source</a>'
+      : 'Source article link not available from ComplyAdvantage payload.';
     var availableRows = monitoringInfoGrid([
       ['Matched subject name', monitoringTextValue(monitoringAlertSubjectName(raw, ref), 'Not available')],
       ['Relationship to client', monitoringTextValue(monitoringAlertRelationship(raw, ref), 'Unknown')],
       ['Provider', monitoringTextValue(monitoringProviderLabel(raw, ref), 'Not available')],
       ['Number of matches', monitoringTextValue(monitoringAlertMatchCount(raw, ref), 'Not available')],
       ['Top risk indicator', monitoringTextValue(monitoringAlertTopIndicator(raw, ref), 'Not available')],
-      ['Source title / reference', monitoringTextValue(monitoringAlertSourceTitle(ref) || raw.source_reference, 'Not available')],
+      ['Source title / reference', monitoringTextValue(monitoringAlertSourceTitle(ref), 'Not available')],
+      ['Source link availability', sourceLinkAvailability],
       ['Match confidence', monitoringTextValue(ref.match_confidence || ref.confidence || ref.match_score, 'Not available')],
       ['Date detected', monitoringTextValue(raw.discovered_at || raw.created_at || alert.date, 'Not available')]
     ]);
@@ -17704,14 +17712,15 @@ function monitoringAlertIsTerminal(alert) {
 
 function renderMonitoringDecisionSection(alert) {
   if (monitoringAlertIsTerminal(alert)) {
-    return monitoringDetailCard('Officer Decision', '<div style="font-size:13px;color:var(--text3);">This alert is already in a terminal or downstream-routed state. Decisions are read-only from this view.</div>');
+    return monitoringDetailCard('Officer Action', '<div style="font-size:13px;color:var(--text3);">This alert is already in a terminal or downstream-routed state. Decisions are read-only from this view.</div>');
   }
   var options = monitoringOutcomeOptions(alert).map(function(opt) {
     return '<option value="' + escapeHtml(opt[0]) + '">' + escapeHtml(opt[1]) + '</option>';
   }).join('');
-  return monitoringDetailCard('Officer Decision',
+  return monitoringDetailCard('Officer Action',
     '<div style="display:grid;gap:12px;">' +
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-start-review-btn" onclick="startMonitoringAlertReview()">Start Review</button><span style="font-size:12px;color:var(--text3);">Step 1 of 4</span></div>' +
+      '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Suggested action: ' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-start-review-btn" onclick="startMonitoringAlertReview()">Start Review</button></div>' +
       '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:start;">' +
         '<div><div class="form-label">Choose Outcome</div><select class="form-select" id="monitoring-alert-outcome" onchange="updateMonitoringDecisionNoteHint()"><option value="">Select outcome</option>' + options + '</select></div>' +
         '<div><div class="form-label">Add Note <span id="monitoring-alert-note-required" style="color:var(--red);display:none;">*</span></div><textarea class="form-input" id="monitoring-alert-decision-note" rows="4" placeholder="Record the rationale, evidence considered, and next operational step."></textarea><div id="monitoring-alert-decision-hint" style="font-size:11px;color:var(--text3);margin-top:4px;">Notes are mandatory for material outcomes and high/critical alerts.</div></div>' +
@@ -17731,25 +17740,57 @@ function renderMonitoringAssignmentSection(alert) {
   }).join('');
   var currentOwner = alert.owner && alert.owner !== 'Unassigned' ? alert.owner : 'Unassigned';
   if (monitoringAlertIsTerminal(alert)) {
-    return monitoringDetailCard('Assignment', monitoringInfoGrid([['Current owner', monitoringTextValue(currentOwner, 'Unassigned')]]) + '<div style="font-size:12px;color:var(--text3);margin-top:10px;">Assignment is read-only because this alert is terminal or already routed downstream.</div>');
+    return '<div data-monitoring-assignment-row="true" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border1);font-size:12px;color:var(--text2);">' +
+      '<strong style="color:var(--text1);">Owner:</strong> <span>' + monitoringTextValue(currentOwner, 'Unassigned') + '</span>' +
+      '<span style="color:var(--text3);">Assignment is read-only for terminal or downstream-routed alerts.</span>' +
+    '</div>';
   }
-  return monitoringDetailCard('Assignment',
-    '<div style="display:grid;gap:12px;">' +
-      monitoringInfoGrid([['Current owner', monitoringTextValue(currentOwner, 'Unassigned')], ['Permission', monitoringTextValue(canAssignOthers ? 'Can assign to another officer' : 'Can assign to self only', '')]]) +
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-outline btn-sm" onclick="assignMonitoringAlertToSelf()">Assign to me</button>' +
-        (canAssignOthers ? '<button class="btn btn-outline btn-sm" onclick="loadMonitoringAssignmentUsers()">Refresh officer list</button>' : '') + '</div>' +
-      (canAssignOthers ? '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:end;"><div><div class="form-label">Officer</div><select class="form-select" id="monitoring-alert-assignee"><option value="">Select officer</option>' + opts + '</select></div><div><div class="form-label">Assignment note</div><input class="form-input" id="monitoring-alert-assignment-note" placeholder="Optional reason or context for reassignment" /></div><div><button class="btn btn-primary btn-sm" onclick="saveMonitoringAlertAssignment()">Save assignment</button></div></div>' : '<div style="font-size:12px;color:var(--text3);">Assign-to-officer is restricted to Administrator and Senior CO roles by the existing permission model.</div>') +
-      '<div id="monitoring-alert-assignment-result" style="font-size:12px;"></div>' +
-    '</div>'
-  );
+  return '<div data-monitoring-assignment-row="true" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border1);">' +
+    '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">Owner:</strong> ' + monitoringTextValue(currentOwner, 'Unassigned') + '</span>' +
+    '<button class="btn btn-outline btn-sm" onclick="assignMonitoringAlertToSelf()">Assign to me</button>' +
+    (canAssignOthers ? '<label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text2);"><span>Assign to:</span><select class="form-select" id="monitoring-alert-assignee" style="min-width:220px;"><option value="">Select officer</option>' + opts + '</select></label><button class="btn btn-primary btn-sm" onclick="saveMonitoringAlertAssignment()">Assign</button><details style="font-size:12px;color:var(--text3);"><summary style="cursor:pointer;">Add note</summary><input class="form-input" id="monitoring-alert-assignment-note" placeholder="Optional assignment note" style="margin-top:6px;min-width:260px;" /></details>' : '<span style="font-size:12px;color:var(--text3);">Assign-to-officer is restricted by role.</span>') +
+    '<span id="monitoring-alert-assignment-result" style="font-size:12px;"></span>' +
+  '</div>';
+}
+
+function monitoringAlertApplicationTarget(alert) {
+  var raw = (alert && alert.raw) || {};
+  return alert && (alert.applicationRef || raw.application_ref || raw.ref || alert.applicationId || raw.application_id || '');
+}
+
+async function openMonitoringAlertApplication() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  var target = monitoringAlertApplicationTarget(alert);
+  if (!target) {
+    showToast('Application link unavailable for this alert.', 'error');
+    return;
+  }
+  var btn = document.getElementById('monitoring-open-application-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening...'; }
+  try {
+    var detailApp = await fetchApplicationDetail(target);
+    renderAuthoritativeAppDetail(detailApp, { initialTab: 'overview' });
+  } catch(err) {
+    showToast('Application link unavailable for this alert.', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Open application'; }
+  }
+}
+
+function monitoringAlertApplicationActionHtml(alert) {
+  var target = monitoringAlertApplicationTarget(alert);
+  if (target) {
+    return '<button class="btn btn-outline btn-sm" id="monitoring-open-application-btn" data-application-target="' + escapeHtml(String(target)) + '" onclick="openMonitoringAlertApplication()">Open application</button>';
+  }
+  return '<button class="btn btn-outline btn-sm" disabled title="Application link unavailable for this alert.">Open application</button><span style="font-size:12px;color:var(--text3);">Application link unavailable for this alert.</span>';
 }
 
 function renderMonitoringDownstreamLinks(alert) {
   var links = [];
-  if (alert.applicationId) links.push('<button class="btn btn-outline btn-sm" onclick="openAppDetail(' + JSON.stringify(alert.applicationId) + ')">Open related application</button>');
+  links.push(monitoringAlertApplicationActionHtml(alert));
   if (alert.linked_periodic_review_id != null) links.push('<button class="btn btn-outline btn-sm" onclick="openReviewDetailById(' + JSON.stringify(alert.linked_periodic_review_id) + ')">Open periodic review #' + escapeHtml(String(alert.linked_periodic_review_id)) + '</button>');
   if (alert.linked_edd_case_id != null) links.push('<button class="btn btn-outline btn-sm" onclick="openEDDDetail(' + JSON.stringify(alert.linked_edd_case_id) + ')">Open EDD case #' + escapeHtml(String(alert.linked_edd_case_id)) + '</button>');
-  return monitoringDetailCard('Downstream Links', links.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + links.join('') + '</div>' : '<div style="font-size:13px;color:var(--text3);">No downstream review or EDD case is linked yet.</div>');
+  return '<div data-monitoring-related-actions="true" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border1);">' + links.join('') + '</div>';
 }
 
 function monitoringAuditLabel(action) {
@@ -17801,15 +17842,17 @@ function renderMonitoringAuditHistory(alert, history) {
 function renderMonitoringTechnicalDetails(alert, auditHistory) {
   var raw = (alert && alert.raw) || {};
   var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
+  var providerEvidence = Array.isArray(raw.provider_evidence) ? raw.provider_evidence : [];
   var idRows = monitoringInfoGrid([
     ['Alert ID', monitoringTextValue(raw.id || alert.id, '')],
     ['Application ID', monitoringTextValue(raw.application_id || alert.applicationId, '')],
+    ['Application reference', monitoringTextValue(raw.application_ref || alert.applicationRef, '')],
     ['Provider case ID', monitoringTextValue(raw.case_identifier || ref.case_identifier, '')],
     ['Provider alert ID', monitoringTextValue(ref.alert_identifier || raw.provider_alert_id, '')],
     ['Normalized record ID', monitoringTextValue(ref.normalized_record_id, '')],
     ['Backfill run ID', monitoringTextValue(raw.backfill_run_id, '')]
   ]);
-  return '<details style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 16px;"><summary style="cursor:pointer;font-size:14px;font-weight:800;color:var(--text1);">Technical Details</summary><div style="margin-top:12px;">' + idRows + '</div><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw alert payload</div><pre style="margin-top:6px;max-height:260px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(raw, null, 2)) + '</pre><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw audit metadata</div><pre style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(auditHistory || [], null, 2)) + '</pre></details>';
+  return '<details data-monitoring-technical-details="true" style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 16px;"><summary style="cursor:pointer;font-size:14px;font-weight:800;color:var(--text1);">Technical Details</summary><div style="margin-top:12px;">' + idRows + '</div><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw provider evidence</div><pre style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(providerEvidence, null, 2)) + '</pre><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw alert payload</div><pre style="margin-top:6px;max-height:260px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(raw, null, 2)) + '</pre><div style="margin-top:12px;font-size:11px;color:var(--text3);font-weight:700;">Raw audit metadata</div><pre style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;">' + escapeHtml(JSON.stringify(auditHistory || [], null, 2)) + '</pre></details>';
 }
 
 function renderMonitoringAlertDetailView() {
@@ -17843,7 +17886,7 @@ function renderMonitoringAlertDetailView() {
   var statusBadge = '<span class="badge ' + monitoringStatusBadgeClass(alert.statusKey) + '">' + escapeHtml(alert.status) + '</span>';
   var severityBadge = '<span class="badge ' + monitoringSeverityBadgeClass(alert.severityKey) + '">' + escapeHtml(alert.severity) + '</span>';
   body.innerHTML =
-    monitoringDetailCard('Alert Summary', monitoringInfoGrid([
+    monitoringDetailCard('Header / Summary', monitoringInfoGrid([
       ['Client name', monitoringTextValue(alert.client, 'Unmapped client')],
       ['Application reference', monitoringTextValue(alert.applicationRef || alert.applicationId, 'Not available')],
       ['Alert type', monitoringTextValue(alert.type, 'Other')],
@@ -17852,15 +17895,10 @@ function renderMonitoringAlertDetailView() {
       ['Owner', monitoringTextValue(alert.owner, 'Unassigned')],
       ['Date detected', monitoringTextValue(raw.discovered_at || raw.created_at || alert.date, 'Not available')],
       ['Age / due status', monitoringTextValue(monitoringAlertAgeDueLabel(alert), 'Not available')],
-      ['Source / provider', monitoringTextValue(monitoringProviderLabel(raw, parseMonitoringSourceReference(raw.source_reference)), 'Not available')],
-      ['Related application', alert.applicationId ? '<button class="btn btn-outline btn-sm" onclick="openAppDetail(' + JSON.stringify(alert.applicationId) + ')">Open application</button>' : 'Not available']
-    ])) +
+      ['Source / provider', monitoringTextValue(monitoringProviderLabel(raw, parseMonitoringSourceReference(raw.source_reference)), 'Not available')]
+    ]) + renderMonitoringDownstreamLinks(alert) + renderMonitoringAssignmentSection(alert)) +
     monitoringDetailCard('Issue / Evidence', monitoringAlertEvidenceHtml(alert)) +
-    monitoringDetailCard('Compliance Impact', '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(monitoringComplianceImpact(alert)) + '</div>') +
-    monitoringDetailCard('Recommended Next Step', '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>') +
-    renderMonitoringAssignmentSection(alert) +
     renderMonitoringDecisionSection(alert) +
-    renderMonitoringDownstreamLinks(alert) +
     renderMonitoringAuditHistory(alert, state.auditHistory || []) +
     renderMonitoringTechnicalDetails(alert, state.auditHistory || []);
   updateMonitoringDecisionNoteHint();
