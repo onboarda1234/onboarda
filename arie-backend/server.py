@@ -15138,6 +15138,534 @@ def _screening_provider_evidence(results):
     return evidence
 
 
+_SCREENING_EVIDENCE_SOURCE_UNAVAILABLE = "Source link not available from provider payload."
+_SCREENING_EVIDENCE_PARTIAL = "Detailed provider evidence is partial or unavailable for this screening result."
+
+
+def _screening_evidence_text(value):
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(v) for v in value if v not in (None, "", [], {}))
+    return str(value).strip()
+
+
+def _screening_evidence_norm(value):
+    return " ".join(_screening_evidence_text(value).lower().replace("_", " ").replace("-", " ").split())
+
+
+def _screening_evidence_subject_type(value):
+    token = _screening_evidence_norm(value)
+    if token in ("company", "entity", "legal entity", "business", "organisation", "organization"):
+        return "entity"
+    if token in ("ubo", "ultimate beneficial owner", "beneficial owner"):
+        return "ubo"
+    if token in ("director", "shareholder", "intermediary", "authorised signatory", "authorized signatory"):
+        return token.replace(" ", "_")
+    if token in ("person", "individual", "screening subject", "subject"):
+        return "unknown"
+    return token or "unknown"
+
+
+def _screening_evidence_relationship(row):
+    subject_type = _screening_evidence_subject_type((row or {}).get("subject_type"))
+    labels = {
+        "entity": "Company / applicant entity",
+        "director": "Director",
+        "ubo": "UBO",
+        "shareholder": "Shareholder",
+        "intermediary": "Intermediary",
+        "authorised_signatory": "Authorised signatory",
+        "authorized_signatory": "Authorised signatory",
+    }
+    return labels.get(subject_type, "Screening subject")
+
+
+def _screening_evidence_category(*values):
+    text = _screening_evidence_norm(" ".join(_screening_evidence_text(v) for v in values))
+    if "adverse" in text or "media" in text:
+        return "Adverse Media"
+    if "pep" in text or "politically exposed" in text or "political" in text:
+        return "PEP"
+    if "sanction" in text:
+        return "Sanctions"
+    if "watchlist" in text or "warning" in text:
+        return "Watchlist"
+    return "Other"
+
+
+def _screening_evidence_source_url(item):
+    return _first_non_empty(
+        item.get("source_url"),
+        item.get("media_url"),
+        item.get("url"),
+    )
+
+
+def _screening_evidence_score(item):
+    return _first_non_empty(
+        item.get("match_score"),
+        item.get("match_confidence"),
+        item.get("confidence"),
+        item.get("similarity"),
+        item.get("match_strength"),
+    )
+
+
+def _screening_evidence_provider_ids(item):
+    return {
+        "case": _screening_evidence_text(_first_non_empty(
+            item.get("provider_case_id"),
+            item.get("provider_case_identifier"),
+            item.get("case_identifier"),
+        )),
+        "alert": _screening_evidence_text(_first_non_empty(
+            item.get("provider_alert_id"),
+            item.get("provider_alert_identifier"),
+            item.get("alert_identifier"),
+        )),
+        "risk": _screening_evidence_text(_first_non_empty(
+            item.get("provider_risk_id"),
+            item.get("provider_risk_identifier"),
+            item.get("risk_identifier"),
+            item.get("risk_id"),
+        )),
+        "match": _screening_evidence_text(_first_non_empty(
+            item.get("provider_match_id"),
+            item.get("provider_match_identifier"),
+            item.get("match_identifier"),
+            item.get("match_id"),
+        )),
+        "profile": _screening_evidence_text(_first_non_empty(
+            item.get("provider_profile_id"),
+            item.get("provider_profile_identifier"),
+            item.get("profile_identifier"),
+        )),
+    }
+
+
+def _screening_evidence_item_status(item):
+    raw = _screening_evidence_norm(item.get("evidence_status"))
+    if raw in ("failed", "error", "fetch failed", "unavailable failed"):
+        return "failed"
+
+    ids = _screening_evidence_provider_ids(item)
+    has_identifier = any(ids.values())
+    has_source_context = bool(
+        item.get("source_name")
+        or item.get("source_title")
+        or item.get("snippet")
+        or item.get("summary")
+        or item.get("publication_date")
+    )
+    has_url = bool(item.get("source_url"))
+    has_score = bool(item.get("match_score"))
+    has_category = item.get("category") not in (None, "", "Other")
+
+    if has_category and has_identifier and has_source_context and (has_url or has_score or item.get("publication_date")):
+        return "available"
+    if has_category or has_identifier or has_source_context:
+        return "partial"
+    return "unavailable"
+
+
+def _screening_evidence_status_label(status):
+    return {
+        "complete": "Complete",
+        "available": "Complete",
+        "partial": "Partial",
+        "unavailable": "Unavailable",
+        "failed": "Failed",
+    }.get(status, "Unavailable")
+
+
+def _screening_evidence_required_message(status):
+    if status == "failed":
+        return "Detailed provider evidence could not be fetched or linked for this screening result."
+    if status == "unavailable":
+        return "Detailed provider evidence is unavailable for this screening result."
+    if status == "partial":
+        return _SCREENING_EVIDENCE_PARTIAL
+    return ""
+
+
+def _screening_evidence_quality(items, row):
+    statuses = [item.get("evidence_status") for item in items if isinstance(item, dict)]
+    if any(status == "failed" for status in statuses):
+        return "failed"
+    if not items:
+        return "failed" if (row or {}).get("status_key") == "failed" else "unavailable"
+    if statuses and all(status == "available" for status in statuses):
+        return "available"
+    if any(status in ("available", "partial") for status in statuses):
+        return "partial"
+    return "unavailable"
+
+
+def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=None):
+    evidence = evidence if isinstance(evidence, dict) else {}
+    ids = _screening_evidence_provider_ids(evidence)
+    category = _screening_evidence_category(
+        evidence.get("category"),
+        evidence.get("match_category"),
+        evidence.get("match_categories"),
+        evidence.get("risk_type_labels"),
+        evidence.get("risk_indicator"),
+        evidence.get("evidence_type"),
+    )
+    source_url = _screening_evidence_text(_screening_evidence_source_url(evidence))
+    item = {
+        "subject_name": _screening_evidence_text(row.get("subject_name")),
+        "subject_type": _screening_evidence_subject_type(row.get("subject_type")),
+        "relationship_to_application": _screening_evidence_text(evidence.get("relationship_to_client")) or _screening_evidence_relationship(row),
+        "application_id": row.get("application_id"),
+        "application_ref": row.get("application_ref"),
+        "company_name": row.get("company_name"),
+        "provider": _screening_evidence_text(_first_non_empty(evidence.get("provider"), evidence.get("source"), row.get("provider"), row.get("source"))),
+        "provider_case_id": ids["case"],
+        "provider_alert_id": ids["alert"],
+        "provider_risk_id": ids["risk"],
+        "provider_match_id": ids["match"],
+        "match_id": ids["match"],
+        "provider_profile_id": ids["profile"],
+        "category": category,
+        "severity": _screening_evidence_text(_first_non_empty(evidence.get("severity"), evidence.get("risk_indicator"))),
+        "total_hits": row.get("total_hits"),
+        "match_score": _screening_evidence_text(_screening_evidence_score(evidence)),
+        "source_name": _screening_evidence_text(_first_non_empty(evidence.get("source_name"), evidence.get("publisher"), evidence.get("authority"), evidence.get("list_name"))),
+        "source_title": _screening_evidence_text(_first_non_empty(evidence.get("source_title"), evidence.get("media_title"), evidence.get("title"))),
+        "source_url": source_url,
+        "source_url_available": bool(source_url),
+        "source_url_unavailable_message": "" if source_url else _SCREENING_EVIDENCE_SOURCE_UNAVAILABLE,
+        "provider_case_url": _screening_evidence_text(evidence.get("provider_case_url")),
+        "publication_date": _screening_evidence_text(evidence.get("publication_date")),
+        "snippet": _screening_evidence_text(_first_non_empty(evidence.get("snippet"), evidence.get("media_snippet"), evidence.get("summary"))),
+        "evidence_fetched_at": _screening_evidence_text(_first_non_empty(evidence.get("fetched_at"), evidence.get("discovered_at"))),
+        "officer_disposition": row.get("review_disposition"),
+        "review_history_summary": _screening_review_summary(row),
+        "evidence_source": source,
+        "link_strategy": link_strategy or source,
+    }
+    item["evidence_status"] = _screening_evidence_item_status(item)
+    item["evidence_quality_label"] = _screening_evidence_status_label(item["evidence_status"])
+    return item
+
+
+def _screening_evidence_provider_shape(item):
+    return {
+        "provider": item.get("provider"),
+        "subject_scope": item.get("subject_type"),
+        "provider_case_identifier": item.get("provider_case_id"),
+        "provider_alert_identifier": item.get("provider_alert_id"),
+        "provider_risk_identifier": item.get("provider_risk_id"),
+        "provider_profile_identifier": item.get("provider_profile_id"),
+        "match_identifier": item.get("provider_match_id"),
+        "matched_name": item.get("subject_name"),
+        "name": item.get("subject_name"),
+        "match_category": item.get("category"),
+        "match_categories": [item.get("category")] if item.get("category") else [],
+        "risk_type_labels": [item.get("category")] if item.get("category") else [],
+        "summary": item.get("snippet"),
+        "media_title": item.get("source_title"),
+        "media_url": item.get("source_url"),
+        "media_snippet": item.get("snippet"),
+        "source_name": item.get("source_name"),
+        "source_url": item.get("source_url"),
+        "source_url_available": item.get("source_url_available"),
+        "source_url_unavailable_message": item.get("source_url_unavailable_message"),
+        "publication_date": item.get("publication_date"),
+        "match_confidence": item.get("match_score"),
+        "evidence_status": item.get("evidence_status"),
+        "fetched_at": item.get("evidence_fetched_at"),
+        "discovered_at": item.get("evidence_fetched_at"),
+    }
+
+
+def _screening_evidence_item_key(item):
+    provider = _screening_evidence_text(item.get("provider")).lower()
+    ids = [
+        item.get("provider_case_id"),
+        item.get("provider_alert_id"),
+        item.get("provider_risk_id"),
+        item.get("provider_match_id"),
+        item.get("provider_profile_id"),
+    ]
+    id_key = "|".join(_screening_evidence_text(value).lower() for value in ids if value)
+    if id_key:
+        return f"{provider}|{id_key}"
+    source_key = "|".join(
+        _screening_evidence_text(value).lower()
+        for value in (item.get("source_url"), item.get("source_title"), item.get("snippet"))
+        if value
+    )
+    return f"{provider}|{source_key}" if source_key else ""
+
+
+def _screening_evidence_dedup(items):
+    deduped = []
+    seen = {}
+    rank = {"failed": 0, "unavailable": 1, "partial": 2, "available": 3, "complete": 3}
+    for item in items:
+        key = _screening_evidence_item_key(item) or json.dumps(item, sort_keys=True, default=str)
+        if key in seen:
+            existing_index = seen[key]
+            existing = deduped[existing_index]
+            item_rank = rank.get(item.get("evidence_status"), 0)
+            existing_rank = rank.get(existing.get("evidence_status"), 0)
+            if (
+                item_rank > existing_rank
+                or (
+                    item_rank == existing_rank
+                    and item.get("evidence_source") == "ca_1b_monitoring_evidence"
+                    and existing.get("evidence_source") != "ca_1b_monitoring_evidence"
+                )
+            ):
+                deduped[existing_index] = item
+            continue
+        seen[key] = len(deduped)
+        deduped.append(item)
+    return deduped
+
+
+def _screening_review_summary(row):
+    if not row or not row.get("review_disposition"):
+        return ""
+    parts = [
+        _screening_evidence_text(row.get("review_disposition")).replace("_", " "),
+        _screening_evidence_text(row.get("review_disposition_code")).replace("_", " "),
+        _screening_evidence_text(row.get("reviewed_by")),
+        _screening_evidence_text(row.get("reviewed_at")),
+    ]
+    return " · ".join(part for part in parts if part)
+
+
+def _load_monitoring_evidence_batch(db, application_ids):
+    application_ids = [app_id for app_id in dict.fromkeys(application_ids or []) if app_id]
+    if not application_ids:
+        return {}
+    placeholders = ",".join("?" for _ in application_ids)
+    try:
+        rows = db.execute(
+            f"""
+            SELECT e.monitoring_alert_id, COALESCE(e.application_id, a.application_id) AS application_id,
+                   e.provider, e.case_identifier, e.alert_identifier, e.match_identifier,
+                   e.risk_identifier, e.profile_identifier, e.evidence_type,
+                   e.matched_subject_name, e.relationship_to_client, e.match_category,
+                   e.risk_indicator, e.match_confidence, e.source_title, e.source_name,
+                   e.source_url, e.source_url_available, e.source_url_unavailable_reason,
+                   e.publication_date, e.snippet, e.provider_case_url, e.evidence_json,
+                   e.raw_provider_reference, e.evidence_status, e.fetched_at,
+                   a.alert_type, a.severity, a.summary AS alert_summary,
+                   a.source_reference AS alert_source_reference
+              FROM monitoring_alert_evidence e
+              LEFT JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
+             WHERE COALESCE(e.application_id, a.application_id) IN ({placeholders})
+             ORDER BY e.id ASC
+            """,
+            tuple(application_ids),
+        ).fetchall()
+    except Exception:
+        return {}
+
+    by_app = {app_id: [] for app_id in application_ids}
+    for row in rows:
+        item = dict(row)
+        item["source_url_available"] = bool(item.get("source_url_available"))
+        item["evidence_json"] = safe_json_loads(item.get("evidence_json") or "{}")
+        item["raw_provider_reference"] = safe_json_loads(item.get("raw_provider_reference") or "{}")
+        item["alert_source_reference_json"] = _decode_monitoring_source_reference(item.get("alert_source_reference"))
+        by_app.setdefault(item.get("application_id"), []).append(item)
+    return by_app
+
+
+def _monitoring_evidence_to_candidate(item):
+    ref = item.get("alert_source_reference_json") or {}
+    raw_ref = item.get("raw_provider_reference") or {}
+    evidence_json = item.get("evidence_json") or {}
+    return {
+        "provider": item.get("provider"),
+        "case_identifier": item.get("case_identifier") or ref.get("case_identifier"),
+        "alert_identifier": item.get("alert_identifier") or ref.get("alert_identifier"),
+        "match_identifier": item.get("match_identifier") or raw_ref.get("match_identifier"),
+        "risk_identifier": item.get("risk_identifier") or ref.get("risk_identifier") or raw_ref.get("risk_identifier"),
+        "profile_identifier": item.get("profile_identifier") or raw_ref.get("profile_identifier"),
+        "evidence_type": item.get("evidence_type") or item.get("alert_type"),
+        "matched_subject_name": item.get("matched_subject_name"),
+        "relationship_to_client": item.get("relationship_to_client"),
+        "match_category": item.get("match_category") or item.get("risk_indicator") or item.get("alert_type"),
+        "severity": item.get("severity"),
+        "risk_indicator": item.get("risk_indicator"),
+        "match_confidence": item.get("match_confidence"),
+        "source_title": item.get("source_title") or evidence_json.get("title"),
+        "source_name": item.get("source_name") or evidence_json.get("source_name"),
+        "source_url": item.get("source_url"),
+        "source_url_available": bool(item.get("source_url_available") and item.get("source_url")),
+        "source_url_unavailable_reason": item.get("source_url_unavailable_reason"),
+        "publication_date": item.get("publication_date") or evidence_json.get("publication_date"),
+        "snippet": item.get("snippet") or item.get("alert_summary"),
+        "provider_case_url": item.get("provider_case_url"),
+        "evidence_status": item.get("evidence_status"),
+        "fetched_at": item.get("fetched_at"),
+    }
+
+
+def _screening_row_identifier_sets(row):
+    ids = {"case": set(), "alert": set(), "risk": set(), "match": set(), "profile": set()}
+    for evidence in row.get("provider_evidence") or []:
+        if not isinstance(evidence, dict):
+            continue
+        evidence_ids = _screening_evidence_provider_ids(evidence)
+        for key, value in evidence_ids.items():
+            if value:
+                ids[key].add(value)
+    return ids
+
+
+def _screening_row_categories(row):
+    categories = set()
+    for evidence in row.get("provider_evidence") or []:
+        if isinstance(evidence, dict):
+            categories.add(_screening_evidence_category(
+                evidence.get("match_category"),
+                evidence.get("match_categories"),
+                evidence.get("risk_type_labels"),
+                evidence.get("evidence_type"),
+            ))
+    context_text = _screening_evidence_norm(row.get("entity_context"))
+    if "adverse" in context_text or row.get("adverse_media_hit"):
+        categories.add("Adverse Media")
+    if _screening_evidence_norm(row.get("pep_screening_status")) in {"match", "hit", "review", "possible match"}:
+        categories.add("PEP")
+    if _screening_evidence_norm(row.get("watchlist_status")) in {"match", "hit", "review", "possible match"}:
+        categories.add("Watchlist")
+    return {cat for cat in categories if cat and cat != "Other"}
+
+
+def _screening_evidence_subject_matches(row, candidate, *, require_candidate=False):
+    row_name = _screening_evidence_norm(row.get("subject_name"))
+    candidate_name = _screening_evidence_norm(candidate.get("matched_subject_name"))
+    if candidate_name and row_name and candidate_name != row_name:
+        return False
+    relation_type = _screening_evidence_subject_type(candidate.get("relationship_to_client"))
+    row_type = _screening_evidence_subject_type(row.get("subject_type"))
+    if relation_type != "unknown" and relation_type != row_type:
+        return False
+    if candidate_name and row_name and candidate_name == row_name:
+        return True
+    if require_candidate:
+        return False
+    return bool(row_name and not candidate_name)
+
+
+def _screening_evidence_link_strategy(row, candidate, row_ids, row_categories):
+    provider = _screening_evidence_norm(_first_non_empty(candidate.get("provider"), "complyadvantage"))
+    row_provider_blob = _screening_evidence_norm(
+        " ".join(
+            _screening_evidence_text(part)
+            for part in [
+                row.get("provider"),
+                row.get("source"),
+                row.get("screening_mode"),
+                row.get("provider_mode"),
+                json.dumps(row.get("provider_evidence") or [], default=str),
+            ]
+        )
+    )
+    if provider and provider not in row_provider_blob and "complyadvantage" not in row_provider_blob:
+        return None
+
+    candidate_ids = _screening_evidence_provider_ids(candidate)
+    subject_match = _screening_evidence_subject_matches(row, candidate)
+    if subject_match is False:
+        return None
+    for key in ("risk", "match", "profile", "alert"):
+        if candidate_ids[key] and candidate_ids[key] in row_ids.get(key, set()):
+            return f"exact_{key}_identifier"
+
+    candidate_category = _screening_evidence_category(
+        candidate.get("match_category"),
+        candidate.get("evidence_type"),
+        candidate.get("risk_indicator"),
+    )
+    category_matches = candidate_category in row_categories or not row_categories
+    if candidate_ids["case"] and candidate_ids["case"] in row_ids.get("case", set()):
+        if subject_match or category_matches:
+            return "exact_case_identifier"
+
+    if _screening_evidence_subject_matches(row, candidate, require_candidate=True) and candidate_category in row_categories:
+        return "same_application_provider_subject_category"
+    return None
+
+
+def _enrich_screening_queue_evidence(row, monitoring_evidence):
+    row = dict(row or {})
+    legacy_provider_evidence = [item for item in (row.get("provider_evidence") or []) if isinstance(item, dict)]
+    evidence_items = [
+        _normalise_screening_evidence_item(row, item, source="screening_result", link_strategy="stored_screening_result")
+        for item in legacy_provider_evidence
+    ]
+    row_ids = _screening_row_identifier_sets(row)
+    row_categories = _screening_row_categories(row)
+    linked_provider_evidence = []
+    link_notes = []
+
+    for raw_item in monitoring_evidence or []:
+        candidate = _monitoring_evidence_to_candidate(raw_item)
+        strategy = _screening_evidence_link_strategy(row, candidate, row_ids, row_categories)
+        if not strategy:
+            continue
+        item = _normalise_screening_evidence_item(row, candidate, source="ca_1b_monitoring_evidence", link_strategy=strategy)
+        evidence_items.append(item)
+        linked_provider_evidence.append(_screening_evidence_provider_shape(item))
+        link_notes.append(strategy)
+
+    evidence_items = _screening_evidence_dedup(evidence_items)
+    existing_provider_keys = {
+        _screening_result_identity(item)
+        for item in legacy_provider_evidence
+    }
+    for item in linked_provider_evidence:
+        marker = _screening_result_identity(item)
+        if marker in existing_provider_keys:
+            continue
+        legacy_provider_evidence.append(item)
+        existing_provider_keys.add(marker)
+
+    evidence_status = _screening_evidence_quality(evidence_items, row)
+    source_url_count = sum(1 for item in evidence_items if item.get("source_url"))
+    unavailable_source_count = sum(1 for item in evidence_items if not item.get("source_url"))
+    categories = sorted({item.get("category") for item in evidence_items if item.get("category")})
+    providers = sorted({item.get("provider") for item in evidence_items if item.get("provider")})
+    summary = {
+        "evidence_status": evidence_status,
+        "evidence_quality_label": _screening_evidence_status_label(evidence_status),
+        "evidence_count": len(evidence_items),
+        "source_url_count": source_url_count,
+        "source_url_unavailable_count": unavailable_source_count,
+        "source_url_unavailable_message": _SCREENING_EVIDENCE_SOURCE_UNAVAILABLE if unavailable_source_count else "",
+        "partial_evidence_message": _screening_evidence_required_message(evidence_status),
+        "categories": categories,
+        "providers": providers,
+        "provider_case_ids": sorted({item.get("provider_case_id") for item in evidence_items if item.get("provider_case_id")}),
+        "provider_alert_ids": sorted({item.get("provider_alert_id") for item in evidence_items if item.get("provider_alert_id")}),
+        "provider_risk_ids": sorted({item.get("provider_risk_id") for item in evidence_items if item.get("provider_risk_id")}),
+        "officer_disposition": row.get("review_disposition"),
+        "review_history_summary": _screening_review_summary(row),
+    }
+    row["provider_evidence"] = legacy_provider_evidence
+    row["evidence_summary"] = summary
+    row["screening_evidence"] = {
+        **summary,
+        "items": evidence_items,
+        "technical_details": {
+            "linked_ca_1b_evidence_count": len(linked_provider_evidence),
+            "link_strategies": sorted(set(link_notes)),
+            "legacy_provider_evidence_count": len([item for item in evidence_items if item.get("evidence_source") == "screening_result"]),
+        },
+    }
+    return row
+
+
 def _screening_result_identity(hit):
     if not isinstance(hit, dict):
         return repr(hit)
@@ -15447,7 +15975,32 @@ def _screening_queue_search_blob(row):
     parts.extend(row.get("entity_context") or [])
     for evidence in row.get("provider_evidence") or []:
         if isinstance(evidence, dict):
-            parts.extend(evidence.get(k) for k in ("source", "provider", "list_name", "name", "category", "status"))
+            parts.extend(evidence.get(k) for k in (
+                "source", "provider", "list_name", "name", "category", "status",
+                "match_category", "media_title", "media_snippet", "source_name",
+                "source_title", "source_url", "provider_case_identifier",
+                "provider_alert_identifier", "provider_risk_identifier",
+                "provider_profile_identifier", "match_identifier",
+            ))
+    screening_evidence = row.get("screening_evidence") or {}
+    evidence_summary = row.get("evidence_summary") or {}
+    if isinstance(evidence_summary, dict):
+        parts.extend(evidence_summary.get(k) for k in (
+            "evidence_status", "evidence_quality_label", "source_url_unavailable_message",
+            "partial_evidence_message", "review_history_summary",
+        ))
+        parts.extend(evidence_summary.get("categories") or [])
+        parts.extend(evidence_summary.get("providers") or [])
+    for evidence in screening_evidence.get("items") or []:
+        if isinstance(evidence, dict):
+            parts.extend(evidence.get(k) for k in (
+                "subject_name", "subject_type", "relationship_to_application",
+                "provider", "provider_case_id", "provider_alert_id",
+                "provider_risk_id", "provider_match_id", "match_id",
+                "category", "severity", "match_score", "source_name",
+                "source_title", "source_url", "publication_date", "snippet",
+                "evidence_status", "evidence_quality_label",
+            ))
     return " ".join(str(part or "") for part in parts).lower()
 
 
@@ -15595,6 +16148,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
     reviews_by_app = _load_screening_reviews_for_truth_batch(db, app_ref_by_id) if app_ids else {}
     monitoring_alerts_by_app = _load_application_monitoring_alerts_batch(db, app_ids) if app_ids else {}
+    monitoring_evidence_by_app = _load_monitoring_evidence_batch(db, app_ids) if app_ids else {}
     rows = []
     metrics = {
         "applications_awaiting_screening": 0,
@@ -15995,7 +16549,13 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         if application_requires_review:
             metrics["applications_requiring_review"] += 1
 
-    rows = [_apply_screening_queue_canonical_state(row) for row in rows]
+    rows = [
+        _enrich_screening_queue_evidence(
+            _apply_screening_queue_canonical_state(row),
+            monitoring_evidence_by_app.get(row.get("application_id"), []),
+        )
+        for row in rows
+    ]
     metrics["applications_requiring_review"] = len({
         row.get("application_id")
         for row in rows

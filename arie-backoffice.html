@@ -11554,6 +11554,112 @@ function providerResultHighlights(results, context) {
   }).join('') + '</div>';
 }
 
+function screeningEvidenceArrayText(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
+  return value || '';
+}
+
+function screeningQueueEvidenceQuality(row) {
+  var evidence = (row && row.screening_evidence) || {};
+  var summary = (row && row.evidence_summary) || evidence || {};
+  return summary.evidence_quality_label || {
+    available: 'Complete',
+    complete: 'Complete',
+    partial: 'Partial',
+    unavailable: 'Unavailable',
+    failed: 'Failed'
+  }[summary.evidence_status] || 'Unavailable';
+}
+
+function screeningQueueEvidenceStatusClass(label) {
+  label = String(label || '').toLowerCase();
+  if (label === 'complete') return 'approved';
+  if (label === 'failed') return 'rejected';
+  if (label === 'partial') return 'pending';
+  return 'draft';
+}
+
+function screeningQueueEvidenceItemCard(item, index) {
+  item = item || {};
+  var sourceUrl = item.source_url || '';
+  var sourceMessage = item.source_url_unavailable_message || (!sourceUrl ? 'Source link not available from provider payload.' : '');
+  var sourceTitle = item.source_title || item.source_name || 'Provider evidence record';
+  var snippet = item.snippet || item.summary || '';
+  var rows = [
+    ['Category', item.category],
+    ['Source', item.source_name],
+    ['Publication date', item.publication_date],
+    ['Match confidence', item.match_score],
+    ['Severity', item.severity]
+  ].filter(function(row) { return evidenceDisplayValue(row[1]); }).map(function(row) {
+    return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong>' + escapeHtml(evidenceDisplayValue(row[1])) + '</strong></div>';
+  }).join('');
+  return '<div style="margin-top:10px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+      '<div style="min-width:0;">' +
+        '<div style="font-weight:700;color:var(--text1);word-break:break-word;">' + escapeHtml(sourceTitle) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Evidence record ' + escapeHtml(String(index + 1)) + '</div>' +
+      '</div>' +
+      '<span class="badge ' + screeningQueueEvidenceStatusClass(item.evidence_quality_label) + '">' + escapeHtml(item.evidence_quality_label || 'Partial') + '</span>' +
+    '</div>' +
+    (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
+    (snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">' + escapeHtml(snippet) + '</div>' : '') +
+    (sourceUrl ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener">Open source</a></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(sourceMessage) + '</div>') +
+  '</div>';
+}
+
+function screeningQueueEvidenceReadinessPanel(row) {
+  if (!row) return '';
+  var evidence = row.screening_evidence || {};
+  var summary = row.evidence_summary || evidence || {};
+  var items = Array.isArray(evidence.items) ? evidence.items : [];
+  var qualityLabel = screeningQueueEvidenceQuality(row);
+  var categories = screeningEvidenceArrayText(summary.categories);
+  var providers = screeningEvidenceArrayText(summary.providers) || formatProviderName(row.provider || row.source || '');
+  var partialMessage = summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : '');
+  var missingSourceMessage = summary.source_url_unavailable_message || (items.some(function(item) { return !item.source_url; }) ? 'Source link not available from provider payload.' : '');
+  var summaryRows = evidenceInfoGrid([
+    ['Client / application', (row.company_name || '') + (row.application_ref ? ' (' + row.application_ref + ')' : '')],
+    ['Subject', row.subject_name],
+    ['Role / relationship', (items[0] && items[0].relationship_to_application) || String(row.subject_type || '').replace('_', ' ')],
+    ['Provider', providers],
+    ['Status', row.status_label],
+    ['Category', categories],
+    ['Hits', row.total_hits != null ? String(row.total_hits) : '']
+  ]);
+  var evidenceCards = items.length
+    ? items.map(screeningQueueEvidenceItemCard).join('')
+    : '<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;">Detailed provider evidence is unavailable for this screening result.</div>';
+  var technicalRows = evidenceInfoGrid([
+    ['Provider case IDs', screeningEvidenceArrayText(summary.provider_case_ids)],
+    ['Provider alert IDs', screeningEvidenceArrayText(summary.provider_alert_ids)],
+    ['Provider risk IDs', screeningEvidenceArrayText(summary.provider_risk_ids)],
+    ['Evidence source', screeningEvidenceArrayText((evidence.technical_details || {}).link_strategies)],
+    ['Linked CA-1B evidence', (evidence.technical_details && evidence.technical_details.linked_ca_1b_evidence_count != null) ? String(evidence.technical_details.linked_ca_1b_evidence_count) : ''],
+    ['Stored legacy evidence', (evidence.technical_details && evidence.technical_details.legacy_provider_evidence_count != null) ? String(evidence.technical_details.legacy_provider_evidence_count) : '']
+  ]);
+  return '<div data-screening-evidence-readiness="true" style="margin-top:14px;padding:14px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);">Screening Summary</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Evidence readiness: ' + escapeHtml(qualityLabel) + '</div>' +
+      '</div>' +
+      '<span class="badge ' + screeningQueueEvidenceStatusClass(qualityLabel) + '">' + escapeHtml(qualityLabel) + '</span>' +
+    '</div>' +
+    summaryRows +
+    '<div style="margin-top:14px;font-size:13px;font-weight:800;color:var(--text1);">Evidence</div>' +
+    (partialMessage ? '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:6px;">' + escapeHtml(partialMessage) + '</div>' : '') +
+    (missingSourceMessage ? '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:4px;">' + escapeHtml(missingSourceMessage) + '</div>' : '') +
+    evidenceCards +
+    '<div style="margin-top:14px;font-size:13px;font-weight:800;color:var(--text1);">Officer Decision</div>' +
+    '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:6px;">' + escapeHtml(row.review_disposition ? ('Current disposition: ' + String(row.review_disposition).replace(/_/g, ' ')) : 'Disposition actions are shown below for review-required items.') + '</div>' +
+    '<details data-screening-technical-details style="margin-top:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
+      '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);">Technical Details</summary>' +
+      '<div style="margin-top:10px;color:var(--text2);">' + technicalRows + '</div>' +
+    '</details>' +
+  '</div>';
+}
+
 function providerIndicatorDetails(indicators) {
   var rows = (Array.isArray(indicators) ? indicators : []).slice(0, 3).map(function(indicator) {
     var value = indicator.value || {};
@@ -11875,6 +11981,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
   body += '<div><strong>Company screening source:</strong> ' + escapeHtml(company.source || 'Not recorded') + (company.api_status ? ' (' + escapeHtml(company.api_status) + ')' : '') + '</div>';
   body += '<div style="margin-top:6px;"><strong>Stored screening summary:</strong> ' + escapeHtml(companyHits.matched ? 'Provider recorded company/entity matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')) + '</div>';
+  body += screeningQueueEvidenceReadinessPanel(reviewRow);
   body += buildScreeningComparisonPanel('entity', app, companyResults, {}, {
     application_ref: app.ref,
     subject_type: 'entity',
@@ -11998,6 +12105,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
       provider_detected_pep: providerPep ? 'Yes' : 'No',
       undeclared_pep: undeclaredPep ? 'Yes' : 'No'
     };
+    body += screeningQueueEvidenceReadinessPanel(reviewRow);
     body += buildScreeningComparisonPanel('person', person, personProviderResults, {
       declaredPep: personDeclaredPep ? 'Yes' : 'No',
       providerPep: providerPep ? 'Yes' : 'No'

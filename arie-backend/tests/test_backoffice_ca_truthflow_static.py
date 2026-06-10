@@ -339,6 +339,44 @@ def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
     assert "provider: facts.source || screeningSummary.provider" in person_region
 
 
+def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel():
+    html = BACKOFFICE_HTML.read_text()
+
+    panel_region = _function_region(html, "screeningQueueEvidenceReadinessPanel", "providerIndicatorDetails")
+    entity_region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
+    person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
+
+    assert "function screeningQueueEvidenceReadinessPanel" in html
+    assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in entity_region
+    assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in person_region
+    assert "Screening Summary" in panel_region
+    assert "Client / application" in panel_region
+    assert "Role / relationship" in panel_region
+    assert "Evidence readiness:" in panel_region
+    assert "Evidence" in panel_region
+    assert "Officer Decision" in panel_region
+    assert "Technical Details" in panel_region
+    assert "data-screening-technical-details" in panel_region
+    assert "Source link not available from provider payload." in panel_region
+    assert "Detailed provider evidence is partial or unavailable for this screening result." in panel_region
+    assert "Provider case IDs" in panel_region
+    assert "Provider alert IDs" in panel_region
+    assert "Provider risk IDs" in panel_region
+    assert "JSON.stringify" not in panel_region
+
+
+def test_backoffice_screening_queue_source_links_are_conditional():
+    html = BACKOFFICE_HTML.read_text()
+
+    card_region = _function_region(html, "screeningQueueEvidenceItemCard", "screeningQueueEvidenceReadinessPanel")
+
+    assert "var sourceUrl = item.source_url || ''" in card_region
+    assert "Open source" in card_region
+    assert "sourceUrl ? '<div" in card_region
+    assert "Source link not available from provider payload." in card_region
+    assert "raw JSON" not in card_region.lower()
+
+
 def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     html = BACKOFFICE_HTML.read_text()
 
