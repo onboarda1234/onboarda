@@ -353,6 +353,7 @@ def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel(
     assert "Client / application" in panel_region
     assert "Role / relationship" in panel_region
     assert "Evidence readiness:" in panel_region
+    assert "evidence_quality_reason" in panel_region
     assert "Evidence" in panel_region
     assert "Officer Decision" in panel_region
     assert "Technical Details" in panel_region

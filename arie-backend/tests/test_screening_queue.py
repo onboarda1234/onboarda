@@ -631,6 +631,12 @@ def test_screening_queue_links_ca_evidence_by_exact_identifiers(db, temp_db):
     assert evidence["match_score"] == "0.92"
     assert evidence["source_url"] == ""
     assert evidence["source_url_unavailable_message"] == "Source link not available from provider payload."
+    assert evidence["linking_method"] == "exact_identifier"
+    assert row["screening_evidence"]["evidence_quality_reason"] == "Evidence linked from CA provider evidence."
+    diagnostics = row["screening_evidence"]["technical_details"]["diagnostics"]
+    assert diagnostics["provider"] == "complyadvantage"
+    assert diagnostics["identifier_presence"]["case"] is True
+    assert diagnostics["field_presence"]["source_title"] is True
 
 
 def test_screening_queue_does_not_attach_mismatched_ca_subject(db, temp_db):
@@ -713,3 +719,93 @@ def test_screening_queue_reports_structured_evidence_unavailable_honestly(db, te
     assert row["screening_evidence"]["items"][0]["source_url_unavailable_message"] == "Source link not available from provider payload."
     assert row["evidence_summary"]["partial_evidence_message"] == "Detailed provider evidence is partial or unavailable for this screening result."
     assert row["status_key"] == "review_required"
+
+
+def test_screening_queue_failed_row_without_evidence_fetch_is_unavailable_not_failed():
+    from server import _enrich_screening_queue_evidence
+
+    row = _enrich_screening_queue_evidence(
+        {
+            "application_id": "app_failed_provider",
+            "application_ref": "ARF-SQ3-FAILED-PROVIDER",
+            "company_name": "Failed Provider Ltd",
+            "subject_name": "Failed Subject",
+            "subject_type": "director",
+            "status_key": "failed",
+            "status_label": "Failed",
+            "screening_state": "failed",
+            "screening_result": "failed",
+            "total_hits": 0,
+            "provider_evidence": [],
+        },
+        [],
+    )
+
+    assert row["screening_evidence"]["evidence_status"] == "unavailable"
+    assert row["screening_evidence"]["evidence_failure_reason"] == "screening_failed_before_evidence"
+    assert row["screening_evidence"]["evidence_quality_reason"] == "Provider screening failed before detailed evidence was available."
+    assert row["screening_evidence"]["technical_details"]["diagnostics"]["failure_reason"] == "screening_failed_before_evidence"
+
+
+def test_screening_queue_evidence_diagnostics_explain_missing_provider_identifiers():
+    from server import _enrich_screening_queue_evidence
+
+    row = _enrich_screening_queue_evidence(
+        {
+            "application_id": "app_missing_ids",
+            "application_ref": "ARF-SQ3-MISSING-IDS",
+            "company_name": "Missing IDs Ltd",
+            "subject_name": "Missing IDs Ltd",
+            "subject_type": "entity",
+            "status_key": "review_required",
+            "status_label": "Review Required",
+            "total_hits": 1,
+            "provider_evidence": [
+                {
+                    "provider": "complyadvantage",
+                    "match_category": "Adverse Media",
+                    "summary": "Provider shell without identifiers",
+                }
+            ],
+        },
+        [],
+    )
+
+    diagnostics = row["screening_evidence"]["technical_details"]["diagnostics"]
+    assert row["screening_evidence"]["evidence_failure_reason"] == "missing_provider_identifiers"
+    assert row["screening_evidence"]["evidence_quality_reason"] == "Missing provider identifiers."
+    assert diagnostics["missing_identifier_types"] == ["alert", "case", "match", "profile", "risk"]
+    assert diagnostics["field_presence"]["snippet"] is True
+    assert row["screening_evidence"]["items"][0]["linking_method"] == "unavailable"
+
+
+def test_screening_queue_monitoring_candidate_extracts_fields_from_evidence_json():
+    from server import _monitoring_evidence_to_candidate
+
+    candidate = _monitoring_evidence_to_candidate({
+        "provider": "complyadvantage",
+        "case_identifier": "case-json",
+        "alert_identifier": "alert-json",
+        "risk_identifier": "risk-json",
+        "profile_identifier": "profile-json",
+        "evidence_type": "adverse_media",
+        "evidence_json": {
+            "indicator": {
+                "value": {
+                    "title": "Evidence JSON title",
+                    "canonical_url": {"url": "https://evidence.example.test/article"},
+                    "publication_date": "2026-06-01",
+                    "snippets": [{"text": "Evidence JSON snippet"}],
+                    "source_metadata": {"source_identifier": "SRC-JSON"},
+                }
+            }
+        },
+        "raw_provider_reference": {},
+        "alert_source_reference_json": {},
+    })
+
+    assert candidate["source_title"] == "Evidence JSON title"
+    assert candidate["source_name"] == "SRC-JSON"
+    assert candidate["source_url"] == "https://evidence.example.test/article"
+    assert candidate["publication_date"] == "2026-06-01"
+    assert candidate["snippet"] == "Evidence JSON snippet"

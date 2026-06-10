@@ -162,6 +162,32 @@ def test_backfill_persists_structured_evidence_from_stored_normalized_report():
     assert row["source_url_unavailable_reason"] == "Source article link not available from ComplyAdvantage payload."
 
 
+def test_backfill_extracts_non_media_source_metadata_without_inventing_url():
+    conn = _db()
+    report = _normalized_report()
+    indicator_value = report["provider_specific"][COMPLYADVANTAGE_PROVIDER_NAME]["matches"][0]["indicators"][0]["value"]
+    indicator_value.clear()
+    indicator_value.update({
+        "authority": "TEST-WATCH-AUTH",
+        "list_name": "TEST Watchlist",
+        "reason": "Listed for test fixture reason",
+        "start_date": "2025-02-03",
+        "source_metadata": {"source_identifier": "WATCH-SRC-1"},
+    })
+    normalized_id = _insert_normalized(conn, report)
+    alert_id = _insert_alert(conn, normalized_record_id=normalized_id)
+
+    backfill_monitoring_alert_evidence(conn, dry_run=False, limit=10, trace_id="test-ca1b")
+
+    row = conn.execute("SELECT * FROM monitoring_alert_evidence WHERE monitoring_alert_id = ?", (alert_id,)).fetchone()
+    assert row["source_title"] == "TEST Watchlist"
+    assert row["source_name"] == "WATCH-SRC-1"
+    assert row["publication_date"] == "2025-02-03"
+    assert row["snippet"] == "Listed for test fixture reason"
+    assert row["source_url"] is None
+    assert row["source_url_available"] == 0
+
+
 def test_backfill_is_idempotent_and_does_not_create_duplicate_alerts():
     conn = _db()
     normalized_id = _insert_normalized(conn, _normalized_report())
