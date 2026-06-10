@@ -250,19 +250,75 @@ def _linked_document_summary(db, requirement):
         return None
     row = db.execute(
         """
-        SELECT id, doc_name, doc_type, uploaded_at, review_status, verification_status
+        SELECT id, doc_name, doc_type, uploaded_at, review_status, verification_status,
+               verification_results, slot_key, is_current, version, superseded_at,
+               superseded_by_document_id
           FROM documents
          WHERE id = ? AND application_id = ?
         """,
         (doc_id, app_id),
     ).fetchone()
-    return _row_dict(row)
+    doc = _row_dict(row)
+    if not doc:
+        return None
+    metadata = _load_json(doc.get("verification_results"), {})
+    if isinstance(metadata, dict):
+        doc["verification_results"] = metadata
+        doc["upload_source"] = metadata.get("upload_source") or (
+            "client_portal" if metadata.get("client_submitted") else "back_office" if metadata.get("officer_uploaded") else ""
+        )
+        doc["source_note"] = metadata.get("source_note") or ""
+        doc["previous_document_id"] = metadata.get("previous_document_id") or metadata.get("monitoring_document_id") or ""
+    return doc
+
+
+def _latest_notification_status(db, alert_id):
+    try:
+        row = db.execute(
+            """
+            SELECT action, detail, timestamp
+              FROM audit_log
+             WHERE target = ?
+               AND action IN ('document_request_notification_sent', 'document_request_notification_failed')
+             ORDER BY id DESC
+             LIMIT 1
+            """,
+            (f"monitoring_alert:{alert_id}",),
+        ).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        return {"status": "not_attempted", "reason": "no_notification_attempt_recorded"}
+    detail = _load_json(_row_get(row, "detail"), {})
+    status = str(detail.get("email_status") or "").strip().lower()
+    if _row_get(row, "action") == "document_request_notification_sent":
+        status = "sent"
+    elif not status:
+        status = "failed"
+    return {
+        "status": status,
+        "reason": detail.get("email_reason") or detail.get("reason") or "",
+        "client_notification_id": detail.get("notification_id"),
+        "timestamp": _row_get(row, "timestamp"),
+    }
 
 
 def document_refresh_context(db, alert_id_or_row) -> Dict[str, Any]:
     alert = _row_dict(alert_id_or_row)
     if not isinstance(alert, dict) or "summary" not in alert:
         alert = _fetch_alert(db, alert_id_or_row)
+    elif alert.get("id") and (
+        not alert.get("application_client_id")
+        or not alert.get("application_ref")
+        or not alert.get("client_email")
+    ):
+        full_alert = _fetch_alert(db, alert.get("id"))
+        if full_alert:
+            merged = dict(full_alert)
+            for key, value in alert.items():
+                if value not in (None, ""):
+                    merged[key] = value
+            alert = merged
     if not alert:
         return {"available": False, "reason": "alert_not_found"}
     if not is_document_refresh_alert(alert):
@@ -309,6 +365,7 @@ def document_refresh_context(db, alert_id_or_row) -> Dict[str, Any]:
         "request_status": (request_item or {}).get("status") or "",
         "due_date": due_date or "",
         "request_reason": _request_reason(alert),
+        "notification": _latest_notification_status(db, alert.get("id")),
         "has_active_request": bool(request_item and str(request_item.get("status") or "").lower() in ACTIVE_REQUEST_STATUSES),
     }
 
@@ -377,7 +434,17 @@ def _insert_client_notification(db, alert, requirement, label, message, due_date
     return _row_dict(row)
 
 
-def request_updated_document(db, alert_id, *, user, audit_writer, email_sender=None, due_date=None):
+def request_updated_document(
+    db,
+    alert_id,
+    *,
+    user,
+    audit_writer,
+    email_sender=None,
+    due_date=None,
+    notify_client=True,
+    audience="client",
+):
     alert = _fetch_alert(db, alert_id)
     if not alert:
         raise MonitoringDocumentRefreshError("Alert not found", 404)
@@ -458,7 +525,7 @@ def request_updated_document(db, alert_id, *, user, audit_writer, email_sender=N
             requirement_key,
             label,
             description,
-            "client",
+            audience if audience in {"client", "both", "backoffice"} else "client",
             "document",
             document.get("owner_type") if document.get("owner_type") in {"company", "director", "ubo", "controller", "application", "screening_subject"} else "application",
             0,
@@ -482,13 +549,16 @@ def request_updated_document(db, alert_id, *, user, audit_writer, email_sender=N
         ),
     )
     request = _active_request_for_alert(db, alert.get("id"))
-    notification = _insert_client_notification(db, alert, request, label, description, due_date)
+    notification = None
+    if notify_client:
+        notification = _insert_client_notification(db, alert, request, label, description, due_date)
 
     before_state = {"status": alert.get("status"), "officer_action": alert.get("officer_action")}
     payload = {
         "event": "updated_document_requested",
         "alert_id": alert.get("id"),
         "application_id": alert.get("application_id"),
+        "client_id": alert.get("application_client_id"),
         "application_ref": alert.get("application_ref"),
         "document_request_id": request.get("id"),
         "document_id": document.get("id") or "",
@@ -496,6 +566,7 @@ def request_updated_document(db, alert_id, *, user, audit_writer, email_sender=N
         "document_owner": owner,
         "due_date": due_date,
         "request_reason": request_reason,
+        "request_channel": "client_portal" if notify_client else "back_office_upload",
         "requested_by": actor_id,
     }
     db.execute(
@@ -532,7 +603,24 @@ def request_updated_document(db, alert_id, *, user, audit_writer, email_sender=N
     )
 
     email_status = {"status": "not_attempted", "reason": "client_id_missing"}
-    if alert.get("application_client_id"):
+    if not notify_client:
+        email_status = {"status": "not_sent", "reason": "backoffice_upload_no_client_email"}
+        email_payload = dict(payload)
+        email_payload.update({
+            "notification_id": None,
+            "email_status": email_status["status"],
+            "email_reason": email_status["reason"],
+        })
+        _audit(
+            audit_writer,
+            user,
+            "document_request_notification_failed",
+            alert.get("id"),
+            email_payload,
+            db=db,
+            after_state=email_payload,
+        )
+    elif alert.get("application_client_id"):
         subject = "Updated document required"
         body = (
             f"Updated {doc_label} required\n\n"
@@ -591,7 +679,9 @@ def mark_client_upload_received_if_monitoring_linked(db, app, requirement, docum
         "event": "client_document_upload_received",
         "alert_id": alert_id,
         "application_id": requirement.get("application_id"),
+        "client_id": alert.get("application_client_id"),
         "document_request_id": requirement.get("id"),
+        "old_document_id": requirement.get("monitoring_document_id") or "",
         "document_id": document_id,
         "document_type": requirement.get("trigger_context", {}).get("document_type") if isinstance(requirement.get("trigger_context"), dict) else "",
         "actor": (actor or {}).get("sub", ""),
@@ -632,6 +722,81 @@ def mark_client_upload_received_if_monitoring_linked(db, app, requirement, docum
     except Exception:
         logger.warning("monitoring document upload officer notification failed", exc_info=True)
     return True
+
+
+def mark_backoffice_upload_received(db, alert_id, requirement, document_id, *, source_note, actor, audit_writer):
+    requirement = serialize_application_requirement(requirement) if not isinstance(requirement, dict) else dict(requirement or {})
+    alert = _fetch_alert(db, alert_id)
+    if not alert:
+        return False
+    before_state = {"status": alert.get("status"), "officer_action": alert.get("officer_action")}
+    payload = {
+        "event": "backoffice_replacement_uploaded",
+        "alert_id": alert_id,
+        "application_id": requirement.get("application_id") or alert.get("application_id"),
+        "client_id": alert.get("application_client_id"),
+        "document_request_id": requirement.get("id"),
+        "old_document_id": requirement.get("monitoring_document_id") or "",
+        "new_document_id": document_id,
+        "document_type": requirement.get("trigger_context", {}).get("document_type") if isinstance(requirement.get("trigger_context"), dict) else "",
+        "upload_source": "back_office_upload",
+        "source_note": source_note,
+        "actor": (actor or {}).get("sub", ""),
+        "timestamp": _now_iso(),
+    }
+    db.execute(
+        """
+        UPDATE monitoring_alerts
+           SET status = 'under_review',
+               officer_action = 'backoffice_replacement_uploaded',
+               officer_notes = ?,
+               reviewed_at = CURRENT_TIMESTAMP,
+               reviewed_by = ?
+         WHERE id = ?
+        """,
+        (json.dumps(payload, sort_keys=True), (actor or {}).get("sub", ""), alert_id),
+    )
+    _audit(
+        audit_writer,
+        actor,
+        "backoffice_replacement_uploaded",
+        alert_id,
+        payload,
+        db=db,
+        before_state=before_state,
+        after_state={"status": "under_review", "document_id": document_id},
+    )
+    return True
+
+
+def _restore_old_document_after_rejection(db, app_id, old_document_id, rejected_document_id):
+    if not old_document_id or not rejected_document_id:
+        return
+    old_doc = _fetch_document(db, old_document_id, app_id)
+    rejected_doc = _fetch_document(db, rejected_document_id, app_id)
+    if not old_doc or not rejected_doc:
+        return
+    db.execute(
+        """
+        UPDATE documents
+           SET is_current = ?,
+               replaced_reason = COALESCE(replaced_reason, 'monitoring_refresh_rejected')
+         WHERE id = ? AND application_id = ?
+        """,
+        (False, rejected_document_id, app_id),
+    )
+    db.execute(
+        """
+        UPDATE documents
+           SET is_current = ?,
+               superseded_at = NULL,
+               superseded_by_document_id = NULL,
+               replaced_reason = NULL,
+               replaced_by_user_id = NULL
+         WHERE id = ? AND application_id = ?
+        """,
+        (True, old_document_id, app_id),
+    )
 
 
 def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
@@ -706,14 +871,23 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
                 app_id,
             ),
         )
+    if outcome == "reject":
+        _restore_old_document_after_rejection(
+            db,
+            app_id,
+            request.get("monitoring_document_id"),
+            linked_document_id,
+        )
 
     before_state = {"status": alert.get("status"), "officer_action": alert.get("officer_action")}
     payload = {
         "event": audit_action,
         "alert_id": alert.get("id"),
         "application_id": app_id,
+        "client_id": alert.get("application_client_id"),
         "application_ref": alert.get("application_ref"),
         "document_request_id": req_id,
+        "old_document_id": request.get("monitoring_document_id") or "",
         "document_id": linked_document_id,
         "outcome": outcome,
         "note": note,
@@ -822,14 +996,23 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
                 requirement.get("application_id"),
             ),
         )
+    if outcome == "reject":
+        _restore_old_document_after_rejection(
+            db,
+            requirement.get("application_id"),
+            requirement.get("monitoring_document_id"),
+            linked_document_id,
+        )
 
     before_state = {"status": alert.get("status"), "officer_action": alert.get("officer_action")}
     payload = {
         "event": audit_action,
         "alert_id": alert_id,
         "application_id": requirement.get("application_id"),
+        "client_id": alert.get("application_client_id"),
         "application_ref": alert.get("application_ref"),
         "document_request_id": requirement.get("id"),
+        "old_document_id": requirement.get("monitoring_document_id") or "",
         "document_id": linked_document_id,
         "outcome": outcome,
         "note": note,

@@ -9654,12 +9654,16 @@ function portalEnhancedRequirementHolder(panel) {
 function portalEnhancedRequirementCardHtml(req) {
   var tone = portalEnhancedRequirementTone(req.status);
   var requestedAt = req && req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
+  var dueDate = req && req.due_date ? new Date(req.due_date).toLocaleDateString() : '';
+  var reason = req && req.request_reason ? String(req.request_reason).replace(/_/g, ' ') : '';
   var docName = portalEnhancedRequirementDocName(req);
   var statusLabel = req.status_label || tone.text;
   var subject = req.owner_label || req.subject_name || '';
   var meta = ['Requested by Compliance'];
   if (subject) meta.push(subject);
   if (requestedAt) meta.push('Requested ' + requestedAt);
+  if (dueDate) meta.push('Due ' + dueDate);
+  if (reason) meta.push(reason.charAt(0).toUpperCase() + reason.slice(1));
   return '<div class="doc-item portal-enhanced-requirement-item" data-enhanced-requirement-id="' + escapeHtml(String(req.id || '')) + '">' +
     '<div class="doc-item-top">' +
       '<span class="doc-item-icon">📄</span>' +
@@ -9669,6 +9673,7 @@ function portalEnhancedRequirementCardHtml(req) {
       '</div>' +
     '</div>' +
     '<span class="' + (tone.cls === 'uploaded' ? 'doc-optional' : 'doc-required') + '">' + escapeHtml(statusLabel) + '</span>' +
+    (dueDate ? '<div style="font-size:12px;color:var(--text2);margin:8px 0 0;"><strong>Due date:</strong> ' + escapeHtml(dueDate) + '</div>' : '') +
     (docName ? '<div style="font-size:12px;color:var(--text2);margin:8px 0 0;"><strong>Uploaded file:</strong> ' + escapeHtml(docName) + '</div>' : '') +
     '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
     portalEnhancedRequirementControlHtml(req) +
