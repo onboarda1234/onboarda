@@ -10376,6 +10376,13 @@ function getMergedScreeningReviewRow(app, queueRow, reviewRow, subjectType, subj
     subject_type: subjectType,
     subject_name: subjectName
   }, queueRow || {}, reviewRow || {});
+  if (queueRow) {
+    ['screening_evidence', 'evidence_summary'].forEach(function(field) {
+      if (screeningQueueEvidenceObjectIsEmpty(merged[field]) && !screeningQueueEvidenceObjectIsEmpty(queueRow[field])) {
+        merged[field] = queueRow[field];
+      }
+    });
+  }
   if (typeof merged.review_required !== 'boolean') merged.review_required = !!merged.review_actionable;
   return merged;
 }
@@ -11579,6 +11586,36 @@ function screeningQueueEvidenceStatusClass(label) {
   return 'draft';
 }
 
+function screeningQueueEvidenceObjectIsEmpty(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return true;
+  return Object.keys(value).length === 0;
+}
+
+function screeningQueueEvidenceQualityReason(row, qualityLabel, items) {
+  row = row || {};
+  var evidence = row.screening_evidence || {};
+  var summary = row.evidence_summary || evidence || {};
+  var reason = summary.evidence_quality_reason || evidence.evidence_quality_reason || '';
+  if (reason) return reason;
+  var normalizedLabel = String(qualityLabel || '').toLowerCase();
+  var statusKey = String(row.canonical_status_key || row.status_key || '').toLowerCase();
+  var totalHits = Number(row.total_hits || 0);
+  if (normalizedLabel === 'partial' && (items || []).some(function(item) { return !item.source_url; })) {
+    return 'Provider did not return source link.';
+  }
+  if (normalizedLabel !== 'unavailable') return '';
+  if ((statusKey === 'clear' || statusKey === 'screened_no_match') && totalHits === 0) {
+    return 'Provider screening completed with no hits; detailed source evidence is not applicable.';
+  }
+  if (statusKey === 'failed' || statusKey === 'screening_unavailable') {
+    return 'Provider screening failed before detailed evidence was available.';
+  }
+  if (totalHits > 0) {
+    return 'Detailed provider evidence is unavailable for this screening result.';
+  }
+  return '';
+}
+
 function screeningQueueEvidenceItemCard(item, index) {
   item = item || {};
   var sourceUrl = item.source_url || '';
@@ -11618,7 +11655,7 @@ function screeningQueueEvidenceReadinessPanel(row) {
   var providers = screeningEvidenceArrayText(summary.providers) || formatProviderName(row.provider || row.source || '');
   var partialMessage = summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : '');
   var missingSourceMessage = summary.source_url_unavailable_message || (items.some(function(item) { return !item.source_url; }) ? 'Source link not available from provider payload.' : '');
-  var qualityReason = summary.evidence_quality_reason || evidence.evidence_quality_reason || '';
+  var qualityReason = screeningQueueEvidenceQualityReason(row, qualityLabel, items);
   var summaryRows = evidenceInfoGrid([
     ['Client / application', (row.company_name || '') + (row.application_ref ? ' (' + row.application_ref + ')' : '')],
     ['Subject', row.subject_name],
