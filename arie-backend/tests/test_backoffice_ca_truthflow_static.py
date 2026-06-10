@@ -342,18 +342,24 @@ def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
 def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel():
     html = BACKOFFICE_HTML.read_text()
 
+    reason_region = _function_region(html, "screeningQueueEvidenceQualityReason", "screeningQueueEvidenceItemCard")
     panel_region = _function_region(html, "screeningQueueEvidenceReadinessPanel", "providerIndicatorDetails")
     entity_region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
     person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
 
     assert "function screeningQueueEvidenceReadinessPanel" in html
+    assert "function screeningQueueEvidenceQualityReason" in html
     assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in entity_region
     assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in person_region
     assert "Screening Summary" in panel_region
     assert "Client / application" in panel_region
     assert "Role / relationship" in panel_region
     assert "Evidence readiness:" in panel_region
-    assert "evidence_quality_reason" in panel_region
+    assert "evidence_quality_reason" in reason_region
+    assert "screeningQueueEvidenceQualityReason(row, qualityLabel, items)" in panel_region
+    assert "Provider screening completed with no hits; detailed source evidence is not applicable." in reason_region
+    assert "Provider screening failed before detailed evidence was available." in reason_region
+    assert "Provider did not return source link." in reason_region
     assert "Evidence" in panel_region
     assert "Officer Decision" in panel_region
     assert "Technical Details" in panel_region
@@ -364,6 +370,18 @@ def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel(
     assert "Provider alert IDs" in panel_region
     assert "Provider risk IDs" in panel_region
     assert "JSON.stringify" not in panel_region
+
+
+def test_backoffice_screening_detail_preserves_queue_evidence_when_merging_review_rows():
+    html = BACKOFFICE_HTML.read_text()
+
+    merge_region = _function_region(html, "getMergedScreeningReviewRow", "buildScreeningTriageSubjects")
+
+    assert "function screeningQueueEvidenceObjectIsEmpty" in html
+    assert "['screening_evidence', 'evidence_summary'].forEach" in merge_region
+    assert "screeningQueueEvidenceObjectIsEmpty(merged[field])" in merge_region
+    assert "screeningQueueEvidenceObjectIsEmpty(queueRow[field])" in merge_region
+    assert "merged[field] = queueRow[field]" in merge_region
 
 
 def test_backoffice_screening_queue_source_links_are_conditional():
