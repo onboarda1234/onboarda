@@ -678,8 +678,6 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
     CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
     CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
-    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_monitoring_alert ON application_enhanced_requirements(monitoring_alert_id);
-    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_monitoring_doc ON application_enhanced_requirements(monitoring_document_id);
 
     -- AI Agents Configuration
     CREATE TABLE IF NOT EXISTS ai_agents (
@@ -1763,8 +1761,6 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
     CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
     CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
-    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_monitoring_alert ON application_enhanced_requirements(monitoring_alert_id);
-    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_monitoring_doc ON application_enhanced_requirements(monitoring_document_id);
 
     -- AI Agents Configuration
     CREATE TABLE IF NOT EXISTS ai_agents (
