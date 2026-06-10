@@ -1101,6 +1101,435 @@ def build_screening_terminality_summary(
     }
 
 
+# ── Screening Queue officer-facing state resolver ─────────────────────
+
+QUEUE_STATUS_NOT_STARTED = "not_started"
+QUEUE_STATUS_IN_PROGRESS = "screening_in_progress"
+QUEUE_STATUS_CLEAR = "clear"
+QUEUE_STATUS_REVIEW_REQUIRED = "review_required"
+QUEUE_STATUS_ESCALATED = "escalated"
+QUEUE_STATUS_FOLLOW_UP_REQUIRED = "follow_up_required"
+QUEUE_STATUS_FAILED = "failed"
+QUEUE_STATUS_CLEARED_BY_OFFICER = "cleared_by_officer"
+
+QUEUE_STATUS_LABELS = {
+    QUEUE_STATUS_NOT_STARTED: "Not Started",
+    QUEUE_STATUS_IN_PROGRESS: "Screening In Progress",
+    QUEUE_STATUS_CLEAR: "Clear",
+    QUEUE_STATUS_REVIEW_REQUIRED: "Review Required",
+    QUEUE_STATUS_ESCALATED: "Escalated",
+    QUEUE_STATUS_FOLLOW_UP_REQUIRED: "Follow-up Required",
+    QUEUE_STATUS_FAILED: "Failed",
+    QUEUE_STATUS_CLEARED_BY_OFFICER: "Cleared by Officer",
+}
+
+QUEUE_ESCALATED_DISPOSITIONS = frozenset({
+    "confirmed_match",
+    "true_match",
+    "material_concern",
+    "escalated_to_edd",
+    "potential_sanctions_match",
+    "potential_pep_match",
+    "adverse_media_match",
+    "director_ubo_sensitive_hit",
+    "high_risk_jurisdiction",
+    "provider_unresolved",
+})
+
+QUEUE_FOLLOW_UP_DISPOSITIONS = frozenset({
+    "needs_more_information",
+    "client_clarification_required",
+    "missing_identity_data",
+    "provider_pending_or_unavailable",
+    "documentation_required",
+})
+
+
+def _queue_int(value):
+    if value in (None, "", [], {}):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _queue_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "t", "yes", "y"}:
+        return True
+    if text in {"0", "false", "f", "no", "n"}:
+        return False
+    return None
+
+
+def _queue_status_token(row: dict, key: str) -> str:
+    return _normalise_token(row.get(key))
+
+
+def _queue_raw_claims_clear(row: dict) -> bool:
+    status_key = _queue_status_token(row, "status_key")
+    status_label = _queue_status_token(row, "status_label")
+    screening_result = _queue_status_token(row, "screening_result")
+    return bool(
+        screening_result == "clear"
+        or status_key in {"screened_no_match", "reviewed_false_positive_cleared", "clear"}
+        or status_label in {"clear", "no match", "cleared by officer"}
+        or row.get("defensible_clear") is True
+    )
+
+
+def _queue_raw_claims_final(row: dict) -> bool:
+    status_key = _queue_status_token(row, "status_key")
+    return status_key in {
+        "screened_no_match",
+        "reviewed_false_positive_cleared",
+        "review_confirmed_match",
+        "review_escalated",
+        "review_follow_up_required",
+        "reviewed",
+        "clear",
+        "failed",
+        "escalated",
+        "follow_up_required",
+        "cleared_by_officer",
+    }
+
+
+def _queue_provider_failed(row: dict) -> bool:
+    states = {
+        _normalise_state(row.get("screening_state")),
+        _normalise_state(row.get("normalized_screening_state")),
+        _normalise_state(row.get("normalized_status")),
+    }
+    status_key = _queue_status_token(row, "status_key")
+    availability = _queue_status_token(row, "provider_availability")
+    truth_state = _queue_status_token(row, "screening_truth_state")
+    mode = _queue_status_token(row, "provider_mode")
+    return bool(
+        FAILED in states
+        or availability == "failed"
+        or truth_state == FAILED
+        or mode == FAILED
+        or status_key in {"screening_unavailable", "failed", "incomplete_record"}
+    )
+
+
+def _queue_provider_not_configured(row: dict) -> bool:
+    states = {
+        _normalise_state(row.get("screening_state")),
+        _normalise_state(row.get("normalized_screening_state")),
+        _normalise_state(row.get("normalized_status")),
+    }
+    status_key = _queue_status_token(row, "status_key")
+    availability = _queue_status_token(row, "provider_availability")
+    truth_state = _queue_status_token(row, "screening_truth_state")
+    return bool(
+        NOT_CONFIGURED in states
+        or availability == "not_configured"
+        or truth_state == NOT_CONFIGURED
+        or status_key == "screening_not_configured"
+    )
+
+
+def _queue_provider_non_terminal(row: dict) -> bool:
+    explicit_terminal = _queue_bool(row.get("terminal"))
+    if explicit_terminal is False:
+        return True
+    if explicit_terminal is True:
+        return False
+
+    raw_state = _normalise_state(
+        row.get("screening_state")
+        or row.get("normalized_screening_state")
+        or row.get("normalized_status")
+    )
+    if raw_state:
+        return raw_state not in TERMINAL_STATES
+    status_key = _queue_status_token(row, "status_key")
+    return status_key in {
+        "awaiting_screening",
+        "screening_pending",
+        "screening_simulated",
+        "screening_sandbox",
+        "screening_not_configured",
+        "screening_unavailable",
+        "incomplete_record",
+    }
+
+
+def _queue_provider_terminal(row: dict) -> bool:
+    explicit_terminal = _queue_bool(row.get("terminal"))
+    if explicit_terminal is not None:
+        return explicit_terminal
+    raw_state = _normalise_state(
+        row.get("screening_state")
+        or row.get("normalized_screening_state")
+        or row.get("normalized_status")
+    )
+    return bool(raw_state in TERMINAL_STATES)
+
+
+def _queue_hit_count(row: dict):
+    total = _queue_int(row.get("total_hits"))
+    if total is None:
+        total = _queue_int(row.get("normalized_total_hits"))
+    if total is not None:
+        return max(0, total)
+    evidence = row.get("provider_evidence")
+    if isinstance(evidence, list) and evidence:
+        return len(evidence)
+    return None
+
+
+def _queue_hits_exist(row: dict) -> bool:
+    total = _queue_hit_count(row)
+    if total is not None and total > 0:
+        return True
+    if _queue_status_token(row, "screening_result") == "match":
+        return True
+    if _normalise_state(
+        row.get("screening_state")
+        or row.get("normalized_screening_state")
+        or row.get("normalized_status")
+    ) == COMPLETED_MATCH:
+        return True
+    for key in ("watchlist_status", "pep_screening_status"):
+        if _queue_status_token(row, key) in {"match", "hit", "possible_match", "review"}:
+            return True
+    evidence = row.get("provider_evidence")
+    return bool(isinstance(evidence, list) and evidence)
+
+
+def _queue_officer_cleared(row: dict) -> bool:
+    code = _review_disposition_code(row)
+    disposition = _normalise_token(row.get("review_disposition") or row.get("disposition"))
+    if code not in FALSE_POSITIVE_CLEARANCE_DISPOSITIONS and disposition not in {"cleared", "no_match", "false_positive_cleared"}:
+        return False
+    if row.get("review_actionable") is False or _truthy_review_flag(row.get("review_resolved")):
+        return True
+    return bool(_review_identity_present(row) and _review_reason_present(row) and _review_timestamp_present(row))
+
+
+def _queue_disposition_status(row: dict):
+    code = _review_disposition_code(row)
+    disposition = _normalise_token(row.get("review_disposition") or row.get("disposition"))
+    if code in QUEUE_FOLLOW_UP_DISPOSITIONS or disposition == "follow_up_required":
+        return QUEUE_STATUS_FOLLOW_UP_REQUIRED
+    if code in QUEUE_ESCALATED_DISPOSITIONS or disposition in {"escalated", "match"}:
+        return QUEUE_STATUS_ESCALATED
+    if _queue_officer_cleared(row):
+        return QUEUE_STATUS_CLEARED_BY_OFFICER if _queue_hits_exist(row) else QUEUE_STATUS_CLEAR
+    return None
+
+
+def _queue_conflict_detected(row: dict, *, hits_exist: bool, non_terminal: bool) -> bool:
+    raw_claims_clear = _queue_raw_claims_clear(row)
+    if raw_claims_clear and hits_exist and not _queue_officer_cleared(row):
+        return True
+    if raw_claims_clear and non_terminal:
+        return True
+
+    legacy_state = _normalise_state(row.get("legacy_screening_state") or row.get("screening_state"))
+    normalized_state = _normalise_state(row.get("normalized_screening_state") or row.get("normalized_status"))
+    if legacy_state and normalized_state and legacy_state != normalized_state:
+        if FAILED in {legacy_state, normalized_state}:
+            return True
+        if COMPLETED_MATCH in {legacy_state, normalized_state}:
+            return True
+        if COMPLETED_CLEAR in {legacy_state, normalized_state} and (
+            legacy_state not in TERMINAL_STATES or normalized_state not in TERMINAL_STATES
+        ):
+            return True
+    return False
+
+
+def _queue_raw_status_metadata(row: dict) -> dict:
+    keys = (
+        "status_key",
+        "status_label",
+        "display_status_label",
+        "screening_state",
+        "screening_truth_state",
+        "screening_result",
+        "terminal",
+        "defensible_clear",
+        "review_required",
+        "provider_mode",
+        "provider_availability",
+        "screening_truth_reason",
+        "total_hits",
+        "review_disposition",
+        "review_disposition_code",
+        "canonical_disposition",
+        "review_actionable",
+        "review_resolved",
+    )
+    return {key: row.get(key) for key in keys if key in row}
+
+
+def _queue_resolution(status_key: str, *, reason: str, requires_review: bool = False, defensible_clear: bool = False, row: dict) -> dict:
+    label = QUEUE_STATUS_LABELS[status_key]
+    return {
+        "canonical_status_key": status_key,
+        "canonical_status": label,
+        "canonical_status_label": label,
+        "status_key": status_key,
+        "status_label": label,
+        "display_status_label": label,
+        "defensible_clear": bool(defensible_clear),
+        "requires_review": bool(requires_review),
+        "review_required": bool(requires_review),
+        "screening_queue_reason": reason,
+        "status_reason": reason,
+        "raw_status": _queue_raw_status_metadata(row),
+    }
+
+
+def resolve_screening_queue_state(row: Optional[dict]) -> dict:
+    """
+    Resolve one Screening Queue row into the allowed officer-facing states.
+
+    The resolver deliberately accepts legacy/raw queue fields, normalized
+    fields when present, and review/disposition fields. It returns a canonical
+    status envelope and preserves raw status metadata for technical debugging.
+    """
+    row = row if isinstance(row, dict) else {}
+    hits_exist = _queue_hits_exist(row)
+    hit_count = _queue_hit_count(row)
+    non_terminal = _queue_provider_non_terminal(row)
+    terminal = _queue_provider_terminal(row)
+
+    disposition_status = _queue_disposition_status(row)
+    if disposition_status == QUEUE_STATUS_ESCALATED:
+        return _queue_resolution(
+            disposition_status,
+            reason="Officer disposition escalated the screening hit.",
+            requires_review=False,
+            defensible_clear=False,
+            row=row,
+        )
+    if disposition_status == QUEUE_STATUS_FOLLOW_UP_REQUIRED:
+        return _queue_resolution(
+            disposition_status,
+            reason="Officer disposition requires follow-up.",
+            requires_review=False,
+            defensible_clear=False,
+            row=row,
+        )
+    if disposition_status == QUEUE_STATUS_CLEARED_BY_OFFICER:
+        return _queue_resolution(
+            disposition_status,
+            reason="Hits cleared by officer disposition.",
+            requires_review=False,
+            defensible_clear=True,
+            row=row,
+        )
+    if _queue_provider_failed(row) or _queue_provider_not_configured(row):
+        return _queue_resolution(
+            QUEUE_STATUS_FAILED,
+            reason="Provider screening failed or returned incomplete data.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
+
+    conflict = _queue_conflict_detected(row, hits_exist=hits_exist, non_terminal=non_terminal)
+    if conflict and hits_exist:
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED,
+            reason="Conflicting legacy and normalized screening data detected; review required.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
+    if conflict:
+        return _queue_resolution(
+            QUEUE_STATUS_IN_PROGRESS,
+            reason="Provider screening is still in progress.",
+            requires_review=False,
+            defensible_clear=False,
+            row=row,
+        )
+
+    raw_status = _queue_status_token(row, "status_key")
+    if raw_status in {"review_required", "declared_pep_review"} or _queue_status_token(row, "pep_declared_status") == "declared":
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED,
+            reason="Provider returned hits requiring officer review." if hits_exist else "Explicit review state requires officer review.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
+    raw_state = _normalise_state(row.get("screening_state"))
+    if raw_status == "awaiting_screening" or (raw_state == NOT_STARTED and not hits_exist and hit_count in (None, 0)):
+        return _queue_resolution(
+            QUEUE_STATUS_NOT_STARTED,
+            reason="Provider screening has not started.",
+            requires_review=False,
+            defensible_clear=False,
+            row=row,
+        )
+
+    if non_terminal:
+        if hits_exist:
+            return _queue_resolution(
+                QUEUE_STATUS_REVIEW_REQUIRED,
+                reason="Provider returned hits requiring officer review.",
+                requires_review=True,
+                defensible_clear=False,
+                row=row,
+            )
+        return _queue_resolution(
+            QUEUE_STATUS_IN_PROGRESS,
+            reason="Provider screening is still in progress.",
+            requires_review=False,
+            defensible_clear=False,
+            row=row,
+        )
+
+    if terminal and hits_exist:
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED,
+            reason="Provider returned hits requiring officer review.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
+
+    if terminal and not hits_exist:
+        return _queue_resolution(
+            QUEUE_STATUS_CLEAR,
+            reason="Provider screening completed with no hits.",
+            requires_review=False,
+            defensible_clear=True,
+            row=row,
+        )
+
+    if _queue_raw_claims_final(row):
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED,
+            reason="Conflicting legacy and normalized screening data detected; review required.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
+
+    return _queue_resolution(
+        QUEUE_STATUS_IN_PROGRESS,
+        reason="Provider screening is still in progress.",
+        requires_review=False,
+        defensible_clear=False,
+        row=row,
+    )
+
+
 # ── Subject-level helpers (per person / entity row) ──
 
 def derive_subject_state(

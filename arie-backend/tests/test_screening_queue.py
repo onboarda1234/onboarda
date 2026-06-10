@@ -123,7 +123,8 @@ def test_screening_queue_separates_declared_pep_from_provider_pep(db, temp_db):
 
     assert person_row["pep_declared_status"] == "declared"
     assert person_row["pep_screening_status"] == "clear"
-    assert person_row["status_key"] == "declared_pep_review"
+    assert person_row["status_key"] == "review_required"
+    assert person_row["status_label"] == "Review Required"
 
 
 def test_screening_queue_uses_company_adverse_media_as_entity_provider_truth(db, temp_db):
@@ -376,7 +377,8 @@ def test_screening_queue_does_not_label_not_configured_entity_as_live(temp_db):
     db.close()
     row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-NOT-CONFIGURED-MODE")
 
-    assert row["status_key"] == "screening_not_configured"
+    assert row["status_key"] == "failed"
+    assert row["status_label"] == "Failed"
     assert row["screening_mode"] == "not_configured"
 
 

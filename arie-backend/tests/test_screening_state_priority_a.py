@@ -622,9 +622,9 @@ class TestScreeningQueueSerializer:
         assert person["watchlist_status"] == "pending"
         assert person["pep_screening_status"] == "pending"
         assert person["screening_state"] == "pending_provider"
-        assert person["status_key"] == "screening_pending"
-        assert person["status_label"] == "Screening Pending Provider"
-        assert person["review_required"] is True
+        assert person["status_key"] == "screening_in_progress"
+        assert person["status_label"] == "Screening In Progress"
+        assert person["review_required"] is False
 
     def test_not_configured_company_is_rendered_explicitly(self, db, temp_db):
         from server import _build_screening_queue_payload
@@ -652,15 +652,15 @@ class TestScreeningQueueSerializer:
                       if r["application_ref"] == "ARF-NCFG-1" and r["subject_type"] == "entity")
         assert entity["watchlist_status"] == "not_configured"
         assert entity["screening_state"] == "not_configured"
-        assert entity["status_key"] == "screening_not_configured"
-        assert entity["status_label"] == "Screening Not Configured"
+        assert entity["status_key"] == "failed"
+        assert entity["status_label"] == "Failed"
         assert entity["review_required"] is True
 
     @pytest.mark.parametrize(
         "api_status,expected_key,expected_label,expected_mode",
         [
-            ("simulated", "screening_simulated", "Simulated Screening — Not Live", "simulated_fallback"),
-            ("sandbox", "screening_sandbox", "Sandbox Screening — Not Production Live", "sandbox_provider"),
+            ("simulated", "screening_in_progress", "Screening In Progress", "simulated_fallback"),
+            ("sandbox", "screening_in_progress", "Screening In Progress", "sandbox_provider"),
         ],
     )
     def test_simulated_and_sandbox_company_labels_are_explicit(
@@ -694,7 +694,7 @@ class TestScreeningQueueSerializer:
         assert entity["status_label"] == expected_label
         assert entity["provider_mode"] == expected_mode
         assert entity["defensible_clear"] is False
-        assert entity["review_required"] is True
+        assert entity["review_required"] is False
 
     def test_failed_provider_for_person_is_rendered_as_unavailable(self, db, temp_db):
         from server import _build_screening_queue_payload
@@ -733,7 +733,8 @@ class TestScreeningQueueSerializer:
                       if r["application_ref"] == "ARF-FAIL-1" and r["subject_name"] == "Failed Person")
         assert person["watchlist_status"] == "unavailable"
         assert person["screening_state"] == "failed"
-        assert person["status_key"] == "screening_unavailable"
+        assert person["status_key"] == "failed"
+        assert person["status_label"] == "Failed"
         assert person["review_required"] is True
 
     def test_declared_pep_visible_before_provider_terminal(self, db, temp_db):
@@ -775,10 +776,11 @@ class TestScreeningQueueSerializer:
         # Both signals must be visible:
         assert person["pep_declared_status"] == "declared"
         assert person["screening_state"] == "pending_provider"
-        # Status must not be "Awaiting Screening" — it must call out
-        # the declared PEP AND the pending provider state.
-        assert "Declared PEP" in person["status_label"]
-        assert "Pending" in person["status_label"]
+        # Status must not be "Awaiting Screening" or "Clear"; declared PEP
+        # makes the row officer-reviewable while raw context keeps the
+        # provider pending detail visible.
+        assert person["status_key"] == "review_required"
+        assert person["status_label"] == "Review Required"
         assert person["review_required"] is True
         assert "Declared PEP" in person["entity_context"]
 
@@ -821,15 +823,15 @@ class TestScreeningQueueSerializer:
         assert person["watchlist_status"] == "clear"
         assert person["pep_screening_status"] == "clear"
         assert person["screening_state"] == "completed_clear"
-        assert person["status_key"] == "screened_no_match"
-        assert person["status_label"] == "No Match"
+        assert person["status_key"] == "clear"
+        assert person["status_label"] == "Clear"
         assert person["review_required"] is False
 
         entity = next(r for r in payload["rows"]
                       if r["application_ref"] == "ARF-CLEAN-1" and r["subject_type"] == "entity")
         assert entity["watchlist_status"] == "clear"
         assert entity["screening_state"] == "completed_clear"
-        assert entity["status_key"] == "screened_no_match"
+        assert entity["status_key"] == "clear"
 
 
 # ── Memo handler: must not overclaim screening completion ─────────────

@@ -4998,7 +4998,7 @@ class TestGovernanceAttemptAudit:
         row = next(r for r in queue.json()["rows"] if r["application_ref"] == app_ref and r["subject_name"] == subject_name)
         assert row["review_required"] is False
         assert row["review_actionable"] is False
-        assert row["status_key"] == "review_escalated"
+        assert row["status_key"] == "escalated"
         assert row["status_label"] == "Escalated"
 
         retry = http_requests.post(
@@ -5096,8 +5096,8 @@ class TestGovernanceAttemptAudit:
         row = next(r for r in queue.json()["rows"] if r["application_ref"] == app_ref and r["subject_name"] == subject_name)
         assert row["review_required"] is False
         assert row["review_actionable"] is False
-        assert row["status_key"] == "review_follow_up_required"
-        assert row["status_label"] == "Follow-Up Required"
+        assert row["status_key"] == "follow_up_required"
+        assert row["status_label"] == "Follow-up Required"
 
     def test_screening_review_subject_must_belong_to_application(self, api_server):
         """Disposition requests must fail closed when the subject is not part of the application."""
