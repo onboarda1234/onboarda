@@ -444,3 +444,272 @@ def test_screening_queue_marks_smoke_provider_as_simulated(temp_db):
 
     assert row["status_key"] == "review_required"
     assert row["screening_mode"] == "simulated"
+
+
+def _insert_sq2_screened_director(
+    db,
+    *,
+    app_id,
+    ref,
+    subject_name="Evidence Director",
+    case_id="case-sq2",
+    alert_id="alert-sq2",
+    risk_id="risk-sq2",
+    profile_id="profile-sq2",
+):
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            ref,
+            "client_sq2",
+            "SQ2 Evidence Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps(
+                {
+                    "screening_report": {
+                        "screened_at": "2026-06-01T00:00:00Z",
+                        "screening_mode": "live",
+                        "company_screening": {
+                            "found": True,
+                            "source": "complyadvantage",
+                            "provider": "complyadvantage",
+                            "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                        },
+                        "director_screenings": [
+                            {
+                                "person_name": subject_name,
+                                "screening": {
+                                    "matched": True,
+                                    "source": "complyadvantage",
+                                    "provider": "complyadvantage",
+                                    "api_status": "live",
+                                    "results": [
+                                        {
+                                            "name": subject_name,
+                                            "is_adverse_media": True,
+                                            "match_category": "Adverse Media",
+                                            "match_categories": ["adverse_media"],
+                                            "provider": "complyadvantage",
+                                            "provider_case_identifier": case_id,
+                                            "provider_alert_identifier": alert_id,
+                                            "provider_risk_identifier": risk_id,
+                                            "provider_profile_identifier": profile_id,
+                                            "summary": "Legacy provider evidence shell",
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                        "ubo_screenings": [],
+                        "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                        "kyc_applicants": [],
+                        "overall_flags": [],
+                        "total_hits": 1,
+                    }
+                }
+            ),
+        ),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        (app_id, subject_name, "Mauritius", "No"),
+    )
+
+
+def _insert_sq2_ca_evidence(
+    db,
+    *,
+    monitoring_id,
+    app_id,
+    case_id="case-sq2",
+    alert_id="alert-sq2",
+    matched_subject="Evidence Director",
+    risk_id="risk-sq2",
+    profile_id="profile-sq2",
+    title="Provider article title",
+    source_url="",
+    source_available=0,
+    evidence_hash="hash-sq2",
+):
+    db.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (id, application_id, client_name, alert_type, severity, detected_by,
+             summary, source_reference, status, provider, case_identifier, discovered_via)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            monitoring_id,
+            app_id,
+            "SQ2 Evidence Ltd",
+            "media",
+            "High",
+            "complyadvantage",
+            f"CA case {case_id} surfaced one media match",
+            json.dumps({
+                "provider": "complyadvantage",
+                "case_identifier": case_id,
+                "alert_identifier": alert_id,
+                "risk_identifier": risk_id,
+                "subject_scope": "director",
+            }),
+            "open",
+            "complyadvantage",
+            case_id,
+            "manual",
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO monitoring_alert_evidence
+            (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+             risk_identifier, profile_identifier, evidence_type, matched_subject_name,
+             relationship_to_client, match_category, risk_indicator, match_confidence,
+             source_title, source_name, source_url, source_url_available, publication_date,
+             snippet, evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            monitoring_id,
+            app_id,
+            "complyadvantage",
+            case_id,
+            alert_id,
+            risk_id,
+            profile_id,
+            "adverse_media",
+            matched_subject,
+            "Director",
+            "Adverse Media",
+            "Adverse Media",
+            "0.92",
+            title,
+            "Provider News",
+            source_url,
+            source_available,
+            "2026-05-01",
+            "Provider snippet for officer review",
+            json.dumps({"title": title, "source_name": "Provider News"}),
+            json.dumps({"risk_identifier": risk_id}),
+            "fetched",
+            evidence_hash,
+            "2026-06-09T00:00:00Z",
+        ),
+    )
+
+
+def test_screening_queue_links_ca_evidence_by_exact_identifiers(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(db, app_id="app_sq2_exact", ref="ARF-SQ2-EXACT")
+    _insert_sq2_ca_evidence(db, monitoring_id=19301, app_id="app_sq2_exact")
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ2-EXACT" and r["subject_type"] == "director")
+
+    assert row["status_key"] == "review_required"
+    assert row["status_label"] == "Review Required"
+    assert "raw_status" in row
+    assert row["screening_evidence"]["evidence_status"] == "available"
+    assert row["screening_evidence"]["evidence_quality_label"] == "Complete"
+    assert row["screening_evidence"]["technical_details"]["linked_ca_1b_evidence_count"] == 1
+    evidence = row["screening_evidence"]["items"][0]
+    assert evidence["source_title"] == "Provider article title"
+    assert evidence["source_name"] == "Provider News"
+    assert evidence["provider_case_id"] == "case-sq2"
+    assert evidence["provider_alert_id"] == "alert-sq2"
+    assert evidence["provider_risk_id"] == "risk-sq2"
+    assert evidence["match_score"] == "0.92"
+    assert evidence["source_url"] == ""
+    assert evidence["source_url_unavailable_message"] == "Source link not available from provider payload."
+
+
+def test_screening_queue_does_not_attach_mismatched_ca_subject(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_sq2_mismatch",
+        ref="ARF-SQ2-MISMATCH",
+        case_id="case-sq2-mismatch",
+        alert_id="alert-sq2-mismatch",
+        risk_id="risk-sq2-mismatch",
+        profile_id="profile-sq2-mismatch",
+    )
+    _insert_sq2_ca_evidence(
+        db,
+        monitoring_id=19302,
+        app_id="app_sq2_mismatch",
+        case_id="case-sq2-mismatch",
+        alert_id="alert-sq2-mismatch",
+        risk_id="risk-sq2-mismatch",
+        profile_id="profile-sq2-mismatch",
+        matched_subject="Different Director",
+        title="Wrong subject article",
+        evidence_hash="hash-sq2-mismatch",
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ2-MISMATCH" and r["subject_type"] == "director")
+
+    titles = [item.get("source_title") for item in row["screening_evidence"]["items"]]
+    assert "Wrong subject article" not in titles
+    assert row["screening_evidence"]["technical_details"]["linked_ca_1b_evidence_count"] == 0
+    assert row["screening_evidence"]["evidence_status"] == "partial"
+
+
+def test_screening_queue_rejects_low_confidence_ca_evidence_without_exact_ids(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(db, app_id="app_sq2_low_conf", ref="ARF-SQ2-LOW-CONF")
+    _insert_sq2_ca_evidence(
+        db,
+        monitoring_id=19303,
+        app_id="app_sq2_low_conf",
+        case_id="case-unrelated",
+        alert_id="alert-unrelated",
+        matched_subject="",
+        risk_id="risk-unrelated",
+        profile_id="profile-unrelated",
+        title="Unrelated no subject article",
+        evidence_hash="hash-sq2-low-conf",
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ2-LOW-CONF" and r["subject_type"] == "director")
+
+    titles = [item.get("source_title") for item in row["screening_evidence"]["items"]]
+    assert "Unrelated no subject article" not in titles
+    assert row["screening_evidence"]["technical_details"]["linked_ca_1b_evidence_count"] == 0
+
+
+def test_screening_queue_reports_structured_evidence_unavailable_honestly(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_sq2_unavailable",
+        ref="ARF-SQ2-UNAVAILABLE",
+        subject_name="Unavailable Evidence Director",
+        risk_id="risk-sq2-unavailable",
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ2-UNAVAILABLE" and r["subject_type"] == "director")
+
+    assert row["screening_evidence"]["evidence_status"] == "partial"
+    assert row["screening_evidence"]["items"][0]["source_url_unavailable_message"] == "Source link not available from provider payload."
+    assert row["evidence_summary"]["partial_evidence_message"] == "Detailed provider evidence is partial or unavailable for this screening result."
+    assert row["status_key"] == "review_required"
