@@ -15494,7 +15494,41 @@ def _screening_queue_provider_group(row):
 
 def _apply_screening_queue_canonical_state(row):
     row = dict(row or {})
-    row.update(resolve_screening_queue_state(row))
+    resolved = resolve_screening_queue_state(row)
+    raw_terminal = row.get("terminal")
+    row.update(resolved)
+
+    status_key = resolved["status_key"]
+    try:
+        hits = int(row.get("total_hits") or 0)
+    except (TypeError, ValueError):
+        hits = 0
+    if status_key == "not_started":
+        row["screening_state"] = "not_started"
+        row["screening_result"] = "not_started"
+        row["terminal"] = False
+    elif status_key == "screening_in_progress":
+        row["screening_state"] = "pending_provider"
+        row["screening_result"] = "pending"
+        row["terminal"] = False
+    elif status_key == "failed":
+        raw_state = str((resolved.get("raw_status") or {}).get("screening_state") or "").strip().lower()
+        raw_key = str((resolved.get("raw_status") or {}).get("status_key") or "").strip().lower()
+        row["screening_state"] = "not_configured" if raw_state == "not_configured" or raw_key == "screening_not_configured" else "failed"
+        row["screening_result"] = "failed"
+        row["terminal"] = False
+    elif status_key == "clear":
+        row["screening_state"] = "completed_clear"
+        row["screening_result"] = "clear"
+        row["terminal"] = True
+    elif status_key == "cleared_by_officer":
+        row["screening_state"] = "completed_match"
+        row["screening_result"] = "cleared_by_officer"
+        row["terminal"] = True
+    elif status_key in ("review_required", "escalated", "follow_up_required"):
+        row["screening_state"] = "completed_match" if hits > 0 else "pending_provider"
+        row["screening_result"] = "match" if hits > 0 else status_key
+        row["terminal"] = bool(raw_terminal) if hits > 0 else False
     return row
 
 

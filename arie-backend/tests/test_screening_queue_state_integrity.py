@@ -216,6 +216,35 @@ def _assert_no_impossible_queue_states(rows):
         assert not (row.get("terminal") is False and status_key in clear_keys), row
 
 
+def test_canonical_queue_payload_suppresses_top_level_legacy_clear_signal():
+    from server import _apply_screening_queue_canonical_state
+
+    row = _apply_screening_queue_canonical_state({
+        "application_ref": "ARF-SQ1-STAGING-LEGACY",
+        "subject_name": "Legacy Clear Pending Co",
+        "subject_type": "entity",
+        "status_key": "screening_pending",
+        "status_label": "Screening Pending Provider",
+        "screening_state": "not_started",
+        "screening_result": "clear",
+        "terminal": True,
+        "defensible_clear": True,
+        "review_required": True,
+        "total_hits": 0,
+    })
+
+    assert row["status_key"] == "not_started"
+    assert row["status_label"] == "Not Started"
+    assert row["defensible_clear"] is False
+    assert row["review_required"] is False
+    assert row["screening_state"] == "not_started"
+    assert row["screening_result"] == "not_started"
+    assert row["terminal"] is False
+    assert row["raw_status"]["screening_result"] == "clear"
+    assert row["raw_status"]["defensible_clear"] is True
+    _assert_no_impossible_queue_states([row])
+
+
 def test_screening_queue_payload_cannot_expose_impossible_officer_states(db, temp_db):
     from server import _build_screening_queue_payload
 
