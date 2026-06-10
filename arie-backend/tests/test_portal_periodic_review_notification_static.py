@@ -26,6 +26,13 @@ def test_portal_notification_center_maps_periodic_review_types():
     assert "periodic_review_overdue" in html
 
 
+def test_portal_notification_center_maps_updated_document_required():
+    html = _html()
+
+    assert "updated_document_required" in html
+    assert "Requested documents:" in html
+
+
 def test_portal_notification_copy_does_not_expose_risk_terms():
     html = _html()
     task_region = html[html.index("function periodicReviewNotificationHint"):]
