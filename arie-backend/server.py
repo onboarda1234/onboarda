@@ -186,6 +186,15 @@ from monitoring_enrollment import (
     enroll_approved_application as _enroll_approved_application_for_monitoring,
     latest_active_review_summary as _latest_monitoring_review_summary,
 )
+from monitoring_document_refresh import (
+    MonitoringDocumentRefreshError as _MonitoringDocumentRefreshError,
+    document_refresh_context as _monitoring_document_refresh_context,
+    is_document_refresh_alert as _is_document_refresh_alert,
+    mark_client_upload_received_if_monitoring_linked as _mark_monitoring_document_upload_received,
+    request_updated_document as _request_monitoring_updated_document,
+    review_document_refresh as _review_monitoring_document_refresh,
+    sync_requirement_review_to_monitoring_alert as _sync_monitoring_requirement_review,
+)
 from periodic_review_policy import policy_snapshot_for_application as _periodic_review_policy_snapshot
 from periodic_review_management import (
     InvalidPeriodicReviewInput as _InvalidPeriodicReviewInput,
@@ -11153,6 +11162,12 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                     ip_address=self.get_client_ip(),
                     after_state=result,
                 )
+            _sync_monitoring_requirement_review(
+                db,
+                result.get("requirement") or {},
+                user=user,
+                audit_writer=self.log_audit,
+            )
             db.commit()
             self.success(result)
         except Exception as exc:
@@ -21544,6 +21559,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["owner_name"] = result.get("owner_name") or _monitoring_alert_owner_label(db, result.get("reviewed_by"))
         result["assigned_officer_name"] = result["owner_name"]
         result["provider_evidence"] = _monitoring_alert_provider_evidence(db, alert_id)
+        result["document_refresh"] = _monitoring_document_refresh_context(db, result)
         result["audit_history"] = _monitoring_alert_audit_history(db, alert_id)
         db.close()
         self.success(result)
@@ -21585,6 +21601,8 @@ class MonitoringAlertDetailHandler(BaseHandler):
         valid_actions = [
             "start_review", "triage", "assign", "save_decision", "dismiss",
             "route_to_periodic_review", "route_to_edd",
+            "request_updated_document", "accept_updated_document",
+            "reject_updated_document", "waive_updated_document",
         ]
         valid_for_error = valid_actions + list(legacy_alias.keys())
         if canonical_action not in valid_actions:
@@ -21602,10 +21620,57 @@ class MonitoringAlertDetailHandler(BaseHandler):
                 return self.error("Alert not found", 404)
             alert_before = dict(alert_before_row)
             try:
-                if canonical_action == "start_review":
+                document_action = canonical_action
+                if canonical_action == "save_decision":
+                    outcome_alias = str(data.get("outcome") or "").strip()
+                    document_outcome_aliases = {
+                        "request_updated_document": "request_updated_document",
+                        "accept_updated_document": "accept_updated_document",
+                        "mark_already_updated": "accept_updated_document",
+                        "reject_updated_document": "reject_updated_document",
+                        "reject_rerequest": "reject_updated_document",
+                        "waive_with_reason": "waive_updated_document",
+                    }
+                    document_action = document_outcome_aliases.get(outcome_alias, canonical_action)
+                if document_action in {
+                    "request_updated_document",
+                    "accept_updated_document",
+                    "reject_updated_document",
+                    "waive_updated_document",
+                }:
+                    if not _is_document_refresh_alert(alert_before):
+                        return self.error("Document refresh actions are only available for document expiry alerts.", 400)
+                    note = str(data.get("note") or data.get("reason") or "").strip()
+                    if document_action == "request_updated_document":
+                        result = _request_monitoring_updated_document(
+                            db,
+                            alert_id,
+                            user=user,
+                            audit_writer=self.log_audit,
+                            email_sender=send_portal_email,
+                            due_date=data.get("due_date"),
+                        )
+                    else:
+                        review_outcome = {
+                            "accept_updated_document": "accept",
+                            "reject_updated_document": "reject",
+                            "waive_updated_document": "waive",
+                        }[document_action]
+                        result = _review_monitoring_document_refresh(
+                            db,
+                            alert_id,
+                            outcome=review_outcome,
+                            note=note,
+                            user=user,
+                            audit_writer=self.log_audit,
+                        )
+                    db.commit()
+                    canonical_action = document_action
+                elif canonical_action == "start_review":
                     prior_status = alert_before.get("status") or "open"
                     if str(prior_status).lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
                         return self.error("Cannot start review for an alert that is already terminal.", 409)
+                    next_status = "under_review" if _is_document_refresh_alert(alert_before) and str(prior_status).lower() == "client_uploaded" else "in_review"
                     note = str(data.get("note") or data.get("reason") or "").strip()
                     payload = {
                         "started_by": user.get("sub", ""),
@@ -21624,7 +21689,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                          WHERE id = ?
                         """,
                         (
-                            "in_review",
+                            next_status,
                             "start_review",
                             json.dumps(payload, sort_keys=True),
                             user.get("sub", ""),
@@ -21638,11 +21703,11 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         json.dumps({"alert_id": alert_id, "note": note}, sort_keys=True),
                         db=db,
                         before_state={"status": prior_status},
-                        after_state={"status": "in_review"},
+                        after_state={"status": next_status},
                         commit=False,
                     )
                     db.commit()
-                    result = {"alert_id": alert_id, "status": "in_review"}
+                    result = {"alert_id": alert_id, "status": next_status}
                 elif canonical_action == "triage":
                     result = mr.triage_alert(
                         db, alert_id, user=user, audit_writer=self.log_audit,
@@ -21831,6 +21896,8 @@ class MonitoringAlertDetailHandler(BaseHandler):
                 return self.error(str(e), 409)
             except mr.MonitoringRoutingError as e:
                 return self.error(str(e), 400)
+            except _MonitoringDocumentRefreshError as e:
+                return self.error(str(e), e.status_code)
 
             self.success({
                 "status": "alert_updated",
@@ -26257,6 +26324,14 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     if str(item.get("id")) == str(requirement_id)
                 ),
                 None,
+            )
+            _mark_monitoring_document_upload_received(
+                db,
+                app,
+                result.get("requirement") or {},
+                document_id,
+                actor=user,
+                audit_writer=self.log_audit,
             )
             if previous_documents:
                 self.log_audit(

@@ -106,6 +106,11 @@ def _remove_modern_backfills(db, keep_count):
         db.execute("DROP INDEX IF EXISTS idx_provider_comparisons_app")
         db.execute("DROP INDEX IF EXISTS uq_provider_comparisons_app_pair")
         db.execute("DROP TABLE IF EXISTS screening_provider_comparisons")
+    if "032" not in kept_versions:
+        db.execute("DROP INDEX IF EXISTS idx_app_enhanced_req_monitoring_alert")
+        db.execute("DROP INDEX IF EXISTS idx_app_enhanced_req_monitoring_doc")
+        for column in ("monitoring_alert_id", "monitoring_document_id", "due_date"):
+            _drop_column_if_present(db, "application_enhanced_requirements", column)
     db.commit()
 
 

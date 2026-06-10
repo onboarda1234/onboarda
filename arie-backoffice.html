@@ -3973,6 +3973,7 @@ var MONITORING_ALERT_STATUS_LABELS = {
   assigned: 'Assigned',
   document_requested: 'Document Requested',
   client_uploaded: 'Client Uploaded',
+  under_review: 'Under Review',
   escalated: 'Escalated',
   routed_to_edd: 'Routed to EDD',
   dismissed: 'Dismissed',
@@ -4044,6 +4045,8 @@ function normalizeAlertStatus(status) {
     requested: 'document_requested',
     client_uploaded: 'client_uploaded',
     uploaded: 'client_uploaded',
+    under_review: 'under_review',
+    underreview: 'under_review',
     escalated: 'escalated',
     escalated_to_edd: 'routed_to_edd',
     routed_edd: 'routed_to_edd',
@@ -4135,7 +4138,7 @@ function monitoringSeverityBadgeClass(severityKey) {
 }
 
 function monitoringStatusBadgeClass(statusKey) {
-  if (statusKey === 'open' || statusKey === 'in_review' || statusKey === 'assigned' || statusKey === 'document_requested' || statusKey === 'client_uploaded') return 'pending';
+  if (statusKey === 'open' || statusKey === 'in_review' || statusKey === 'assigned' || statusKey === 'document_requested' || statusKey === 'client_uploaded' || statusKey === 'under_review') return 'pending';
   if (statusKey === 'escalated') return 'high';
   if (statusKey === 'dismissed' || statusKey === 'waived') return 'draft';
   if (statusKey === 'resolved' || statusKey === 'routed_to_edd') return 'approved';
@@ -17621,6 +17624,34 @@ function monitoringAlertProviderEvidenceRows(raw) {
   }).join('');
 }
 
+function monitoringDocumentRefreshContext(alert) {
+  var raw = (alert && alert.raw) || alert || {};
+  return (raw && raw.document_refresh) || {};
+}
+
+function monitoringDocumentRefreshStatusLabel(status) {
+  var key = monitoringCanonicalToken(status || '');
+  var map = {
+    requested: 'Document Requested',
+    uploaded: 'Client Uploaded',
+    under_review: 'Under Review',
+    accepted: 'Accepted',
+    rejected: 'Rejected / Re-requested',
+    waived: 'Waived',
+    cancelled: 'Cancelled'
+  };
+  return map[key] || normalizeAlertStatusLabel(status || 'open');
+}
+
+function monitoringDocumentRefreshNextAction(alert, ctx) {
+  ctx = ctx || monitoringDocumentRefreshContext(alert);
+  var status = monitoringCanonicalToken((ctx.request && ctx.request.status) || ctx.request_status || alert.statusKey || '');
+  if (alert && (alert.statusKey === 'resolved' || alert.statusKey === 'waived')) return 'No further action required.';
+  if (status === 'uploaded' || status === 'under_review' || (alert && alert.statusKey === 'client_uploaded')) return 'Review the uploaded replacement document.';
+  if (status === 'requested' || status === 'rejected' || (alert && alert.statusKey === 'document_requested')) return 'Await client upload or re-request if rejected.';
+  return 'Request an updated document or waive with a documented reason.';
+}
+
 function monitoringAlertEvidenceHtml(alert) {
   var raw = (alert && alert.raw) || alert || {};
   var ref = parseMonitoringSourceReference(raw.source_reference || raw.source_reference_json);
@@ -17648,7 +17679,11 @@ function monitoringAlertEvidenceHtml(alert) {
       '<div style="margin-top:12px;font-size:13px;color:var(--text2);line-height:1.55;"><strong>Why this matters:</strong> Screening-change alerts may indicate adverse media, PEP, sanctions, or watchlist exposure requiring human review before risk acceptance.</div>';
   }
   if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') {
-    var expiryDate = ref.expiry_date || ref.expires_at || ref.document_expiry || raw.expiry_date || '';
+    var ctx = monitoringDocumentRefreshContext(alert);
+    var doc = ctx.document || {};
+    var req = ctx.request || {};
+    var linkedDoc = req.linked_document || {};
+    var expiryDate = doc.expiry_date || ref.expiry_date || ref.expires_at || ref.document_expiry || raw.expiry_date || '';
     var daysLabel = 'Not available';
     if (expiryDate) {
       var ts = Date.parse(expiryDate);
@@ -17658,12 +17693,16 @@ function monitoringAlertEvidenceHtml(alert) {
       }
     }
     return monitoringInfoGrid([
-      ['Document type', monitoringTextValue(ref.document_type || ref.doc_type || raw.document_type || alert.type, 'Not available')],
-      ['Document owner', monitoringTextValue(ref.document_owner || ref.owner || ref.person_name || raw.document_owner, 'Not available')],
+      ['Client name', monitoringTextValue(alert.client || raw.application_company_name || raw.client_name, 'Not available')],
+      ['Application reference', monitoringTextValue(alert.applicationRef || raw.application_ref || raw.application_id, 'Not available')],
+      ['Document type', monitoringTextValue(doc.type_label || ref.document_type || ref.doc_type || raw.document_type || alert.type, 'Not available')],
+      ['Document owner', monitoringTextValue(doc.owner || ref.document_owner || ref.owner || ref.person_name || raw.document_owner, 'Not available')],
       ['Expiry date', monitoringTextValue(expiryDate, 'Not available')],
       ['Days overdue / until expiry', monitoringTextValue(daysLabel, 'Not available')],
-      ['Current status', monitoringTextValue(alert.status, 'Not available')],
-      ['Recommended next action', 'Confirm whether an updated document is already on file or record intent to request an update. Client upload/request workflow is out of scope for this sprint.']
+      ['Request status', monitoringTextValue(monitoringDocumentRefreshStatusLabel(req.status || ctx.request_status || alert.statusKey), 'Not available')],
+      ['Due date', monitoringTextValue(ctx.due_date || req.due_date || '', 'Not set')],
+      ['Uploaded replacement document', monitoringTextValue(linkedDoc.doc_name || '', 'Not uploaded')],
+      ['Next action', monitoringTextValue(monitoringDocumentRefreshNextAction(alert, ctx), 'Not available')]
     ]);
   }
   return '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + monitoringTextValue(alert.detail || raw.summary, 'No issue detail available.') + '</div>';
@@ -17681,7 +17720,7 @@ function monitoringComplianceImpact(alert) {
 
 function monitoringRecommendedNextStep(alert) {
   if (!alert) return 'Start review, select an outcome, and record the decision rationale.';
-  if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') return 'Start review, confirm document status, then request update intent, mark already updated, waive with reason, or escalate overdue item.';
+  if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') return 'Request the updated document, review the client upload, then accept, reject/re-request, or waive with a documented reason.';
   if (alert.typeKey === 'risk_drift') return 'Start review, decide whether the risk profile needs updating, and route to EDD or SCO if material.';
   if (alert.typeKey === 'adverse_media' || alert.typeKey === 'pep_change' || alert.typeKey === 'sanctions_change') return 'Start review, inspect evidence, determine materiality, and either dismiss with rationale, route to EDD, escalate to SCO, update risk profile, or request more information.';
   return 'Start review and record a clear outcome with supporting note where material.';
@@ -17690,7 +17729,7 @@ function monitoringRecommendedNextStep(alert) {
 function monitoringOutcomeOptions(alert) {
   var type = alert && alert.typeKey;
   if (type === 'document_expiry' || type === 'missing_document_refresh') {
-    return [['request_updated_document', 'Request updated document'], ['mark_already_updated', 'Mark as already updated'], ['waive_with_reason', 'Waive with reason'], ['escalate_overdue_item', 'Escalate overdue item']];
+    return [['request_updated_document', 'Request updated document'], ['accept_updated_document', 'Accept uploaded document'], ['reject_updated_document', 'Reject / re-request'], ['waive_with_reason', 'Waive with reason']];
   }
   if (type === 'risk_drift') {
     return [['no_material_impact', 'No material impact'], ['update_risk_profile', 'Update risk profile'], ['route_to_edd', 'Route to EDD'], ['escalate_to_sco', 'Escalate to SCO'], ['request_further_information', 'Request further information']];
@@ -17700,7 +17739,7 @@ function monitoringOutcomeOptions(alert) {
 
 function monitoringOutcomeRequiresNote(alert, outcome) {
   if (!outcome) return false;
-  if (['false_positive','waive_with_reason','escalate_to_sco','route_to_edd','update_risk_profile','escalate_overdue_item'].indexOf(outcome) >= 0) return true;
+  if (['false_positive','waive_with_reason','waive_updated_document','reject_updated_document','escalate_to_sco','route_to_edd','update_risk_profile','escalate_overdue_item'].indexOf(outcome) >= 0) return true;
   if (alert && (alert.severityKey === 'high' || alert.severityKey === 'critical')) return true;
   if (['adverse_media','pep_change','sanctions_change'].indexOf((alert || {}).typeKey) >= 0 && ['false_positive','no_material_impact'].indexOf(outcome) >= 0) return true;
   return false;
@@ -17710,7 +17749,39 @@ function monitoringAlertIsTerminal(alert) {
   return ['dismissed','resolved','waived','routed_to_edd'].indexOf((alert || {}).statusKey) >= 0 || (alert && alert.rawStatusKey === 'routed_to_review');
 }
 
+function renderMonitoringDocumentDecisionSection(alert) {
+  if (monitoringAlertIsTerminal(alert)) {
+    return monitoringDetailCard('Officer Action', '<div style="font-size:13px;color:var(--text3);">This document refresh alert is already closed. Decisions are read-only from this view.</div>');
+  }
+  var ctx = monitoringDocumentRefreshContext(alert);
+  var req = ctx.request || {};
+  var reqStatus = monitoringCanonicalToken(req.status || ctx.request_status || '');
+  var hasActive = !!ctx.has_active_request;
+  var uploaded = alert.statusKey === 'client_uploaded' || reqStatus === 'uploaded' || reqStatus === 'under_review';
+  var actionButtons = [];
+  if (!hasActive) {
+    actionButtons.push('<button class="btn btn-primary btn-sm" id="monitoring-request-updated-document-btn" onclick="requestMonitoringUpdatedDocument()">Request Updated Document</button>');
+  } else if (uploaded) {
+    actionButtons.push('<button class="btn btn-primary btn-sm" id="monitoring-accept-updated-document-btn" onclick="reviewMonitoringUpdatedDocument(\'accept_updated_document\')">Accept uploaded document</button>');
+    actionButtons.push('<button class="btn btn-outline btn-sm" id="monitoring-reject-updated-document-btn" onclick="reviewMonitoringUpdatedDocument(\'reject_updated_document\')">Reject / re-request</button>');
+  } else {
+    actionButtons.push('<button class="btn btn-outline btn-sm" disabled>Document request active</button>');
+  }
+  actionButtons.push('<button class="btn btn-outline btn-sm" id="monitoring-waive-updated-document-btn" onclick="reviewMonitoringUpdatedDocument(\'waive_updated_document\')">Waive with reason</button>');
+  return monitoringDetailCard('Officer Action',
+    '<div style="display:grid;gap:12px;">' +
+      '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Suggested action: ' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-outline btn-sm" id="monitoring-start-review-btn" onclick="startMonitoringAlertReview()">Start Review</button>' + actionButtons.join('') + '</div>' +
+      '<div><div class="form-label">Add Note <span id="monitoring-alert-note-required" style="color:var(--red);display:none;">*</span></div><textarea class="form-input" id="monitoring-alert-decision-note" rows="3" placeholder="Required for rejection or waiver. Optional for request and acceptance."></textarea><div id="monitoring-alert-decision-hint" style="font-size:11px;color:var(--text3);margin-top:4px;">Reject and waive actions require a note.</div></div>' +
+      '<span id="monitoring-alert-decision-result" style="font-size:12px;"></span>' +
+    '</div>'
+  );
+}
+
 function renderMonitoringDecisionSection(alert) {
+  if (alert && (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh')) {
+    return renderMonitoringDocumentDecisionSection(alert);
+  }
   if (monitoringAlertIsTerminal(alert)) {
     return monitoringDetailCard('Officer Action', '<div style="font-size:13px;color:var(--text3);">This alert is already in a terminal or downstream-routed state. Decisions are read-only from this view.</div>');
   }
@@ -17939,6 +18010,58 @@ async function refreshMonitoringAlertDetail() {
 function backToMonitoringAlerts() {
   if (window.history) window.history.replaceState(null, '', '#monitoring');
   showView('monitoring');
+}
+
+async function requestMonitoringUpdatedDocument() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var noteEl = document.getElementById('monitoring-alert-decision-note');
+  var resultEl = document.getElementById('monitoring-alert-decision-result');
+  var btn = document.getElementById('monitoring-request-updated-document-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Requesting...'; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, {
+      action: 'request_updated_document',
+      note: noteEl ? noteEl.value.trim() : ''
+    });
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Updated document requested.</span>';
+    showToast('Updated document requested');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Request failed') + '</span>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Request Updated Document'; }
+  }
+}
+
+async function reviewMonitoringUpdatedDocument(action) {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var noteEl = document.getElementById('monitoring-alert-decision-note');
+  var resultEl = document.getElementById('monitoring-alert-decision-result');
+  var note = noteEl ? noteEl.value.trim() : '';
+  if ((action === 'reject_updated_document' || action === 'waive_updated_document') && !note) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">A reason is required for this action.</span>';
+    var requiredEl = document.getElementById('monitoring-alert-note-required');
+    if (requiredEl) requiredEl.style.display = '';
+    return;
+  }
+  var btnId = action === 'accept_updated_document' ? 'monitoring-accept-updated-document-btn' :
+    action === 'reject_updated_document' ? 'monitoring-reject-updated-document-btn' :
+    'monitoring-waive-updated-document-btn';
+  var btn = document.getElementById(btnId);
+  var original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, { action: action, note: note });
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Document decision saved.</span>';
+    showToast('Document decision saved');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Save failed') + '</span>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original || 'Save'; }
+  }
 }
 
 async function startMonitoringAlertReview() {

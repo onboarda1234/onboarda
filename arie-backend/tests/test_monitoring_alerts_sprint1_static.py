@@ -248,6 +248,31 @@ def test_monitoring_alert_decision_and_assignment_controls_are_simplified():
     assert "monitoringDetailCard('Assignment'" not in assignment
 
 
+def test_monitoring_document_refresh_actions_are_specific_and_not_adverse_media_workflow():
+    html = _html()
+    evidence = _function_region(html, "monitoringAlertEvidenceHtml", "monitoringComplianceImpact")
+    doc_decision = _function_region(html, "renderMonitoringDocumentDecisionSection", "renderMonitoringDecisionSection")
+    handlers = _function_region(html, "requestMonitoringUpdatedDocument", "startMonitoringAlertReview")
+
+    assert "document_refresh" in evidence
+    assert "Request status" in evidence
+    assert "Uploaded replacement document" in evidence
+    assert "Client upload/request workflow is out of scope" not in evidence
+
+    assert "Request Updated Document" in doc_decision
+    assert "Accept uploaded document" in doc_decision
+    assert "Reject / re-request" in doc_decision
+    assert "Waive with reason" in doc_decision
+    assert "Route to EDD" not in doc_decision
+    assert "escalate_overdue_item" not in doc_decision
+
+    assert "request_updated_document" in handlers
+    assert "accept_updated_document" in handlers
+    assert "reject_updated_document" in handlers
+    assert "waive_updated_document" in handlers
+    assert "A reason is required for this action." in handlers
+
+
 def test_monitoring_alert_open_application_prefers_ref_and_handles_missing_link():
     html = _html()
     target_region = _function_region(html, "monitoringAlertApplicationTarget", "openMonitoringAlertApplication")
