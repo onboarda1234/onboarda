@@ -84,7 +84,8 @@ def test_queue_declared_pep_chip_robust_to_noncanonical_truthy(db, temp_db, is_p
     assert person_row["pep_declared_status"] == "declared", (
         f"is_pep value {is_pep_value!r} was flattened to {person_row['pep_declared_status']!r}"
     )
-    assert person_row["status_key"] == "declared_pep_review"
+    assert person_row["status_key"] == "review_required"
+    assert person_row["status_label"] == "Review Required"
 
 
 def test_queue_declared_pep_chip_does_not_render_not_declared(db, temp_db):
@@ -104,6 +105,9 @@ def test_queue_terminal_clear_non_pep_still_renders_not_declared(db, temp_db):
     """Regression guard: non-PEP, terminal-clear case must not be elevated."""
     from server import _build_screening_queue_payload
 
+    app_id = "app_clean_" + uuid.uuid4().hex[:8]
+    ref = "ARF-CLEAN-" + uuid.uuid4().hex[:8]
+    client_id = "client_clean_" + uuid.uuid4().hex[:8]
     db.execute(
         """
         INSERT INTO applications
@@ -111,7 +115,7 @@ def test_queue_terminal_clear_non_pep_still_renders_not_declared(db, temp_db):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            "app_clean", "ARF-CLEAN", "client_clean", "Clean Co",
+            app_id, ref, client_id, "Clean Co",
             "Mauritius", "Technology", "SME", "pricing_review",
             json.dumps({
                 "screening_report": {
@@ -138,14 +142,15 @@ def test_queue_terminal_clear_non_pep_still_renders_not_declared(db, temp_db):
     )
     db.execute(
         "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
-        ("app_clean", "Clean Director", "Mauritius", "No"),
+        (app_id, "Clean Director", "Mauritius", "No"),
     )
     db.commit()
 
     payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
-    person_row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-CLEAN" and r["subject_type"] == "director")
+    person_row = next(r for r in payload["rows"] if r["application_ref"] == ref and r["subject_type"] == "director")
     assert person_row["pep_declared_status"] == "not_declared"
-    assert person_row["status_key"] == "screened_no_match"
+    assert person_row["status_key"] == "clear"
+    assert person_row["status_label"] == "Clear"
 
 
 # ── C. Memo builder — banned phrasing must be scrubbed when declared PEP ────

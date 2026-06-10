@@ -83,8 +83,8 @@ def test_upsert_screening_review_persists_and_survives_queue_reload(db, temp_db)
     assert row["reviewed_by"] == "Test Admin"
     assert row["review_required"] is False
     assert row["review_actionable"] is False
-    assert row["status_key"] == "reviewed_false_positive_cleared"
-    assert row["status_label"] == "No Match"
+    assert row["status_key"] == "cleared_by_officer"
+    assert row["status_label"] == "Cleared by Officer"
 
 
 def test_screening_review_rationale_flows_into_memo():
@@ -204,11 +204,11 @@ def test_false_positive_clearance_queue_label_is_reviewed_not_raw_clear(db, temp
     row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-REVIEWED-FP-LABEL")
 
     assert row["screening_state"] == "completed_match"
-    assert row["status_key"] == "reviewed_false_positive_cleared"
-    assert row["status_label"] == "No Match"
+    assert row["status_key"] == "cleared_by_officer"
+    assert row["status_label"] == "Cleared by Officer"
     assert row["review_resolved"] is True
     assert row["canonical_disposition"] == "false_positive_cleared"
-    assert row["defensible_clear"] is False
+    assert row["defensible_clear"] is True
 
 
 def test_confirmed_match_queue_label_remains_blocking(db, temp_db):
@@ -289,8 +289,8 @@ def test_confirmed_match_queue_label_remains_blocking(db, temp_db):
     payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
     row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-CONFIRMED-MATCH")
 
-    assert row["status_key"] == "review_confirmed_match"
-    assert row["status_label"] == "Match Confirmed"
+    assert row["status_key"] == "escalated"
+    assert row["status_label"] == "Escalated"
     assert row["canonical_disposition"] == "confirmed_match"
     assert row["review_required"] is False
 
@@ -557,8 +557,8 @@ def test_person_media_monitoring_alert_does_not_drive_company_summary(db, temp_d
     payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
     row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-CA-PERSON-MEDIA" and r["subject_type"] == "entity")
 
-    assert row["status_key"] == "screened_no_match"
-    assert row["status_label"] == "No Match"
+    assert row["status_key"] == "clear"
+    assert row["status_label"] == "Clear"
     assert row["watchlist_status"] == "clear"
     assert row["review_required"] is False
     assert row["total_hits"] == 0

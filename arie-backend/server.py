@@ -2453,6 +2453,7 @@ from screening_state import (
     derive_screening_truth,
     build_screening_truth_summary,
     build_screening_terminality_summary,
+    resolve_screening_queue_state,
     derive_subject_state,
     state_label as screening_state_label,
     legacy_status_value as _screening_legacy_status,
@@ -15454,16 +15455,20 @@ def _screening_queue_status_group(row):
     status_key = _screening_queue_filter_value(row.get("status_key"))
     canonical = _screening_queue_filter_value(row.get("canonical_disposition") or row.get("review_disposition_code"))
     disposition = _screening_queue_filter_value(row.get("review_disposition"))
-    if status_key == "awaiting_screening":
+    if status_key in ("not_started", "awaiting_screening"):
         return "awaiting"
-    if status_key in ("screening_pending", "screening_not_configured", "screening_unavailable", "screening_simulated", "screening_sandbox", "incomplete_record"):
+    if status_key in ("screening_in_progress", "screening_pending", "screening_simulated", "screening_sandbox"):
         return "pending_provider"
-    if canonical == "false_positive_cleared" or disposition == "cleared" or status_key in ("screened_no_match", "reviewed_false_positive_cleared"):
+    if status_key == "failed" or status_key in ("screening_not_configured", "screening_unavailable", "incomplete_record"):
+        return "failed"
+    if status_key in ("clear", "cleared_by_officer") or canonical == "false_positive_cleared" or disposition == "cleared" or status_key in ("screened_no_match", "reviewed_false_positive_cleared"):
         return "no_match"
     if canonical == "confirmed_match":
         return "match"
-    if status_key == "review_escalated" or disposition == "escalated":
+    if status_key in ("escalated", "review_escalated") or disposition == "escalated":
         return "escalated"
+    if status_key in ("follow_up_required", "review_follow_up_required"):
+        return "follow_up_required"
     if status_key in ("review_required", "declared_pep_review"):
         return "review_required"
     return status_key or "other"
@@ -15485,6 +15490,12 @@ def _screening_queue_provider_group(row):
     if "opencorporates" in blob or "open corporates" in blob:
         return "opencorporates"
     return "other"
+
+
+def _apply_screening_queue_canonical_state(row):
+    row = dict(row or {})
+    row.update(resolve_screening_queue_state(row))
+    return row
 
 
 def _screening_queue_pep_group(row):
@@ -15950,6 +15961,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         if application_requires_review:
             metrics["applications_requiring_review"] += 1
 
+    rows = [_apply_screening_queue_canonical_state(row) for row in rows]
+    metrics["applications_requiring_review"] = len({
+        row.get("application_id")
+        for row in rows
+        if row.get("application_id") and row.get("review_required")
+    })
     filtered_rows = _filter_screening_queue_rows(rows, filters)
     metrics["subject_rows"] = len(rows)
     metrics["filtered_subject_rows"] = len(filtered_rows)
