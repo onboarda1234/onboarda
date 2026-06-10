@@ -238,6 +238,16 @@ def _upload_client_document(base_url, client_token, requirement_id):
     )
 
 
+def _upload_backoffice_replacement(base_url, officer_token, *, source_note="Received by email from client on 2026-06-10"):
+    return requests.post(
+        f"{base_url}/api/monitoring/alerts/9301/replacement-upload",
+        headers=_auth_headers(officer_token),
+        data={"source_note": source_note},
+        files={"file": ("backoffice-renewed-passport.pdf", b"%PDF-1.4\n% backoffice renewed\n%%EOF", "application/pdf")},
+        timeout=5,
+    )
+
+
 def test_request_updated_document_creates_linked_portal_task_notification_and_audit(monitoring_doc_refresh_server):
     base_url, db_module = monitoring_doc_refresh_server
     token = _token("admin_m3", "admin", "Admin M3")
@@ -259,6 +269,8 @@ def test_request_updated_document_creates_linked_portal_task_notification_and_au
     detail_body = detail.json()
     assert detail_body["document_refresh"]["document"]["type_label"] == "Passport"
     assert detail_body["document_refresh"]["request"]["status"] == "requested"
+    assert detail_body["document_refresh"]["client_id"] == "client_m3"
+    assert detail_body["document_refresh"]["notification"]["status"] in {"sent", "failed"}
 
     conn = db_module.get_db()
     try:
@@ -326,6 +338,7 @@ def test_client_portal_task_upload_updates_alert_without_internal_language(monit
     task = tasks_body["requirements"][0]
     assert task["label"] == "Updated Passport required"
     assert task["requirement_type"] == "document"
+    assert task["due_date"]
     serialized_task = json.dumps(task).lower()
     assert "monitoring alert" not in serialized_task
     assert "9301" not in serialized_task
@@ -342,7 +355,76 @@ def test_client_portal_task_upload_updates_alert_without_internal_language(monit
     detail_body = detail.json()
     assert detail_body["status"] == "client_uploaded"
     assert detail_body["document_refresh"]["request"]["linked_document"]["doc_name"] == "renewed-passport.pdf"
+    assert detail_body["document_refresh"]["request"]["linked_document"]["doc_type"] == "passport"
+    assert detail_body["document_refresh"]["request"]["linked_document"]["upload_source"] == "client_portal"
     assert any(item["action"] == "client_document_upload_received" for item in detail_body["audit_history"])
+
+    app_docs = requests.get(
+        f"{base_url}/api/applications/app_m3/documents?include_history=true",
+        headers=_auth_headers(officer_token),
+        timeout=5,
+    )
+    assert app_docs.status_code == 200
+    docs = app_docs.json()
+    replacement = next(doc for doc in docs if doc["id"] == detail_body["document_refresh"]["request"]["linked_document"]["id"])
+    expired = next(doc for doc in docs if doc["id"] == "doc_expired_m3")
+    assert replacement["doc_type"] == "passport"
+    assert replacement["review_status"] == "pending"
+    assert replacement["is_current"] in (1, True)
+    assert expired["is_current"] in (0, False)
+    assert expired["superseded_by_document_id"] == replacement["id"]
+
+
+def test_backoffice_upload_replacement_requires_note_and_links_application_documents(monitoring_doc_refresh_server):
+    base_url, _db_module = monitoring_doc_refresh_server
+    officer_token = _token("admin_m3", "admin", "Admin M3")
+    client_token = _token("client_m3", "client", "Monitoring Three Client Ltd", "client")
+
+    missing_note = requests.post(
+        f"{base_url}/api/monitoring/alerts/9301/replacement-upload",
+        headers=_auth_headers(officer_token),
+        data={"source_note": ""},
+        files={"file": ("backoffice-renewed-passport.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+        timeout=5,
+    )
+    assert missing_note.status_code == 400
+
+    upload = _upload_backoffice_replacement(base_url, officer_token)
+    assert upload.status_code == 201, upload.text
+    uploaded_doc = upload.json()["document"]
+    assert uploaded_doc["doc_type"] == "passport"
+    assert uploaded_doc["upload_source"] == "back_office_upload"
+
+    detail = requests.get(
+        f"{base_url}/api/monitoring/alerts/9301",
+        headers=_auth_headers(officer_token),
+        timeout=5,
+    ).json()
+    assert detail["status"] == "under_review"
+    assert detail["document_refresh"]["request"]["status"] == "under_review"
+    assert detail["document_refresh"]["request"]["linked_document"]["upload_source"] == "back_office_upload"
+    assert any(item["action"] == "backoffice_replacement_uploaded" for item in detail["audit_history"])
+
+    portal_tasks = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    )
+    assert portal_tasks.status_code == 200
+    assert portal_tasks.json()["requirements"] == []
+
+    app_docs = requests.get(
+        f"{base_url}/api/applications/app_m3/documents?include_history=true",
+        headers=_auth_headers(officer_token),
+        timeout=5,
+    )
+    docs = app_docs.json()
+    replacement = next(doc for doc in docs if doc["id"] == uploaded_doc["id"])
+    expired = next(doc for doc in docs if doc["id"] == "doc_expired_m3")
+    assert replacement["doc_type"] == "passport"
+    assert replacement["review_status"] == "pending"
+    assert expired["is_current"] in (0, False)
+    assert expired["superseded_by_document_id"] == replacement["id"]
 
 
 def test_officer_accepts_uploaded_document_and_resolves_alert(monitoring_doc_refresh_server):
@@ -432,6 +514,18 @@ def test_reject_requires_reason_and_reopens_request(monitoring_doc_refresh_serve
     ).json()
     assert detail["document_refresh"]["request"]["status"] == "rejected"
     assert any(item["action"] == "updated_document_rejected" for item in detail["audit_history"])
+
+    docs = requests.get(
+        f"{base_url}/api/applications/app_m3/documents?include_history=true",
+        headers=_auth_headers(officer_token),
+        timeout=5,
+    ).json()
+    rejected_doc_id = detail["document_refresh"]["request"]["linked_document"]["id"]
+    rejected_doc = next(doc for doc in docs if doc["id"] == rejected_doc_id)
+    old_doc = next(doc for doc in docs if doc["id"] == "doc_expired_m3")
+    assert rejected_doc["review_status"] == "rejected"
+    assert rejected_doc["is_current"] in (0, False)
+    assert old_doc["is_current"] in (1, True)
 
 
 def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server):

@@ -3278,6 +3278,12 @@ def serialize_portal_application_requirement(db, row):
         "requirement_type": requirement_type,
         "status": status_key,
         "status_label": status_label,
+        "due_date": requirement.get("due_date") or (
+            requirement.get("trigger_context", {}) if isinstance(requirement.get("trigger_context"), dict) else {}
+        ).get("due_date"),
+        "request_reason": (
+            requirement.get("trigger_context", {}) if isinstance(requirement.get("trigger_context"), dict) else {}
+        ).get("request_reason"),
         "requested_at": requirement.get("requested_at"),
         "uploaded_at": requirement.get("uploaded_at"),
         "reviewed_at": requirement.get("reviewed_at"),
@@ -3416,17 +3422,24 @@ def fulfill_application_enhanced_requirement_document(
     if error:
         return None, error, status_code
 
+    is_monitoring_refresh = (
+        str(before.get("generation_source") or "").strip() == "monitoring_document_expiry_refresh"
+        or bool(before.get("monitoring_alert_id") or before.get("monitoring_document_id"))
+    )
+    doc_type_clause = "" if is_monitoring_refresh else "AND doc_type = 'enhanced_requirement'"
     doc = db.execute(
-        """
+        f"""
         SELECT id
         FROM documents
         WHERE id = ?
           AND application_id = ?
-          AND doc_type = 'enhanced_requirement'
+          {doc_type_clause}
         """,
         (document_id, app["id"]),
     ).fetchone()
     if not doc:
+        if is_monitoring_refresh:
+            return None, "Uploaded document must belong to the same application", 400
         return None, "Uploaded document must be an enhanced requirement document for the same application", 400
 
     now = _now_iso()

@@ -187,9 +187,11 @@ from monitoring_enrollment import (
     latest_active_review_summary as _latest_monitoring_review_summary,
 )
 from monitoring_document_refresh import (
+    DOCUMENT_REFRESH_GENERATION_SOURCE,
     MonitoringDocumentRefreshError as _MonitoringDocumentRefreshError,
     document_refresh_context as _monitoring_document_refresh_context,
     is_document_refresh_alert as _is_document_refresh_alert,
+    mark_backoffice_upload_received as _mark_monitoring_backoffice_upload_received,
     mark_client_upload_received_if_monitoring_linked as _mark_monitoring_document_upload_received,
     request_updated_document as _request_monitoring_updated_document,
     review_document_refresh as _review_monitoring_document_refresh,
@@ -19630,6 +19632,49 @@ def _finalize_document_slot_replacement(db, application_id, previous_documents, 
         )
 
 
+def _is_monitoring_document_refresh_requirement(requirement):
+    requirement = requirement or {}
+    return (
+        str(requirement.get("generation_source") or "").strip() == DOCUMENT_REFRESH_GENERATION_SOURCE
+        or bool(requirement.get("monitoring_alert_id") or requirement.get("monitoring_document_id"))
+    )
+
+
+def _monitoring_refresh_upload_target(db, application_id, requirement):
+    """Return the document slot metadata for a monitoring document refresh upload."""
+    requirement = requirement or {}
+    context = requirement.get("trigger_context") if isinstance(requirement.get("trigger_context"), dict) else {}
+    old_doc = None
+    old_doc_id = requirement.get("monitoring_document_id") or context.get("document_id")
+    if old_doc_id:
+        old_doc = db.execute(
+            "SELECT * FROM documents WHERE id = ? AND application_id = ?",
+            (old_doc_id, application_id),
+        ).fetchone()
+        old_doc = dict(old_doc) if old_doc else None
+
+    doc_type = (
+        (old_doc or {}).get("doc_type")
+        or context.get("document_type")
+        or "enhanced_requirement"
+    )
+    person_id = (old_doc or {}).get("person_id")
+    slot_key = (old_doc or {}).get("slot_key") or _document_slot_key(doc_type, person_id)
+    extra_ids = []
+    if old_doc_id:
+        extra_ids.append(old_doc_id)
+    if requirement.get("linked_document_id"):
+        extra_ids.append(requirement.get("linked_document_id"))
+    return {
+        "doc_type": doc_type,
+        "person_id": person_id,
+        "slot_key": slot_key,
+        "old_document_id": old_doc_id or "",
+        "old_document": old_doc,
+        "extra_document_ids": extra_ids,
+    }
+
+
 def _normalize_rmi_text(value, max_len=1000):
     text = str(value or "").strip()
     text = re.sub(r"\s+", " ", text)
@@ -21908,6 +21953,290 @@ class MonitoringAlertDetailHandler(BaseHandler):
                 "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                 "audit_history": _monitoring_alert_audit_history(db, alert_id),
             })
+        finally:
+            db.close()
+
+
+class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
+    """POST /api/monitoring/alerts/:id/replacement-upload — officer replacement upload."""
+
+    def _cleanup_upload_artifacts(self, file_path=None, s3_key=None):
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Monitoring replacement local upload cleanup failed: %s", exc)
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, message = s3.delete_document(s3_key)
+                if not success:
+                    logger.warning("Monitoring replacement S3 upload cleanup failed for %s: %s", s3_key, message)
+            except Exception as exc:
+                logger.warning("Monitoring replacement S3 upload cleanup exception for %s: %s", s3_key, exc)
+
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not self.check_rate_limit("monitoring_replacement_upload", max_attempts=20, window_seconds=60):
+            return
+
+        source_note = str(self.get_argument("source_note", "") or "").strip()
+        if not source_note:
+            return self.error("A source note is required for back-office replacement uploads", 400)
+        if "file" not in self.request.files:
+            return self.error("No file provided", 400)
+
+        db = get_db()
+        file_path = None
+        s3_key = None
+        try:
+            alert = _monitoring_alert_get(db, alert_id)
+            if not alert:
+                return self.error("Alert not found", 404)
+            alert = dict(alert)
+            if not _is_document_refresh_alert(alert):
+                return self.error("Upload Replacement is only available for document expiry alerts", 400)
+            if str(alert.get("status") or "").lower() in ("resolved", "waived", "dismissed", "routed_to_edd", "routed_to_review"):
+                return self.error("Cannot upload a replacement for a terminal alert", 409)
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ?",
+                (alert.get("application_id"),),
+            ).fetchone()
+            if not app:
+                return self.error("Alert is not linked to an application", 400)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            request_result = _request_monitoring_updated_document(
+                db,
+                alert_id,
+                user=user,
+                audit_writer=self.log_audit,
+                email_sender=None,
+                notify_client=False,
+                audience="backoffice",
+            )
+            requirement = request_result.get("request") or {}
+            if not requirement.get("id"):
+                return self.error("Unable to create or reuse a document refresh request", 500)
+
+            file_info = self.request.files["file"][0]
+            filename = os.path.basename(file_info["filename"] or "")
+            body = file_info["body"]
+            content_type = file_info.get("content_type", "application/octet-stream")
+            file_sha256 = hashlib.sha256(body).hexdigest()
+            if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+                return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
+            is_valid, reason, upload_error = FileUploadValidator.validate_with_reason(filename, content_type, body)
+            if not is_valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            target = _monitoring_refresh_upload_target(db, app["id"], requirement)
+            upload_doc_type = target["doc_type"]
+            document_id = uuid.uuid4().hex[:16]
+            ext = os.path.splitext(filename)[1].lower()
+            safe_name = f"{app['id']}_{document_id}{ext}"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
+            with open(file_path, "wb") as f:
+                f.write(body)
+
+            if HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, key_or_error = s3.upload_document(
+                        file_data=body,
+                        client_id=app["id"],
+                        doc_type=upload_doc_type,
+                        filename=safe_name,
+                        content_type=content_type,
+                        metadata={
+                            "original_name": filename,
+                            "monitoring_alert_id": str(alert_id),
+                            "document_request_id": str(requirement.get("id")),
+                            "source_surface": "monitoring_document_refresh_backoffice_upload",
+                        },
+                    )
+                    if success:
+                        s3_key = key_or_error
+                    else:
+                        logger.error("Monitoring replacement S3 upload failed for %s: %s", document_id, key_or_error)
+                        if is_production() or is_staging():
+                            self._cleanup_upload_artifacts(file_path=file_path)
+                            return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                except Exception as exc:
+                    logger.error("Monitoring replacement S3 upload exception for %s: %s", document_id, exc)
+                    if is_production() or is_staging():
+                        self._cleanup_upload_artifacts(file_path=file_path)
+                        return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+            elif is_production() or is_staging():
+                self._cleanup_upload_artifacts(file_path=file_path)
+                return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
+
+            verification_metadata = {
+                "source": "monitoring_document_refresh_upload",
+                "source_surface": "monitoring_document_refresh_backoffice_upload",
+                "upload_source": "back_office_upload",
+                "source_note": source_note,
+                "monitoring_alert_id": str(alert_id),
+                "document_request_id": str(requirement.get("id")),
+                "monitoring_document_id": target.get("old_document_id") or "",
+                "previous_document_id": target.get("old_document_id") or "",
+                "officer_uploaded": True,
+                "verification_triggered": False,
+                "verification_trigger_path": "/api/documents/{document_id}/verify",
+            }
+            replacement = _prepare_document_slot_replacement(
+                db,
+                application_id=app["id"],
+                new_document_id=document_id,
+                doc_type=upload_doc_type,
+                person_id=target.get("person_id"),
+                slot_key=target["slot_key"],
+                actor_user=user,
+                replaced_reason="monitoring_document_refresh_replacement",
+                extra_document_ids=target.get("extra_document_ids"),
+            )
+            previous_documents = replacement["previous_documents"]
+            db.execute(
+                """
+                INSERT INTO documents
+                    (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
+                     file_size, mime_type, slot_key, is_current, version,
+                     verification_status, verification_results, review_status, file_sha256)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    document_id,
+                    app["id"],
+                    target.get("person_id"),
+                    upload_doc_type,
+                    filename,
+                    file_path,
+                    s3_key,
+                    len(body),
+                    content_type,
+                    replacement["slot_key"],
+                    True,
+                    replacement["version"],
+                    STATE_PENDING,
+                    json.dumps(verification_metadata, sort_keys=True),
+                    "pending",
+                    file_sha256,
+                ),
+            )
+            _finalize_document_slot_replacement(db, app["id"], previous_documents, document_id)
+
+            now = datetime.now(timezone.utc).isoformat()
+            db.execute(
+                """
+                UPDATE application_enhanced_requirements
+                   SET status = 'under_review',
+                       linked_document_id = ?,
+                       uploaded_at = ?,
+                       reviewed_at = NULL,
+                       reviewed_by = NULL,
+                       updated_by = ?,
+                       updated_at = ?
+                 WHERE id = ? AND application_id = ?
+                """,
+                (document_id, now, user.get("sub", ""), now, requirement.get("id"), app["id"]),
+            )
+            after_req = serialize_application_requirement(
+                db.execute(
+                    "SELECT * FROM application_enhanced_requirements WHERE id = ? AND application_id = ?",
+                    (requirement.get("id"), app["id"]),
+                ).fetchone()
+            )
+            _mark_monitoring_backoffice_upload_received(
+                db,
+                alert_id,
+                after_req,
+                document_id,
+                source_note=source_note,
+                actor=user,
+                audit_writer=self.log_audit,
+            )
+            if previous_documents:
+                self.log_audit(
+                    user,
+                    "document.replaced",
+                    app["ref"],
+                    json.dumps({
+                        "event": "document.replaced",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "doc_type": upload_doc_type,
+                        "person_id": target.get("person_id"),
+                        "slot_key": replacement["slot_key"],
+                        "old_document_id": previous_documents[0]["id"],
+                        "old_document_ids": [row["id"] for row in previous_documents],
+                        "new_document_id": document_id,
+                        "monitoring_alert_id": alert_id,
+                        "document_request_id": requirement.get("id"),
+                        "upload_source": "back_office_upload",
+                        "actor": user.get("sub", ""),
+                        "timestamp": now,
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state={"documents": previous_documents},
+                    after_state={"document_id": document_id, "version": replacement["version"], "is_current": True},
+                )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="monitoring_document_refresh_uploaded",
+                reason="Monitoring document refresh upload changed memo evidence.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state={"documents": previous_documents},
+                after_state={"requirement": after_req, "document_id": document_id},
+            )
+            db.commit()
+            refreshed_alert = dict(_monitoring_alert_get(db, alert_id) or {})
+            refreshed_alert["document_refresh"] = _monitoring_document_refresh_context(db, refreshed_alert)
+            self.success({
+                "status": "uploaded",
+                "alert": refreshed_alert,
+                "document_request": after_req,
+                "document": {
+                    "id": document_id,
+                    "doc_name": filename,
+                    "doc_type": upload_doc_type,
+                    "file_size": len(body),
+                    "mime_type": content_type,
+                    "slot_key": replacement["slot_key"],
+                    "is_current": True,
+                    "version": replacement["version"],
+                    "upload_source": "back_office_upload",
+                    "source_note": source_note,
+                    "replaced_document_ids": [row["id"] for row in previous_documents],
+                },
+            }, 201)
+        except _MonitoringDocumentRefreshError as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+            self.error(str(exc), exc.status_code)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+            logger.error(
+                "monitoring replacement upload failed: alert_id=%s error=%s",
+                alert_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to upload replacement document", 500)
         finally:
             db.close()
 
@@ -26200,6 +26529,28 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 return self.error("This requested information item does not accept document uploads", 400)
             if safe_req.get("status") not in ("required", "additional_information_needed"):
                 return self.error("This requested information item is not awaiting a document", 400)
+            requirement_row = db.execute(
+                """
+                SELECT *
+                  FROM application_enhanced_requirements
+                 WHERE id = ? AND application_id = ? AND active = 1
+                """,
+                (requirement_id, app["id"]),
+            ).fetchone()
+            raw_req = serialize_application_requirement(requirement_row)
+            is_monitoring_refresh = _is_monitoring_document_refresh_requirement(raw_req)
+            upload_target = (
+                _monitoring_refresh_upload_target(db, app["id"], raw_req)
+                if is_monitoring_refresh
+                else {
+                    "doc_type": "enhanced_requirement",
+                    "person_id": None,
+                    "slot_key": _document_slot_key("enhanced_requirement", enhanced_requirement_id=requirement_id),
+                    "old_document_id": "",
+                    "extra_document_ids": [safe_req.get("linked_document_id")] if safe_req.get("linked_document_id") else [],
+                }
+            )
+            upload_doc_type = upload_target["doc_type"]
 
             if "file" not in self.request.files:
                 return self.error("No file provided", 400)
@@ -26232,12 +26583,13 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     success, key_or_error = s3.upload_document(
                         file_data=body,
                         client_id=app["id"],
-                        doc_type="enhanced_requirement",
+                        doc_type=upload_doc_type,
                         filename=safe_name,
                         content_type=content_type,
                         metadata={
                             "original_name": filename,
                             "enhanced_requirement_id": str(requirement_id),
+                            "source_surface": "monitoring_document_refresh_portal_upload" if is_monitoring_refresh else "portal_enhanced_requirement_upload",
                         },
                     )
                     if success:
@@ -26257,38 +26609,39 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
 
             verification_metadata = {
-                "source": "enhanced_requirement_upload",
+                "source": "monitoring_document_refresh_upload" if is_monitoring_refresh else "enhanced_requirement_upload",
                 "enhanced_requirement_id": str(requirement_id),
+                "monitoring_alert_id": (raw_req or {}).get("monitoring_alert_id") or "",
+                "monitoring_document_id": upload_target.get("old_document_id") or "",
+                "previous_document_id": upload_target.get("old_document_id") or "",
+                "upload_source": "client_portal" if is_monitoring_refresh else "portal",
                 "client_submitted": True,
             }
-            slot_key = _document_slot_key(
-                "enhanced_requirement",
-                enhanced_requirement_id=requirement_id,
-            )
             replacement = _prepare_document_slot_replacement(
                 db,
                 application_id=app["id"],
                 new_document_id=document_id,
-                doc_type="enhanced_requirement",
-                person_id=None,
-                slot_key=slot_key,
+                doc_type=upload_doc_type,
+                person_id=upload_target.get("person_id"),
+                slot_key=upload_target["slot_key"],
                 actor_user=user,
-                replaced_reason="enhanced_requirement_replacement",
-                extra_document_ids=[safe_req.get("linked_document_id")] if safe_req.get("linked_document_id") else None,
+                replaced_reason="monitoring_document_refresh_replacement" if is_monitoring_refresh else "enhanced_requirement_replacement",
+                extra_document_ids=upload_target.get("extra_document_ids"),
             )
             previous_documents = replacement["previous_documents"]
             db.execute(
                 """
                 INSERT INTO documents
-                (id, application_id, doc_type, doc_name, file_path, s3_key,
+                (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version,
                  verification_status, verification_results, review_status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
                     app["id"],
-                    "enhanced_requirement",
+                    upload_target.get("person_id"),
+                    upload_doc_type,
                     filename,
                     file_path,
                     s3_key,
@@ -26335,22 +26688,23 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             )
             if previous_documents:
                 self.log_audit(
-                    user,
-                    "document.replaced",
-                    app["ref"],
-                    json.dumps({
-                        "event": "document.replaced",
-                        "application_id": app["id"],
-                        "application_ref": app["ref"],
-                        "doc_type": "enhanced_requirement",
-                        "person_id": None,
-                        "slot_key": replacement["slot_key"],
-                        "old_document_id": previous_documents[0]["id"],
-                        "old_document_ids": [row["id"] for row in previous_documents],
-                        "new_document_id": document_id,
-                        "actor": user.get("sub", ""),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }, sort_keys=True),
+                user,
+                "document.replaced",
+                app["ref"],
+                json.dumps({
+                    "event": "document.replaced",
+                    "application_id": app["id"],
+                    "application_ref": app["ref"],
+                    "doc_type": upload_doc_type,
+                    "person_id": upload_target.get("person_id"),
+                    "slot_key": replacement["slot_key"],
+                    "old_document_id": previous_documents[0]["id"],
+                    "old_document_ids": [row["id"] for row in previous_documents],
+                    "new_document_id": document_id,
+                    "monitoring_alert_id": (raw_req or {}).get("monitoring_alert_id") or "",
+                    "actor": user.get("sub", ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }, sort_keys=True),
                     db=db,
                     commit=False,
                     before_state={"documents": previous_documents},
@@ -26401,7 +26755,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 "document": {
                     "id": document_id,
                     "doc_name": filename,
-                    "doc_type": "enhanced_requirement",
+                    "doc_type": upload_doc_type,
                     "file_size": len(body),
                     "slot_key": replacement["slot_key"],
                     "is_current": True,
@@ -26781,6 +27135,7 @@ def make_app():
         (r"/api/monitoring/dashboard", MonitoringDashboardHandler),
         (r"/api/monitoring/clients", MonitoringClientsHandler),
         # Alerts (more specific routes first)
+        (r"/api/monitoring/alerts/([^/]+)/replacement-upload", MonitoringAlertDocumentReplacementUploadHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents

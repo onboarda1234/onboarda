@@ -168,6 +168,8 @@ def test_monitoring_alert_detail_has_required_ma2c_sections():
     assert "monitoringDetailCard('Recommended Next Step'" not in renderer
     assert "monitoringDetailCard('Assignment'" not in renderer
     assert "monitoringDetailCard('Downstream Links'" not in renderer
+    assert "renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge)" in renderer
+    assert "Document Expiry Alert" in html
 
 
 def test_monitoring_alert_detail_keeps_raw_payload_collapsed():
@@ -260,13 +262,18 @@ def test_monitoring_document_refresh_actions_are_specific_and_not_adverse_media_
     assert "Client upload/request workflow is out of scope" not in evidence
 
     assert "Request Updated Document" in doc_decision
-    assert "Accept uploaded document" in doc_decision
+    assert "Upload Replacement" in html
+    assert "source note is required" in html
+    assert "Accept Document" in doc_decision
     assert "Reject / re-request" in doc_decision
     assert "Waive with reason" in doc_decision
+    assert "Start Review" not in doc_decision
     assert "Route to EDD" not in doc_decision
     assert "escalate_overdue_item" not in doc_decision
 
     assert "request_updated_document" in handlers
+    assert "uploadMonitoringReplacementDocument" in html
+    assert "/monitoring/alerts/' + encodeURIComponent(alert.id) + '/replacement-upload" in html
     assert "accept_updated_document" in handlers
     assert "reject_updated_document" in handlers
     assert "waive_updated_document" in handlers
