@@ -95,6 +95,7 @@ def test_agent_health_hidden_until_real_telemetry_is_active():
 def test_admin_pages_do_not_create_generic_client_ip_audit_rows():
     html = BACKOFFICE_HTML.read_text()
 
+    assert "AUDIT_LOG.unshift" not in html
     assert "ip:'client'" not in html
     assert 'ip: "client"' not in html
     assert "refreshAdminAuditEvidence()" in html

@@ -21456,10 +21456,9 @@ async function confirmDecision() {
 
   try {
     var resp = await boApiCall('POST', '/applications/' + currentApp.id + '/decision', payload);
-    var detail = pendingDecision + ' — ' + reason + (notes ? ' | Notes: ' + notes : '');
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:pendingDecision, target:currentApp.ref, detail:detail });
     closeModal('modal-decision-reason');
     await refreshCurrentAppDetail();
+    refreshAdminAuditEvidence();
 
     if (resp.status === 'first_approval_recorded') {
       showToast(resp.message || 'First approval recorded; awaiting second approver');
@@ -21569,10 +21568,9 @@ async function confirmOverride() {
       override_reason: reason,
       officer_signoff: { acknowledged: true, scope: 'override', source_context: 'ai_advisory' }
     });
-    var detail = 'Override: Changed recommendation to ' + decision + ' — ' + reason;
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Override', target:currentApp.ref, detail:detail });
     closeModal('modal-override');
     await refreshCurrentAppDetail();
+    refreshAdminAuditEvidence();
     if (resp.status === 'first_approval_recorded') {
       showToast(resp.message || 'First approval recorded; awaiting second approver');
     } else {
@@ -21637,16 +21635,9 @@ async function confirmRMIRequest() {
     if (!resp || !resp.rmi_request_id) {
       throw new Error('Document request was not confirmed by the server. Please retry.');
     }
-    AUDIT_LOG.unshift({
-      ts: new Date().toISOString().slice(0,16).replace('T',' '),
-      user: currentUser.name,
-      role: ROLE_LABELS[currentUser.role],
-      action: 'Request Docs',
-      target: currentApp.ref,
-      detail: 'Structured RMI ' + (resp.rmi_request_id || '') + ' — ' + reason
-    });
     closeModal('modal-rmi-request');
     await refreshCurrentAppDetail();
+    refreshAdminAuditEvidence();
     showToast('Additional document request sent to client');
   } catch (e) {
     console.warn('RMI request failed:', e);
@@ -24970,16 +24961,8 @@ async function submitBoDocUpload() {
         console.warn('Post-upload verification failed:', verifyErr);
       }
     }
-    AUDIT_LOG.unshift({
-      ts: new Date().toISOString().slice(0,16).replace('T',' '),
-      user: currentUser.name,
-      role: ROLE_LABELS[currentUser.role],
-      action: 'Doc Upload',
-      target: currentApp.ref,
-      detail: 'Uploaded "' + file.name + '" as ' + docType + (notes ? ' — ' + notes : ''),
-      ip: '196.192.44.12'
-    });
     await loadFromAPI();
+    refreshAdminAuditEvidence();
     toggleBoDocUpload();
     openAppDetail(currentApp.ref);
     showToast('Document uploaded to the application record.');
