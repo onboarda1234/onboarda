@@ -1,9 +1,9 @@
 # RegMind Admin Role Evidence And Agent Telemetry Sprint
 
-Date: 2026-06-11  
-Branch: `codex/admin-role-evidence-agent-telemetry`  
-Base validated main: `ca0477afeec0ac9dbc92e9a13a40a5c429a97244`  
-Staging URL: `https://staging.regmind.co/backoffice`  
+Date: 2026-06-11
+Branch: `codex/admin-role-evidence-agent-telemetry`
+Base validated main: `ca0477afeec0ac9dbc92e9a13a40a5c429a97244`
+Staging URL: `https://staging.regmind.co/backoffice`
 Final verdict: **PASS WITH MINOR ISSUES**
 
 ## Executive Summary
