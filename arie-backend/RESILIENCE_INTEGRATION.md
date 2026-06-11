@@ -93,7 +93,7 @@ else:
 ### 2. Using Integration Wrappers
 
 ```python
-from resilience import ResilientSumsubClient, ResilientOpenSanctionsClient
+from resilience import ResilientSumsubClient, ResilientOpenCorporatesClient
 
 # Initialize wrappers
 sumsub = ResilientSumsubClient(
@@ -101,14 +101,14 @@ sumsub = ResilientSumsubClient(
     sumsub_client=existing_sumsub_client
 )
 
-sanctions = ResilientOpenSanctionsClient(
+registry = ResilientOpenCorporatesClient(
     db_path="./arie.db",
-    sanctions_client=existing_sanctions_client
+    corporates_client=existing_corporates_client
 )
 
 # Use them
 result = await sumsub.verify_kyc(application_id, applicant_data)
-result = await sanctions.screen_entity(application_id, name, country)
+result = await registry.lookup_company(application_id, company_name, jurisdiction)
 
 # On failure, application status is automatically updated:
 # - KYC failure: "pending_external_retry" (blocking)

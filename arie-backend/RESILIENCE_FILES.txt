@@ -55,7 +55,7 @@ CORE MODULES (10 files):
 
 8. /sessions/loving-awesome-bell/mnt/Onboarda/arie-backend/resilience/integration_wrappers.py
    - ResilientSumsubClient - KYC verification (blocking failures)
-   - ResilientOpenSanctionsClient - Sanctions screening (non-blocking, manual review)
+   - ComplyAdvantage screening integrations - Sanctions, watchlists, PEP/RCA, adverse media, and monitoring
    - ResilientOpenCorporatesClient - Company verification (non-blocking)
    - ResilientClaudeClient - Compliance memo generation (blocking)
    - ApplicationStatusUpdater - updates app status in database

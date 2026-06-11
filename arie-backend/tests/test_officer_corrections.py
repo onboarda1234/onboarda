@@ -1094,7 +1094,7 @@ def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_
             "target_id": case["ubo_id"],
             "field_changes": {"verified_pep": True},
             "correction_reason": "Screening hit confirms the UBO is a PEP.",
-            "evidence_source": "Sumsub screening report",
+            "evidence_source": "Screening provider report",
             "correction_note": "Officer verified PEP exposure during review.",
             "correction_source": "screening_review",
         },
@@ -1162,7 +1162,7 @@ def test_pep_correction_requested_tier3_still_forces_tier1(officer_correction_ap
             "materiality": "tier3",
             "field_changes": {"verified_pep": True},
             "correction_reason": "Screening hit confirms the UBO is a PEP.",
-            "evidence_source": "Sumsub screening report",
+            "evidence_source": "Screening provider report",
             "correction_note": "Officer verified PEP exposure during review.",
         },
     )
@@ -1547,7 +1547,7 @@ def test_verified_pep_correction_explicitly_routes_to_edd_and_audits(officer_cor
             "target_id": case["ubo_id"],
             "field_changes": {"verified_pep": True},
             "correction_reason": "Screening hit confirms the UBO is a PEP.",
-            "evidence_source": "Sumsub screening report",
+            "evidence_source": "Screening provider report",
             "correction_note": "Officer verified PEP exposure during review.",
         },
     )
@@ -1641,7 +1641,7 @@ def test_repeated_material_correction_reuses_edd_case_idempotently(officer_corre
         "target_id": case["ubo_id"],
         "field_changes": {"verified_pep": True},
         "correction_reason": "Screening hit confirms the UBO is a PEP.",
-        "evidence_source": "Sumsub screening report",
+        "evidence_source": "Screening provider report",
         "correction_note": "Officer verified PEP exposure during review.",
     }
     first = _post_correction(base_url, case["app_id"], payload)

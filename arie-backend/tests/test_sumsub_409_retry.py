@@ -1,5 +1,5 @@
 """
-Tests for PR #96: Sumsub AML screening retry-safe 409 handling.
+Tests for PR #96: legacy screening retry-safe 409 handling.
 
 Covers:
   1. request_check 409 → /one pending → api_status=pending

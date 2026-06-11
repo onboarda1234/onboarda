@@ -36,8 +36,6 @@ from config import (
     SUMSUB_BASE_URL as _CFG_SUMSUB_BASE_URL,
     SUMSUB_LEVEL_NAME as _CFG_SUMSUB_LEVEL_NAME,
     SUMSUB_WEBHOOK_SECRET as _CFG_SUMSUB_WEBHOOK_SECRET,
-    OPENSANCTIONS_API_KEY as _CFG_OPENSANCTIONS_API_KEY,
-    OPENSANCTIONS_API_URL as _CFG_OPENSANCTIONS_API_URL,
     OPENCORPORATES_API_KEY as _CFG_OPENCORPORATES_API_KEY,
     OPENCORPORATES_API_URL as _CFG_OPENCORPORATES_API_URL,
     IP_GEOLOCATION_API_KEY as _CFG_IP_GEOLOCATION_API_KEY,
@@ -1037,8 +1035,6 @@ MAX_UPLOAD_MB = 10
 TOKEN_EXPIRY_HOURS = 24
 
 # ── External API Keys (from unified config module) ────────
-OPENSANCTIONS_API_KEY = _CFG_OPENSANCTIONS_API_KEY
-OPENSANCTIONS_API_URL = _CFG_OPENSANCTIONS_API_URL
 OPENCORPORATES_API_KEY = _CFG_OPENCORPORATES_API_KEY
 OPENCORPORATES_API_URL = _CFG_OPENCORPORATES_API_URL
 IP_GEOLOCATION_API_KEY = _CFG_IP_GEOLOCATION_API_KEY
@@ -2251,8 +2247,6 @@ def validate_environment():
             warnings.append("ALLOWED_ORIGIN not set — CORS defaults to same-origin only")
         if not DATABASE_URL:
             warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
-        if not OPENSANCTIONS_API_KEY:
-            warnings.append("OPENSANCTIONS_API_KEY not set — sanctions screening will be simulated")
         if not SUMSUB_APP_TOKEN:
             warnings.append("SUMSUB_APP_TOKEN not set — KYC verification will be simulated")
     else:
@@ -2776,10 +2770,9 @@ class HealthHandler(BaseHandler):
             health["database"] = {"status": db_status, "type": "postgresql" if USE_POSTGRES else "sqlite"}
 
             health["integrations"] = {
-                "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
                 "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
                 "ip_geolocation": "live",
-                "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
+                "sumsub_identity_verification": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
                 "complyadvantage": _complyadvantage_runtime_status()["status"],
             }
             health["metrics_enabled"] = METRICS_ENABLED
@@ -8937,7 +8930,7 @@ class DocumentVerifyHandler(BaseHandler):
                             checks.append({
                                 "label": "Sanctions/PEP Screening",
                                 "type": "sanctions",
-                                "rule": "Screened against Sumsub AML watchlists and PEP databases",
+                                "rule": "Screened against configured screening provider watchlists and PEP databases",
                                 "result": "fail",
                                 "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
                                 "details": sanctions_result["results"],
@@ -8947,7 +8940,7 @@ class DocumentVerifyHandler(BaseHandler):
                             checks.append({
                                 "label": "Sanctions/PEP Screening",
                                 "type": "sanctions",
-                                "rule": "Screened against Sumsub AML watchlists and PEP databases",
+                                "rule": "Screened against configured screening provider watchlists and PEP databases",
                                 "result": "pass",
                                 "message": "No matches found on sanctions or PEP lists",
                                 "source": sanctions_result["source"]
@@ -14770,12 +14763,10 @@ def _screening_queue_row_mode(report_mode, state, status_key, entity_context=Non
         return "unavailable"
     if status_key == "screening_pending" or state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
         return "pending"
-    # OpenCorporates/OpenSanctions are not the Phase 2 source of truth for live
+    # OpenCorporates is not the Phase 2 source of truth for live
     # KYB/adverse/ongoing monitoring. CA owns that scope and is still in
     # progress; rows from simulated legacy enrichment must not show as live.
     if "opencorporates" in combined and not OPENCORPORATES_API_KEY:
-        return "simulated" if report_mode != "live" else "mixed"
-    if "opensanctions" in combined and not OPENSANCTIONS_API_KEY:
         return "simulated" if report_mode != "live" else "mixed"
     return report_mode or "unknown"
 
@@ -18009,11 +18000,6 @@ class APIStatusHandler(BaseHandler):
             return
 
         self.success({
-            "opensanctions": {
-                "configured": bool(OPENSANCTIONS_API_KEY),
-                "status": "live" if OPENSANCTIONS_API_KEY else "simulated",
-                "description": "Sanctions, PEP, and watchlist screening"
-            },
             "opencorporates": {
                 "configured": bool(OPENCORPORATES_API_KEY),
                 "status": "live" if OPENCORPORATES_API_KEY else "simulated",
@@ -18027,7 +18013,7 @@ class APIStatusHandler(BaseHandler):
             "sumsub": {
                 "configured": bool(SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY),
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
-                "description": "IDV and KYC screening (document + selfie + liveness)"
+                "description": "Individual identity verification and KYC (document + selfie + liveness)"
             },
             "complyadvantage": _complyadvantage_runtime_status(),
             "anthropic": {
@@ -27930,7 +27916,7 @@ if __name__ == "__main__":
     logger.info("startup: listener bound — server READY (+%s)", _elapsed())
 
     # API integration status
-    sanctions_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"
+    ca_screening_status = _complyadvantage_runtime_status()["status"].upper()
     corporates_status = "LIVE" if OPENCORPORATES_API_KEY else "SIMULATED"
     ip_status = "LIVE (ipapi.co free tier)"
     sumsub_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"
@@ -27957,7 +27943,7 @@ if __name__ == "__main__":
 ║    GET  /api/screening/status                    ║
 ║                                                  ║
 ║  API Integrations:                               ║
-║    Sumsub AML:       {sanctions_status:<27s}║
+║    CA Screening:     {ca_screening_status:<27s}║
 ║    OpenCorporates:   {corporates_status:<27s}║
 ║    IP Geolocation:   {ip_status:<27s}║
 ║    Sumsub KYC:       {sumsub_status:<27s}║

@@ -96,7 +96,7 @@ class TestFinding2_ValidationScores:
                         "financial_crime_risk": {"title": "FinCrime", "content": "Low.", "rating": "LOW"},
                     },
                 },
-                "screening_results": {"title": "Screening", "content": "OpenSanctions screening. No matches."},
+                "screening_results": {"title": "Screening", "content": "ComplyAdvantage screening. No matches."},
                 "document_verification": {"title": "Documents", "content": "All verified and consistent."},
                 "ai_explainability": {
                     "content": "Explainability.",

@@ -460,10 +460,6 @@ def get_opencorporates_api_key() -> str:
 def get_ip_geolocation_api_key() -> str:
     return os.environ.get("IP_GEOLOCATION_API_KEY", "")
 
-def get_opensanctions_api_key() -> str:
-    return os.environ.get("OPENSANCTIONS_API_KEY", "")
-
-
 def get_screening_validity_days() -> int:
     """Configurable screening validity period in days.
 

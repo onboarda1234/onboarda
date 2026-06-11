@@ -55,7 +55,6 @@ fi
 # export DATABASE_URL="postgresql://user:pass@host:5432/arie"
 
 # ── API Keys (set these for live screening) ─────────────
-# export OPENSANCTIONS_API_KEY="your-key-here"
 # export OPENCORPORATES_API_KEY="your-key-here"
 # export IP_GEOLOCATION_API_KEY=""  # Optional: ipapi.co free tier works without key
 
@@ -112,7 +111,7 @@ echo "    Email:    asudally@onboarda.com"
 echo "    Password: (generated on first run — check server output above)"
 echo ""
 echo "  API Keys:"
-echo "    Sumsub AML:     ${SUMSUB_APP_TOKEN:+configured ✅}${SUMSUB_APP_TOKEN:-not set (simulated mode)}"
+echo "    CA Screening:   ${COMPLYADVANTAGE_API_KEY:+configured ✅}${COMPLYADVANTAGE_API_KEY:-not set}"
 echo "    OpenCorporates: ${OPENCORPORATES_API_KEY:+configured ✅}${OPENCORPORATES_API_KEY:-not set (simulated mode)}"
 echo "    IP Geolocation: live (free tier)
     Sumsub KYC:     ${SUMSUB_APP_TOKEN:+configured ✅}${SUMSUB_APP_TOKEN:-not set (simulated mode)}"

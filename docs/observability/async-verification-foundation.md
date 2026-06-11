@@ -30,7 +30,7 @@ explicitly flips the flag in staging.
 
 ## Sumsub / Mesh Hazard Note
 
-This PR does not alter Sumsub applicant creation, Sumsub AML checks, screening
+This PR does not alter Sumsub applicant creation, configured screening-provider checks, screening
 provider selection, ComplyAdvantage abstraction state, or downstream screening
 workflow timing. If PR7 later enables async verification, soak validation must
 confirm that any downstream logic expecting immediate document verification

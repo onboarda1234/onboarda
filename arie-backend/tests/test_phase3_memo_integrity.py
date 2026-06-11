@@ -298,7 +298,7 @@ def test_screening_source_summary_marks_simulated_report():
                         "api_status": "simulated",
                         "matched": False,
                         "results": [],
-                        "source": "opensanctions",
+                        "source": "complyadvantage",
                     }
                 },
                 director_screenings=[],
@@ -310,7 +310,7 @@ def test_screening_source_summary_marks_simulated_report():
     memo, _, _, _ = build_compliance_memo(app, _directors(), _ubos(), _documents())
     sources = memo["metadata"]["source_attribution"]["screening_sources"]
 
-    assert sources["provider"] == "opensanctions"
+    assert sources["provider"] == "complyadvantage"
     assert sources["mode"] == "simulated"
     assert "configured" not in sources.values()
 

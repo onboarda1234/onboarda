@@ -608,13 +608,13 @@ def _mock_generate_compliance_memo() -> Dict[str, Any]:
                     "financial_crime_risk": {
                         "title": "Financial Crime Risk",
                         "rating": "LOW",
-                        "content": "Sanctions screening was conducted across UN Security Council Consolidated List, EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List via OpenSanctions API. No matches were returned for any director, UBO, or the entity itself. Adverse media screening returned no relevant hits across global media databases. No connections to high-risk individuals, designated entities, or known criminal networks were identified. The entity's business model does not exhibit typology indicators associated with money laundering (layering through fund structures), terrorist financing, or proliferation financing. Risk weighting factor: 0.10. Contribution to composite score: +2 points."
+                        "content": "Sanctions screening was conducted across UN Security Council Consolidated List, EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List via ComplyAdvantage screening evidence. No matches were returned for any director, UBO, or the entity itself. Adverse media screening returned no relevant hits across global media databases. No connections to high-risk individuals, designated entities, or known criminal networks were identified. The entity's business model does not exhibit typology indicators associated with money laundering (layering through fund structures), terrorist financing, or proliferation financing. Risk weighting factor: 0.10. Contribution to composite score: +2 points."
                     }
                 }
             },
             "screening_results": {
                 "title": "Screening Results",
-                "content": "Sanctions Screening: Conducted via OpenSanctions API against UN, EU, OFAC, and HMT consolidated lists. No matches returned for John Smith, Jane Doe, Robert Lee, or Example Corp Ltd. Screening timestamp: 2025-03-16T10:15:00Z. PEP Screening: One match confirmed — Robert Lee identified as a Foreign Government Official (Senior Trade Advisor, Singapore Ministry of Trade and Industry). This is a confirmed true positive based on verified identity data (full name, date of birth, nationality). PEP classification: Foreign PEP, Tier 2. PEP declaration form and bank reference letter have been requested. Adverse Media Screening: Comprehensive adverse media search conducted across global news databases and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity itself. No historical regulatory actions, enforcement proceedings, or negative press coverage identified. Company Registry Verification: Example Corp Ltd verified as active on the Mauritius Companies Division register via OpenCorporates API. Registration number, registered office, director names, and incorporation date are all consistent with application data. Last annual return filed: 2024-12-15 — entity is current with filing obligations."
+                "content": "Sanctions Screening: Conducted via ComplyAdvantage screening evidence against UN, EU, OFAC, and HMT consolidated lists. No matches returned for John Smith, Jane Doe, Robert Lee, or Example Corp Ltd. Screening timestamp: 2025-03-16T10:15:00Z. PEP Screening: One match confirmed — Robert Lee identified as a Foreign Government Official (Senior Trade Advisor, Singapore Ministry of Trade and Industry). This is a confirmed true positive based on verified identity data (full name, date of birth, nationality). PEP classification: Foreign PEP, Tier 2. PEP declaration form and bank reference letter have been requested. Adverse Media Screening: Comprehensive adverse media search conducted across global news databases and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity itself. No historical regulatory actions, enforcement proceedings, or negative press coverage identified. Company Registry Verification: Example Corp Ltd verified as active on the Mauritius Companies Division register via OpenCorporates API. Registration number, registered office, director names, and incorporation date are all consistent with application data. Last annual return filed: 2024-12-15 — entity is current with filing obligations."
             },
             "document_verification": {
                 "title": "Document Verification",
@@ -659,7 +659,7 @@ def _mock_generate_compliance_memo() -> Dict[str, Any]:
             "key_findings": [
                 "Beneficial ownership traced to natural persons via single-tier structure — John Smith (75%, UK national) exercises effective control",
                 "PEP identified: Robert Lee (Director, 0% ownership) — Foreign Government Official, Singapore. Advisory role, no direct control.",
-                "Clean sanctions and adverse media screening across all consolidated lists via OpenSanctions API",
+                "Clean sanctions and adverse media screening across all consolidated lists via ComplyAdvantage screening evidence",
                 "7 of 9 required documents verified at 94% confidence; 2 outstanding documents formally requested",
                 "Business model assessed as plausible and consistent with FSC regulatory licence",
                 "Mauritius jurisdiction presents moderate risk due to IFC classification despite current FATF compliance"
@@ -1309,7 +1309,7 @@ Map the ownership chain, identify the ultimate beneficial owner, and flag any ri
         Uses claude-sonnet-4-6 for speed and cost efficiency.
 
         Args:
-            screening_results: Raw screening output from Sumsub AML or similar service
+            screening_results: Raw output from the configured screening provider
             person_name: Name of person/entity being screened
             entity_type: Type of entity (individual, company, etc.)
 

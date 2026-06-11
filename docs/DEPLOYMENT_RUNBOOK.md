@@ -232,7 +232,7 @@ Run these after every Phase hardening deployment before declaring the environmen
 4. **Evidence pack:** includes application notes, documents, RMI, memos, decision records, EDD cases, EDD findings/status/policy, and build metadata.
 5. **UNKNOWN risk:** dashboard and reports include an explicit `UNKNOWN`/`NOT RATED` bucket; missing risk scores render as null/em dash, never `0` or default `50`.
 6. **EDD lifecycle:** findings and SLA are required before senior review; closure requires SCO/admin and a different actor; `EDD Closure (dual-control)` audit rows target the ARF.
-7. **Screening truthfulness:** `/api/screening/status` lists Sumsub as live, OpenSanctions/OpenCorporates as simulated unless configured, and does not advertise ComplyAdvantage as live while implementation is in progress.
+7. **Screening truthfulness:** `/api/screening/status` lists ComplyAdvantage screening, Sumsub individual identity verification, OpenCorporates enrichment, and IP geolocation without advertising deprecated or unused screening providers.
 8. **Diagnostics exposure:** unauthenticated `/metrics` and `/api/readiness` return `401`; `/api/liveness` is public and hardened; random 404 paths return `Server: RegMind` plus hardened headers.
 9. **Admin resets:** client/officer password-reset endpoints require confirmation token, enforce password policy, write audit rows, and revoke existing JWT sessions.
 10. **Operational queues:** `/api/edd/cases` hides fixture/smoke rows by default; only admin/SCO with `include_fixtures=1` or `show_fixtures=true` can include them.

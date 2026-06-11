@@ -136,7 +136,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 
 **Step-by-step flow:**
 
-1. **AML/PEP Screening** (`screen_sumsub_aml()`) — Per-person Sumsub AML screening: create applicant → trigger check → poll review → map GREEN/RED/PENDING
+1. **AML/PEP Screening** — ComplyAdvantage-owned sanctions, PEP/RCA, watchlist, adverse-media, customer, company, and ongoing-monitoring screening responsibilities
 2. **Company Registry Verification** (`lookup_opencorporates()`) — OpenCorporates enrichment path exists, but it is not yet a fully runtime-proven authoritative dependency for controlled deployment
 3. **IP Geolocation** (`geolocate_ip()`) — Client IP risk classification
 4. **Screening Queue** (`GET /api/screening/queue`) — Officers review hits with false positive analysis (Agent 3: FinCrime Screening Interpretation)
@@ -253,7 +253,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 ### Screening Queue
 - **Purpose:** Centralized review of AML/PEP/sanctions screening results
 - **Functionality:** Queue listing, per-subject review, disposition tracking (cleared/escalated/follow_up_required), false positive analysis via Agent 3
-- **Completeness:** ⚠️ **Pilot-ready** — live Sumsub screening is code-confirmed and staging-aligned, but external registry enrichment remains partially implemented / degraded
+- **Completeness:** ⚠️ **Pilot-ready** — screening-provider evidence paths are code-confirmed and staging-aligned, but external registry enrichment remains partially implemented / degraded
 - **Dependencies:** screening.py, sumsub_client.py, screening_normalizer.py
 - **Commercial relevance:** High — eliminates manual screening review spreadsheets
 

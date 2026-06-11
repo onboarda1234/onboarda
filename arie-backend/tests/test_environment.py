@@ -294,12 +294,6 @@ class TestApiKeyGetters:
         from environment import get_ip_geolocation_api_key
         assert get_ip_geolocation_api_key() == ""
 
-    def test_opensanctions_key_default(self, monkeypatch):
-        monkeypatch.delenv("OPENSANCTIONS_API_KEY", raising=False)
-        from environment import get_opensanctions_api_key
-        assert get_opensanctions_api_key() == ""
-
-
 class TestGetCorsOrigin:
     """Test get_cors_origin() per-environment behavior."""
 

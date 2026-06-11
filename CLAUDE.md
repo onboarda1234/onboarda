@@ -177,8 +177,8 @@ These clarifications prevent marketing claims from diverging from code behaviour
 
 | Feature | Status | Details |
 |---------|--------|---------|
-| **Sumsub AML/PEP screening** | ✅ ACTIVE | `run_full_screening()` in `screening.py` uses Sumsub end-to-end |
-| **Adverse media parsing** | ✅ ACTIVE | Parses adverse-media signals already included in Sumsub screening results and prescreening data |
+| **ComplyAdvantage sanctions/PEP/RCA screening** | ✅ ACTIVE | Screening and monitoring surfaces are labelled for ComplyAdvantage-owned responsibilities |
+| **Adverse media parsing** | ✅ ACTIVE | Parses adverse-media signals from screening provider results and prescreening data |
 | **Adverse media (external provider)** | ⚠️ NOT IMPLEMENTED | No external adverse-media API call; no `ADVERSE_MEDIA_API_KEY`. Back office correctly notes: "Distinct adverse-media results are not persisted in the current screening report." |
 | **ComplyAdvantage provider** | ⚠️ SCAFFOLDED — OFF by default | Adapter and registry exist (`screening_complyadvantage/`). `ENABLE_SCREENING_ABSTRACTION` is `False` in all environments. `run_full_screening()` is hardcoded to Sumsub and does not invoke provider abstraction. Do not claim ComplyAdvantage as a live provider unless `ENABLE_SCREENING_ABSTRACTION=true` is confirmed working end-to-end. |
 | **Periodic review (state machine)** | ✅ ACTIVE | `periodic_review_engine.py` enforces review states, audit trails, and lifecycle linkage |

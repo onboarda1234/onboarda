@@ -1,5 +1,5 @@
 """
-Tests for Sumsub screening config split (EX-06 fix).
+Tests for legacy screening config split (EX-06 fix).
 
 Covers:
   1. Individual screening uses SUMSUB_INDIVIDUAL_LEVEL_NAME

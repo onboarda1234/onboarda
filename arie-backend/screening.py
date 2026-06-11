@@ -3,7 +3,7 @@ ARIE Finance — Screening & API Integrations
 Extracted from server.py during Sprint 2 monolith decomposition.
 
 Provides:
-    - Sumsub AML screening (screen_sumsub_aml)
+    - Legacy screening adapter (screen_sumsub_aml)
     - OpenCorporates company lookup (lookup_opencorporates)
     - IP geolocation (geolocate_ip)
     - Sumsub KYC integration (create applicant, tokens, status, documents, webhooks)
@@ -59,7 +59,7 @@ SUMSUB_AML_LEVEL_NAME = get_sumsub_aml_level_name()
 
 def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
-    Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
+    Legacy screening adapter for sanctions, PEP, and watchlist checks.
 
     **Person AML** (directors / UBOs):
         Uses the ``aml-screening`` level (``SUMSUB_AML_LEVEL_NAME``).
@@ -117,7 +117,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
         )
 
         if not applicant_result.get("applicant_id"):
-            logger.warning("Sumsub AML: Failed to create/retrieve applicant for '%s'", name)
+            logger.warning("Legacy screening adapter: failed to create/retrieve applicant for '%s'", name)
             # Always return error — never coerce missing applicant into pending
             return {
                 "matched": False,
@@ -211,7 +211,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
             }
 
     except Exception as e:
-        logger.error("Sumsub AML screening error: %s", e)
+        logger.error("Legacy screening adapter error: %s", e)
         client = None
         try:
             client = get_sumsub_client()
@@ -223,7 +223,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
                 "results": [],
                 "source": "sumsub",
                 "api_status": "error",
-                "error": f"Sumsub AML screening failed: {str(e)[:200]}",
+                "error": f"Legacy screening adapter failed: {str(e)[:200]}",
                 "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             }
         return _simulate_aml_screen(name)
