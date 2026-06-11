@@ -12258,7 +12258,7 @@ class AIAgentsHandler(BaseHandler):
                       VALUES (?,?,?,?,?,?,?)""",
                    (normalized["agent_number"], normalized["name"], normalized["icon"] or "🤖",
                     normalized["stage"], normalized["description"],
-                    1 if normalized["enabled"] else 0, json.dumps(normalized["checks"])))
+                    bool(normalized["enabled"]), json.dumps(normalized["checks"])))
         created = db.execute("SELECT * FROM ai_agents WHERE agent_number=?", (normalized["agent_number"],)).fetchone()
         created_state = _safe_admin_state(_row_dict(created))
         if created_state:
@@ -12322,7 +12322,7 @@ class AIAgentDetailHandler(BaseHandler):
                       agent_number=?, enabled=?, checks=?, updated_at=datetime('now') WHERE id=?""",
                    (normalized["name"], normalized["icon"], normalized["stage"],
                     normalized["description"], normalized["agent_number"],
-                    1 if normalized["enabled"] else 0,
+                    bool(normalized["enabled"]),
                     json.dumps(normalized["checks"]), agent_id))
 
         # P2-1: Build audit detail with old/new values
@@ -12368,7 +12368,7 @@ class AIAgentDetailHandler(BaseHandler):
         before_state = _safe_admin_state(_row_dict(old_agent))
         before_state["checks"] = safe_json_loads(before_state.get("checks")) if before_state.get("checks") else []
         before_state["enabled"] = bool(before_state.get("enabled"))
-        db.execute("UPDATE ai_agents SET enabled=0, updated_at=datetime('now') WHERE id=?", (agent_id,))
+        db.execute("UPDATE ai_agents SET enabled=?, updated_at=datetime('now') WHERE id=?", (False, agent_id))
         after = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
         after_state = _safe_admin_state(_row_dict(after))
         after_state["checks"] = safe_json_loads(after_state.get("checks")) if after_state.get("checks") else []

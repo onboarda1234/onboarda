@@ -6217,6 +6217,21 @@ class TestAdminPilotMutationAuditabilityAndRBAC:
         self._assert_before_after_no_secrets(row)
         assert "ADMIN-AUDIT synthetic update" in row["after_state"]
 
+    def test_ai_agent_partial_toggle_creates_before_after_audit(self, api_server):
+        agents = http_requests.get(f"{api_server}/api/config/ai-agents", headers=self._headers(), timeout=5).json()["agents"]
+        agent = agents[0]
+        resp = http_requests.put(
+            f"{api_server}/api/config/ai-agents/{agent['id']}",
+            headers=self._headers(),
+            json={"enabled": not bool(agent["enabled"])},
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        row = self._audit_row("Config Update", "AI Agents")
+        self._assert_before_after_no_secrets(row)
+        assert '"enabled":' in row["before_state"]
+        assert '"enabled":' in row["after_state"]
+
     def test_ai_agent_delete_soft_disables_and_audits(self, api_server):
         from db import get_db
 
