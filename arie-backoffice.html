@@ -802,6 +802,7 @@ a { color:var(--brand); text-decoration:none; }
 body.role-admin .role-admin-only { display:initial !important; }
 body.role-admin .role-admin-only-flex, body.role-admin .snav-item.role-admin-only { display:flex !important; }
 body.role-admin .role-admin-only-block, body.role-admin .snav-section.role-admin-only { display:block !important; }
+[data-pilot-hidden], body.role-admin .snav-item[data-pilot-hidden] { display:none !important; }
 .role-sco-only { display:none !important; }
 body.role-admin .role-sco-only, body.role-sco .role-sco-only { display:initial !important; }
 body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only { display:flex !important; }
@@ -964,7 +965,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item role-admin-only" onclick="showView('risk-model',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg></span> Risk Scoring Model</div>
     <div class="snav-item role-admin-only" onclick="showView('ai-checks',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span> AI Verification Checks</div>
     <div class="snav-item role-admin-only" onclick="showView('ai-agents',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></svg></span> AI Agents</div>
-    <div class="snav-item role-admin-only" onclick="showView('agent-health',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Agent Health</div>
+    <div class="snav-item role-admin-only" data-pilot-hidden="agent-health" style="display:none;" onclick="showView('agent-health',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Agent Health</div>
     <div class="snav-item role-enhanced-settings" data-view="enhanced-requirements" onclick="showView('enhanced-requirements',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><path d="M21 12a9 9 0 1 1-6.22-8.56"/><path d="M21 3v6h-6"/></svg></span> Enhanced Requirements</div>
     <div class="snav-item" onclick="showView('resources',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span> Resources</div>
     <div class="snav-item role-admin-only" onclick="showView('settings',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> Settings</div>
@@ -5639,7 +5640,7 @@ function showView(name, navItem) {
   var requestedName = name;
   if (name === 'screening-queue') name = 'screening';
   // Enforce frontend role restrictions on admin-only views
-  var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'agent-health', 'settings'];
+  var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'settings'];
   var scoOnlyViews = ['audit'];
   var enhancedSettingsViews = ['enhanced-requirements'];
   var role = currentUser ? currentUser.role : '';
@@ -9769,6 +9770,12 @@ async function loadAuditTrail(options) {
   AUDIT_LOG = (auditResp.entries || []).map(mapAuditEntry);
   renderAudit();
   if (!options.silent) showToast('Audit trail loaded (' + AUDIT_LOG.length + ' row' + (AUDIT_LOG.length === 1 ? '' : 's') + ')', 'success');
+}
+
+function refreshAdminAuditEvidence() {
+  loadAuditTrail({ silent: true, limit: 100 }).catch(function(e) {
+    console.warn('Could not refresh persisted audit evidence:', e);
+  });
 }
 
 function clearAuditFilters() {
@@ -21897,7 +21904,6 @@ async function preApproveApplication() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
       decision: 'PRE_APPROVE', notes: notes
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approve', target:currentApp.ref, detail:'Pre-approved: ' + notes, ip:'client' });
     await refreshCurrentAppDetail();
     showToast('Application pre-approved. Client can now proceed to KYC document submission.');
   } catch(e) {
@@ -21917,7 +21923,6 @@ async function preApprovalReject() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
       decision: 'REJECT', notes: notes
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval Reject', target:currentApp.ref, detail:'Rejected at pre-approval: ' + notes, ip:'client' });
     await refreshCurrentAppDetail();
     showToast('Application rejected at pre-approval stage.');
   } catch(e) {
@@ -21937,7 +21942,6 @@ async function preApprovalRequestInfo() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
       decision: 'REQUEST_INFO', notes: notes
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval RMI', target:currentApp.ref, detail:'Requested info at pre-approval: ' + notes, ip:'client' });
     await refreshCurrentAppDetail();
     showToast('Additional information requested. Client will be notified to update pre-screening data.');
   } catch(e) {
@@ -22720,7 +22724,7 @@ function toggleCountryEdit() {
   if (!countryEditMode) {
     boApiCall('PUT', '/config/risk-model', { country_risk_scores: COUNTRY_RISK_LISTS })
       .then(function() {
-        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'client' });
+        refreshAdminAuditEvidence();
         showToast('Country risk lists saved');
       })
       .catch(function(e) {
@@ -22738,7 +22742,7 @@ function toggleSectorEdit() {
     });
     boApiCall('PUT', '/config/risk-model', { sector_risk_scores: SECTOR_RISK_CONFIG })
       .then(function() {
-        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'client' });
+        refreshAdminAuditEvidence();
         showToast('Sector risk scores saved');
       })
       .catch(function(e) {
@@ -22758,7 +22762,7 @@ function toggleEntityEdit() {
     });
     boApiCall('PUT', '/config/risk-model', { entity_type_scores: ENTITY_TYPE_SCORES })
       .then(function() {
-        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'client' });
+        refreshAdminAuditEvidence();
         showToast('Entity type risk scores saved');
       })
       .catch(function(e) {
@@ -22912,13 +22916,11 @@ function toggleConfigPanel(id) {
 function addSubCriteria(dimIdx) {
   RISK_DIMENSIONS[dimIdx].subcriteria.push({ name:'New Criterion', weight:0, scoring:'Define scoring 1-4' });
   renderRiskModel();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Added sub-criterion to ' + RISK_DIMENSIONS[dimIdx].id, ip:'client' });
 }
 
 function removeSubCriteria(dimIdx, subIdx) {
   var removed = RISK_DIMENSIONS[dimIdx].subcriteria.splice(subIdx, 1);
   renderRiskModel();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Removed "' + removed[0].name + '" from ' + RISK_DIMENSIONS[dimIdx].id, ip:'client' });
 }
 
 function saveRiskModel() {
@@ -22973,7 +22975,6 @@ function saveRiskModel() {
     showToast('⚠️ Dimension weights total ' + totalWeight + '% — must equal 100%');
     return;
   }
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Risk scoring model updated', ip:'client' });
   // Exit edit mode
   riskEditMode = false;
   document.getElementById('btn-edit-risk').style.display = '';
@@ -22982,7 +22983,7 @@ function saveRiskModel() {
   renderRiskModel();
   // Sync to API — toast only on confirmed persistence
   boApiCall('PUT', '/config/risk-model', { dimensions: RISK_DIMENSIONS, thresholds: RISK_THRESHOLDS })
-    .then(function() { showToast('Risk scoring model saved successfully'); })
+    .then(function() { refreshAdminAuditEvidence(); showToast('Risk scoring model saved successfully'); })
     .catch(function(e) { showToast('Failed to save risk model: ' + (e.message || e), 'error'); });
 }
 
@@ -23173,14 +23174,12 @@ function addCheck(type, docIdx) {
   var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
   data[docIdx].checks.push({ label:'New Check', rule:'Define the verification rule', type:'content' });
   renderAIChecks();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Added check to ' + data[docIdx].name, ip:'client' });
 }
 
 function removeCheck(type, docIdx, checkIdx) {
   var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
   var removed = data[docIdx].checks.splice(checkIdx, 1);
   renderAIChecks();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Removed "' + removed[0].label + '" from ' + data[docIdx].name, ip:'client' });
 }
 
 function addDocType(type) {
@@ -23189,7 +23188,6 @@ function addDocType(type) {
   var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
   data.push({ docId:'doc-' + name.toLowerCase().replace(/\s+/g,'-'), name:name, checks:[] });
   renderAIChecks();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Added document type: ' + name, ip:'client' });
   showToast('Document type "' + name + '" added');
 }
 
@@ -23218,7 +23216,7 @@ async function saveAIChecks() {
     for (var i = 0; i < payloads.length; i++) {
       await boApiCall('PUT', '/config/verification-checks', payloads[i]);
     }
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'AI verification checks updated', ip:'client' });
+    refreshAdminAuditEvidence();
     renderAIChecks();
     showToast('✅ AI verification checks saved — ' + document.getElementById('total-checks-count').textContent + ' checks active');
   } catch (err) {
@@ -23352,7 +23350,6 @@ function toggleAgent(idx, el) {
   AI_AGENTS[idx].enabled = !AI_AGENTS[idx].enabled;
   el.classList.toggle('on');
   var state = AI_AGENTS[idx].enabled ? 'enabled' : 'disabled';
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Agent ' + AI_AGENTS[idx].id + ' ' + state, ip:'client' });
   showToast('Agent ' + AI_AGENTS[idx].id + ': ' + AI_AGENTS[idx].name + ' ' + state);
 }
 
@@ -23374,16 +23371,22 @@ function addNewAgent() {
     checks:['Define first check']
   });
   renderAgentsPipeline();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Added new Agent ' + newId, ip:'client' });
   showToast('New agent added — configure it below');
 }
 
-function deleteAgent(agentIdx) {
-  if (!confirm('Delete Agent ' + AI_AGENTS[agentIdx].id + ': ' + AI_AGENTS[agentIdx].name + '? This cannot be undone.')) return;
-  var removed = AI_AGENTS.splice(agentIdx, 1);
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Deleted Agent ' + removed[0].id + ': ' + removed[0].name, ip:'client' });
-  renderAgentsPipeline();
-  showToast('Agent deleted');
+async function deleteAgent(agentIdx) {
+  var agent = AI_AGENTS[agentIdx];
+  if (!confirm('Disable Agent ' + agent.id + ': ' + agent.name + '? The agent will remain in the audit trail and can be re-enabled later.')) return;
+  var recordId = getAIAgentRecordId(agent);
+  try {
+    await boApiCall('DELETE', '/config/ai-agents/' + encodeURIComponent(recordId));
+    agent.enabled = false;
+    refreshAdminAuditEvidence();
+    renderAgentsPipeline();
+    showToast('Agent disabled');
+  } catch (err) {
+    showToast('Failed to disable agent: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 function saveAgents() {
@@ -23403,7 +23406,6 @@ function saveAgents() {
   document.querySelectorAll('.agent-check-input').forEach(function(el) {
     AI_AGENTS[parseInt(el.dataset.agent)].checks[parseInt(el.dataset.check)] = el.value;
   });
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'AI agent pipeline configuration updated', ip:'client' });
   // Sync each agent to API
   if (BO_AUTH_TOKEN) {
     var savePromises = AI_AGENTS.map(function(agent) {
@@ -23412,6 +23414,7 @@ function saveAgents() {
       return boApiCall('PUT', '/config/ai-agents/' + encodeURIComponent(recordId), agentData);
     });
     Promise.all(savePromises).then(function() {
+      refreshAdminAuditEvidence();
       renderAgentsPipeline();
       showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
     }).catch(function(err) {
@@ -23425,6 +23428,7 @@ function saveAgents() {
 // ═══════════════════════════════════════════════════════════
 // AGENT HEALTH DASHBOARD
 // ═══════════════════════════════════════════════════════════
+var AGENT_HEALTH_ACTIVE = false;
 
 function generateAgentHealthData() {
   // Simulates realistic agent health telemetry based on actual AI_AGENTS config
@@ -23503,14 +23507,17 @@ function generateAgentHealthData() {
 }
 
 function renderAgentHealth() {
-  // Non-demo: show placeholder — no real agent health metrics available yet
-  if (APP_ENV !== 'demo') {
+  // Paid pilot: hidden until real execution telemetry is connected.
+  if (!AGENT_HEALTH_ACTIVE || APP_ENV !== 'demo') {
     document.getElementById('ah-summary-stats').innerHTML =
       '<div style="text-align:center;padding:60px 20px;color:var(--text3);">' +
       '<div style="font-size:48px;margin-bottom:16px;">📊</div>' +
-      '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">Agent Health Monitoring Not Yet Active</div>' +
-      '<div style="font-size:13px;">Agent execution metrics will appear here once the monitoring pipeline is operational.</div>' +
+      '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">Agent Health Monitoring Unavailable</div>' +
+      '<div style="font-size:13px;">This page is hidden from paid-pilot navigation until real agent execution telemetry is connected.</div>' +
       '</div>';
+    document.getElementById('ah-alerts').innerHTML = '';
+    document.getElementById('ah-agent-cards').innerHTML = '';
+    document.getElementById('ah-detail-tables').innerHTML = '';
     return;
   }
 
@@ -23693,16 +23700,23 @@ function toggleHealthCard(idx) {
 }
 
 function runGoldenTest(idx) {
+  if (!AGENT_HEALTH_ACTIVE) {
+    showToast('Agent Health monitoring is not active in this environment.', 'warning');
+    return;
+  }
   var agent = AI_AGENTS[idx];
   showToast('Running golden dataset regression for ' + agent.name + '...');
   setTimeout(function() {
     var score = (88 + Math.random() * 11).toFixed(1);
     showToast('✅ ' + agent.name + ' scored ' + score + '% on golden dataset (' + agent.checks.length + ' test cases)');
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Test', target:'Agent Health', detail:'Golden dataset test for ' + agent.name + ': ' + score + '%', ip:'client' });
   }, 2000);
 }
 
 function exportAgentHealthReport() {
+  if (!AGENT_HEALTH_ACTIVE) {
+    showToast('Agent Health monitoring is not active in this environment.', 'warning');
+    return;
+  }
   var data = generateAgentHealthData();
   var csv = 'Agent,Status,Accuracy,Confidence,Override Rate,Golden Score,Drift,Latency(s),Runs,Escalations,False Positives,False Negatives\n';
   data.forEach(function(d) {
@@ -23716,7 +23730,6 @@ function exportAgentHealthReport() {
   a.href = url; a.download = 'agent_health_report_' + new Date().toISOString().slice(0,10) + '.csv';
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
   showToast('Agent health report exported as CSV');
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:'Agent Health', detail:'Exported agent health report', ip:'client' });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -23764,7 +23777,6 @@ async function signOut() {
     ssKeys.forEach(function(sk) { sessionStorage.removeItem(sk); });
   } catch(e) { /* storage may be unavailable in some environments */ }
 
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Logout', target:'System', detail:'Signed out', ip:'client' });
   showToast('Signed out successfully');
   showLoginScreen();
 }
@@ -23905,8 +23917,6 @@ async function handleLogin(e) {
     setBoAuth(resp.token, resp.user);
     resetBackofficeSessionData();
     syncCurrentUserUI();
-
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: 'Signed in via login page', ip:'client' });
 
     activateAuthenticatedShell();
     showView('dashboard');
@@ -24575,7 +24585,6 @@ function saveReviewSchedule() {
   REVIEW_SCHEDULE.MEDIUM.months = parseInt(document.getElementById('review-medium-months').value) || 24;
   REVIEW_SCHEDULE.HIGH.months = parseInt(document.getElementById('review-high-months').value) || 12;
   REVIEW_SCHEDULE.VERY_HIGH.months = parseInt(document.getElementById('review-vhigh-months').value) || 6;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Review Schedule', detail:'Updated: Low=' + REVIEW_SCHEDULE.LOW.months + 'm, Med=' + REVIEW_SCHEDULE.MEDIUM.months + 'm, High=' + REVIEW_SCHEDULE.HIGH.months + 'm, VHigh=' + REVIEW_SCHEDULE.VERY_HIGH.months + 'm', ip:'client' });
   showToast('✅ Review schedule saved — reminders will trigger accordingly');
 }
 
@@ -24604,12 +24613,13 @@ async function saveSystemSettings() {
     licence_number: document.getElementById('setting-fsc-licence').value.trim(),
     default_retention_years: parseInt(document.getElementById('setting-retention').value, 10) || 7,
     auto_approve_max_score: parseInt(document.getElementById('setting-auto-approve').value, 10) || 40,
-    edd_threshold_score: parseInt(document.getElementById('setting-edd-threshold').value, 10) || 55
+    edd_threshold_score: parseInt(document.getElementById('setting-edd-threshold').value, 10) || 55,
+    confirm_dangerous_change: true
   };
 
   try {
     await boApiCall('PUT', '/config/system-settings', payload);
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'System Settings', detail:'System settings updated', ip:'client' });
+    refreshAdminAuditEvidence();
     showToast('✅ Settings saved successfully');
   } catch (e) {
     console.warn('Could not save system settings:', e);
@@ -24872,7 +24882,7 @@ async function downloadResource(resourceId) {
     link.remove();
     setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'View', target:'Resources', detail:'Viewed resource: ' + resourceId, ip:'client' });
+    refreshAdminAuditEvidence();
     showToast('Opening resource...');
   } catch (e) {
     console.warn('Resource download failed:', e);
@@ -24899,7 +24909,7 @@ async function handleResourceUpload(input) {
     var names = (data.uploaded || []).map(function(r) { return r.file_name || r.title; }).join(', ');
     await loadFromAPI();
     renderResources();
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Upload', target:'Resources', detail:'Uploaded: ' + names, ip:'client' });
+    refreshAdminAuditEvidence();
     showToast('Uploaded ' + (data.count || input.files.length) + ' file(s) successfully');
   } catch (e) {
     console.warn('Resource upload failed:', e);
@@ -26452,7 +26462,6 @@ function downloadRiskCSV() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast('CSV report downloaded');
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:app.ref, detail:'Risk computation CSV exported', ip:'client' });
 }
 
 function downloadRiskPDF() {
@@ -26634,7 +26643,6 @@ function downloadRiskPDF() {
   w.document.close();
 
   showToast('PDF report opened — use Print / Save as PDF');
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:app.ref, detail:'Risk computation PDF (full audit trail) exported', ip:'client' });
 }
 </script>
 </body>

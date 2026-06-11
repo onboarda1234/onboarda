@@ -78,3 +78,23 @@ def test_monitoring_alerts_view_keeps_agents_and_drops_review_signals_tab():
     assert "if (tab === 'agents')" in switch_tab_region
     assert "reviews" not in switch_tab_region
     assert "if (type === 'alert') return 'Monitoring Alerts';" in lifecycle_region
+
+
+def test_agent_health_hidden_until_real_telemetry_is_active():
+    html = BACKOFFICE_HTML.read_text()
+
+    assert 'data-pilot-hidden="agent-health"' in html
+    assert "[data-pilot-hidden], body.role-admin .snav-item[data-pilot-hidden] { display:none !important; }" in html
+    assert "var AGENT_HEALTH_ACTIVE = false;" in html
+    assert "Agent Health Monitoring Unavailable" in html
+    assert "hidden from paid-pilot navigation" in html
+    render_region = _function_region(html, "renderAgentHealth", "toggleHealthCard")
+    assert "if (!AGENT_HEALTH_ACTIVE || APP_ENV !== 'demo')" in render_region
+
+
+def test_admin_pages_do_not_create_generic_client_ip_audit_rows():
+    html = BACKOFFICE_HTML.read_text()
+
+    assert "ip:'client'" not in html
+    assert 'ip: "client"' not in html
+    assert "refreshAdminAuditEvidence()" in html
