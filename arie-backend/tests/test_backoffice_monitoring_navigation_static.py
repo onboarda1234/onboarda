@@ -92,6 +92,14 @@ def test_agent_health_hidden_until_real_telemetry_is_active():
     assert "if (!AGENT_HEALTH_ACTIVE || APP_ENV !== 'demo')" in render_region
 
 
+def test_audit_chain_navigation_matches_admin_sco_backend_policy():
+    html = BACKOFFICE_HTML.read_text()
+    show_view_region = _function_region(html, "showView", "signOut")
+
+    assert 'class="snav-item role-sco-only" onclick="showView(\'supervisor-audit\',this)"' in html
+    assert "var scoOnlyViews = ['audit', 'supervisor-audit'];" in show_view_region
+
+
 def test_admin_pages_do_not_create_generic_client_ip_audit_rows():
     html = BACKOFFICE_HTML.read_text()
 
