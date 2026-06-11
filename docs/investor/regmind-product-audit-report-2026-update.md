@@ -233,7 +233,7 @@ A deep audit identified serious admin control weaknesses, including a staging ri
 - formula-safe CSV exports were added;
 - Agent Health is hidden until real telemetry exists.
 
-A post-merge validation report noted that a deployed branch passed focused probes but was not yet proven as merged main at that time. Current repository source inspection confirms the relevant hardening patterns exist in code; staging provenance should still be checked at the time of any investor or paid-pilot demo.
+A historical post-merge validation report for the admin hardening work noted that the deployed branch passed focused probes but, in that validation run, staging was not proven to be running the merged `main` SHA. Current repository source inspection confirms the relevant hardening patterns exist in code; before any investor or paid-pilot demo, staging provenance should be rechecked by confirming `/api/version`, ECS task definition, ECR image tag, and GitHub `main` all identify the same approved commit.
 
 ---
 
