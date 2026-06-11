@@ -773,7 +773,7 @@ Some validation reports show strong deployed-branch behaviour but also highlight
 6. Transaction monitoring data infrastructure.
 7. Enterprise SSO / SCIM / access-review workflows.
 8. Full provider abstraction live failover validation.
-9. External adverse-media provider integration, distinct from parsing provider signals, is not implemented in the current scope.
+9. External adverse-media provider integration (distinct from parsing provider signals) is not implemented.
 10. Regulatory reporting/API integrations.
 11. Modularisation of monolithic backend.
 12. Componentisation of frontends.
