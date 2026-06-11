@@ -53,7 +53,7 @@ onboarda/
 │   ├── demo_pilot_data.py  # Demo seed data
 │   ├── Dockerfile          # Container build
 │   ├── docker-compose.yml  # Local dev setup
-│   └── tests/              # 206 tests (pytest)
+│   └── tests/              # 5,200+ tests (pytest)
 │       ├── test_api.py
 │       ├── test_application.py
 │       ├── test_auth.py
@@ -127,7 +127,7 @@ cd arie-backend
 python -m pytest tests/ -v
 ```
 
-All 206 tests should pass. Tests cover API endpoints, authentication, rule engine, validation engine, supervisor, PDF generation, GDPR, and integration flows.
+All tests should pass (5,222 passed, 17 skipped as of 2026-06-11). Tests cover API endpoints, authentication, rule engine, validation engine, supervisor, PDF generation, GDPR, and integration flows.
 
 ## Deployment
 
@@ -182,7 +182,7 @@ These clarifications prevent marketing claims from diverging from code behaviour
 | **Adverse media (external provider)** | ⚠️ NOT IMPLEMENTED | No external adverse-media API call; no `ADVERSE_MEDIA_API_KEY`. Back office correctly notes: "Distinct adverse-media results are not persisted in the current screening report." |
 | **ComplyAdvantage provider** | ⚠️ SCAFFOLDED — OFF by default | Adapter and registry exist (`screening_complyadvantage/`). `ENABLE_SCREENING_ABSTRACTION` is `False` in all environments. `run_full_screening()` is hardcoded to Sumsub and does not invoke provider abstraction. Do not claim ComplyAdvantage as a live provider unless `ENABLE_SCREENING_ABSTRACTION=true` is confirmed working end-to-end. |
 | **Periodic review (state machine)** | ✅ ACTIVE | `periodic_review_engine.py` enforces review states, audit trails, and lifecycle linkage |
-| **Periodic review (automatic scheduler)** | ⚠️ NOT IMPLEMENTED | No APScheduler, `PeriodicCallback`, or `IOLoop` timer. Reviews are scheduled via the manual "Schedule Due Reviews" button in back office. |
+| **Periodic review (automatic scheduler)** | ✅ ACTIVE (staging/production) | Tornado `PeriodicCallback` runs the due-review sweep (`monitoring_automation.run_due_monitoring_reviews`); enabled by default only when `ENVIRONMENT` is staging/production or `MONITORING_AUTOMATION_ENABLED=true`. No manual "Schedule Due Reviews" button exists in the back office; the `/api/monitoring/reviews/schedule` backfill endpoint is API-only. |
 
 
 
