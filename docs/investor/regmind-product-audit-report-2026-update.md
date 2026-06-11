@@ -169,7 +169,7 @@ The current architecture distinguishes:
 
 ### 3.6 Sumsub Remediation and Provider Label Cleanup
 
-Sumsub has been repositioned correctly as an identity verification / KYC provider, while ComplyAdvantage labels are used for sanctions, watchlists, PEP/RCA, adverse-signal, and monitoring responsibilities. The provider-label cleanup evidence reports removal of legacy OpenSanctions product-surface references from buyer/officer-facing materials and correction of provider responsibility labels.
+Sumsub has been repositioned correctly as an identity verification / KYC provider, while ComplyAdvantage labels are used for sanctions, watchlists, PEP/RCA, adverse-signal, and monitoring responsibilities. The provider-label cleanup evidence reports removal of legacy non-active provider product-surface references from buyer/officer-facing materials and correction of provider responsibility labels.
 
 Important nuance: ComplyAdvantage provider code and abstraction exist, but provider abstraction is not yet the live default in all environments. Current product claims should avoid overstating ComplyAdvantage as an end-to-end active provider unless the abstraction is enabled and confirmed working end-to-end in the deployed environment.
 
