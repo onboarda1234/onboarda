@@ -49,6 +49,13 @@ However, RegMind should not yet be represented as fully enterprise-production-re
 
 The platform has strategic value because it is not merely a wrapper around KYC providers. It owns the compliance workflow layer above providers: rule interpretation, evidence orchestration, memo governance, officer controls, lifecycle review, audit proof, and decision traceability.
 
+### 1.4 Critical Scope Caveats for Investors
+
+- **Provider status:** ComplyAdvantage-labelled screening responsibilities should not be interpreted as proven live provider execution unless the screening abstraction is enabled and validated end-to-end in the deployed environment.
+- **Adverse media:** RegMind parses adverse-media signals from screening provider results, but a separate external adverse-media provider/API is not implemented.
+- **Periodic review:** The periodic-review state machine and officer workflows are active, but automatic background scheduling is not implemented; scheduling is currently manual from the back office.
+- **Staging provenance:** Before any investor or paid-pilot demo, the deployed SHA, ECS task definition, ECR image tag, and approved source branch should be verified as matching.
+
 ---
 
 ## 2. Scope and Evidence Reviewed
@@ -233,7 +240,7 @@ A deep audit identified serious admin control weaknesses, including a staging ri
 - formula-safe CSV exports were added;
 - Agent Health is hidden until real telemetry exists.
 
-A historical post-merge validation report for the admin hardening work noted that the deployed branch passed focused probes but, in that validation run, staging was not proven to be running the merged `main` SHA. Current repository source inspection confirms the relevant hardening patterns exist in code; before any investor or paid-pilot demo, staging provenance should be rechecked by confirming `/api/version`, ECS task definition, ECR image tag, and GitHub `main` all identify the same approved commit.
+A historical post-merge validation report for the admin hardening work noted that the deployed branch passed focused probes. In that validation run, staging was not proven to be running the merged `main` SHA. Current repository source inspection confirms the relevant hardening patterns exist in code. Before any investor or paid-pilot demo, staging provenance should be rechecked by confirming `/api/version`, ECS task definition, ECR image tag, and GitHub `main` all identify the same approved commit.
 
 ---
 
@@ -773,7 +780,7 @@ Some validation reports show strong deployed-branch behaviour but also highlight
 6. Transaction monitoring data infrastructure.
 7. Enterprise SSO / SCIM / access-review workflows.
 8. Full provider abstraction live failover validation.
-9. External adverse-media provider integration (distinct from parsing provider signals) is not implemented.
+9. External adverse-media provider integration is not implemented; this is distinct from active parsing of adverse-media signals contained in screening provider results.
 10. Regulatory reporting/API integrations.
 11. Modularisation of monolithic backend.
 12. Componentisation of frontends.
