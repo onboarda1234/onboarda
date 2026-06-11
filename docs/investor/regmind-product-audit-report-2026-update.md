@@ -2,8 +2,8 @@
 
 **Classification:** Confidential — investor / partner due diligence material  
 **Report date:** 11 June 2026  
-**Repository audited:** `onboarda1234/onboarda`  
-**Local audited branch / SHA:** `copilot/update-regmind-product-audit-report-again` / `2b2f51b02a4968c5e4b85a13dcaccbdb353c2afd`  
+**Repository audited:** Current RegMind / Onboarda source repository  
+**Local audited checkout:** Current task branch at audit time  
 **Methodology:** Fresh codebase and documentation review; current architecture review; post-remediation report review; staging evidence review from recent validation reports; targeted source inspection of backend, frontend, deployment, audit, AI, screening, lifecycle, monitoring, and approval-control modules.  
 **Important note:** The prior `docs/investor/regmind-product-audit-report.md` was used as historical context only. This report is a new assessment based on current repository evidence and current validation documentation.
 
@@ -28,7 +28,7 @@ RegMind is now best described as a **compliance decision platform and operating 
 11. periodic review;
 12. audit trail and governance reporting.
 
-The platform is materially more mature than the original audit baseline. The current codebase contains a large monolithic Tornado backend (`arie-backend/server.py`), 75 backend Python modules at top level, 263 pytest files, two large single-file HTML applications, a documented AWS ECS staging path, and extensive remediation reports proving recent hardening work.
+The platform is materially more mature than the original audit baseline. The current codebase contains a large monolithic Tornado backend (`arie-backend/server.py`), 75 backend Python modules at top level, 263 pytest test files discovered in the current checkout, two large single-file HTML applications, a documented AWS ECS staging path, and extensive remediation reports proving recent hardening work.
 
 ### 1.2 Investor-Friendly Verdict
 
@@ -162,7 +162,7 @@ The current architecture distinguishes:
 
 ### 3.6 Sumsub Remediation and Provider Label Cleanup
 
-Sumsub has been repositioned correctly as an identity verification / KYC provider, while ComplyAdvantage labels are used for sanctions, watchlists, PEP/RCA, adverse-signal, and monitoring responsibilities. The provider-label cleanup evidence reports removal of OpenSanctions product-surface references and buyer/officer label correction.
+Sumsub has been repositioned correctly as an identity verification / KYC provider, while ComplyAdvantage labels are used for sanctions, watchlists, PEP/RCA, adverse-signal, and monitoring responsibilities. The provider-label cleanup evidence reports removal of legacy OpenSanctions product-surface references from buyer/officer-facing materials and correction of provider responsibility labels.
 
 Important nuance: ComplyAdvantage provider code and abstraction exist, but provider abstraction is not yet the live default in all environments. Current product claims should avoid overstating ComplyAdvantage as an end-to-end active provider unless the abstraction is enabled and confirmed working end-to-end in the deployed environment.
 
@@ -773,7 +773,7 @@ Some validation reports show strong deployed-branch behaviour but also highlight
 6. Transaction monitoring data infrastructure.
 7. Enterprise SSO / SCIM / access-review workflows.
 8. Full provider abstraction live failover validation.
-9. External adverse-media provider integration, if intended as separate from adverse-media parsing of screening provider signals; no separate external adverse-media API is implemented in the current scope.
+9. External adverse-media provider integration, distinct from parsing adverse-media signals from screening provider results, is not implemented in the current scope.
 10. Regulatory reporting/API integrations.
 11. Modularisation of monolithic backend.
 12. Componentisation of frontends.
