@@ -4852,12 +4852,16 @@ function loadSupportReferenceData(sessionId) {
   if (SUPPORT_DATA_PROMISE) return SUPPORT_DATA_PROMISE;
   SUPPORT_DATA_STATE = 'loading';
   var options = { suppressAuthReset: true, sessionId: sessionId || getCurrentBoSessionId() };
-  SUPPORT_DATA_PROMISE = Promise.all([
-    loadUsersFromAPI(options).catch(function(e) { console.warn('Could not load users:', e); }),
+  var role = (currentUser && currentUser.role) || (BO_AUTH_USER && BO_AUTH_USER.role) || '';
+  var supportLoads = [
     loadRiskConfigFromAPI(options).catch(function(e) { console.warn('Could not load risk config:', e); }),
     loadAIAgentsFromAPI(options).catch(function(e) { console.warn('Could not load AI agents:', e); }),
     loadVerificationChecksFromAPI(options).catch(function(e) { console.warn('Could not load verification checks:', e); })
-  ]).then(function() {
+  ];
+  if (role === 'admin' || role === 'sco') {
+    supportLoads.unshift(loadUsersFromAPI(options).catch(function(e) { console.warn('Could not load users:', e); }));
+  }
+  SUPPORT_DATA_PROMISE = Promise.all(supportLoads).then(function() {
     SUPPORT_DATA_STATE = 'ready';
     SUPPORT_DATA_PROMISE = null;
     return true;

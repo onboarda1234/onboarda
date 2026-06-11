@@ -100,6 +100,16 @@ def test_audit_chain_navigation_matches_admin_sco_backend_policy():
     assert "var scoOnlyViews = ['audit', 'supervisor-audit'];" in show_view_region
 
 
+def test_support_reference_preload_does_not_fetch_users_for_lower_roles():
+    html = BACKOFFICE_HTML.read_text()
+    region = _function_region(html, "loadSupportReferenceData", "ensureScreeningQueueLoaded")
+
+    assert "var role = (currentUser && currentUser.role) || (BO_AUTH_USER && BO_AUTH_USER.role) || '';" in region
+    assert "if (role === 'admin' || role === 'sco')" in region
+    assert "supportLoads.unshift(loadUsersFromAPI(options)" in region
+    assert "Promise.all(supportLoads)" in region
+
+
 def test_admin_pages_do_not_create_generic_client_ip_audit_rows():
     html = BACKOFFICE_HTML.read_text()
 
