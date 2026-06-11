@@ -84,7 +84,7 @@ def test_agent_health_hidden_until_real_telemetry_is_active():
     html = BACKOFFICE_HTML.read_text()
 
     assert 'data-pilot-hidden="agent-health"' in html
-    assert "[data-pilot-hidden], body.role-admin [data-pilot-hidden] { display:none !important; }" in html
+    assert "[data-pilot-hidden], body.role-admin .snav-item[data-pilot-hidden] { display:none !important; }" in html
     assert "var AGENT_HEALTH_ACTIVE = false;" in html
     assert "Agent Health Monitoring Unavailable" in html
     assert "hidden from paid-pilot navigation" in html
