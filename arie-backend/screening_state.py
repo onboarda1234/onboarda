@@ -2,17 +2,18 @@
 Canonical Screening State Model — Priority A: Truthful, Fail-Closed Semantics
 =============================================================================
 
-This module defines the **single source of truth** for what state a screening
-subject is in (entity, director, UBO). It exists to stop the legacy code path
-that rendered any non-terminal Sumsub provider state as "Clear" / "No Provider
-Match", which created false reassurance for compliance officers.
+This module defines the **single source of truth** for what state an AML /
+PEP / sanctions screening subject is in (entity, director, UBO). It exists to
+stop the legacy code path that rendered any non-terminal screening-provider
+state as "Clear" / "No Provider Match", which created false reassurance for
+compliance officers.
 
 The legacy screening adapters return a sub-record like::
 
     {
         "matched": False,
         "results": [],
-        "source": "sumsub" | "simulated" | "unavailable" | "blocked",
+        "source": "complyadvantage" | "simulated" | "unavailable" | "blocked",
         "api_status": "live" | "pending" | "error" | "not_configured"
                        | "simulated" | "unavailable",
         ...
@@ -27,8 +28,8 @@ Canonical states
 ----------------
 
 * ``not_started``      — no screening attempt recorded for the subject.
-* ``pending_provider`` — provider job submitted; no terminal answer yet
-                          (Sumsub init/queued/onHold/pending).
+* ``pending_provider`` — screening provider job submitted; no terminal answer
+                          yet (init/queued/onHold/pending).
 * ``partial_result``   — some sub-checks done but the screening is not
                           complete (e.g. company registry returned but
                           sanctions still pending).
@@ -36,8 +37,8 @@ Canonical states
                           are no hits.
 * ``completed_match``  — provider returned a terminal answer and there
                           is at least one hit.
-* ``not_configured``   — the provider/level for this scope is not
-                          provisioned (e.g. no Sumsub company KYB level).
+* ``not_configured``   — the screening provider/level for this scope is not
+                          provisioned.
 * ``failed``           — provider call errored or was unavailable / blocked.
 
 Invariants
@@ -388,7 +389,7 @@ def derive_screening_state(screening: Optional[dict]) -> str:
     api_status = _normalise_token(screening.get("api_status"))
     source = (screening.get("source") or "").strip().lower()
 
-    # Explicit not_configured short-circuit (e.g. Sumsub company KYB level missing)
+    # Explicit not_configured short-circuit.
     if api_status in NOT_CONFIGURED_API_STATUSES:
         return NOT_CONFIGURED
 
@@ -1123,6 +1124,39 @@ QUEUE_STATUS_LABELS = {
     QUEUE_STATUS_CLEARED_BY_OFFICER: "Cleared by Officer",
 }
 
+QUEUE_BUSINESS_STATUS_LABELS = {
+    QUEUE_STATUS_NOT_STARTED: "Not Started",
+    QUEUE_STATUS_IN_PROGRESS: "Screening In Progress",
+    QUEUE_STATUS_CLEAR: "Clear",
+    QUEUE_STATUS_REVIEW_REQUIRED: "Review Required",
+    QUEUE_STATUS_ESCALATED: "Escalated",
+    QUEUE_STATUS_FAILED: "Failed / Provider Error",
+}
+
+QUEUE_STATUS_TO_BUSINESS_STATUS = {
+    QUEUE_STATUS_NOT_STARTED: QUEUE_STATUS_NOT_STARTED,
+    QUEUE_STATUS_IN_PROGRESS: QUEUE_STATUS_IN_PROGRESS,
+    QUEUE_STATUS_CLEAR: QUEUE_STATUS_CLEAR,
+    QUEUE_STATUS_REVIEW_REQUIRED: QUEUE_STATUS_REVIEW_REQUIRED,
+    QUEUE_STATUS_ESCALATED: QUEUE_STATUS_ESCALATED,
+    QUEUE_STATUS_FOLLOW_UP_REQUIRED: QUEUE_STATUS_REVIEW_REQUIRED,
+    QUEUE_STATUS_FAILED: QUEUE_STATUS_FAILED,
+    QUEUE_STATUS_CLEARED_BY_OFFICER: QUEUE_STATUS_CLEAR,
+}
+
+QUEUE_NON_TERMINAL_STATUS_KEYS = frozenset({
+    "awaiting_screening",
+    "incomplete_record",
+    "not_started",
+    "pending",
+    "screening_in_progress",
+    "screening_not_configured",
+    "screening_pending",
+    "screening_sandbox",
+    "screening_simulated",
+    "screening_unavailable",
+})
+
 QUEUE_ESCALATED_DISPOSITIONS = frozenset({
     "confirmed_match",
     "true_match",
@@ -1239,6 +1273,27 @@ def _queue_provider_not_configured(row: dict) -> bool:
 
 
 def _queue_provider_non_terminal(row: dict) -> bool:
+    status_key = _queue_status_token(row, "status_key")
+    availability = _queue_status_token(row, "provider_availability")
+    truth_state = _queue_status_token(row, "screening_truth_state")
+    mode = _queue_status_token(row, "provider_mode")
+    if status_key in QUEUE_NON_TERMINAL_STATUS_KEYS:
+        return True
+    if availability in {"pending", "sandbox", "simulated", "not_configured", "failed", "unavailable"}:
+        return True
+    if truth_state in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+        return True
+    if mode in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+        return True
+
+    states = {
+        _normalise_state(row.get("screening_state")),
+        _normalise_state(row.get("normalized_screening_state")),
+        _normalise_state(row.get("normalized_status")),
+    }
+    if any(state in {PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED} for state in states):
+        return True
+
     explicit_terminal = _queue_bool(row.get("terminal"))
     if explicit_terminal is False:
         return True
@@ -1252,19 +1307,31 @@ def _queue_provider_non_terminal(row: dict) -> bool:
     )
     if raw_state:
         return raw_state not in TERMINAL_STATES
-    status_key = _queue_status_token(row, "status_key")
-    return status_key in {
-        "awaiting_screening",
-        "screening_pending",
-        "screening_simulated",
-        "screening_sandbox",
-        "screening_not_configured",
-        "screening_unavailable",
-        "incomplete_record",
-    }
+    return status_key in QUEUE_NON_TERMINAL_STATUS_KEYS
 
 
 def _queue_provider_terminal(row: dict) -> bool:
+    status_key = _queue_status_token(row, "status_key")
+    availability = _queue_status_token(row, "provider_availability")
+    truth_state = _queue_status_token(row, "screening_truth_state")
+    mode = _queue_status_token(row, "provider_mode")
+    if status_key in QUEUE_NON_TERMINAL_STATUS_KEYS:
+        return False
+    if availability in {"pending", "sandbox", "simulated", "not_configured", "failed", "unavailable"}:
+        return False
+    if truth_state in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+        return False
+    if mode in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+        return False
+
+    states = {
+        _normalise_state(row.get("screening_state")),
+        _normalise_state(row.get("normalized_screening_state")),
+        _normalise_state(row.get("normalized_status")),
+    }
+    if any(state in {PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED} for state in states):
+        return False
+
     explicit_terminal = _queue_bool(row.get("terminal"))
     if explicit_terminal is not None:
         return explicit_terminal
@@ -1330,24 +1397,126 @@ def _queue_disposition_status(row: dict):
 
 
 def _queue_conflict_detected(row: dict, *, hits_exist: bool, non_terminal: bool) -> bool:
+    return bool(_queue_state_integrity_flags(row, hits_exist=hits_exist, non_terminal=non_terminal, terminal=_queue_provider_terminal(row)))
+
+
+def _queue_state_integrity_flags(row: dict, *, hits_exist: bool, non_terminal: bool, terminal: bool) -> list:
+    flags = []
     raw_claims_clear = _queue_raw_claims_clear(row)
-    if raw_claims_clear and hits_exist and not _queue_officer_cleared(row):
-        return True
+    officer_cleared = _queue_officer_cleared(row)
+
+    def add(flag):
+        if flag not in flags:
+            flags.append(flag)
+
+    if raw_claims_clear and hits_exist and not officer_cleared:
+        add("unreviewed_hits_claimed_clear")
+    if _truthy_review_flag(row.get("defensible_clear")) and hits_exist and not officer_cleared:
+        add("unreviewed_hits_claimed_defensible_clear")
     if raw_claims_clear and non_terminal:
-        return True
+        add("non_terminal_claimed_clear")
+    if _truthy_review_flag(row.get("defensible_clear")) and non_terminal:
+        add("non_terminal_claimed_defensible_clear")
+    if _queue_bool(row.get("terminal")) is True and non_terminal:
+        add("terminal_true_with_non_terminal_provider_status")
+    if _queue_bool(row.get("terminal")) is False and _queue_raw_claims_final(row):
+        add("terminal_false_with_final_status")
+    if raw_claims_clear and (_queue_provider_failed(row) or _queue_provider_not_configured(row)):
+        add("provider_error_claimed_clear")
+    if raw_claims_clear and _queue_status_token(row, "status_key") in {"awaiting_screening", "not_started"}:
+        add("not_started_claimed_clear")
+    if officer_cleared and non_terminal:
+        add("officer_clear_with_non_terminal_provider")
+    if officer_cleared and hits_exist and not terminal:
+        add("officer_clear_without_terminal_provider")
 
     legacy_state = _normalise_state(row.get("legacy_screening_state") or row.get("screening_state"))
     normalized_state = _normalise_state(row.get("normalized_screening_state") or row.get("normalized_status"))
     if legacy_state and normalized_state and legacy_state != normalized_state:
         if FAILED in {legacy_state, normalized_state}:
-            return True
+            add("legacy_normalized_state_conflict")
         if COMPLETED_MATCH in {legacy_state, normalized_state}:
-            return True
+            add("legacy_normalized_state_conflict")
         if COMPLETED_CLEAR in {legacy_state, normalized_state} and (
             legacy_state not in TERMINAL_STATES or normalized_state not in TERMINAL_STATES
         ):
-            return True
-    return False
+            add("legacy_normalized_state_conflict")
+    if terminal and hits_exist and raw_claims_clear and not officer_cleared:
+        add("terminal_hits_claimed_clear")
+    return flags
+
+
+def _queue_provider_status(row: dict, *, hits_exist: bool, non_terminal: bool, terminal: bool) -> str:
+    if _queue_provider_not_configured(row):
+        return "not_configured"
+    if _queue_provider_failed(row):
+        return "failed"
+    raw_state = _normalise_state(
+        row.get("screening_state")
+        or row.get("normalized_screening_state")
+        or row.get("normalized_status")
+    )
+    if non_terminal:
+        status_key = _queue_status_token(row, "status_key")
+        if status_key in {"awaiting_screening", "not_started"} or (raw_state == NOT_STARTED and not status_key):
+            return "not_started"
+        return "pending"
+    if terminal and hits_exist:
+        return COMPLETED_MATCH
+    if terminal and not hits_exist:
+        return COMPLETED_CLEAR
+    return raw_state or "unknown"
+
+
+def _queue_officer_review_status(row: dict) -> str:
+    if _queue_officer_cleared(row):
+        return "cleared"
+    disposition_status = _queue_disposition_status(row)
+    if disposition_status == QUEUE_STATUS_ESCALATED:
+        return "escalated"
+    if disposition_status == QUEUE_STATUS_FOLLOW_UP_REQUIRED:
+        return "follow_up_required"
+    if _normalise_token(row.get("review_four_eyes_status")) == "pending_second_review":
+        return "pending_second_review"
+    if row.get("review_disposition") or row.get("disposition") or row.get("review_disposition_code") or row.get("canonical_disposition"):
+        return "review_recorded"
+    return "not_reviewed"
+
+
+def _queue_review_evidence_present(row: dict) -> bool:
+    evidence_documents = row.get("review_evidence_documents")
+    return bool(
+        _queue_officer_cleared(row)
+        or row.get("review_evidence_reference")
+        or row.get("evidence_reference")
+        or (isinstance(evidence_documents, list) and evidence_documents)
+        or (
+            (row.get("review_disposition") or row.get("disposition") or row.get("review_disposition_code") or row.get("canonical_disposition"))
+            and _review_identity_present(row)
+            and (_review_reason_present(row) or row.get("review_notes"))
+            and _review_timestamp_present(row)
+        )
+    )
+
+
+def _queue_blocking_flags(status_key: str, *, hits_exist: bool, non_terminal: bool, state_integrity_flags: list, row: dict) -> list:
+    flags = []
+
+    def add(flag):
+        if flag not in flags:
+            flags.append(flag)
+
+    for flag in state_integrity_flags or []:
+        add(flag)
+    if status_key == QUEUE_STATUS_FAILED:
+        add("provider_failed_or_incomplete")
+    if status_key in {QUEUE_STATUS_NOT_STARTED, QUEUE_STATUS_IN_PROGRESS} or non_terminal:
+        add("screening_not_terminal")
+    if status_key == QUEUE_STATUS_REVIEW_REQUIRED:
+        add("unresolved_screening_hits" if hits_exist else "review_required")
+    if hits_exist and not _queue_officer_cleared(row):
+        add("unresolved_screening_hits")
+    return flags
 
 
 def _queue_raw_status_metadata(row: dict) -> dict:
@@ -1376,16 +1545,59 @@ def _queue_raw_status_metadata(row: dict) -> dict:
 
 def _queue_resolution(status_key: str, *, reason: str, requires_review: bool = False, defensible_clear: bool = False, row: dict) -> dict:
     label = QUEUE_STATUS_LABELS[status_key]
+    business_key = QUEUE_STATUS_TO_BUSINESS_STATUS[status_key]
+    business_label = QUEUE_BUSINESS_STATUS_LABELS[business_key]
+    hits_exist = _queue_hits_exist(row)
+    hit_count = _queue_hit_count(row)
+    non_terminal = _queue_provider_non_terminal(row)
+    terminal = _queue_provider_terminal(row)
+    state_integrity_flags = _queue_state_integrity_flags(
+        row,
+        hits_exist=hits_exist,
+        non_terminal=non_terminal,
+        terminal=terminal,
+    )
+    resolved_terminal = bool(status_key in {QUEUE_STATUS_CLEAR, QUEUE_STATUS_CLEARED_BY_OFFICER})
+    blocking_flags = _queue_blocking_flags(
+        status_key,
+        hits_exist=hits_exist,
+        non_terminal=non_terminal,
+        state_integrity_flags=state_integrity_flags,
+        row=row,
+    )
     return {
-        "canonical_status_key": status_key,
-        "canonical_status": label,
-        "canonical_status_label": label,
+        "canonical_status_key": business_key,
+        "canonical_status": business_label,
+        "canonical_status_label": business_label,
+        "officer_label": business_label,
         "status_key": status_key,
         "status_label": label,
-        "display_status_label": label,
+        "display_status_label": business_label,
+        "provider_status": _queue_provider_status(
+            row,
+            hits_exist=hits_exist,
+            non_terminal=non_terminal,
+            terminal=terminal,
+        ),
+        "screening_provider_status": _queue_provider_status(
+            row,
+            hits_exist=hits_exist,
+            non_terminal=non_terminal,
+            terminal=terminal,
+        ),
+        "provider_status_scope": "aml_pep_sanctions_screening",
+        "terminal": resolved_terminal,
+        "is_terminal": resolved_terminal,
+        "total_hits": max(0, hit_count or 0),
+        "has_hits": bool(hits_exist),
+        "officer_review_status": _queue_officer_review_status(row),
+        "review_evidence_present": _queue_review_evidence_present(row),
         "defensible_clear": bool(defensible_clear),
         "requires_review": bool(requires_review),
         "review_required": bool(requires_review),
+        "state_integrity_flags": state_integrity_flags,
+        "blocking_flags": blocking_flags,
+        "reasons": [reason],
         "screening_queue_reason": reason,
         "status_reason": reason,
         "raw_status": _queue_raw_status_metadata(row),
@@ -1423,14 +1635,6 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
             defensible_clear=False,
             row=row,
         )
-    if disposition_status == QUEUE_STATUS_CLEARED_BY_OFFICER:
-        return _queue_resolution(
-            disposition_status,
-            reason="Hits cleared by officer disposition.",
-            requires_review=False,
-            defensible_clear=True,
-            row=row,
-        )
     if _queue_provider_failed(row) or _queue_provider_not_configured(row):
         return _queue_resolution(
             QUEUE_STATUS_FAILED,
@@ -1441,6 +1645,14 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
         )
 
     conflict = _queue_conflict_detected(row, hits_exist=hits_exist, non_terminal=non_terminal)
+    if disposition_status == QUEUE_STATUS_CLEARED_BY_OFFICER and (non_terminal or not terminal):
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED if hits_exist else QUEUE_STATUS_IN_PROGRESS,
+            reason="Officer clearance cannot finalize a non-terminal or missing provider result.",
+            requires_review=bool(hits_exist),
+            defensible_clear=False,
+            row=row,
+        )
     if conflict and hits_exist:
         return _queue_resolution(
             QUEUE_STATUS_REVIEW_REQUIRED,
@@ -1459,6 +1671,14 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
         )
 
     raw_status = _queue_status_token(row, "status_key")
+    if disposition_status == QUEUE_STATUS_CLEARED_BY_OFFICER:
+        return _queue_resolution(
+            disposition_status,
+            reason="Hits cleared by officer disposition.",
+            requires_review=False,
+            defensible_clear=True,
+            row=row,
+        )
     if raw_status in {"review_required", "declared_pep_review"} or _queue_status_token(row, "pep_declared_status") == "declared":
         return _queue_resolution(
             QUEUE_STATUS_REVIEW_REQUIRED,

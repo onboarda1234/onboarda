@@ -9,7 +9,7 @@ def _resolve(row):
     return resolve_screening_queue_state(row)
 
 
-def test_pending_raw_terminal_no_hits_resolves_to_clear():
+def test_pending_raw_terminal_no_hits_fails_closed_to_in_progress():
     resolved = _resolve({
         "status_key": "screening_pending",
         "status_label": "Screening Pending Provider",
@@ -18,10 +18,22 @@ def test_pending_raw_terminal_no_hits_resolves_to_clear():
         "total_hits": 0,
     })
 
-    assert resolved["status_key"] == "clear"
-    assert resolved["canonical_status"] == "Clear"
-    assert resolved["defensible_clear"] is True
+    assert resolved["status_key"] == "screening_in_progress"
+    assert resolved["canonical_status_key"] == "screening_in_progress"
+    assert resolved["canonical_status"] == "Screening In Progress"
+    assert resolved["officer_label"] == "Screening In Progress"
+    assert resolved["provider_status"] == "pending"
+    assert resolved["screening_provider_status"] == "pending"
+    assert resolved["provider_status_scope"] == "aml_pep_sanctions_screening"
+    assert resolved["terminal"] is False
+    assert resolved["is_terminal"] is False
+    assert resolved["has_hits"] is False
+    assert resolved["review_evidence_present"] is False
+    assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is False
+    assert "screening_not_terminal" in resolved["blocking_flags"]
+    assert resolved["reasons"] == ["Provider screening is still in progress."]
+    assert "terminal_true_with_non_terminal_provider_status" in resolved["state_integrity_flags"]
 
 
 def test_pending_clear_with_hits_fails_closed_to_review_required():
@@ -36,9 +48,13 @@ def test_pending_clear_with_hits_fails_closed_to_review_required():
     })
 
     assert resolved["status_key"] == "review_required"
+    assert resolved["canonical_status_key"] == "review_required"
     assert resolved["canonical_status"] == "Review Required"
+    assert resolved["provider_status"] == "pending"
     assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is True
+    assert "unreviewed_hits_claimed_clear" in resolved["state_integrity_flags"]
+    assert "unreviewed_hits_claimed_defensible_clear" in resolved["state_integrity_flags"]
     assert "Conflicting" in resolved["screening_queue_reason"]
 
 
@@ -70,9 +86,73 @@ def test_terminal_hits_cleared_by_officer_get_distinct_status():
     })
 
     assert resolved["status_key"] == "cleared_by_officer"
-    assert resolved["canonical_status"] == "Cleared by Officer"
+    assert resolved["canonical_status_key"] == "clear"
+    assert resolved["canonical_status"] == "Clear"
+    assert resolved["officer_review_status"] == "cleared"
+    assert resolved["review_evidence_present"] is True
     assert resolved["defensible_clear"] is True
     assert resolved["review_required"] is False
+    assert resolved["state_integrity_flags"] == []
+
+
+def test_hits_claimed_defensible_clear_requires_explicit_officer_review():
+    resolved = _resolve({
+        "screening_state": "completed_match",
+        "terminal": True,
+        "total_hits": 1,
+        "screening_result": "clear",
+        "defensible_clear": True,
+    })
+
+    assert resolved["status_key"] == "review_required"
+    assert resolved["canonical_status"] == "Review Required"
+    assert resolved["provider_status"] == "completed_match"
+    assert resolved["defensible_clear"] is False
+    assert resolved["review_required"] is True
+    assert resolved["officer_review_status"] == "not_reviewed"
+    assert "unreviewed_hits_claimed_clear" in resolved["state_integrity_flags"]
+    assert "unreviewed_hits_claimed_defensible_clear" in resolved["state_integrity_flags"]
+
+
+def test_officer_clear_cannot_finalize_non_terminal_provider_result():
+    resolved = _resolve({
+        "screening_state": "pending_provider",
+        "terminal": False,
+        "total_hits": 1,
+        "screening_result": "match",
+        "review_disposition": "cleared",
+        "review_disposition_code": "false_positive_cleared",
+        "review_actionable": False,
+        "reviewer_id": "co001",
+        "review_rationale": "Officer reviewed stale match.",
+        "reviewed_at": "2026-06-10T10:00:00Z",
+    })
+
+    assert resolved["status_key"] == "review_required"
+    assert resolved["canonical_status"] == "Review Required"
+    assert resolved["provider_status"] == "pending"
+    assert resolved["defensible_clear"] is False
+    assert resolved["review_required"] is True
+    assert "officer_clear_with_non_terminal_provider" in resolved["state_integrity_flags"]
+
+
+def test_officer_clear_cannot_finalize_missing_terminal_provider_evidence():
+    resolved = _resolve({
+        "total_hits": 1,
+        "screening_result": "match",
+        "review_disposition": "cleared",
+        "review_disposition_code": "false_positive_cleared",
+        "review_actionable": False,
+        "reviewer_id": "co001",
+        "review_rationale": "Officer reviewed a match but terminal provider evidence is absent.",
+        "reviewed_at": "2026-06-10T10:00:00Z",
+    })
+
+    assert resolved["status_key"] == "review_required"
+    assert resolved["canonical_status"] == "Review Required"
+    assert resolved["defensible_clear"] is False
+    assert resolved["review_required"] is True
+    assert "officer_clear_without_terminal_provider" in resolved["state_integrity_flags"]
 
 
 def test_no_hit_officer_clear_does_not_override_provider_failure():
@@ -86,6 +166,8 @@ def test_no_hit_officer_clear_does_not_override_provider_failure():
     })
 
     assert resolved["status_key"] == "failed"
+    assert resolved["canonical_status"] == "Failed / Provider Error"
+    assert resolved["provider_status"] == "failed"
     assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is True
 
@@ -99,6 +181,8 @@ def test_terminal_no_hits_is_clear():
     })
 
     assert resolved["status_key"] == "clear"
+    assert resolved["canonical_status_key"] == "clear"
+    assert resolved["provider_status"] == "completed_clear"
     assert resolved["defensible_clear"] is True
     assert resolved["review_required"] is False
 
@@ -112,6 +196,7 @@ def test_non_terminal_unknown_hits_is_screening_in_progress():
 
     assert resolved["status_key"] == "screening_in_progress"
     assert resolved["canonical_status"] == "Screening In Progress"
+    assert resolved["provider_status"] == "pending"
     assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is False
 
@@ -127,7 +212,7 @@ def test_provider_error_or_failed_conflict_is_failed(row):
     resolved = _resolve(row)
 
     assert resolved["status_key"] == "failed"
-    assert resolved["canonical_status"] == "Failed"
+    assert resolved["canonical_status"] == "Failed / Provider Error"
     assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is True
 
@@ -159,7 +244,8 @@ def test_follow_up_officer_disposition_drives_follow_up_required():
     })
 
     assert resolved["status_key"] == "follow_up_required"
-    assert resolved["canonical_status"] == "Follow-up Required"
+    assert resolved["canonical_status_key"] == "review_required"
+    assert resolved["canonical_status"] == "Review Required"
     assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is False
 
@@ -204,11 +290,11 @@ def test_legacy_and_normalized_match_clear_conflict_fails_closed_to_review():
 
 def _assert_no_impossible_queue_states(rows):
     pending_keys = {"not_started", "screening_in_progress"}
-    clear_keys = {"clear", "cleared_by_officer"}
+    clear_keys = {"clear"}
     for row in rows:
-        status_key = row["status_key"]
+        status_key = row.get("canonical_status_key") or row["status_key"]
         hits = int(row.get("total_hits") or 0)
-        officer_cleared = status_key == "cleared_by_officer"
+        officer_cleared = row.get("status_key") == "cleared_by_officer" and row.get("officer_review_status") == "cleared"
         assert not (status_key in pending_keys and row.get("defensible_clear") is True), row
         assert not (status_key in pending_keys and row.get("screening_result") == "clear"), row
         assert not (row.get("defensible_clear") is True and hits > 0 and not officer_cleared), row
@@ -233,12 +319,17 @@ def test_canonical_queue_payload_suppresses_top_level_legacy_clear_signal():
         "total_hits": 0,
     })
 
-    assert row["status_key"] == "not_started"
-    assert row["status_label"] == "Not Started"
+    assert row["status_key"] == "screening_in_progress"
+    assert row["canonical_status_key"] == "screening_in_progress"
+    assert row["canonical_status"] == "Screening In Progress"
+    assert row["status_label"] == "Screening In Progress"
+    assert row["provider_status"] == "pending"
+    assert row["officer_review_status"] == "not_reviewed"
+    assert "non_terminal_claimed_clear" in row["state_integrity_flags"]
     assert row["defensible_clear"] is False
     assert row["review_required"] is False
-    assert row["screening_state"] == "not_started"
-    assert row["screening_result"] == "not_started"
+    assert row["screening_state"] == "pending_provider"
+    assert row["screening_result"] == "pending"
     assert row["terminal"] is False
     assert row["raw_status"]["screening_result"] == "clear"
     assert row["raw_status"]["defensible_clear"] is True
@@ -313,8 +404,37 @@ def test_screening_queue_payload_cannot_expose_impossible_officer_states(db, tem
     assert rows
     _assert_no_impossible_queue_states(rows)
     hit_row = next(row for row in rows if row["subject_name"] == "SQ1 Pending Hit")
+    for field in (
+        "canonical_status",
+        "officer_label",
+        "provider_status",
+        "screening_provider_status",
+        "provider_status_scope",
+        "terminal",
+        "is_terminal",
+        "total_hits",
+        "has_hits",
+        "officer_review_status",
+        "defensible_clear",
+        "requires_review",
+        "review_evidence_present",
+        "state_integrity_flags",
+        "blocking_flags",
+        "reasons",
+    ):
+        assert field in hit_row
     assert hit_row["status_key"] == "review_required"
+    assert hit_row["canonical_status"] == "Review Required"
     assert hit_row["status_label"] == "Review Required"
+    assert hit_row["provider_status"] == "pending"
+    assert hit_row["screening_provider_status"] == "pending"
+    assert hit_row["provider_status_scope"] == "aml_pep_sanctions_screening"
+    assert hit_row["is_terminal"] is False
+    assert hit_row["has_hits"] is True
+    assert hit_row["requires_review"] is True
+    assert hit_row["review_evidence_present"] is False
+    assert "unresolved_screening_hits" in hit_row["blocking_flags"]
+    assert hit_row["reasons"]
     assert hit_row["defensible_clear"] is False
     assert hit_row["review_required"] is True
     assert "raw_status" in hit_row
