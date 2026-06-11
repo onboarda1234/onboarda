@@ -16795,8 +16795,8 @@ def _screening_queue_search_blob(row):
 
 
 def _screening_queue_status_group(row):
-    status_key = _screening_queue_filter_value(row.get("status_key"))
-    canonical = _screening_queue_filter_value(row.get("canonical_disposition") or row.get("review_disposition_code"))
+    status_key = _screening_queue_filter_value(row.get("canonical_status_key") or row.get("status_key"))
+    raw_status_key = _screening_queue_filter_value(row.get("status_key"))
     disposition = _screening_queue_filter_value(row.get("review_disposition"))
     if status_key in ("not_started", "awaiting_screening"):
         return "awaiting"
@@ -16804,15 +16804,16 @@ def _screening_queue_status_group(row):
         return "pending_provider"
     if status_key == "failed" or status_key in ("screening_not_configured", "screening_unavailable", "incomplete_record"):
         return "failed"
-    if status_key in ("clear", "cleared_by_officer") or canonical == "false_positive_cleared" or disposition == "cleared" or status_key in ("screened_no_match", "reviewed_false_positive_cleared"):
+    if status_key in ("clear", "cleared_by_officer") or raw_status_key == "cleared_by_officer" or status_key in ("screened_no_match", "reviewed_false_positive_cleared"):
         return "no_match"
+    canonical = _screening_queue_filter_value(row.get("canonical_disposition") or row.get("review_disposition_code"))
     if canonical == "confirmed_match":
         return "match"
-    if status_key in ("escalated", "review_escalated") or disposition == "escalated":
+    if status_key in ("escalated", "review_escalated") or raw_status_key in ("escalated", "review_escalated") or disposition == "escalated":
         return "escalated"
-    if status_key in ("follow_up_required", "review_follow_up_required"):
+    if status_key in ("follow_up_required", "review_follow_up_required") or raw_status_key in ("follow_up_required", "review_follow_up_required"):
         return "follow_up_required"
-    if status_key in ("review_required", "declared_pep_review"):
+    if status_key in ("review_required", "declared_pep_review") or raw_status_key in ("review_required", "declared_pep_review"):
         return "review_required"
     return status_key or "other"
 

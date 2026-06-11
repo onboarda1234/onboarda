@@ -115,7 +115,9 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     assert "No Match" in html
     assert "Declared PEP · No provider matches" in triage_region
     assert "screeningSubjectRoleBadge(subject.subject_type)" in triage_region
-    assert "screeningQueueStatusBadge(subject.status_key, subject.display_status_label)" in triage_region
+    assert "screeningQueueCanonicalStatus(subject)" in triage_region
+    assert "screeningQueueStatusBadge(status.key, status.label)" in triage_region
+    assert "Screening provider:" in html
     assert "Screening Subjects" in review_region
     assert "Select one subject to review comparison, evidence, and disposition state." in review_region
     assert "screeningTriageSubjectListItem(subject" in review_region

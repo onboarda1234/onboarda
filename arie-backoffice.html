@@ -10252,14 +10252,22 @@ function changeScreeningQueuePage(direction) {
 
 function screeningQueueStatusBadge(statusKey, statusLabel) {
   var cls = 'pending';
-  if (statusKey === 'screened_no_match') cls = 'approved';
-  else if (statusKey === 'reviewed_false_positive_cleared' || statusKey === 'reviewed') cls = 'approved';
-  else if (statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
+  if (statusKey === 'clear' || statusKey === 'screened_no_match') cls = 'approved';
+  else if (statusKey === 'reviewed_false_positive_cleared' || statusKey === 'reviewed' || statusKey === 'cleared_by_officer') cls = 'approved';
+  else if (statusKey === 'not_started' || statusKey === 'screening_in_progress' || statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
   else if (statusKey === 'screening_simulated' || statusKey === 'screening_sandbox' || statusKey === 'screening_not_configured' || statusKey === 'screening_unavailable') cls = 'high';
-  else if (statusKey === 'review_escalated' || statusKey === 'review_confirmed_match') cls = 'high';
+  else if (statusKey === 'failed' || statusKey === 'escalated' || statusKey === 'review_escalated' || statusKey === 'review_confirmed_match') cls = 'high';
   else if (statusKey === 'review_follow_up_required') cls = 'pending';
   else if (statusKey === 'review_required') cls = 'high';
   return '<span class="badge ' + cls + '">' + escapeHtml(statusLabel || statusKey || 'Pending') + '</span>';
+}
+
+function screeningQueueCanonicalStatus(row) {
+  row = row || {};
+  return {
+    key: row.canonical_status_key || row.status_key || '',
+    label: row.canonical_status || row.canonical_status_label || row.display_status_label || row.status_label || row.status_key || 'Pending'
+  };
 }
 
 function screeningTagBadge(label, cls) {
@@ -10281,9 +10289,16 @@ function screeningReviewDisplayLabel(row) {
 function screeningQueueContextCell(row) {
   var parts = (row.entity_context || []).slice();
   if (row.screened_at) parts.push('Screened: ' + String(row.screened_at).substring(0, 19).replace('T', ' '));
+  var screeningProviderStatus = row.screening_provider_status || row.provider_status;
+  if (screeningProviderStatus) parts.push('Screening provider: ' + String(screeningProviderStatus).replace(/_/g, ' '));
+  if (row.officer_review_status && row.officer_review_status !== 'not_reviewed') parts.push('Review: ' + String(row.officer_review_status).replace(/_/g, ' '));
   var modeBadge = row.screening_mode ? screeningModeBadge(row.screening_mode) : '';
-  if (!parts.length && !modeBadge) return '<span style="font-size:12px;color:var(--text3);">—</span>';
-  return '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">' + modeBadge + parts.map(function(part) {
+  var integrityFlags = Array.isArray(row.state_integrity_flags) ? row.state_integrity_flags : [];
+  var integrityBadge = integrityFlags.length
+    ? '<span class="badge high" title="' + escapeHtml(integrityFlags.join(', ')) + '">State Integrity Flag</span>'
+    : '';
+  if (!parts.length && !modeBadge && !integrityBadge) return '<span style="font-size:12px;color:var(--text3);">—</span>';
+  return '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">' + modeBadge + integrityBadge + parts.map(function(part) {
     return '<span class="explain-data-source" style="margin:0;">' + escapeHtml(part) + '</span>';
   }).join('') + '</div>';
 }
@@ -11930,6 +11945,7 @@ function screeningSubjectRoleBadge(subjectType) {
 
 function screeningTriageSubjectListItem(subject, isSelected) {
   if (!subject) return '';
+  var status = screeningQueueCanonicalStatus(subject);
   var tags = (subject.category_labels || []).map(function(label) {
     return screeningTagBadge(label, screeningTriageCategoryChipClass(label));
   }).join('');
@@ -11942,7 +11958,7 @@ function screeningTriageSubjectListItem(subject, isSelected) {
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:700;color:var(--text1);line-height:1.4;">' + screeningSubjectRoleBadge(subject.subject_type) + '<span>' + escapeHtml(subject.subject_name) + '</span></div>' +
         '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(screeningSubjectTypeLabel(subject.subject_type)) + (subject.provider_label ? ' · ' + escapeHtml(subject.provider_label) : '') + '</div>' +
       '</div>' +
-      '<div style="flex-shrink:0;">' + screeningQueueStatusBadge(subject.status_key, subject.display_status_label) + '</div>' +
+      '<div style="flex-shrink:0;">' + screeningQueueStatusBadge(status.key, status.label) + '</div>' +
     '</div>' +
     '<div style="font-size:11px;color:var(--text2);margin-top:8px;">' + escapeHtml(screeningTriageHitSummary(subject)) + '</div>' +
     (tags ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' + tags + '</div>' : '') +
@@ -12825,13 +12841,14 @@ async function renderScreening(options) {
         }
       }
 
+      var canonicalStatus = screeningQueueCanonicalStatus(row);
       tr.innerHTML = '<td>' + escapeHtml(row.subject_name) + '</td>' +
         '<td style="font-size:12px;text-transform:capitalize;">' + escapeHtml(String(row.subject_type || '').replace('_', ' ')) + '</td>' +
         '<td style="font-size:12px;">' + escapeHtml(row.company_name || '') + '</td>' +
         '<td>' + screeningQueueSignalBadge(row.watchlist_status, row) + '</td>' +
         '<td>' + pepCell + '</td>' +
         '<td>' + screeningQueueContextCell(row) + '</td>' +
-        '<td>' + screeningQueueStatusBadge(row.status_key, row.status_label) + screeningReviewBadge(row, { suppressChip: screeningReviewDisplayLabel(row) === String(row.status_label || '') }) + '</td>' +
+        '<td>' + screeningQueueStatusBadge(canonicalStatus.key, canonicalStatus.label) + screeningReviewBadge(row, { suppressChip: screeningReviewDisplayLabel(row) === String(canonicalStatus.label || '') }) + '</td>' +
         '<td>' + actions + '</td>';
       tbody.appendChild(tr);
     });
