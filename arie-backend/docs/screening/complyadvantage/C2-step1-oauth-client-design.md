@@ -48,7 +48,7 @@ Within screening, calls are synchronous functions but may run concurrently on wo
 
 - `screening.py` imports `ThreadPoolExecutor` at `arie-backend/screening.py:22`.
 - `run_full_screening()` documents that it uses `ThreadPoolExecutor` for concurrent HTTP calls at `arie-backend/screening.py:751-755`.
-- It submits concurrent Sumsub AML and KYC tasks at `arie-backend/screening.py:783-840`.
+- It submits concurrent legacy screening and KYC tasks at `arie-backend/screening.py:783-840`.
 
 Recommendation: C2 should expose a synchronous API first. Because current screening uses worker threads, token cache refresh coordination must be thread-safe even though Tornado itself runs a single IOLoop.
 

@@ -1,5 +1,5 @@
 """
-Sumsub Screening Adapter — ScreeningProvider wrapper
+Legacy Screening Adapter — ScreeningProvider wrapper
 =====================================================
 Thin adapter wrapping existing screening.py functions
 behind the ScreeningProvider interface.
@@ -22,7 +22,7 @@ logger = logging.getLogger("arie.screening_adapter_sumsub")
 
 class SumsubScreeningAdapter(ScreeningProvider):
     """
-    Adapter wrapping existing Sumsub screening functions
+    Adapter wrapping existing legacy screening functions
     behind the ScreeningProvider interface.
 
     All calls delegate to the existing screening module.

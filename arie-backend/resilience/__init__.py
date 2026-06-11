@@ -34,7 +34,6 @@ from .provider_tracker import ProviderStatusTracker
 from .resilient_client import ResilientAPIClient
 from .integration_wrappers import (
     ResilientSumsubClient,
-    ResilientOpenSanctionsClient,
     ResilientOpenCorporatesClient,
     ResilientClaudeClient,
 )
@@ -68,7 +67,6 @@ __all__ = [
     "QueueTask",
     # Integration wrappers
     "ResilientSumsubClient",
-    "ResilientOpenSanctionsClient",
     "ResilientOpenCorporatesClient",
     "ResilientClaudeClient",
     # Workflow

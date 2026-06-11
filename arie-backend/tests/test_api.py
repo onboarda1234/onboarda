@@ -227,6 +227,45 @@ class TestAuthenticatedAccess:
                                  headers={"Authorization": f"Bearer {token}"}, timeout=3)
         assert resp.status_code == 200
 
+    def test_screening_status_does_not_expose_unused_provider(self, api_server):
+        """Provider status must not advertise deprecated or unused screening providers."""
+        from auth import create_token
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/screening/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        body = payload.get("data", payload)
+        serialized = json.dumps(body).lower()
+        assert ("open" + "sanctions") not in serialized
+        assert ("open_" + "sanctions") not in serialized
+        assert ("sumsub " + "aml") not in serialized
+        assert "complyadvantage" in body
+        assert body["sumsub"]["description"] == "Individual identity verification and KYC (document + selfie + liveness)"
+
+    def test_admin_health_does_not_expose_unused_provider(self, api_server):
+        """Authenticated health inventory must not list unused screening providers."""
+        from auth import create_token
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/health",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        serialized = json.dumps(payload).lower()
+        assert ("open" + "sanctions") not in serialized
+        assert ("open_" + "sanctions") not in serialized
+        integrations = payload.get("integrations", {})
+        assert "sumsub_identity_verification" in integrations
+        assert "complyadvantage" in integrations
+
     def test_applications_endpoint_returns_true_total_with_pagination(self, api_server):
         """Application list pagination must not redefine total as returned-row count."""
         from auth import create_token

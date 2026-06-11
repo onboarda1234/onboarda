@@ -175,7 +175,7 @@ export default function OnboardaWebsite() {
     { icon: Icons.brain, title: "AI Risk Scoring", desc: "Five-dimension weighted risk engine with explainable outputs. Every score has a clear rationale." },
     { icon: Icons.doc, title: "KYC & Document Automation", desc: "Structured document collection with AI verification. Passport, PoA, certificates — validated automatically." },
     { icon: Icons.users, title: "UBO & Structure Mapping", desc: "Multi-layer beneficial ownership analysis. Intermediary shareholders, PEP checks, ownership chains." },
-    { icon: Icons.search, title: "Screening & Adverse Media", desc: "Real-time sanctions, PEP, and adverse media screening against global watchlists. OpenSanctions integrated." },
+    { icon: Icons.search, title: "Screening & Adverse Media", desc: "ComplyAdvantage screening for sanctions, PEPs, RCAs, watchlists, adverse media, company screening, and ongoing monitoring." },
     { icon: Icons.doc, title: "Compliance Memo Generation", desc: "AI-generated compliance memos synthesising all agent findings into a regulator-ready narrative." },
     { icon: Icons.clock, title: "Ongoing Monitoring", desc: "Continuous client monitoring with periodic reviews, risk drift detection, and automated alerting." },
     { icon: Icons.eye, title: "Audit Trail & Explainability", desc: "Every decision logged. Every AI output explained. Full agent decision trail for regulatory inspection." },

@@ -1,5 +1,5 @@
 """
-Tests for EX-06 Sumsub AML backend fix.
+Tests for EX-06 legacy screening backend fix.
 
 Covers:
   1. AML level name resolution (SUMSUB_AML_LEVEL_NAME env var)

@@ -106,8 +106,6 @@ SUMSUB_WEBHOOK_SECRET = os.getenv("SUMSUB_WEBHOOK_SECRET", "")
 # External APIs
 # ══════════════════════════════════════════════════════════════
 
-OPENSANCTIONS_API_KEY = os.getenv("OPENSANCTIONS_API_KEY", "")
-OPENSANCTIONS_API_URL = os.getenv("OPENSANCTIONS_API_URL", "https://api.opensanctions.org")
 OPENCORPORATES_API_KEY = os.getenv("OPENCORPORATES_API_KEY", "")
 OPENCORPORATES_API_URL = os.getenv("OPENCORPORATES_API_URL", "https://api.opencorporates.com/v0.4")
 IP_GEOLOCATION_API_KEY = os.getenv("IP_GEOLOCATION_API_KEY", "")

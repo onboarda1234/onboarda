@@ -229,7 +229,7 @@ def test_gate5_allows_simulated_company_registry_with_live_sumsub(db, temp_db):
     report = _live_report()
     report["company_screening"]["source"] = "simulated"
     report["company_screening"]["api_status"] = "simulated"
-    # Sumsub sanctions sub-check stays live
+    # Sanctions sub-check stays live
     assert report["company_screening"]["sanctions"]["api_status"] == "live"
 
     app = _insert_gate5_app(db, "app_g5_cr_sim", report)

@@ -1,5 +1,5 @@
 """
-Tests for screening_adapter_sumsub.py — Sumsub screening adapter.
+Tests for screening_adapter_sumsub.py — legacy screening adapter.
 """
 
 import os

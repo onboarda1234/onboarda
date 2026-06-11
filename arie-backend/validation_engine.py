@@ -394,7 +394,6 @@ def validate_compliance_memo(memo_data):
             issues.append({"category": "screening", "severity": "warning", "description": "Screening matches found but no false positive analysis included.", "fix": "Add false positive determination for each screening match."})
 
     provider_markers = (
-        "opensanctions",
         "sumsub",
         "world-check",
         "dow jones",

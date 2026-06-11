@@ -1,7 +1,7 @@
 """
 Screening Normalizer / Denormalizer
 ====================================
-Converts between legacy Sumsub screening report format and the
+Converts between legacy screening report format and the
 normalized format defined in screening_models.py.
 
 STRICT RULES:
@@ -105,7 +105,7 @@ def _compute_person_hits(person: dict) -> dict:
 
 def normalize_screening_report(raw_report: dict) -> dict:
     """
-    Normalize a raw Sumsub screening report by adding metadata.
+    Normalize a raw legacy screening report by adding metadata.
 
     Does NOT restructure the report — only adds normalization metadata.
 

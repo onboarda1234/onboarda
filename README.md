@@ -87,7 +87,7 @@ Applicant submits via Portal
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
-│  2. Screening                 │  Sumsub AML/PEP,
+│  2. Screening                 │  ComplyAdvantage sanctions/PEP/RCA,
 │     (external APIs)           │  sanctions & registry lookups
 └───────────┬───────────────────┘
             ▼

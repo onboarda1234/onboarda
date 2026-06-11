@@ -60,8 +60,6 @@ services:
         sync: false
       - key: OPENCORPORATES_API_KEY
         sync: false
-      - key: OPENSANCTIONS_API_KEY
-        sync: false
       - key: S3_BUCKET
         sync: false
       - key: AWS_ACCESS_KEY_ID

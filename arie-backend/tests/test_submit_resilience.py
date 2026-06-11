@@ -188,7 +188,7 @@ class TestDegradedScreeningPath:
 
         def mock_aml_fail_director(name, birth_date=None, nationality=None, entity_type="Person"):
             if entity_type == "Person":
-                raise TimeoutError("Sumsub AML timeout")
+                raise TimeoutError("Legacy screening timeout")
             return {"matched": False, "results": [], "source": "mocked", "api_status": "mocked"}
 
         def mock_oc(company_name, jurisdiction=None):

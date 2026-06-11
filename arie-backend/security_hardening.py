@@ -741,7 +741,7 @@ class ApprovalGateValidator:
                     )
 
             # 6. Check screening report for any simulated or degraded provider statuses
-            #    Required checks (Sumsub AML/KYC/sanctions or CA screening) block approval if simulated.
+            #    Required checks (identity verification or CA screening) block approval if simulated.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
             #    company_watchlist with api_status="not_configured" warns but does not block
             #    (no Sumsub company/KYB level provisioned).
@@ -1108,7 +1108,7 @@ def determine_screening_mode(screening_report: Dict) -> str:
     """
     Analyzes a screening report to determine if it used live or simulated sources.
 
-    Only required screening sources (Sumsub AML/KYC/sanctions or CA screening)
+    Only required screening sources (identity verification or CA screening)
     affect the mode.
     Enrichment sources (company_registry, ip_geolocation) are excluded — their
     simulated status does not make the overall screening mode 'simulated'.
