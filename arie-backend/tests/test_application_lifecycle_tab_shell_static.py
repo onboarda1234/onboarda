@@ -136,6 +136,36 @@ def test_alerts_tab_surfaces_non_review_edd_from_lifecycle_summary():
     assert "Periodic-review-linked work remains in Periodic Reviews." in section
 
 
+def test_alerts_tab_owner_workflow_buttons_use_safe_data_handlers():
+    html = _read_backoffice()
+    start = html.index("function renderApplicationAlertsDetailTab(context)")
+    end = html.index("async function loadApplicationAlertsDetailTab(force)", start)
+    section = html[start:end]
+
+    assert "ownerWorkflowButtonHtml('Open Monitoring Alerts', 'monitoring-alerts-application'" in section
+    assert 'onclick="openMonitoringAlertsForApplication(' not in section
+    assert 'onclick=openMonitoringAlertsForApplication(' not in html
+    assert 'data-owner-workflow-action="' in html
+    assert "monitoring-alerts-application" in html
+    assert "function handleOwnerWorkflowButtonClick(event)" in html
+    assert "openMonitoringAlertsForApplication(appId, appRef, alertId)" in html
+
+
+def test_lifecycle_detail_item_rows_do_not_render_fragile_edd_inline_handlers():
+    html = _read_backoffice()
+    start = html.index("function lifecycleDetailItemRow(item)")
+    end = html.index("var LIFECYCLE_MATERIAL_CHANGE_OPTIONS", start)
+    section = html[start:end]
+
+    assert "lifecycleOwnerWorkflowButtonForItem(item, 'Open ' + sourceModule)" in section
+    assert "openEDDCaseFromApplication(" not in section
+    assert "event.stopPropagation();" not in section
+    assert "edd-case" in html
+    assert "openEDDCaseFromApplication(caseId, appId, appRef)" in html
+    assert "Investigation case context is unavailable" in html
+    assert "openEDDCaseFromApplication(254," not in html
+
+
 def test_periodic_reviews_tab_does_not_promote_non_review_work_without_active_review():
     html = _read_backoffice()
     start = html.index("function renderLifecycleDetailTab(context)")

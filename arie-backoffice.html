@@ -14853,6 +14853,78 @@ function lifecycleDetailCard(title, subtitle, body, accent) {
   '</div>';
 }
 
+function ownerWorkflowButtonDataAttrs(action, attrs) {
+  var html = ' data-owner-workflow-action="' + escapeHtml(action || '') + '"';
+  Object.keys(attrs || {}).forEach(function(key) {
+    var value = attrs[key];
+    if (value == null) value = '';
+    html += ' data-' + key.replace(/_/g, '-') + '="' + escapeHtml(String(value)) + '"';
+  });
+  return html;
+}
+
+function ownerWorkflowButtonHtml(label, action, attrs, extraClass) {
+  return '<button class="btn btn-outline btn-sm ' + escapeHtml(extraClass || '') + '"' +
+    ownerWorkflowButtonDataAttrs(action, attrs) + '>' + escapeHtml(label || 'Open') + '</button>';
+}
+
+function lifecycleOwnerWorkflowButtonForItem(item, label) {
+  if (!item || item.id == null) return '';
+  var type = String(item.type || '').toLowerCase();
+  if (type === 'alert') {
+    return ownerWorkflowButtonHtml(label, 'monitoring-alert-detail', {
+      alert_id: item.id,
+      application_id: item.application_id || item.applicationId || (currentApp && currentApp.id) || '',
+      application_ref: item.application_ref || item.applicationRef || (currentApp && currentApp.ref) || ''
+    });
+  }
+  if (type === 'edd') {
+    return ownerWorkflowButtonHtml(label, 'edd-case', {
+      case_id: item.id,
+      application_id: item.application_id || item.applicationId || (currentApp && currentApp.id) || '',
+      application_ref: item.application_ref || item.applicationRef || (currentApp && currentApp.ref) || ''
+    });
+  }
+  if (type === 'review') {
+    return ownerWorkflowButtonHtml(label, 'detail-tab', { tab: 'lifecycle' });
+  }
+  return '';
+}
+
+function handleOwnerWorkflowButtonClick(event) {
+  var button = event && event.target && event.target.closest
+    ? event.target.closest('[data-owner-workflow-action]')
+    : null;
+  if (!button) return;
+  if (event.preventDefault) event.preventDefault();
+  if (event.stopPropagation) event.stopPropagation();
+
+  var action = button.getAttribute('data-owner-workflow-action') || '';
+  var appId = button.getAttribute('data-application-id') || '';
+  var appRef = button.getAttribute('data-application-ref') || '';
+  var alertId = button.getAttribute('data-alert-id') || '';
+  var caseId = button.getAttribute('data-case-id') || '';
+
+  if (action === 'monitoring-alerts-application') {
+    openMonitoringAlertsForApplication(appId, appRef, alertId);
+  } else if (action === 'monitoring-alert-detail') {
+    if (alertId) openMonitoringAlertsForApplication(appId, appRef, alertId);
+    else openMonitoringAlertsForApplication(appId, appRef);
+  } else if (action === 'edd-case') {
+    if (caseId) openEDDCaseFromApplication(caseId, appId, appRef);
+    else if (appId || appRef) openEDDQueueForApplication(appId, appRef);
+    else showToast('Investigation case context is unavailable. Open the EDD queue and search for the application.', 'error');
+  } else if (action === 'edd-queue') {
+    openEDDQueueForApplication(appId, appRef);
+  } else if (action === 'detail-tab') {
+    switchDetailTab(button.getAttribute('data-tab') || 'overview');
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', handleOwnerWorkflowButtonClick);
+}
+
 function lifecycleDetailEdgeChip(edge) {
   function side(obj) {
     if (!obj || obj.id == null) return '<span style="font-size:11px;color:var(--text3);">Unknown</span>';
@@ -14874,13 +14946,10 @@ function lifecycleDetailItemRow(item) {
   var nextAction = item && item.next_action ? item.next_action : 'Open in owner workflow';
   var label = lifecycleObjectLabel(item);
   var sourceModule = lifecycleSourceModuleLabel(item);
-  var openAction = lifecycleOpenItemAction(item);
   var type = String((item && item.type) || 'item');
   var itemId = String((item && item.id) || '');
   var domId = lifecycleQueueItemDomId(type, itemId);
-  var openButton = openAction
-    ? '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();' + openAction + '">Open ' + escapeHtml(sourceModule) + '</button>'
-    : '';
+  var openButton = lifecycleOwnerWorkflowButtonForItem(item, 'Open ' + sourceModule);
   return '<div id="' + escapeHtml(domId) + '" data-lifecycle-item-type="' + escapeHtml(type) + '" data-lifecycle-item-id="' + escapeHtml(itemId) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
     '<div style="min-width:220px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div>' +
@@ -16639,7 +16708,10 @@ function renderApplicationAlertsDetailTab(context) {
         '<h2>Alerts</h2>' +
         '<p>Contextual application-level alert view using linked monitoring, adverse media, and risk signal data already stored for this client.</p>' +
       '</div>' +
-      '<button class="btn btn-outline btn-sm" onclick="openMonitoringAlertsForApplication(' + JSON.stringify(app.id || '') + ',' + JSON.stringify(app.ref || '') + ')">Open Monitoring Alerts</button>' +
+      ownerWorkflowButtonHtml('Open Monitoring Alerts', 'monitoring-alerts-application', {
+        application_id: app.id || '',
+        application_ref: app.ref || ''
+      }) +
     '</div>' +
     '<div class="lifecycle-detail-banner">' +
       '<strong style="color:#153a7d;">This tab is contextual only.</strong> Monitoring Alerts remains the owner workflow. This view keeps linked signals beside the application review and Periodic Reviews workspace.' +
