@@ -10417,6 +10417,279 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
 # USER MANAGEMENT ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+ADMIN_SECRET_FIELD_RE = re.compile(r"(secret|token|password|api[_-]?key|credential)", re.I)
+
+
+def _admin_json_error(handler, message, code, errors=None, status=400):
+    payload = {
+        "status": "error",
+        "error": message,
+        "code": code,
+    }
+    if errors:
+        payload["errors"] = errors
+    handler.set_status(status)
+    handler.set_header("Content-Type", "application/json")
+    handler.write(json.dumps(payload, default=str))
+
+
+def _safe_admin_state(value):
+    """Return a JSON-safe admin audit snapshot without secret-like fields."""
+    if value is None:
+        return None
+    if hasattr(value, "keys") and not isinstance(value, dict):
+        value = dict(value)
+    if isinstance(value, dict):
+        result = {}
+        for key, val in value.items():
+            if ADMIN_SECRET_FIELD_RE.search(str(key)):
+                continue
+            result[key] = _safe_admin_state(val)
+        return result
+    if isinstance(value, list):
+        return [_safe_admin_state(v) for v in value]
+    return value
+
+
+def _row_dict(row):
+    return dict(row) if row else None
+
+
+def _bool_from_payload(value, field_name, errors):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    errors.append({"code": "invalid_type", "field": field_name, "message": f"{field_name} must be a boolean"})
+    return None
+
+
+def _validate_admin_score_map(name, value, errors):
+    if not isinstance(value, dict) or not value:
+        errors.append({"code": "risk_score_map_required", "field": name, "message": f"{name} must be a non-empty score map"})
+        return
+    for key, score in value.items():
+        if not isinstance(key, str) or not key.strip():
+            errors.append({"code": "risk_score_map_key_invalid", "field": name, "message": f"{name} keys must be non-empty strings"})
+            continue
+        if not isinstance(score, (int, float)) or isinstance(score, bool) or score < 1 or score > 4:
+            errors.append({"code": "risk_score_out_of_range", "field": name, "message": f"{name}.{key} must be numeric between 1 and 4"})
+
+
+def _validate_system_settings_payload(data, current=None):
+    current = current or {}
+    errors = []
+
+    def text_field(name, default, *, max_len=160, required=True):
+        value = data.get(name, current.get(name, default))
+        if not isinstance(value, str):
+            errors.append({"code": "invalid_type", "field": name, "message": f"{name} must be a string"})
+            return default
+        value = value.strip()
+        if required and not value:
+            errors.append({"code": "required", "field": name, "message": f"{name} is required"})
+        if len(value) > max_len:
+            errors.append({"code": "too_long", "field": name, "message": f"{name} must be {max_len} characters or fewer"})
+        if ADMIN_SECRET_FIELD_RE.search(name):
+            errors.append({"code": "secret_field_not_allowed", "field": name, "message": f"{name} cannot be updated through system settings"})
+        return value
+
+    def int_field(name, default, min_value, max_value):
+        raw = data.get(name, current.get(name, default))
+        if isinstance(raw, bool):
+            errors.append({"code": "invalid_type", "field": name, "message": f"{name} must be an integer"})
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            errors.append({"code": "invalid_type", "field": name, "message": f"{name} must be an integer"})
+            return default
+        if value < min_value or value > max_value:
+            errors.append({"code": "out_of_range", "field": name, "message": f"{name} must be between {min_value} and {max_value}"})
+        return value
+
+    allowed = {
+        "company_name",
+        "licence_number",
+        "default_retention_years",
+        "auto_approve_max_score",
+        "edd_threshold_score",
+        "confirm_dangerous_change",
+    }
+    for key in data:
+        if key not in allowed:
+            errors.append({"code": "unknown_field", "field": key, "message": f"{key} is not a supported system setting"})
+        if ADMIN_SECRET_FIELD_RE.search(str(key)):
+            errors.append({"code": "secret_field_not_allowed", "field": key, "message": f"{key} cannot be updated through system settings"})
+
+    normalized = {
+        "company_name": text_field("company_name", "Onboarda Ltd", max_len=120),
+        "licence_number": text_field("licence_number", "FSC-PIS-2024-001", max_len=80),
+        "default_retention_years": int_field("default_retention_years", 7, 1, 25),
+        "auto_approve_max_score": int_field("auto_approve_max_score", 40, 0, 100),
+        "edd_threshold_score": int_field("edd_threshold_score", 55, 0, 100),
+    }
+    if normalized["auto_approve_max_score"] >= normalized["edd_threshold_score"]:
+        errors.append({
+            "code": "threshold_order_invalid",
+            "field": "auto_approve_max_score",
+            "message": "auto_approve_max_score must be lower than edd_threshold_score",
+        })
+
+    dangerous_fields = {"auto_approve_max_score", "edd_threshold_score"}
+    if dangerous_fields.intersection(data.keys()) and data.get("confirm_dangerous_change") is not True:
+        errors.append({
+            "code": "confirmation_required",
+            "field": "confirm_dangerous_change",
+            "message": "Risk-affecting system settings require confirm_dangerous_change=true",
+        })
+
+    return normalized, errors
+
+
+AI_AGENT_ALLOWED_STAGES = {
+    "Pre-Screening", "Verification", "Risk Scoring", "Post-Scoring",
+    "Onboarding", "Post-Approval", "Monitoring", "Continuous Monitoring",
+    "Compliance Review", "Decision Support",
+}
+
+
+def _validate_ai_agent_payload(data, db, existing_id=None):
+    errors = []
+    allowed = {
+        "agent_number", "name", "icon", "stage", "description", "enabled",
+        "checks", "expected_updated_at", "supervisor_agent_type", "risk_dimensions",
+        "provider", "model", "authority", "authority_level",
+    }
+    for key in data:
+        if key not in allowed:
+            errors.append({"code": "unknown_field", "field": key, "message": f"{key} is not supported for AI agents"})
+        if ADMIN_SECRET_FIELD_RE.search(str(key)):
+            errors.append({"code": "secret_field_not_allowed", "field": key, "message": f"{key} cannot be stored in AI agent config"})
+
+    try:
+        agent_number = int(data.get("agent_number", 0))
+    except (TypeError, ValueError):
+        agent_number = 0
+    if agent_number <= 0 or agent_number > 999:
+        errors.append({"code": "invalid_agent_number", "field": "agent_number", "message": "agent_number must be a positive integer"})
+
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        errors.append({"code": "required", "field": "name", "message": "name is required"})
+    if len(name) > 120:
+        errors.append({"code": "too_long", "field": "name", "message": "name must be 120 characters or fewer"})
+
+    stage = str(data.get("stage", "") or "").strip()
+    if stage not in AI_AGENT_ALLOWED_STAGES:
+        errors.append({"code": "invalid_stage", "field": "stage", "message": "stage is not an allowed AI agent stage"})
+
+    enabled = _bool_from_payload(data.get("enabled", True), "enabled", errors)
+    checks = data.get("checks", [])
+    if not isinstance(checks, list):
+        errors.append({"code": "invalid_type", "field": "checks", "message": "checks must be a list"})
+        checks = []
+    elif len(checks) > 500:
+        errors.append({"code": "too_many_checks", "field": "checks", "message": "checks cannot exceed 500 items"})
+    normalized_checks = []
+    for idx, item in enumerate(checks):
+        if not isinstance(item, str):
+            errors.append({"code": "invalid_type", "field": f"checks[{idx}]", "message": "check labels must be strings"})
+            continue
+        text = item.strip()
+        if not text:
+            errors.append({"code": "required", "field": f"checks[{idx}]", "message": "check labels cannot be empty"})
+        if ADMIN_SECRET_FIELD_RE.search(text):
+            errors.append({"code": "secret_value_not_allowed", "field": f"checks[{idx}]", "message": "check labels cannot contain secret-like values"})
+        normalized_checks.append(text[:240])
+
+    if agent_number:
+        row = db.execute("SELECT id FROM ai_agents WHERE agent_number=?", (agent_number,)).fetchone()
+        if row and str(row["id"]) != str(existing_id or ""):
+            errors.append({"code": "duplicate_agent_number", "field": "agent_number", "message": "agent_number already exists"})
+    if name:
+        row = db.execute("SELECT id FROM ai_agents WHERE lower(name)=lower(?)", (name,)).fetchone()
+        if row and str(row["id"]) != str(existing_id or ""):
+            errors.append({"code": "duplicate_agent_name", "field": "name", "message": "name already exists"})
+
+    normalized = {
+        "agent_number": agent_number,
+        "name": name,
+        "icon": str(data.get("icon", "") or "")[:16],
+        "stage": stage,
+        "description": str(data.get("description", "") or "").strip()[:1000],
+        "enabled": bool(enabled) if enabled is not None else True,
+        "checks": normalized_checks,
+    }
+    return normalized, errors
+
+
+AI_CHECK_ALLOWED_TYPES = {"name", "content", "quality", "expiry", "age", "ai", "rule", "hybrid", "gate", "advisory"}
+AI_CHECK_ALLOWED_AUTHORITY = {"gate", "rule", "hybrid", "ai", "advisory"}
+AI_CHECK_ALLOWED_SEVERITY = {"info", "low", "medium", "high", "critical"}
+
+
+def _validate_ai_checks_payload(data):
+    errors = []
+    category = str(data.get("category", "") or "").strip()
+    doc_type = str(data.get("doc_type", "") or "").strip()
+    doc_name = str(data.get("doc_name", doc_type) or "").strip()
+    checks = data.get("checks", [])
+
+    if category not in {"entity", "person"}:
+        errors.append({"code": "invalid_category", "field": "category", "message": "category must be entity or person"})
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", doc_type):
+        errors.append({"code": "invalid_doc_type", "field": "doc_type", "message": "doc_type must be a stable lowercase identifier"})
+    if not doc_name or len(doc_name) > 120:
+        errors.append({"code": "invalid_doc_name", "field": "doc_name", "message": "doc_name is required and must be 120 characters or fewer"})
+    if not isinstance(checks, list):
+        errors.append({"code": "invalid_type", "field": "checks", "message": "checks must be a list"})
+        checks = []
+    if len(checks) > 200:
+        errors.append({"code": "too_many_checks", "field": "checks", "message": "checks cannot exceed 200 items per document"})
+
+    seen_ids = set()
+    normalized_checks = []
+    for idx, check in enumerate(checks):
+        if not isinstance(check, dict):
+            errors.append({"code": "invalid_type", "field": f"checks[{idx}]", "message": "each check must be an object"})
+            continue
+        check_id = str(check.get("id") or check.get("check_id") or "").strip()
+        if check_id:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,80}", check_id):
+                errors.append({"code": "invalid_check_id", "field": f"checks[{idx}].id", "message": "check id must be a stable lowercase identifier"})
+            if check_id in seen_ids:
+                errors.append({"code": "duplicate_check_id", "field": f"checks[{idx}].id", "message": "check ids must be unique"})
+            seen_ids.add(check_id)
+        label = str(check.get("label", "") or "").strip()
+        rule = str(check.get("rule", "") or "").strip()
+        check_type = str(check.get("type", "") or "").strip().lower()
+        classification = str(check.get("classification", check.get("authority", "")) or "").strip().lower()
+        severity = str(check.get("severity", "medium") or "").strip().lower()
+        if not label or len(label) > 160:
+            errors.append({"code": "invalid_label", "field": f"checks[{idx}].label", "message": "label is required and must be 160 characters or fewer"})
+        if not rule or len(rule) > 1000:
+            errors.append({"code": "invalid_rule", "field": f"checks[{idx}].rule", "message": "rule is required and must be 1000 characters or fewer"})
+        if check_type not in AI_CHECK_ALLOWED_TYPES:
+            errors.append({"code": "invalid_check_type", "field": f"checks[{idx}].type", "message": "check type is not allowed"})
+        if classification and classification not in AI_CHECK_ALLOWED_AUTHORITY:
+            errors.append({"code": "invalid_authority", "field": f"checks[{idx}].classification", "message": "classification/authority is not allowed"})
+        if severity not in AI_CHECK_ALLOWED_SEVERITY:
+            errors.append({"code": "invalid_severity", "field": f"checks[{idx}].severity", "message": "severity is not allowed"})
+        if "active" in check:
+            _bool_from_payload(check.get("active"), f"checks[{idx}].active", errors)
+        if ADMIN_SECRET_FIELD_RE.search(label) or ADMIN_SECRET_FIELD_RE.search(rule):
+            errors.append({"code": "secret_value_not_allowed", "field": f"checks[{idx}]", "message": "checks cannot contain secret-like values"})
+        normalized_checks.append(_safe_admin_state(check))
+
+    return {
+        "category": category,
+        "doc_type": doc_type,
+        "doc_name": doc_name,
+        "checks": normalized_checks,
+    }, errors
+
+
 class UsersHandler(BaseHandler):
     """GET /api/users — list, POST — create"""
     def get(self):
@@ -10473,13 +10746,27 @@ class UsersHandler(BaseHandler):
         try:
             db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
                         (user_id, email, pw_hash, name, role))
+            created = db.execute(
+                "SELECT id, email, full_name, role, status, created_at, updated_at FROM users WHERE id=?",
+                (user_id,),
+            ).fetchone()
+            self.log_audit(
+                user,
+                "Create User",
+                email,
+                f"New user added as {role}",
+                db=db,
+                before_state=None,
+                after_state=_safe_admin_state(_row_dict(created)),
+                commit=False,
+            )
             db.commit()
         except Exception:
+            db.rollback()
             db.close()
             return self.error("Failed to create user", 500)
         db.close()
 
-        self.log_audit(user, "Create User", name, f"New user added as {role}")
         self.success({"id": user_id, "email": email, "name": name, "role": role}, 201)
 
 
@@ -10524,6 +10811,8 @@ class UserDetailHandler(BaseHandler):
             db.close()
             return self.error("User not found", 404)
 
+        before_state = _safe_admin_state(_row_dict(u))
+
         updated_name = data.get("full_name", u["full_name"])
         updated_role = new_role or u["role"]
         updated_status = new_status or u["status"]
@@ -10531,14 +10820,27 @@ class UserDetailHandler(BaseHandler):
         try:
             db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
                        (updated_name, updated_role, updated_status, user_id))
+            updated = db.execute(
+                "SELECT id, email, full_name, role, status, created_at, updated_at FROM users WHERE id=?",
+                (user_id,),
+            ).fetchone()
+            self.log_audit(
+                user,
+                "Update User",
+                u["email"],
+                f"Updated user lifecycle fields: role={u['role']}->{updated_role}, status={u['status']}->{updated_status}",
+                db=db,
+                before_state=before_state,
+                after_state=_safe_admin_state(_row_dict(updated)),
+                commit=False,
+            )
             db.commit()
         except Exception:
+            db.rollback()
             db.close()
             return self.error("Failed to update user", 500)
         db.close()
 
-        self.log_audit(user, "Update User", u["full_name"],
-                       f"Updated: role={u['role']}→{updated_role}, status={u['status']}→{updated_status}, name={u['full_name']}→{updated_name}")
         self.success({"status": "updated"})
 
 
@@ -10548,6 +10850,129 @@ class UserDetailHandler(BaseHandler):
 
 class RiskConfigHandler(BaseHandler):
     """GET/PUT /api/config/risk-model"""
+
+    REQUIRED_DIMENSION_IDS = {"D1", "D2", "D3", "D4", "D5"}
+
+    @staticmethod
+    def _risk_config_from_row(row):
+        if not row:
+            return {
+                "dimensions": [],
+                "thresholds": [],
+                "country_risk_scores": {},
+                "sector_risk_scores": {},
+                "entity_type_scores": {},
+            }
+        return {
+            "dimensions": safe_json_loads(row["dimensions"]) if row["dimensions"] else [],
+            "thresholds": safe_json_loads(row["thresholds"]) if row["thresholds"] else [],
+            "country_risk_scores": safe_json_loads(row["country_risk_scores"]) if row["country_risk_scores"] else {},
+            "sector_risk_scores": safe_json_loads(row["sector_risk_scores"]) if row["sector_risk_scores"] else {},
+            "entity_type_scores": safe_json_loads(row["entity_type_scores"]) if row["entity_type_scores"] else {},
+        }
+
+    @classmethod
+    def _validate_risk_model_semantics(cls, config):
+        errors = []
+        dimensions = config.get("dimensions") or []
+        thresholds = config.get("thresholds") or []
+
+        if not dimensions:
+            errors.append({"code": "risk_dimensions_required", "field": "dimensions", "message": "complete five-dimension model is required"})
+        elif isinstance(dimensions, list):
+            dim_ids = {str(d.get("id") or "") for d in dimensions if isinstance(d, dict)}
+            missing = cls.REQUIRED_DIMENSION_IDS - dim_ids
+            extra = dim_ids - cls.REQUIRED_DIMENSION_IDS
+            if len(dim_ids) != len(dimensions):
+                errors.append({"code": "risk_dimension_duplicate_or_invalid", "field": "dimensions", "message": "dimension ids must be unique and non-empty"})
+            if missing:
+                errors.append({"code": "risk_dimension_missing", "field": "dimensions", "message": f"missing required dimensions {sorted(missing)}"})
+            if extra:
+                errors.append({"code": "risk_dimension_unknown", "field": "dimensions", "message": f"unsupported dimensions {sorted(extra)}"})
+            total_weight = 0
+            for dim in dimensions:
+                if not isinstance(dim, dict):
+                    errors.append({"code": "risk_dimension_invalid", "field": "dimensions", "message": "each dimension must be an object"})
+                    continue
+                weight = dim.get("weight")
+                if not isinstance(weight, int) or isinstance(weight, bool) or weight <= 0:
+                    errors.append({"code": "risk_dimension_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.weight", "message": "dimension weights must be positive integers"})
+                else:
+                    total_weight += weight
+                subcriteria = dim.get("subcriteria") or []
+                if not subcriteria:
+                    errors.append({"code": "risk_subcriteria_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "at least one subcriteria row is required"})
+                    continue
+                sub_total = 0
+                names = set()
+                for sub in subcriteria:
+                    if not isinstance(sub, dict):
+                        errors.append({"code": "risk_subcriteria_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria rows must be objects"})
+                        continue
+                    name = str(sub.get("name") or "").strip()
+                    if not name:
+                        errors.append({"code": "risk_subcriteria_name_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.name", "message": "subcriteria name is required"})
+                    names.add(name)
+                    sub_weight = sub.get("weight")
+                    if not isinstance(sub_weight, int) or isinstance(sub_weight, bool) or sub_weight <= 0:
+                        errors.append({"code": "risk_subcriteria_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.weight", "message": "subcriteria weights must be positive integers"})
+                    else:
+                        sub_total += sub_weight
+                if len(names) != len(subcriteria):
+                    errors.append({"code": "risk_subcriteria_duplicate", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria names must be unique within each dimension"})
+                if sub_total != 100:
+                    errors.append({"code": "risk_subcriteria_weight_total_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria total weight must equal 100"})
+            if total_weight != 100:
+                errors.append({"code": "risk_dimension_weight_total_invalid", "field": "dimensions", "message": "dimension total weight must equal 100"})
+
+        if not thresholds:
+            errors.append({"code": "risk_thresholds_required", "field": "thresholds", "message": "complete LOW/MEDIUM/HIGH/VERY_HIGH thresholds are required"})
+        elif isinstance(thresholds, list):
+            expected = ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
+            by_level = {str(t.get("level") or ""): t for t in thresholds if isinstance(t, dict)}
+            if set(by_level) != set(expected):
+                errors.append({"code": "risk_threshold_levels_invalid", "field": "thresholds", "message": "thresholds must contain LOW, MEDIUM, HIGH, and VERY_HIGH"})
+            ordered = []
+            for level in expected:
+                row = by_level.get(level)
+                if not row:
+                    continue
+                min_v = row.get("min")
+                max_v = row.get("max")
+                if not isinstance(min_v, (int, float)) or not isinstance(max_v, (int, float)):
+                    errors.append({"code": "risk_threshold_value_invalid", "field": f"thresholds.{level}", "message": "threshold min/max must be numeric"})
+                    continue
+                if min_v < 0 or max_v > 100 or min_v > max_v:
+                    errors.append({"code": "risk_threshold_range_invalid", "field": f"thresholds.{level}", "message": "threshold ranges must be ordered within 0-100"})
+                ordered.append((level, min_v, max_v))
+            for idx in range(1, len(ordered)):
+                if ordered[idx][1] <= ordered[idx - 1][1] or ordered[idx][2] <= ordered[idx - 1][2]:
+                    errors.append({"code": "risk_threshold_order_invalid", "field": "thresholds", "message": "thresholds must be ordered LOW to VERY_HIGH"})
+                    break
+
+        for map_name in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+            _validate_admin_score_map(map_name, config.get(map_name), errors)
+
+        return errors
+
+    @staticmethod
+    def _normalize_validation_errors(errors):
+        normalized = []
+        for err in errors:
+            if isinstance(err, dict):
+                normalized.append({
+                    "code": str(err.get("code") or "risk_config_invalid")[:80],
+                    "field": str(err.get("field") or "risk_config")[:120],
+                    "message": str(err.get("message") or "Risk config validation failed")[:240],
+                })
+            else:
+                normalized.append({
+                    "code": "risk_config_invalid",
+                    "field": "risk_config",
+                    "message": str(err)[:240],
+                })
+        return normalized
+
     def get(self):
         user = self.require_auth()
         if not user:
@@ -10578,62 +11003,46 @@ class RiskConfigHandler(BaseHandler):
         if not user:
             return
         data = self.get_json()
-
-        # Schema-validate before saving — reject malformed config
-        config_to_validate = {
-            "dimensions": data.get("dimensions", []),
-            "thresholds": data.get("thresholds", []),
-            "country_risk_scores": data.get("country_risk_scores", {}),
-            "sector_risk_scores": data.get("sector_risk_scores", {}),
-            "entity_type_scores": data.get("entity_type_scores", {}),
-        }
-        validated, errors = validate_risk_config(config_to_validate)
-        if errors:
-            # Sanitize error messages — they may contain user-supplied type names
-            safe_errors = [str(e)[:200] for e in errors]
-            self.set_status(400)
-            self.set_header("Content-Type", "application/json")
-            self.write(json.dumps({
-                "status": "error",
-                "message": "Risk config validation failed",
-                "errors": safe_errors,
-            }))
-            return
-
         db = get_db()
 
-        # EX-05: Capture full before-state of risk config for audit trail
-        _risk_before = None
-        try:
-            old_cfg = db.execute("SELECT dimensions, thresholds, country_risk_scores, sector_risk_scores, entity_type_scores FROM risk_config WHERE id=1").fetchone()
-            if old_cfg:
-                _risk_before = {
-                    "dimensions": safe_json_loads(old_cfg["dimensions"]),
-                    "thresholds": safe_json_loads(old_cfg["thresholds"]),
-                    "country_risk_scores": safe_json_loads(old_cfg["country_risk_scores"]) if old_cfg["country_risk_scores"] else {},
-                    "sector_risk_scores": safe_json_loads(old_cfg["sector_risk_scores"]) if old_cfg["sector_risk_scores"] else {},
-                    "entity_type_scores": safe_json_loads(old_cfg["entity_type_scores"]) if old_cfg["entity_type_scores"] else {},
-                }
-        except Exception:
-            pass  # Non-critical: proceed without before-state
+        old_cfg = db.execute(
+            "SELECT dimensions, thresholds, country_risk_scores, sector_risk_scores, entity_type_scores "
+            "FROM risk_config WHERE id=1"
+        ).fetchone()
+        _risk_before = self._risk_config_from_row(old_cfg)
 
-        db.execute(
-            "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
-            (json.dumps(validated.get("dimensions", [])),
-             json.dumps(validated.get("thresholds", [])),
-             json.dumps(validated.get("country_risk_scores", {})),
-             json.dumps(validated.get("sector_risk_scores", {})),
-             json.dumps(validated.get("entity_type_scores", {})),
-             user["sub"]))
-        db.commit()
+        # Merge partial editor saves with the existing source-of-truth row.
+        # Omitted fields must not be interpreted as empty risk controls.
+        config_to_validate = dict(_risk_before)
+        premerge_errors = []
+        if "dimensions" in data and "thresholds" not in data:
+            premerge_errors.append({
+                "code": "risk_thresholds_required",
+                "field": "thresholds",
+                "message": "thresholds are required when dimensions are updated",
+            })
+        if "thresholds" in data and "dimensions" not in data:
+            premerge_errors.append({
+                "code": "risk_dimensions_required",
+                "field": "dimensions",
+                "message": "dimensions are required when thresholds are updated",
+            })
+        for key in ("dimensions", "thresholds", "country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+            if key in data:
+                config_to_validate[key] = data.get(key)
 
-        # EX-09: Recompute risk for all active applications after config change
-        recomp_results = recompute_risk_for_active_apps(
-            db, "risk_config_updated", user=user, log_audit_fn=self.log_audit)
-        if recomp_results:
-            db.commit()
-
-        db.close()
+        validated, errors = validate_risk_config(config_to_validate)
+        errors = premerge_errors + errors
+        errors.extend(self._validate_risk_model_semantics(validated))
+        if errors:
+            db.close()
+            return _admin_json_error(
+                self,
+                "Risk config validation failed",
+                "risk_config_invalid",
+                self._normalize_validation_errors(errors),
+                status=400,
+            )
 
         _risk_after = {
             "dimensions": validated.get("dimensions", []),
@@ -10642,8 +11051,51 @@ class RiskConfigHandler(BaseHandler):
             "sector_risk_scores": validated.get("sector_risk_scores", {}),
             "entity_type_scores": validated.get("entity_type_scores", {}),
         }
-        self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated",
-                       before_state=_risk_before, after_state=_risk_after)
+
+        try:
+            db.execute("BEGIN")
+            db.execute(
+                "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
+                (json.dumps(validated.get("dimensions", [])),
+                 json.dumps(validated.get("thresholds", [])),
+                 json.dumps(validated.get("country_risk_scores", {})),
+                 json.dumps(validated.get("sector_risk_scores", {})),
+                 json.dumps(validated.get("entity_type_scores", {})),
+                 user["sub"]))
+
+            def _audit_without_commit(audit_user, action, target, detail, db=None,
+                                      before_state=None, after_state=None, commit=False):
+                self.log_audit(
+                    audit_user,
+                    action,
+                    target,
+                    detail,
+                    db=db,
+                    before_state=before_state,
+                    after_state=after_state,
+                    commit=False,
+                )
+
+            # EX-09: Recompute risk only after full validation passes.
+            recomp_results = recompute_risk_for_active_apps(
+                db, "risk_config_updated", user=user, log_audit_fn=_audit_without_commit)
+            self.log_audit(
+                user,
+                "Config",
+                "Risk Model",
+                "Risk scoring model updated",
+                db=db,
+                before_state=_risk_before,
+                after_state=_risk_after,
+                commit=False,
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.exception("risk_config_update_failed")
+            db.close()
+            return self.error("Failed to save risk model configuration", 500)
+        db.close()
 
         changed_count = sum(1 for r in recomp_results if r.get("changed"))
         self.success({
@@ -10718,6 +11170,11 @@ class SystemSettingsHandler(BaseHandler):
         data = self.get_json()
         db = get_db()
         current = db.execute("SELECT * FROM system_settings WHERE id=1").fetchone()
+        current_state = _safe_admin_state(_row_dict(current))
+        normalized, errors = _validate_system_settings_payload(data, dict(current) if current else {})
+        if errors:
+            db.close()
+            return _admin_json_error(self, "System settings validation failed", "system_settings_invalid", errors, status=400)
         if current:
             db.execute("""
                 UPDATE system_settings SET
@@ -10730,11 +11187,11 @@ class SystemSettingsHandler(BaseHandler):
                     updated_at=datetime('now')
                 WHERE id=1
             """, (
-                data.get("company_name", current["company_name"]),
-                data.get("licence_number", current["licence_number"]),
-                int(data.get("default_retention_years", current["default_retention_years"])),
-                int(data.get("auto_approve_max_score", current["auto_approve_max_score"])),
-                int(data.get("edd_threshold_score", current["edd_threshold_score"])),
+                normalized["company_name"],
+                normalized["licence_number"],
+                normalized["default_retention_years"],
+                normalized["auto_approve_max_score"],
+                normalized["edd_threshold_score"],
                 user["sub"],
             ))
         else:
@@ -10743,16 +11200,26 @@ class SystemSettingsHandler(BaseHandler):
                 (id, company_name, licence_number, default_retention_years, auto_approve_max_score, edd_threshold_score, updated_by, updated_at)
                 VALUES (1,?,?,?,?,?,?,datetime('now'))
             """, (
-                data.get("company_name", "Onboarda Ltd"),
-                data.get("licence_number", "FSC-PIS-2024-001"),
-                int(data.get("default_retention_years", 7)),
-                int(data.get("auto_approve_max_score", 40)),
-                int(data.get("edd_threshold_score", 55)),
+                normalized["company_name"],
+                normalized["licence_number"],
+                normalized["default_retention_years"],
+                normalized["auto_approve_max_score"],
+                normalized["edd_threshold_score"],
                 user["sub"],
             ))
+        after = db.execute("SELECT * FROM system_settings WHERE id=1").fetchone()
+        self.log_audit(
+            user,
+            "Config",
+            "System Settings",
+            "System settings updated",
+            db=db,
+            before_state=current_state,
+            after_state=_safe_admin_state(_row_dict(after)),
+            commit=False,
+        )
         db.commit()
         db.close()
-        self.log_audit(user, "Config", "System Settings", "System settings updated")
         self.success({"status": "saved"})
 
 
@@ -11783,14 +12250,32 @@ class AIAgentsHandler(BaseHandler):
             return
         data = self.get_json()
         db = get_db()
+        normalized, errors = _validate_ai_agent_payload(data, db)
+        if errors:
+            db.close()
+            return _admin_json_error(self, "AI agent validation failed", "ai_agent_invalid", errors, status=400)
         db.execute("""INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks)
                       VALUES (?,?,?,?,?,?,?)""",
-                   (data.get("agent_number",0), data.get("name",""), data.get("icon","🤖"),
-                    data.get("stage",""), data.get("description",""),
-                    1 if data.get("enabled", True) else 0, json.dumps(data.get("checks",[]))))
+                   (normalized["agent_number"], normalized["name"], normalized["icon"] or "🤖",
+                    normalized["stage"], normalized["description"],
+                    1 if normalized["enabled"] else 0, json.dumps(normalized["checks"])))
+        created = db.execute("SELECT * FROM ai_agents WHERE agent_number=?", (normalized["agent_number"],)).fetchone()
+        created_state = _safe_admin_state(_row_dict(created))
+        if created_state:
+            created_state["checks"] = safe_json_loads(created_state.get("checks")) if created_state.get("checks") else []
+            created_state["enabled"] = bool(created_state.get("enabled"))
+        self.log_audit(
+            user,
+            "Config",
+            "AI Agents",
+            f"Agent added: {normalized['name']}",
+            db=db,
+            before_state=None,
+            after_state=created_state,
+            commit=False,
+        )
         db.commit()
         db.close()
-        self.log_audit(user, "Config", "AI Agents", f"Agent added: {data.get('name','')}")
         self.success({"status": "created"}, 201)
 
 
@@ -11808,6 +12293,10 @@ class AIAgentDetailHandler(BaseHandler):
         if not old_agent:
             db.close()
             return self.error("Agent not found", 404)
+        old_state = _safe_admin_state(_row_dict(old_agent))
+        old_state["checks"] = safe_json_loads(old_state.get("checks")) if old_state.get("checks") else []
+        old_state["risk_dimensions"] = safe_json_loads(old_state.get("risk_dimensions")) if old_state.get("risk_dimensions") else []
+        old_state["enabled"] = bool(old_state.get("enabled"))
 
         # P2-3: Conflict detection — reject stale updates
         if data.get("expected_updated_at"):
@@ -11815,28 +12304,56 @@ class AIAgentDetailHandler(BaseHandler):
                 db.close()
                 return self.error("Configuration was modified by another user. Please refresh and try again.", 409)
 
+        merged_payload = {
+            "agent_number": data.get("agent_number", old_agent["agent_number"]),
+            "name": data.get("name", old_agent["name"]),
+            "icon": data.get("icon", old_agent["icon"]),
+            "stage": data.get("stage", old_agent["stage"]),
+            "description": data.get("description", old_agent["description"]),
+            "enabled": data.get("enabled", bool(old_agent["enabled"])),
+            "checks": data.get("checks", safe_json_loads(old_agent["checks"]) if old_agent["checks"] else []),
+        }
+        normalized, errors = _validate_ai_agent_payload(merged_payload, db, existing_id=agent_id)
+        if errors:
+            db.close()
+            return _admin_json_error(self, "AI agent validation failed", "ai_agent_invalid", errors, status=400)
+
         db.execute("""UPDATE ai_agents SET name=?, icon=?, stage=?, description=?,
-                      enabled=?, checks=?, updated_at=datetime('now') WHERE id=?""",
-                   (data.get("name",""), data.get("icon",""), data.get("stage",""),
-                    data.get("description",""), 1 if data.get("enabled",True) else 0,
-                    json.dumps(data.get("checks",[])), agent_id))
-        db.commit()
+                      agent_number=?, enabled=?, checks=?, updated_at=datetime('now') WHERE id=?""",
+                   (normalized["name"], normalized["icon"], normalized["stage"],
+                    normalized["description"], normalized["agent_number"],
+                    1 if normalized["enabled"] else 0,
+                    json.dumps(normalized["checks"]), agent_id))
 
         # P2-1: Build audit detail with old/new values
         changes = []
-        if "enabled" in data and (1 if data["enabled"] else 0) != old_agent["enabled"]:
-            changes.append(f"enabled: {bool(old_agent['enabled'])} -> {data['enabled']}")
-        if "name" in data and data["name"] != old_agent["name"]:
-            changes.append(f"name: '{old_agent['name']}' -> '{data['name']}'")
-        if "stage" in data and data["stage"] != old_agent["stage"]:
-            changes.append(f"stage: '{old_agent['stage']}' -> '{data['stage']}'")
-        detail = f"Agent {agent_id} updated: {data.get('name', old_agent['name'])}. Changes: "
+        if normalized["enabled"] != bool(old_agent["enabled"]):
+            changes.append(f"enabled: {bool(old_agent['enabled'])} -> {normalized['enabled']}")
+        if normalized["name"] != old_agent["name"]:
+            changes.append(f"name changed")
+        if normalized["stage"] != old_agent["stage"]:
+            changes.append(f"stage: {old_agent['stage']} -> {normalized['stage']}")
+        detail = f"Agent {agent_id} updated: {normalized['name']}. Changes: "
         detail += ", ".join(changes) if changes else "no field changes"
 
         # Return updated_at for conflict detection
-        updated_row = db.execute("SELECT updated_at FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        updated_row = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        after_state = _safe_admin_state(_row_dict(updated_row))
+        after_state["checks"] = safe_json_loads(after_state.get("checks")) if after_state.get("checks") else []
+        after_state["risk_dimensions"] = safe_json_loads(after_state.get("risk_dimensions")) if after_state.get("risk_dimensions") else []
+        after_state["enabled"] = bool(after_state.get("enabled"))
+        self.log_audit(
+            user,
+            "Config Update",
+            "AI Agents",
+            detail,
+            db=db,
+            before_state=old_state,
+            after_state=after_state,
+            commit=False,
+        )
+        db.commit()
         db.close()
-        self.log_audit(user, "Config Update", "AI Agents", detail)
         self.success({"status": "updated", "updated_at": updated_row["updated_at"] if updated_row else None})
 
     def delete(self, agent_id):
@@ -11844,11 +12361,31 @@ class AIAgentDetailHandler(BaseHandler):
         if not user:
             return
         db = get_db()
-        db.execute("DELETE FROM ai_agents WHERE id=?", (agent_id,))
+        old_agent = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        if not old_agent:
+            db.close()
+            return self.error("Agent not found", 404)
+        before_state = _safe_admin_state(_row_dict(old_agent))
+        before_state["checks"] = safe_json_loads(before_state.get("checks")) if before_state.get("checks") else []
+        before_state["enabled"] = bool(before_state.get("enabled"))
+        db.execute("UPDATE ai_agents SET enabled=0, updated_at=datetime('now') WHERE id=?", (agent_id,))
+        after = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        after_state = _safe_admin_state(_row_dict(after))
+        after_state["checks"] = safe_json_loads(after_state.get("checks")) if after_state.get("checks") else []
+        after_state["enabled"] = bool(after_state.get("enabled"))
+        self.log_audit(
+            user,
+            "Config Disable",
+            "AI Agents",
+            f"Agent {agent_id} disabled via delete request",
+            db=db,
+            before_state=before_state,
+            after_state=after_state,
+            commit=False,
+        )
         db.commit()
         db.close()
-        self.log_audit(user, "Config", "AI Agents", f"Agent {agent_id} deleted")
-        self.success({"status": "deleted"})
+        self.success({"status": "disabled"})
 
 
 # ══════════════════════════════════════════════════════════
@@ -11885,17 +12422,21 @@ class VerificationChecksHandler(BaseHandler):
         if not user:
             return
         data = self.get_json()
-        doc_type = data.get("doc_type")
-        category = data.get("category")
-        checks = data.get("checks", [])
-        if not doc_type or not category:
-            return self.error("doc_type and category are required", 400)
+        normalized, errors = _validate_ai_checks_payload(data)
+        if errors:
+            return _admin_json_error(self, "AI verification checks validation failed", "ai_checks_invalid", errors, status=400)
+        doc_type = normalized["doc_type"]
+        category = normalized["category"]
+        checks = normalized["checks"]
 
         db = get_db()
 
         # P2-1: Read old state for audit diff
-        old_row = db.execute("SELECT checks FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
-        old_checks_count = len(safe_json_loads(old_row["checks"])) if old_row and old_row["checks"] else 0
+        old_row = db.execute("SELECT * FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
+        old_state = _safe_admin_state(_row_dict(old_row)) if old_row else None
+        if old_state:
+            old_state["checks"] = safe_json_loads(old_state.get("checks")) if old_state.get("checks") else []
+        old_checks_count = len(old_state["checks"]) if old_state else 0
 
         # Update existing row or insert if new
         existing = db.execute("SELECT id FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
@@ -11905,10 +12446,9 @@ class VerificationChecksHandler(BaseHandler):
                 (json.dumps(checks), doc_type, category)
             )
         else:
-            doc_name = data.get("doc_name", doc_type)
             db.execute(
                 "INSERT INTO ai_checks (category, doc_type, doc_name, checks) VALUES (?,?,?,?)",
-                (category, doc_type, doc_name, json.dumps(checks))
+                (category, doc_type, normalized["doc_name"], json.dumps(checks))
             )
 
         # Auto-update Agent 1's checks list from all ai_checks
@@ -11923,12 +12463,25 @@ class VerificationChecksHandler(BaseHandler):
             (json.dumps(all_labels),)
         )
 
-        db.commit()
-        db.close()
+        after_row = db.execute("SELECT * FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
+        after_state = _safe_admin_state(_row_dict(after_row))
+        if after_state:
+            after_state["checks"] = safe_json_loads(after_state.get("checks")) if after_state.get("checks") else []
         # P2-1: Audit log with old/new check counts
         new_checks_count = len(checks)
         detail = f"Checks updated for {category}/{doc_type}: {old_checks_count} -> {new_checks_count} checks"
-        self.log_audit(user, "Config Update", "AI Checks", detail)
+        self.log_audit(
+            user,
+            "Config Update",
+            "AI Checks",
+            detail,
+            db=db,
+            before_state=old_state,
+            after_state=after_state,
+            commit=False,
+        )
+        db.commit()
+        db.close()
         self.success({"status": "saved"})
 
 
@@ -13451,6 +14004,15 @@ class ApplicationNotesHandler(BaseHandler):
         self.success({"status": "ok"}, 201)
 
 
+def _csv_formula_safe(value):
+    if value is None:
+        return ""
+    text = str(value)
+    if text and text[0] in ("=", "+", "-", "@"):
+        return "'" + text
+    return value
+
+
 class AuditExportHandler(BaseHandler):
     """GET /api/audit/export — export audit_log entries as JSON or CSV."""
 
@@ -13569,7 +14131,7 @@ class AuditExportHandler(BaseHandler):
         writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()
         for entry in entries:
-            writer.writerow({h: entry.get(h, "") for h in headers})
+            writer.writerow({h: _csv_formula_safe(entry.get(h, "")) for h in headers})
         self.set_header("Content-Type", "text/csv; charset=utf-8")
         self.set_header("Content-Disposition", "attachment; filename=audit_export.csv")
         self.write(buf.getvalue())
@@ -13714,7 +14276,7 @@ class SupervisorAuditExportHandler(BaseHandler):
         writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()
         for entry in entries:
-            writer.writerow({h: entry.get(h, "") for h in headers})
+            writer.writerow({h: _csv_formula_safe(entry.get(h, "")) for h in headers})
         self.set_header("Content-Type", "text/csv; charset=utf-8")
         self.set_header("Content-Disposition", "attachment; filename=supervisor_audit_export.csv")
         self.write(buf.getvalue())

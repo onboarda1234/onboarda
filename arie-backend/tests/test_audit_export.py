@@ -267,6 +267,15 @@ class TestAuditExportCSV(_AuditExportTestBase):
         resp = self.fetch("/api/audit/export?format=xml", headers={"Authorization": f"Bearer {self.admin_token}"})
         self.assertEqual(resp.code, 400)
 
+    def test_csv_escapes_formula_like_cells(self):
+        self._seed_audit_rows(1, action="=cmd", target="+target")
+        resp = self.fetch("/api/audit/export?format=csv", headers={"Authorization": f"Bearer {self.admin_token}"})
+        self.assertEqual(resp.code, 200)
+        reader = csv.DictReader(io.StringIO(resp.body.decode()))
+        row = next(reader)
+        self.assertEqual(row["action"], "'=cmd")
+        self.assertEqual(row["target"], "'+target")
+
 
 # ===========================================================================
 # /api/audit/supervisor/export tests
@@ -384,3 +393,11 @@ class TestSupervisorAuditExportCSV(_AuditExportTestBase):
     def test_invalid_format_returns_400(self):
         resp = self.fetch("/api/audit/supervisor/export?format=xml", headers={"Authorization": f"Bearer {self.admin_token}"})
         self.assertEqual(resp.code, 400)
+
+    def test_csv_escapes_formula_like_cells(self):
+        self._seed_supervisor_audit_rows(1, action="@verify")
+        resp = self.fetch("/api/audit/supervisor/export?format=csv", headers={"Authorization": f"Bearer {self.admin_token}"})
+        self.assertEqual(resp.code, 200)
+        reader = csv.DictReader(io.StringIO(resp.body.decode()))
+        row = next(reader)
+        self.assertEqual(row["action"], "'@verify")

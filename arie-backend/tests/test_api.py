@@ -5972,3 +5972,366 @@ class TestMonitoringEnrollmentActuation:
         assert rows[0]["risk_level"] == "MEDIUM"
         assert rows[0]["priority"] == "normal"
         assert audit is not None
+
+
+class TestRiskModelAdminConfigSafety:
+    """Regression coverage for paid-pilot risk-model admin controls."""
+
+    def _admin_headers(self):
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        return {"Authorization": f"Bearer {token}"}
+
+    def _risk_config(self, api_server, headers):
+        resp = http_requests.get(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _assert_risk_rejected_unchanged(self, api_server, payload, expected_code):
+        headers = self._admin_headers()
+        before = self._risk_config(api_server, headers)
+        rejected = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json=payload,
+            timeout=5,
+        )
+        assert rejected.status_code == 400, rejected.text
+        body = rejected.json()
+        assert body["code"] == "risk_config_invalid"
+        assert any(e["code"] == expected_code for e in body["errors"])
+        after = self._risk_config(api_server, headers)
+        assert after == before
+
+    def test_partial_score_update_preserves_dimensions_and_thresholds(self, api_server):
+        headers = self._admin_headers()
+
+        before_body = self._risk_config(api_server, headers)
+
+        update = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json={"country_risk_scores": {"testland": 2}},
+            timeout=5,
+        )
+        assert update.status_code == 200, update.text
+
+        after_body = self._risk_config(api_server, headers)
+
+        assert after_body["dimensions"] == before_body["dimensions"]
+        assert after_body["thresholds"] == before_body["thresholds"]
+        assert after_body["country_risk_scores"] == {"testland": 2}
+        assert after_body["sector_risk_scores"] == before_body["sector_risk_scores"]
+        assert after_body["entity_type_scores"] == before_body["entity_type_scores"]
+
+    def test_incomplete_dimension_payload_is_rejected_without_mutation(self, api_server):
+        self._assert_risk_rejected_unchanged(
+            api_server,
+            {
+                "dimensions": [{"id": "BAD", "name": "Invalid", "weight": 1, "subcriteria": []}],
+                "thresholds": [],
+            },
+            "risk_dimension_missing",
+        )
+
+
+    def test_unknown_dimension_id_returns_400(self, api_server):
+        headers = self._admin_headers()
+        config = self._risk_config(api_server, headers)
+        dims = [dict(d) for d in config["dimensions"]]
+        dims[0] = dict(dims[0], id="BAD")
+        self._assert_risk_rejected_unchanged(
+            api_server,
+            {"dimensions": dims, "thresholds": config["thresholds"]},
+            "risk_dimension_missing",
+        )
+
+    def test_total_weight_not_100_returns_400(self, api_server):
+        headers = self._admin_headers()
+        config = self._risk_config(api_server, headers)
+        dims = [dict(d) for d in config["dimensions"]]
+        dims[0] = dict(dims[0], weight=dims[0]["weight"] + 1)
+        self._assert_risk_rejected_unchanged(
+            api_server,
+            {"dimensions": dims, "thresholds": config["thresholds"]},
+            "risk_dimension_weight_total_invalid",
+        )
+
+    def test_missing_thresholds_returns_400(self, api_server):
+        headers = self._admin_headers()
+        config = self._risk_config(api_server, headers)
+        self._assert_risk_rejected_unchanged(
+            api_server,
+            {"dimensions": config["dimensions"]},
+            "risk_thresholds_required",
+        )
+
+    def test_empty_thresholds_returns_400(self, api_server):
+        headers = self._admin_headers()
+        config = self._risk_config(api_server, headers)
+        self._assert_risk_rejected_unchanged(
+            api_server,
+            {"dimensions": config["dimensions"], "thresholds": []},
+            "risk_thresholds_required",
+        )
+
+    def test_empty_score_maps_are_rejected(self, api_server):
+        headers = self._admin_headers()
+        config = self._risk_config(api_server, headers)
+        self._assert_risk_rejected_unchanged(
+            api_server,
+            {
+                "dimensions": config["dimensions"],
+                "thresholds": config["thresholds"],
+                "country_risk_scores": {},
+            },
+            "risk_score_map_required",
+        )
+
+    def test_invalid_update_does_not_call_recompute_or_mutate(self, api_server, monkeypatch):
+        import server
+
+        calls = []
+
+        def fail_if_called(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError("recompute must not be called for invalid risk config")
+
+        monkeypatch.setattr(server, "recompute_risk_for_active_apps", fail_if_called)
+        headers = self._admin_headers()
+        before = self._risk_config(api_server, headers)
+        resp = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json={"dimensions": [], "thresholds": []},
+            timeout=5,
+        )
+        assert resp.status_code == 400, resp.text
+        assert calls == []
+        assert self._risk_config(api_server, headers) == before
+
+    def test_valid_full_update_still_succeeds(self, api_server):
+        headers = self._admin_headers()
+        config = self._risk_config(api_server, headers)
+        resp = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json={
+                "dimensions": config["dimensions"],
+                "thresholds": config["thresholds"],
+                "country_risk_scores": config["country_risk_scores"],
+                "sector_risk_scores": config["sector_risk_scores"],
+                "entity_type_scores": config["entity_type_scores"],
+            },
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+
+
+class TestAdminPilotMutationAuditabilityAndRBAC:
+    """Paid-pilot admin control auditability, validation, and RBAC coverage."""
+
+    def _headers(self, role="admin", sub=None, name=None):
+        from auth import create_token
+        sub = sub or f"{role}001"
+        name = name or f"Test {role.upper()}"
+        token = create_token(sub, role, name, "officer")
+        return {"Authorization": f"Bearer {token}"}
+
+    def _audit_row(self, action, target):
+        from db import get_db
+        conn = get_db()
+        row = conn.execute(
+            "SELECT detail, before_state, after_state FROM audit_log WHERE action=? AND target=? ORDER BY id DESC LIMIT 1",
+            (action, target),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        return row
+
+    def _assert_before_after_no_secrets(self, row):
+        assert row["after_state"]
+        blob = f"{row['before_state'] or ''} {row['after_state'] or ''} {row['detail'] or ''}".lower()
+        assert "password_hash" not in blob
+        assert "api_key" not in blob
+        assert "secret" not in blob
+        assert "token" not in blob
+
+    def test_unauthenticated_admin_apis_return_401(self, api_server):
+        checks = [
+            ("PUT", "/api/config/risk-model", {}),
+            ("POST", "/api/config/ai-agents", {}),
+            ("PUT", "/api/config/verification-checks", {}),
+            ("PUT", "/api/config/system-settings", {}),
+            ("POST", "/api/users", {}),
+        ]
+        for method, path, payload in checks:
+            resp = http_requests.request(method, f"{api_server}{path}", json=payload, timeout=5)
+            assert resp.status_code == 401, (method, path, resp.text)
+
+    def test_lower_roles_cannot_mutate_admin_control_endpoints(self, api_server):
+        payloads = [
+            ("PUT", "/api/config/risk-model", {"dimensions": []}),
+            ("POST", "/api/config/ai-agents", {"agent_number": 901, "name": "Blocked", "stage": "Monitoring", "enabled": True, "checks": []}),
+            ("PUT", "/api/config/verification-checks", {"category": "entity", "doc_type": "blocked_doc", "doc_name": "Blocked", "checks": []}),
+            ("PUT", "/api/config/system-settings", {"company_name": "Blocked"}),
+            ("POST", "/api/users", {"email": "blocked@example.test", "full_name": "Blocked", "role": "analyst"}),
+        ]
+        for role in ("sco", "co", "analyst"):
+            headers = self._headers(role)
+            for method, path, payload in payloads:
+                resp = http_requests.request(method, f"{api_server}{path}", headers=headers, json=payload, timeout=5)
+                assert resp.status_code == 403, (role, method, path, resp.text)
+
+    def test_sco_co_analyst_read_policy_is_server_side(self, api_server):
+        assert http_requests.get(f"{api_server}/api/users", headers=self._headers("sco"), timeout=5).status_code == 200
+        assert http_requests.get(f"{api_server}/api/users", headers=self._headers("co"), timeout=5).status_code == 403
+        assert http_requests.get(f"{api_server}/api/config/risk-model", headers=self._headers("analyst"), timeout=5).status_code == 200
+        assert http_requests.get(f"{api_server}/api/settings/enhanced-requirements", headers=self._headers("co"), timeout=5).status_code == 200
+        assert http_requests.get(f"{api_server}/api/settings/enhanced-requirements", headers=self._headers("analyst"), timeout=5).status_code == 403
+
+    def test_ai_agent_update_creates_before_after_audit(self, api_server):
+        agents = http_requests.get(f"{api_server}/api/config/ai-agents", headers=self._headers(), timeout=5).json()["agents"]
+        agent = agents[0]
+        payload = {
+            "agent_number": agent["agent_number"],
+            "name": agent["name"],
+            "icon": agent.get("icon") or "",
+            "stage": agent["stage"],
+            "description": "ADMIN-AUDIT synthetic update",
+            "enabled": agent["enabled"],
+            "checks": agent.get("checks") or [],
+        }
+        resp = http_requests.put(
+            f"{api_server}/api/config/ai-agents/{agent['id']}",
+            headers=self._headers(),
+            json=payload,
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        row = self._audit_row("Config Update", "AI Agents")
+        self._assert_before_after_no_secrets(row)
+        assert "ADMIN-AUDIT synthetic update" in row["after_state"]
+
+    def test_ai_agent_delete_soft_disables_and_audits(self, api_server):
+        from db import get_db
+
+        conn = get_db()
+        max_num = conn.execute("SELECT COALESCE(MAX(agent_number), 0) AS m FROM ai_agents").fetchone()["m"]
+        conn.close()
+        agent_number = min(max_num + 1, 998)
+        create = http_requests.post(
+            f"{api_server}/api/config/ai-agents",
+            headers=self._headers(),
+            json={
+                "agent_number": agent_number,
+                "name": f"ADMIN-AUDIT Agent {agent_number}",
+                "icon": "A",
+                "stage": "Monitoring",
+                "description": "Synthetic audit agent",
+                "enabled": True,
+                "checks": ["Synthetic check"],
+            },
+            timeout=5,
+        )
+        assert create.status_code == 201, create.text
+        conn = get_db()
+        agent = conn.execute("SELECT id FROM ai_agents WHERE agent_number=?", (agent_number,)).fetchone()
+        conn.close()
+
+        deleted = http_requests.delete(
+            f"{api_server}/api/config/ai-agents/{agent['id']}",
+            headers=self._headers(),
+            timeout=5,
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["status"] == "disabled"
+        conn = get_db()
+        row = conn.execute("SELECT enabled FROM ai_agents WHERE id=?", (agent["id"],)).fetchone()
+        conn.close()
+        assert row is not None
+        assert int(row["enabled"]) == 0
+        audit = self._audit_row("Config Disable", "AI Agents")
+        self._assert_before_after_no_secrets(audit)
+        assert json.loads(audit["before_state"])["enabled"] is True
+        assert json.loads(audit["after_state"])["enabled"] is False
+
+    def test_ai_verification_check_update_creates_before_after_audit(self, api_server):
+        payload = {
+            "category": "entity",
+            "doc_type": "admin_audit_test",
+            "doc_name": "ADMIN AUDIT Test Document",
+            "checks": [
+                {
+                    "id": "admin_audit_check",
+                    "label": "ADMIN-AUDIT label",
+                    "rule": "Synthetic rule for auditability",
+                    "type": "rule",
+                    "classification": "rule",
+                    "severity": "medium",
+                    "active": True,
+                }
+            ],
+        }
+        resp = http_requests.put(
+            f"{api_server}/api/config/verification-checks",
+            headers=self._headers(),
+            json=payload,
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        row = self._audit_row("Config Update", "AI Checks")
+        self._assert_before_after_no_secrets(row)
+        assert "ADMIN-AUDIT label" in row["after_state"]
+
+    def test_system_settings_update_creates_before_after_audit(self, api_server):
+        current = http_requests.get(f"{api_server}/api/config/system-settings", headers=self._headers(), timeout=5)
+        assert current.status_code == 200, current.text
+        body = current.json()
+        payload = {
+            "company_name": "Onboarda Ltd",
+            "licence_number": body.get("licence_number") or "FSC-PIS-2024-001",
+            "default_retention_years": 7,
+            "auto_approve_max_score": 35,
+            "edd_threshold_score": 60,
+            "confirm_dangerous_change": True,
+        }
+        resp = http_requests.put(
+            f"{api_server}/api/config/system-settings",
+            headers=self._headers(),
+            json=payload,
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        row = self._audit_row("Config", "System Settings")
+        self._assert_before_after_no_secrets(row)
+        assert json.loads(row["after_state"])["edd_threshold_score"] == 60
+
+    def test_user_role_status_update_creates_before_after_audit(self, api_server):
+        email = f"admin-audit-{uuid.uuid4().hex[:8]}@example.test"
+        create = http_requests.post(
+            f"{api_server}/api/users",
+            headers=self._headers(),
+            json={"email": email, "full_name": "ADMIN-AUDIT User", "role": "analyst"},
+            timeout=5,
+        )
+        assert create.status_code == 201, create.text
+        user_id = create.json()["id"]
+        update = http_requests.put(
+            f"{api_server}/api/users/{user_id}",
+            headers=self._headers(),
+            json={"role": "co", "status": "inactive", "full_name": "ADMIN-AUDIT User"},
+            timeout=5,
+        )
+        assert update.status_code == 200, update.text
+        row = self._audit_row("Update User", email)
+        self._assert_before_after_no_secrets(row)
+        before = json.loads(row["before_state"])
+        after = json.loads(row["after_state"])
+        assert before["role"] == "analyst"
+        assert after["role"] == "co"
+        assert after["status"] == "inactive"
