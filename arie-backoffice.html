@@ -958,7 +958,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="reg-intel" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
     <div class="snav-section">AI Compliance Supervisor</div>
     <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Supervisor Dashboard</div>
-    <div class="snav-item" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span> Audit Chain</div>
+    <div class="snav-item role-sco-only" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span> Audit Chain</div>
     <div class="snav-section role-admin-only">Administration</div>
     <div class="snav-item role-admin-only" onclick="showView('users',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> User Management</div>
     <div class="snav-item role-admin-only" onclick="showView('roles',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span> Roles &amp; Permissions</div>
@@ -5641,7 +5641,7 @@ function showView(name, navItem) {
   if (name === 'screening-queue') name = 'screening';
   // Enforce frontend role restrictions on admin-only views
   var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'settings'];
-  var scoOnlyViews = ['audit'];
+  var scoOnlyViews = ['audit', 'supervisor-audit'];
   var enhancedSettingsViews = ['enhanced-requirements'];
   var role = currentUser ? currentUser.role : '';
   if (adminOnlyViews.indexOf(name) >= 0 && role !== 'admin') {
