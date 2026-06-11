@@ -28,7 +28,7 @@ RegMind is now best described as a **compliance decision platform and operating 
 11. periodic review;
 12. audit trail and governance reporting.
 
-The platform is materially more mature than the original audit baseline. The current codebase contains a large monolithic Tornado backend (`arie-backend/server.py`, now approximately 28k lines), 75 backend Python modules at top level, 263 pytest files, two large single-file HTML applications, a documented AWS ECS staging path, and extensive remediation reports proving recent hardening work.
+The platform is materially more mature than the original audit baseline. The current codebase contains a large monolithic Tornado backend (`arie-backend/server.py`), 75 backend Python modules at top level, 263 pytest files, two large single-file HTML applications, a documented AWS ECS staging path, and extensive remediation reports proving recent hardening work.
 
 ### 1.2 Investor-Friendly Verdict
 
@@ -164,7 +164,7 @@ The current architecture distinguishes:
 
 Sumsub has been repositioned correctly as an identity verification / KYC provider, while ComplyAdvantage labels are used for sanctions, watchlists, PEP/RCA, adverse-signal, and monitoring responsibilities. The provider-label cleanup evidence reports removal of OpenSanctions product-surface references and buyer/officer label correction.
 
-Important nuance: ComplyAdvantage provider code and abstraction exist, but provider abstraction is not yet the live default in all environments. Current product claims should avoid overstating ComplyAdvantage as an end-to-end active provider unless runtime flags and deployment evidence prove it.
+Important nuance: ComplyAdvantage provider code and abstraction exist, but provider abstraction is not yet the live default in all environments. Current product claims should avoid overstating ComplyAdvantage as an end-to-end active provider unless the abstraction is enabled and confirmed working end-to-end in the deployed environment.
 
 ### 3.7 Case Command Centre and Case Management
 
@@ -307,6 +307,8 @@ Key design decisions:
 
 This is regulator-friendly architecture.
 
+Scheduling nuance: the periodic-review state machine is active, but automatic background scheduling is not yet implemented. Reviews are scheduled through the manual back-office scheduling workflow rather than an APScheduler, Tornado `PeriodicCallback`, or `IOLoop` timer.
+
 ### 4.6 Monitoring Architecture
 
 Monitoring is partially mature:
@@ -400,7 +402,8 @@ Pilot conditions:
 - staging SHA must match approved source before buyer validation;
 - provider status and live/sandbox mode must be disclosed;
 - Agent Health should remain hidden unless backed by real telemetry;
-- transaction monitoring should be excluded or clearly marked as not live unless transaction ingestion is implemented.
+- transaction monitoring should be excluded or clearly marked as not live unless transaction ingestion is implemented;
+- automatic periodic-review scheduling should not be claimed unless a real scheduler is implemented; the active state machine currently relies on manual scheduling.
 
 ### 5.3 Production Ready
 
@@ -770,7 +773,7 @@ Some validation reports show strong deployed-branch behaviour but also highlight
 6. Transaction monitoring data infrastructure.
 7. Enterprise SSO / SCIM / access-review workflows.
 8. Full provider abstraction live failover validation.
-9. External adverse-media provider integration, if intended as separate from screening provider signals.
+9. External adverse-media provider integration, if intended as separate from adverse-media parsing of screening provider signals; no separate external adverse-media API is implemented in the current scope.
 10. Regulatory reporting/API integrations.
 11. Modularisation of monolithic backend.
 12. Componentisation of frontends.
@@ -818,4 +821,3 @@ If the company converts current pilot readiness into real paid pilots with measu
 8. Maintain strict provider-truth language in sales, docs, UI, and investor materials.
 9. Create a pilot evidence pack template: deployment SHA, user roles, case metrics, audit exports, memo validation, approval evidence, and exceptions.
 10. Preserve the architectural discipline established by the lifecycle and change-management ADRs.
-
