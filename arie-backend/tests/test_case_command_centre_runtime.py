@@ -326,7 +326,7 @@ class TestCaseCommandCentreRuntime:
         assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-enhanced-requirements-section")\'' in result["html"]
         assert "Next: Resolve Enhanced Review." in result["html"]
 
-    def test_formal_investigation_blocker_targets_lifecycle(self):
+    def test_formal_investigation_blocker_targets_edd_owner_workflow(self):
         html = _read_backoffice()
         result = _run_node(
             _runtime_js(
@@ -344,11 +344,150 @@ class TestCaseCommandCentreRuntime:
             )
         )
         investigation = [item for item in result["blockers"] if item["id"] == "edd"][0]
-        assert investigation["category"] == "Investigation Case"
-        assert investigation["title"] == "Investigation Case is open."
-        assert investigation["ctaLabel"] == "Open investigation case"
-        assert investigation["tab"] == "lifecycle"
-        assert 'onclick=\'activateCaseCommandTarget("lifecycle","detail-tab-lifecycle")\'' in result["html"]
+        assert investigation["category"] == "EDD / Investigation"
+        assert investigation["title"] == "EDD / Investigation case is open."
+        assert investigation["ctaLabel"] == "Open EDD"
+        assert investigation["tab"] == "alerts"
+        assert investigation["action"] == "openEDDQueueForApplication(101,\"ARF-TEST-101\")"
+        assert 'onclick=\'openEDDQueueForApplication(101,&quot;ARF-TEST-101&quot;)\'' in result["html"]
+
+    def test_ccc1_mixed_owner_workflows_are_split_and_routed(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        id="13cabbdf214542ea",
+                        ref="ARF-2026-900289",
+                        status="EDD Required",
+                        statusRaw="edd_required",
+                        monitoringAlerts=[
+                            {"id": 185, "status": "in_review", "summary": "Active monitoring alert"},
+                            {"id": 184, "status": "routed_to_review", "linked_periodic_review_id": 48},
+                            {"id": 183, "status": "routed_to_review", "recommended_destination_module": "periodic_review"},
+                            {"id": 182, "status": "routed_to_edd", "linked_edd_case_id": 254},
+                        ],
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "enhancedSummary": {
+                        "approval_blocked": True,
+                        "enhanced_review_active": True,
+                        "next_action": "Resolve outstanding enhanced review requirements.",
+                    },
+                    "lifecycleSummaryOverview": {
+                        "applicationId": "13cabbdf214542ea",
+                        "summary": {
+                            "active": {
+                                "items": [
+                                    {"type": "review", "id": 48, "state": "pending", "next_action": "Start review"},
+                                    {"type": "edd", "id": 254, "stage": "triggered", "next_action": "Begin information gathering"},
+                                ]
+                            }
+                        },
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Enhanced review required"]},
+                },
+            )
+        )
+        by_id = {item["id"]: item for item in result["blockers"]}
+        assert {"monitoring-alert", "periodic-review", "edd"}.issubset(by_id)
+        assert by_id["monitoring-alert"]["title"] == "One monitoring alert is still open."
+        assert "3 monitoring alerts are still open" not in result["html"]
+        assert by_id["monitoring-alert"]["category"] == "Monitoring Alerts"
+        assert by_id["monitoring-alert"]["tab"] == "alerts"
+        assert by_id["monitoring-alert"]["anchorId"] == "detail-tab-alerts"
+        assert by_id["periodic-review"]["category"] == "Periodic Review"
+        assert by_id["periodic-review"]["tab"] == "lifecycle"
+        assert by_id["edd"]["category"] == "EDD / Investigation"
+        assert by_id["edd"]["action"] == 'openEDDCaseFromApplication(254,"13cabbdf214542ea","ARF-2026-900289")'
+        assert by_id["edd"]["id"] in [item["id"] for item in result["blockers"]]
+
+    def test_ccc1_monitoring_only_case_shows_alerts_card_only_for_owner_alerts(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        monitoringAlerts=[
+                            {"id": "mon-1", "status": "open"},
+                            {"id": "pr-1", "status": "routed_to_review", "linked_periodic_review_id": 12},
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                },
+            )
+        )
+        ids = [item["id"] for item in result["blockers"]]
+        assert "monitoring-alert" in ids
+        assert "periodic-review" not in ids
+        assert "edd" not in ids
+        assert [item for item in result["blockers"] if item["id"] == "monitoring-alert"][0]["tab"] == "alerts"
+
+    def test_ccc1_periodic_review_only_case_does_not_show_monitoring(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "lifecycleSummaryOverview": {
+                        "applicationId": 101,
+                        "summary": {"active": {"items": [{"type": "review", "id": 77, "state": "awaiting_client"}]}},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                },
+            )
+        )
+        ids = [item["id"] for item in result["blockers"]]
+        assert "periodic-review" in ids
+        assert "monitoring-alert" not in ids
+        assert "edd" not in ids
+
+    def test_ccc1_edd_only_case_is_not_hidden_by_enhanced_review(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(status="EDD Required", statusRaw="edd_required"),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "enhancedSummary": {
+                        "approval_blocked": True,
+                        "enhanced_review_active": True,
+                    },
+                    "lifecycleSummaryOverview": {
+                        "applicationId": 101,
+                        "summary": {"active": {"items": [{"type": "edd", "id": 254, "stage": "triggered"}]}},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Enhanced review required", "EDD required"]},
+                },
+            )
+        )
+        ids = [item["id"] for item in result["blockers"]]
+        assert "enhanced-review" in ids
+        assert "edd" in ids
+        edd = [item for item in result["blockers"] if item["id"] == "edd"][0]
+        assert edd["action"] == 'openEDDCaseFromApplication(254,101,"ARF-TEST-101")'
 
     def test_document_blocker_is_shown_when_document_issues_exist(self):
         html = _read_backoffice()
@@ -422,6 +561,18 @@ class TestCaseCommandCentreRuntime:
         assert "confirmBtn.disabled = true" in html
         assert "Open approval decision modal to review blockers." in html
         assert "Backend gates still perform final validation." in html
+
+    def test_ccc1_cold_cache_edd_open_loads_queue_before_error(self):
+        html = _read_backoffice()
+        edd_region = _extract_between(
+            html,
+            "async function openEDDDetail(caseId) {",
+            "async function saveEDDFindings(caseId) {",
+        )
+        assert "await ensureEDDCasesLoaded({ force: true })" in edd_region
+        assert "findEDDCaseById(caseId)" in edd_region
+        assert "Investigation case not found" not in edd_region
+        assert "could not be loaded" in edd_region
 
     def test_pr2d_overview_and_kyc_ui_cleanup_markup_is_present(self):
         html = _read_backoffice()

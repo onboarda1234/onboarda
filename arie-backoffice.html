@@ -1916,6 +1916,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="tab" data-monitoring-alert-tab="escalated" onclick="setMonitoringAlertSubtab('escalated',this)">Escalated</div>
     </div>
 
+    <div id="monitoring-alert-context-banner" style="display:none;margin-bottom:12px;padding:10px 12px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#153a7d;font-size:12px;"></div>
+
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
       <select class="form-select" style="width:auto;" id="alert-severity-filter" onchange="renderMonitoringAlerts()">
         <option value="">All Severities</option>
@@ -3910,6 +3912,7 @@ function resetBackofficeSessionData() {
   MONITORING_ALERTS = [];
   MONITORING_ALERTS_LOAD_ERROR = null;
   MONITORING_ALERT_SUBTAB = 'all';
+  window._monitoringAlertsApplicationContext = null;
   MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [], loading: false, error: '' };
   MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = false;
   PERIODIC_REVIEWS = [];
@@ -3919,6 +3922,7 @@ function resetBackofficeSessionData() {
   MONITORING_DATA_PROMISE = null;
   EDD_CASES = [];
   EDD_DATA_PROMISE = null;
+  window._eddApplicationContext = null;
   AUDIT_LOG = [];
   AUDIT_DATA_PROMISE = null;
   RESOURCES = [];
@@ -12906,7 +12910,7 @@ function eddLinkedSourceHtml(c) {
   var status = source.status || c.stage || '—';
   var action = '';
   if (source.type === 'monitoring_alert' && source.id != null) {
-    action = "<button class=\"btn btn-outline btn-sm\" onclick=\"event.stopPropagation();closeModal('modal-edd-detail');showView('monitoring');\">Open monitoring alerts</button>";
+    action = "<button class=\"btn btn-outline btn-sm\" onclick=\"event.stopPropagation();closeModal('modal-edd-detail');openMonitoringAlertsForApplication(" + JSON.stringify(c.application_id || '') + ", '', " + JSON.stringify(source.id) + ");\">Open monitoring alerts</button>";
   } else if (source.type === 'periodic_review' && c.application_id) {
     action = "<button class=\"btn btn-outline btn-sm\" onclick=\"event.stopPropagation();closeModal('modal-edd-detail');openAppDetail(" + JSON.stringify(c.application_id) + ", { initialTab: 'lifecycle' });\">Open lifecycle history</button>";
   } else if (c.application_id) {
@@ -12935,7 +12939,11 @@ function renderEDD() {
 
   var filtered = EDD_CASES.filter(function(c) {
     if (stageFilter && c.stage !== stageFilter) return false;
-    if (searchText && (c.client_name || '').toLowerCase().indexOf(searchText) < 0 && (c.application_id || '').toLowerCase().indexOf(searchText) < 0) return false;
+    var appRef = c.application_ref || c.ref || (c.linked_source && (c.linked_source.application_ref || c.linked_source.ref)) || '';
+    if (searchText &&
+        (c.client_name || '').toLowerCase().indexOf(searchText) < 0 &&
+        (c.application_id || '').toLowerCase().indexOf(searchText) < 0 &&
+        String(appRef || '').toLowerCase().indexOf(searchText) < 0) return false;
     return true;
   });
 
@@ -12951,7 +12959,7 @@ function renderEDD() {
       '<td>' + eddStageBadge(c.stage) + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</td>' +
       '<td style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + 'd</td>' +
-      '<td><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openEDDDetail(' + c.id + ')">Review</button></td>';
+      '<td><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openEDDDetail(' + JSON.stringify(c.id) + ')">Review</button></td>';
     tbody.appendChild(tr);
   });
 
@@ -12982,9 +12990,20 @@ async function updateEDDStats() {
   }
 }
 
-function openEDDDetail(caseId) {
-  var c = EDD_CASES.find(function(x) { return x.id === caseId; });
-  if (!c) { showToast('Investigation case not found'); return; }
+function findEDDCaseById(caseId) {
+  return EDD_CASES.find(function(x) { return String(x && x.id) === String(caseId); }) || null;
+}
+
+async function openEDDDetail(caseId) {
+  var c = findEDDCaseById(caseId);
+  if (!c) {
+    await ensureEDDCasesLoaded({ force: true });
+    c = findEDDCaseById(caseId);
+  }
+  if (!c) {
+    showToast('Investigation case #' + String(caseId || '').slice(0, 24) + ' could not be loaded. Refresh the EDD queue and try again.', 'error');
+    return;
+  }
   currentEDDCase = c;
 
   var days = Math.floor((new Date() - new Date(c.triggered_at)) / 86400000);
@@ -13118,6 +13137,60 @@ function openEDDDetail(caseId) {
   document.getElementById('modal-edd-detail').classList.add('open');
   // PR-C Scope C — additive lifecycle context section (read-only).
   prcEnhanceEDDDetail(c);
+}
+
+function setEDDApplicationContext(applicationId, applicationRef, caseId) {
+  window._eddApplicationContext = {
+    applicationId: applicationId || '',
+    applicationRef: applicationRef || '',
+    caseId: caseId == null ? '' : String(caseId)
+  };
+}
+
+function eddContextSearchValue() {
+  var context = window._eddApplicationContext || {};
+  return context.applicationRef || context.applicationId || '';
+}
+
+function applyEDDApplicationContextSearch() {
+  var searchValue = eddContextSearchValue();
+  if (!searchValue) return;
+  var searchEl = document.getElementById('edd-search');
+  if (searchEl) searchEl.value = searchValue;
+}
+
+function updateEDDHashContext(caseId, applicationId, applicationRef) {
+  if (!window.history) return;
+  var params = new URLSearchParams('');
+  if (caseId != null && caseId !== '') params.set('case_id', String(caseId));
+  if (applicationId) params.set('application_id', String(applicationId));
+  if (applicationRef) params.set('application_ref', String(applicationRef));
+  window.history.replaceState(null, '', '#edd' + (params.toString() ? '?' + params.toString() : ''));
+}
+
+async function openEDDCaseFromApplication(caseId, applicationId, applicationRef) {
+  setEDDApplicationContext(applicationId, applicationRef, caseId);
+  updateEDDHashContext(caseId, applicationId, applicationRef);
+  showView('edd');
+  applyEDDApplicationContextSearch();
+  renderEDD();
+  if (caseId != null && caseId !== '') {
+    await openEDDDetail(caseId);
+  }
+}
+
+function openEDDQueueForApplication(applicationId, applicationRef) {
+  setEDDApplicationContext(applicationId, applicationRef, '');
+  updateEDDHashContext('', applicationId, applicationRef);
+  showView('edd');
+  applyEDDApplicationContextSearch();
+  renderEDD();
+  ensureEDDCasesLoaded().then(function(loaded) {
+    if (loaded) {
+      applyEDDApplicationContextSearch();
+      renderEDD();
+    }
+  });
 }
 
 async function saveEDDFindings(caseId) {
@@ -14780,6 +14853,78 @@ function lifecycleDetailCard(title, subtitle, body, accent) {
   '</div>';
 }
 
+function ownerWorkflowButtonDataAttrs(action, attrs) {
+  var html = ' data-owner-workflow-action="' + escapeHtml(action || '') + '"';
+  Object.keys(attrs || {}).forEach(function(key) {
+    var value = attrs[key];
+    if (value == null) value = '';
+    html += ' data-' + key.replace(/_/g, '-') + '="' + escapeHtml(String(value)) + '"';
+  });
+  return html;
+}
+
+function ownerWorkflowButtonHtml(label, action, attrs, extraClass) {
+  return '<button class="btn btn-outline btn-sm ' + escapeHtml(extraClass || '') + '"' +
+    ownerWorkflowButtonDataAttrs(action, attrs) + '>' + escapeHtml(label || 'Open') + '</button>';
+}
+
+function lifecycleOwnerWorkflowButtonForItem(item, label) {
+  if (!item || item.id == null) return '';
+  var type = String(item.type || '').toLowerCase();
+  if (type === 'alert') {
+    return ownerWorkflowButtonHtml(label, 'monitoring-alert-detail', {
+      alert_id: item.id,
+      application_id: item.application_id || item.applicationId || (currentApp && currentApp.id) || '',
+      application_ref: item.application_ref || item.applicationRef || (currentApp && currentApp.ref) || ''
+    });
+  }
+  if (type === 'edd') {
+    return ownerWorkflowButtonHtml(label, 'edd-case', {
+      case_id: item.id,
+      application_id: item.application_id || item.applicationId || (currentApp && currentApp.id) || '',
+      application_ref: item.application_ref || item.applicationRef || (currentApp && currentApp.ref) || ''
+    });
+  }
+  if (type === 'review') {
+    return ownerWorkflowButtonHtml(label, 'detail-tab', { tab: 'lifecycle' });
+  }
+  return '';
+}
+
+function handleOwnerWorkflowButtonClick(event) {
+  var button = event && event.target && event.target.closest
+    ? event.target.closest('[data-owner-workflow-action]')
+    : null;
+  if (!button) return;
+  if (event.preventDefault) event.preventDefault();
+  if (event.stopPropagation) event.stopPropagation();
+
+  var action = button.getAttribute('data-owner-workflow-action') || '';
+  var appId = button.getAttribute('data-application-id') || '';
+  var appRef = button.getAttribute('data-application-ref') || '';
+  var alertId = button.getAttribute('data-alert-id') || '';
+  var caseId = button.getAttribute('data-case-id') || '';
+
+  if (action === 'monitoring-alerts-application') {
+    openMonitoringAlertsForApplication(appId, appRef, alertId);
+  } else if (action === 'monitoring-alert-detail') {
+    if (alertId) openMonitoringAlertsForApplication(appId, appRef, alertId);
+    else openMonitoringAlertsForApplication(appId, appRef);
+  } else if (action === 'edd-case') {
+    if (caseId) openEDDCaseFromApplication(caseId, appId, appRef);
+    else if (appId || appRef) openEDDQueueForApplication(appId, appRef);
+    else showToast('Investigation case context is unavailable. Open the EDD queue and search for the application.', 'error');
+  } else if (action === 'edd-queue') {
+    openEDDQueueForApplication(appId, appRef);
+  } else if (action === 'detail-tab') {
+    switchDetailTab(button.getAttribute('data-tab') || 'overview');
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', handleOwnerWorkflowButtonClick);
+}
+
 function lifecycleDetailEdgeChip(edge) {
   function side(obj) {
     if (!obj || obj.id == null) return '<span style="font-size:11px;color:var(--text3);">Unknown</span>';
@@ -14801,13 +14946,10 @@ function lifecycleDetailItemRow(item) {
   var nextAction = item && item.next_action ? item.next_action : 'Open in owner workflow';
   var label = lifecycleObjectLabel(item);
   var sourceModule = lifecycleSourceModuleLabel(item);
-  var openAction = lifecycleOpenItemAction(item);
   var type = String((item && item.type) || 'item');
   var itemId = String((item && item.id) || '');
   var domId = lifecycleQueueItemDomId(type, itemId);
-  var openButton = openAction
-    ? '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();' + openAction + '">Open ' + escapeHtml(sourceModule) + '</button>'
-    : '';
+  var openButton = lifecycleOwnerWorkflowButtonForItem(item, 'Open ' + sourceModule);
   return '<div id="' + escapeHtml(domId) + '" data-lifecycle-item-type="' + escapeHtml(type) + '" data-lifecycle-item-id="' + escapeHtml(itemId) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
     '<div style="min-width:220px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div>' +
@@ -14922,7 +15064,11 @@ function lifecycleOpenItemAction(item) {
   if (!item || item.id == null) return '';
   var type = String(item.type || '').toLowerCase();
   if (type === 'alert') return 'openAlertDetailById(' + JSON.stringify(item.id) + ')';
-  if (type === 'edd') return 'openEDDDetail(' + JSON.stringify(item.id) + ')';
+  if (type === 'edd') {
+    return 'openEDDCaseFromApplication(' + JSON.stringify(item.id) + ',' +
+      JSON.stringify(item.application_id || item.applicationId || (currentApp && currentApp.id) || '') + ',' +
+      JSON.stringify(item.application_ref || item.applicationRef || (currentApp && currentApp.ref) || '') + ')';
+  }
   if (type === 'review') return 'switchDetailTab(\'lifecycle\')';
   return '';
 }
@@ -16562,7 +16708,10 @@ function renderApplicationAlertsDetailTab(context) {
         '<h2>Alerts</h2>' +
         '<p>Contextual application-level alert view using linked monitoring, adverse media, and risk signal data already stored for this client.</p>' +
       '</div>' +
-      '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open Monitoring Alerts</button>' +
+      ownerWorkflowButtonHtml('Open Monitoring Alerts', 'monitoring-alerts-application', {
+        application_id: app.id || '',
+        application_ref: app.ref || ''
+      }) +
     '</div>' +
     '<div class="lifecycle-detail-banner">' +
       '<strong style="color:#153a7d;">This tab is contextual only.</strong> Monitoring Alerts remains the owner workflow. This view keeps linked signals beside the application review and Periodic Reviews workspace.' +
@@ -16648,8 +16797,8 @@ function renderLifecycleDetailTab(context) {
           '<strong>Active non-review work exists:</strong> ' + escapeHtml(String(activeNonReviewCount)) + ' monitoring alert or EDD item(s) are actioned from Alerts, Monitoring Alerts, or EDD owner workflows.' +
           '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">' +
             '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'alerts\')">Open Alerts tab</button>' +
-            '<button class="btn btn-outline btn-sm" onclick="showView(\'monitoring\')">Open Monitoring Alerts</button>' +
-            '<button class="btn btn-outline btn-sm" onclick="showView(\'edd\')">Open EDD queue</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="openMonitoringAlertsForApplication(currentApp && currentApp.id, currentApp && currentApp.ref)">Open Monitoring Alerts</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="openEDDQueueForApplication(currentApp && currentApp.id, currentApp && currentApp.ref)">Open EDD queue</button>' +
           '</div>' +
         '</div>'
       : '');
@@ -18104,6 +18253,67 @@ function backToMonitoringAlerts() {
   showView('monitoring');
 }
 
+function setMonitoringAlertsApplicationContext(applicationId, applicationRef, alertId) {
+  window._monitoringAlertsApplicationContext = {
+    applicationId: applicationId || '',
+    applicationRef: applicationRef || '',
+    alertId: alertId == null ? '' : String(alertId)
+  };
+}
+
+function clearMonitoringAlertsApplicationContext() {
+  window._monitoringAlertsApplicationContext = null;
+  if (window.history) window.history.replaceState(null, '', '#monitoring');
+  renderMonitoringAlerts();
+}
+
+function monitoringAlertMatchesApplicationContext(alert) {
+  var context = window._monitoringAlertsApplicationContext || null;
+  if (!context || (!context.applicationId && !context.applicationRef && !context.alertId)) return true;
+  var raw = (alert && alert.raw) || alert || {};
+  if (context.alertId && String(alert && alert.id) === String(context.alertId)) return true;
+  var appId = String(context.applicationId || '');
+  var appRef = String(context.applicationRef || '');
+  var candidates = [
+    alert && alert.applicationId,
+    alert && alert.applicationRef,
+    raw.application_id,
+    raw.applicationId,
+    raw.application_ref,
+    raw.ref,
+    raw.client_id,
+    raw.client_name
+  ].map(function(value) { return String(value || ''); });
+  return candidates.some(function(value) {
+    return value && ((appId && value === appId) || (appRef && value === appRef));
+  });
+}
+
+function monitoringAlertsContextLabel() {
+  var context = window._monitoringAlertsApplicationContext || {};
+  return context.applicationRef || context.applicationId || '';
+}
+
+function updateMonitoringAlertsHashContext(applicationId, applicationRef, alertId) {
+  if (!window.history) return;
+  var params = new URLSearchParams('');
+  if (applicationId) params.set('application_id', String(applicationId));
+  if (applicationRef) params.set('application_ref', String(applicationRef));
+  if (alertId != null && alertId !== '') params.set('alert_id', String(alertId));
+  window.history.replaceState(null, '', '#monitoring' + (params.toString() ? '?' + params.toString() : ''));
+}
+
+function openMonitoringAlertsForApplication(applicationId, applicationRef, alertId) {
+  setMonitoringAlertsApplicationContext(applicationId, applicationRef, alertId);
+  updateMonitoringAlertsHashContext(applicationId, applicationRef, alertId);
+  showView('monitoring');
+  switchMonitoringTab('alerts');
+  renderMonitoringAlerts();
+  if (alertId != null && alertId !== '') {
+    openMonitoringAlertDetail(alertId);
+  }
+}
+
 async function requestMonitoringUpdatedDocument() {
   var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
   if (!alert || !alert.id) return;
@@ -18289,6 +18499,20 @@ function renderMonitoringAlerts() {
   var severityFilter = document.getElementById('alert-severity-filter').value;
   var typeFilter = document.getElementById('alert-type-filter').value;
   var statusFilter = document.getElementById('alert-status-filter').value;
+  var contextLabel = monitoringAlertsContextLabel();
+  var contextBanner = document.getElementById('monitoring-alert-context-banner');
+  if (contextBanner) {
+    if (contextLabel) {
+      contextBanner.style.display = '';
+      contextBanner.innerHTML = '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">' +
+        '<span><strong>Application context:</strong> showing monitoring alerts linked to ' + escapeHtml(contextLabel) + '.</span>' +
+        '<button class="btn btn-outline btn-sm" onclick="clearMonitoringAlertsApplicationContext()">Clear context</button>' +
+      '</div>';
+    } else {
+      contextBanner.style.display = 'none';
+      contextBanner.innerHTML = '';
+    }
+  }
 
   tbody.innerHTML = '';
   if (MONITORING_DATA_STATE === 'loading' && !MONITORING_ALERTS.length) {
@@ -18303,6 +18527,7 @@ function renderMonitoringAlerts() {
   MONITORING_ALERTS.forEach(function(alert) {
     alert.client = monitoringAlertClientDisplay(alert.raw || alert);
     alert.clientTitle = monitoringAlertClientTitle(alert.raw || alert);
+    if (!monitoringAlertMatchesApplicationContext(alert)) return;
     if (!monitoringAlertMatchesSubtab(alert)) return;
     if (severityFilter && alert.severityKey !== severityFilter) return;
     if (typeFilter && alert.typeKey !== typeFilter) return;
@@ -18334,7 +18559,9 @@ function renderMonitoringAlerts() {
     rendered++;
   });
   if (!rendered) {
-    var msg = MONITORING_ALERTS.length ? 'No monitoring alerts match the current filters.' : 'No monitoring alerts found.';
+    var msg = contextLabel
+      ? 'No monitoring alerts match the current filters for ' + contextLabel + '.'
+      : (MONITORING_ALERTS.length ? 'No monitoring alerts match the current filters.' : 'No monitoring alerts found.');
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">' + escapeHtml(msg) + '</td></tr>';
   }
 }
@@ -19672,12 +19899,97 @@ function caseCommandOpenLifecycleItems(app) {
   return (summary && summary.active && Array.isArray(summary.active.items)) ? summary.active.items : [];
 }
 
-function caseCommandOpenMonitoringAlertCount(app) {
+function caseCommandToken(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
+function caseCommandActiveLifecycleItem(item) {
+  var state = caseCommandToken((item && (item.state || item.status || item.stage)) || '');
+  return ['completed', 'complete', 'cancelled', 'canceled', 'superseded', 'closed', 'resolved', 'edd_approved', 'edd_rejected'].indexOf(state) < 0;
+}
+
+function caseCommandPeriodicReviewItems(app) {
+  return caseCommandOpenLifecycleItems(app).filter(function(item) {
+    return item && String(item.type || '').toLowerCase() === 'review' && caseCommandActiveLifecycleItem(item);
+  });
+}
+
+function caseCommandEDDItems(app) {
+  return caseCommandOpenLifecycleItems(app).filter(function(item) {
+    return item && String(item.type || '').toLowerCase() === 'edd' && caseCommandActiveLifecycleItem(item);
+  });
+}
+
+function caseCommandAlertOwnerWorkflow(alert) {
+  var candidates = [
+    alert && alert.next_owner_workflow,
+    alert && alert.owner_workflow,
+    alert && alert.route_to_workflow,
+    alert && alert.routed_to_workflow,
+    alert && alert.destination_workflow,
+    alert && alert.destination_module,
+    alert && alert.recommended_destination,
+    alert && alert.recommended_destination_module,
+    alert && alert.next_action_workflow,
+    alert && alert.officer_action,
+    alert && alert.outcome
+  ].map(caseCommandToken).filter(Boolean);
+  if ((alert && alert.linked_periodic_review_id != null) || candidates.some(function(value) { return value.indexOf('periodic_review') >= 0 || value === 'review' || value === 'lifecycle_review'; })) {
+    return 'periodic_review';
+  }
+  if ((alert && alert.linked_edd_case_id != null) || candidates.some(function(value) { return value.indexOf('edd') >= 0 || value.indexOf('investigation') >= 0; })) {
+    return 'edd';
+  }
+  return 'monitoring';
+}
+
+function caseCommandMonitoringOwnerAlerts(app) {
   var alerts = (app && Array.isArray(app.monitoringAlerts)) ? app.monitoringAlerts : [];
   return alerts.filter(function(alert) {
     var status = String((alert && alert.status) || '').toLowerCase();
-    return ['dismissed', 'converted_to_change_request', 'resolved_no_change', 'implemented', 'cancelled', 'superseded'].indexOf(status) < 0;
-  }).length;
+    var statusKey = caseCommandToken(status);
+    var terminal = [
+      'dismissed', 'converted_to_change_request', 'resolved_no_change', 'implemented', 'cancelled', 'canceled',
+      'superseded', 'resolved', 'closed', 'completed', 'waived', 'false_positive', 'no_material_impact',
+      'routed_to_review', 'route_to_review', 'routed_review', 'routed_to_edd', 'route_to_edd', 'escalated_to_edd',
+      'edd_approved', 'edd_rejected'
+    ];
+    if (terminal.indexOf(statusKey) >= 0) return false;
+    return caseCommandAlertOwnerWorkflow(alert) === 'monitoring';
+  });
+}
+
+function caseCommandOpenMonitoringAlertCount(app) {
+  return caseCommandMonitoringOwnerAlerts(app).length;
+}
+
+function caseCommandLifecycleStateText(item) {
+  var raw = (item && (item.status_label || item.state || item.status || item.stage)) || '';
+  return String(raw || '').replace(/_/g, ' ').trim();
+}
+
+function caseCommandPeriodicReviewDescription(item) {
+  var state = caseCommandLifecycleStateText(item) || 'Active review';
+  var action = (item && (item.primary_action_label || item.next_action_label || item.next_action)) || '';
+  return 'Periodic review pending' + (state ? ' · ' + state : '') + (action && String(action).toLowerCase() !== String(state).toLowerCase() ? ' · ' + action : '') + '.';
+}
+
+function caseCommandEDDDescription(item, status) {
+  if (item) {
+    var state = caseCommandLifecycleStateText(item) || 'Active investigation';
+    var action = (item.primary_action_label || item.next_action_label || item.next_action || '') || '';
+    return 'EDD case ' + state + (action && String(action).toLowerCase() !== String(state).toLowerCase() ? ' · ' + action : '') + '.';
+  }
+  return 'EDD / Investigation is required for this case' + (status ? ' (' + status.replace(/_/g, ' ') + ')' : '') + '.';
+}
+
+function caseCommandEDDAction(app, item) {
+  if (item && item.id != null) {
+    return 'openEDDCaseFromApplication(' + JSON.stringify(item.id) + ',' +
+      JSON.stringify((item.application_id || item.applicationId || (app && app.id) || '')) + ',' +
+      JSON.stringify((item.application_ref || item.applicationRef || (app && app.ref) || '')) + ')';
+  }
+  return 'openEDDQueueForApplication(' + JSON.stringify((app && app.id) || '') + ',' + JSON.stringify((app && app.ref) || '') + ')';
 }
 
 function caseCommandAuditFailureMessage() {
@@ -19731,10 +20043,12 @@ function getCaseCommandBlockers(app) {
   var memoSupervisor = memoSupervisorBlock(memoData, memoMeta);
   var supervisorVerdict = String(memoSupervisor.verdict || memoMeta.supervisor_status || '').toUpperCase();
   var lifecycleItems = caseCommandOpenLifecycleItems(app);
+  var periodicReviewItems = caseCommandPeriodicReviewItems(app);
+  var eddItems = caseCommandEDDItems(app);
   var openAlertCount = caseCommandOpenMonitoringAlertCount(app);
   var auditFailureMessage = caseCommandAuditFailureMessage();
 
-  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking, priority) {
+  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking, priority, action) {
     blockers.push({
       id: id,
       category: category,
@@ -19744,7 +20058,8 @@ function getCaseCommandBlockers(app) {
       tab: tab,
       anchorId: anchorId,
       blocking: blocking !== false,
-      priority: priority == null ? 50 : priority
+      priority: priority == null ? 50 : priority,
+      action: action || ''
     });
   };
 
@@ -19865,17 +20180,21 @@ function getCaseCommandBlockers(app) {
       true,
       10
     );
-  } else if (status === 'edd_required' || status === 'edd_in_progress' || status === 'edd_approved' || status === 'pending_senior_review') {
+  }
+
+  if (eddItems.length > 0 || status === 'edd_required' || status === 'edd_in_progress' || status === 'pending_senior_review') {
+    var eddItem = eddItems[0] || null;
     addBlocker(
       'edd',
-      'Investigation Case',
-      'Investigation Case is open.',
-      'Resolve findings and senior review in Lifecycle before approval.',
-      'Open investigation case',
-      'lifecycle',
-      'detail-tab-lifecycle',
+      'EDD / Investigation',
+      'EDD / Investigation case is open.',
+      caseCommandEDDDescription(eddItem, status),
+      'Open EDD',
+      eddItem ? null : 'alerts',
+      eddItem ? null : 'detail-tab-alerts',
       true,
-      40
+      40,
+      caseCommandEDDAction(app, eddItem)
     );
   }
 
@@ -19986,21 +20305,42 @@ function getCaseCommandBlockers(app) {
   if (openAlertCount > 0) {
     addBlocker(
       'monitoring-alert',
-      'Monitoring',
+      'Monitoring Alerts',
       openAlertCount === 1 ? 'One monitoring alert is still open.' : openAlertCount + ' monitoring alerts are still open.',
-      'Review the lifecycle view to understand linked alerts and next steps before approval.',
+      'Open the Alerts tab to review active monitoring-owner alerts for this application. Alerts already routed to Periodic Review or EDD are shown in their owner workflows.',
       'View alerts',
-      'lifecycle',
-      'detail-tab-lifecycle',
+      'alerts',
+      'detail-tab-alerts',
       false,
       90
     );
-  } else if (lifecycleItems.length > 0) {
+  }
+
+  if (periodicReviewItems.length > 0) {
+    var periodicReviewItem = periodicReviewItems[0];
+    addBlocker(
+      'periodic-review',
+      'Periodic Review',
+      'Periodic Review work is active.',
+      caseCommandPeriodicReviewDescription(periodicReviewItem),
+      'Open periodic review',
+      'lifecycle',
+      'detail-tab-lifecycle',
+      false,
+      85
+    );
+  }
+
+  var otherLifecycleItems = lifecycleItems.filter(function(item) {
+    var type = String((item && item.type) || '').toLowerCase();
+    return caseCommandActiveLifecycleItem(item) && type !== 'review' && type !== 'edd' && type !== 'alert';
+  });
+  if (otherLifecycleItems.length > 0) {
     addBlocker(
       'lifecycle-review',
       'Lifecycle',
       'Lifecycle follow-up is open for this client.',
-      'Open the lifecycle view to review linked work items and confirm what still needs officer attention.',
+      'Open the lifecycle view to review the remaining linked work item and confirm what still needs officer attention.',
       'Open lifecycle',
       'lifecycle',
       'detail-tab-lifecycle',
@@ -20061,6 +20401,8 @@ function renderCaseCommandCentre(app) {
   '<span class="case-command-centre-chip blockers">' + escapeHtml(blockers.length === 1 ? '1 blocker' : (String(blockers.length) + ' blockers')) + '</span>';
 
   var blockersHtml = blockers.map(function(blocker) {
+    var blockerAction = blocker.action || ('activateCaseCommandTarget(' + JSON.stringify(blocker.tab) + ',' + JSON.stringify(blocker.anchorId) + ')');
+    var blockerActionAttr = blocker.action ? escapeHtml(blockerAction) : blockerAction;
     return '<div class="case-command-blocker-card ' + (blocker.blocking ? 'blocking' : '') + '">' +
       '<div class="case-command-blocker-top">' +
         '<span class="case-command-blocker-chip">' + escapeHtml(blocker.category) + '</span>' +
@@ -20068,7 +20410,7 @@ function renderCaseCommandCentre(app) {
       '<div class="case-command-blocker-title">' + escapeHtml(blocker.title) + '</div>' +
       '<div class="case-command-blocker-text">' + escapeHtml(blocker.description) + '</div>' +
       '<div class="case-command-blocker-actions">' +
-        '<button class="btn btn-outline btn-sm" onclick=\'activateCaseCommandTarget(' + JSON.stringify(blocker.tab) + ',' + JSON.stringify(blocker.anchorId) + ')\'>' + escapeHtml(blocker.ctaLabel) + '</button>' +
+        '<button class="btn btn-outline btn-sm" onclick=\'' + blockerActionAttr + '\'>' + escapeHtml(blocker.ctaLabel) + '</button>' +
       '</div>' +
     '</div>';
   }).join('');
@@ -21795,7 +22137,11 @@ function applyBackofficeHashRoute() {
     return true;
   }
   if (route.view === 'edd') {
+    setEDDApplicationContext(route.params.get('application_id') || '', route.params.get('application_ref') || '', route.params.get('case_id') || '');
     showView('edd');
+    applyEDDApplicationContextSearch();
+    var caseId = route.params.get('case_id');
+    if (caseId) openEDDDetail(caseId);
     return true;
   }
   if (route.view === 'periodic-review-signals') {
@@ -21803,7 +22149,10 @@ function applyBackofficeHashRoute() {
     return true;
   }
   if (route.view === 'monitoring') {
+    setMonitoringAlertsApplicationContext(route.params.get('application_id') || '', route.params.get('application_ref') || '', route.params.get('alert_id') || '');
     showView('monitoring');
+    var monitoringAlertId = route.params.get('alert_id');
+    if (monitoringAlertId) openMonitoringAlertDetail(monitoringAlertId);
     return true;
   }
   if (route.view.indexOf('monitoring-alerts/') === 0) {
