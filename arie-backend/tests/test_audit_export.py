@@ -396,7 +396,7 @@ class TestSupervisorAuditExportCSV(_AuditExportTestBase):
 
     def test_csv_escapes_formula_like_cells(self):
         self._seed_supervisor_audit_rows(1, action="@verify")
-        resp = self.fetch("/api/audit/supervisor/export?format=csv", headers={"Authorization": f"Bearer {self.admin_token}"})
+        resp = self.fetch("/api/audit/supervisor/export?format=csv&action=%40verify", headers={"Authorization": f"Bearer {self.admin_token}"})
         self.assertEqual(resp.code, 200)
         reader = csv.DictReader(io.StringIO(resp.body.decode()))
         row = next(reader)
