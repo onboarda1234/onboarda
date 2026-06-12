@@ -108,6 +108,12 @@ def _runtime_js(html, config):
                   const actionId = Object.keys(CASE_COMMAND_RENDERED_ACTIONS).find(id => CASE_COMMAND_RENDERED_ACTIONS[id].action_key === CONFIG.runActionKey);
                   actionRunResult = actionId ? runCaseCommandAction(actionId) : false;
                 }
+                if (CONFIG.runDirectActionKey) {
+                  actionRunResult = runCaseCommandAction(caseCommandActionTarget(CONFIG.runDirectActionKey, {
+                    target_application_id: app && app.id,
+                    filter_application_ref: app && app.ref
+                  }));
+                }
                 if (CONFIG.resolveTarget) {
                   activateCaseCommandTarget(CONFIG.resolveTarget.tab, CONFIG.resolveTarget.anchorId);
                 }
@@ -803,6 +809,27 @@ class TestCaseCommandCentreRuntime:
         assert 'onclick="reassignCase()"' in html
         assert 'onclick="openExportPackModal()"' in html
         assert "function runCaseCommandAction(actionId)" in html
+
+    def test_default_edd_action_map_routes_to_current_application_edd_queue(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(status="Blocked", statusRaw="blocked"),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "enhancedSummary": {},
+                    "approvalReadiness": {"ready": False, "blockers": ["Formal investigation is open"]},
+                    "runDirectActionKey": "edd.open",
+                },
+            )
+        )
+        assert result["actionRunResult"] is True
+        assert result["eddCalls"] == [{"type": "queue", "applicationId": 101, "applicationRef": "ARF-TEST-101"}]
 
     def test_ccc1_cold_cache_edd_open_loads_queue_before_error(self):
         html = _read_backoffice()
