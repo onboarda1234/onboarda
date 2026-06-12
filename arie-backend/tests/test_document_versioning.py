@@ -612,6 +612,39 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
         (app_id, json.dumps(memo_data), "approved", "pass", "CONSISTENT", 9),
     )
     conn.execute(
+        """
+        INSERT INTO idv_resolutions
+        (id, application_id, application_ref, person_id, person_type, person_name,
+         prior_provider_status, prior_review_answer, resolution_status, resolution_outcome,
+         reason_code, evidence_reviewed, rationale, confirmation_text, senior_approver_id,
+         resolved_by, resolved_by_name, resolved_by_role, ip_address, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "docver-idv-resolution",
+            app_id,
+            "ARF-DOCVER-APPROVAL",
+            "docver_approval_client",
+            "client",
+            "Approval Ltd",
+            "pending",
+            "",
+            "manual_verified",
+            "manual_verification_completed",
+            "other",
+            json.dumps(["corporate_documents"]),
+            "Manual IDV resolution recorded for document versioning approval fixture.",
+            "confirmed",
+            "",
+            "admin001",
+            "Test Admin",
+            "admin",
+            "127.0.0.1",
+            "pytest",
+            now.isoformat(),
+        ),
+    )
+    conn.execute(
         """INSERT INTO documents
            (id, application_id, doc_type, doc_name, file_path, slot_key, is_current,
             version, verification_status, superseded_at, superseded_by_document_id)
