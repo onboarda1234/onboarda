@@ -276,9 +276,8 @@ Full suite: **3313 passed** after PR-03 (3265 → 3313).
 * Tests for `MonitoringAlertDetailHandler.patch` HTTP seam (PR-02
   follow-up).
 
-## Protected-control posture
+## EX-control posture
 
-* No file in `protected_controls.PROTECTED_FILES` is modified.
 * `server.py` is touched only additively (5 new handler classes + 5
   new route registrations). None of the touched paths intersect EX-02
   (CSRF), EX-07 (approval gate), EX-09 (rate-limit), EX-11 (officer
@@ -361,20 +360,16 @@ In `tests/test_periodic_review_handlers.py`:
   a trivial fix at the SQLite/Postgres seam without a wider
   transaction model change, which is explicitly out of PR-03a scope.
 
-### Protected-control posture (PR-03a)
+### EX-control posture (PR-03a)
 
-* `server.py` is on the `PROTECTED_FILES` list (for EX-02 / EX-07 /
-  EX-09 / EX-11 / EX-12 / EX-13). PR-03a edits `server.py` ONLY on
-  the PR-03 handler block (lines around `PeriodicReviewStateHandler
-  … PeriodicReviewCompleteHandler`) and adds a single helper
-  (`_parse_review_id`) directly above that block. None of the EX
-  enforcement seams (Sumsub webhook ingestion, approval gate,
-  rate-limit, officer sign-off, client-side security helpers,
-  batch-fetch / ETag) are touched, read, or affected.
-* `periodic_review_engine.py` is *not* in `PROTECTED_FILES`; PR-03a
-  edits are confined to it for the priority-wiring / boundary
-  validation change and a docstring/inline-comment clarification on
+* PR-03a edits `server.py` only on the PR-03 handler block (lines
+  around `PeriodicReviewStateHandler … PeriodicReviewCompleteHandler`)
+  and adds a single helper (`_parse_review_id`) directly above that
+  block. None of the EX enforcement seams (Sumsub webhook ingestion,
+  approval gate, rate-limit, officer sign-off, client-side security
+  helpers, batch-fetch / ETag) are touched, read, or affected.
+* `periodic_review_engine.py` edits are confined to priority wiring,
+  boundary validation, and a docstring/inline-comment clarification on
   the outcome-vs-decision contract.
 * `lifecycle_linkage.py` is not modified (PR-03a only imports
   `VALID_PRIORITIES` from it, which was already a public contract).
-* No other protected file is modified.

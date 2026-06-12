@@ -28,7 +28,7 @@
 -- The CREATE TABLE IF NOT EXISTS clauses are additionally idempotent
 -- for safety (mirrors the convention used elsewhere in this repo).
 --
--- EX-CONTROL IMPACT: none. No file in PROTECTED_FILES is modified by
+-- EX-CONTROL IMPACT: none. Existing runtime control code is not modified by
 -- this migration. No existing column is altered. No existing row is
 -- mutated. EX-01..EX-13 regressions are impossible by construction.
 --

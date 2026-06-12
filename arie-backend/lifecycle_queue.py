@@ -26,7 +26,8 @@ Design contract
     - PR-04a onboarding attachment rule -- only attachments with a real
       ``compliance_memos.id`` (memo_id IS NOT NULL when kind='onboarding')
       are surfaced as confirmed onboarding attachments
-* No protected file is modified by this module being added.
+* Existing lifecycle, monitoring, and EDD runtime contracts are not
+  modified by this module being added.
 
 Public surface
 --------------

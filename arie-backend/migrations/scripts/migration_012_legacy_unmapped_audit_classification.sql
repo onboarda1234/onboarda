@@ -91,7 +91,7 @@
 -- * Read-only against monitoring_alerts (no UPDATE / DELETE).
 -- * INSERT-only against audit_log.
 -- * No schema changes (no ALTER, no new column).
--- * No protected file is modified by this migration.
+-- * Existing runtime control code is not modified by this migration.
 -- * No EX-01..EX-13 control-critical file is touched.
 
 INSERT INTO audit_log (

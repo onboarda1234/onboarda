@@ -9,7 +9,8 @@ without:
 * mutating ``compliance_memos`` history,
 * overwriting an onboarding memo with periodic-review-lifecycle material,
 * creating a third, disconnected EDD memo universe,
-* touching any file in ``PROTECTED_FILES``.
+* changing the existing memo, screening, validation, or approval-gate
+  runtime contracts.
 
 What this module provides
 -------------------------
@@ -54,7 +55,8 @@ Design constraints (preserved verbatim from PR-01..PR-03a contracts)
   ComplyAdvantage. No reading of ``screening_reports_normalized`` as
   authoritative.
 
-* **EX-01..EX-13 untouched.** No file in ``PROTECTED_FILES`` is
+* **EX-01..EX-13 runtime controls untouched.** Existing screening,
+  memo, validation, approval-gate, auth, and audit behaviours are not
   imported, modified, or relied on for new behaviour.
 
 PR-02 reverse-link displacement contract
