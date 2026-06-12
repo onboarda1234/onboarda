@@ -10,8 +10,8 @@ Date: 2026-06-12
 | `origin/main` SHA at branch creation | `7f94117f5e8f75e9e3c4dce435b2bef6656523d5` |
 | Branch | `codex/provider-label-cleanup-2-backoffice-runtime` |
 | Branch base SHA | `7f94117f5e8f75e9e3c4dce435b2bef6656523d5` |
-| Local HEAD SHA | Pending final commit |
-| PR number | Pending |
+| Local HEAD SHA | `52e337cced85c6db43b60b965c5cd9d6df490e29` at draft PR publication; this report update is a follow-up commit on the same branch |
+| PR number | `#464` |
 | Merge commit SHA | Pending PR merge |
 | Deployed `/api/version` SHA | Pending authenticated staging validation |
 | ECS task definition | Pending post-deploy validation |
@@ -134,13 +134,12 @@ OpenSanctions remains only in historical audit evidence under `docs/audits/`, in
 
 ## Remaining Work
 
-1. Open PR and update this report with the PR number.
-2. Merge PR and update this report with the merge commit SHA.
-3. Deploy staging and validate authenticated `/api/version` matches final `main`.
-4. Capture ECS task definition.
-5. Run authenticated staging browser smoke with approved `STAGING_QA_EMAIL` and `STAGING_QA_PASSWORD`.
-6. Run authenticated staging API scans for protected endpoints.
-7. Repeat after clearing browser cache/storage.
+1. Merge PR #464 and update this report with the merge commit SHA.
+2. Deploy staging and validate authenticated `/api/version` matches final `main`.
+3. Capture ECS task definition.
+4. Run authenticated staging browser smoke with approved `STAGING_QA_EMAIL` and `STAGING_QA_PASSWORD`.
+5. Run authenticated staging API scans for protected endpoints.
+6. Repeat after clearing browser cache/storage.
 
 ## Final Verdict
 
