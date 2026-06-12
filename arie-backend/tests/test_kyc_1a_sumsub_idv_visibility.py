@@ -43,7 +43,7 @@ def _db():
             action TEXT,
             target TEXT,
             detail TEXT,
-            created_at TEXT
+            timestamp TEXT
         )
         """
     )
@@ -232,6 +232,30 @@ def test_audit_lookup_uses_parameterized_like_for_postgres_safety():
     payload = build_sumsub_idv_statuses(guarded, _application(), directors=[_director()])
 
     assert guarded.saw_parameterized_review_like is True
+    assert _status(payload)["verification_status"] == "not_started"
+
+
+def test_audit_lookup_uses_audit_log_timestamp_column_for_deployed_schema():
+    class GuardedConnection:
+        def __init__(self, conn):
+            self.conn = conn
+            self.saw_timestamp_audit_lookup = False
+
+        def execute(self, sql, params=()):
+            if "FROM audit_log" in sql:
+                assert "SELECT action, target, detail, created_at FROM audit_log" not in sql
+                assert "ORDER BY created_at" not in sql
+                assert "timestamp AS created_at" in sql
+                assert "ORDER BY timestamp DESC" in sql
+                self.saw_timestamp_audit_lookup = True
+            return self.conn.execute(sql, params)
+
+    conn = _db()
+    guarded = GuardedConnection(conn)
+
+    payload = build_sumsub_idv_statuses(guarded, _application(), directors=[_director()])
+
+    assert guarded.saw_timestamp_audit_lookup is True
     assert _status(payload)["verification_status"] == "not_started"
 
 
