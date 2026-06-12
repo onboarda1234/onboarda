@@ -60,6 +60,39 @@ def _insert_gate_ready_app(db):
             now,
         ),
     )
+    db.execute(
+        """
+        INSERT INTO idv_resolutions
+        (id, application_id, application_ref, person_id, person_type, person_name,
+         prior_provider_status, prior_review_answer, resolution_status, resolution_outcome,
+         reason_code, evidence_reviewed, rationale, confirmation_text, senior_approver_id,
+         resolved_by, resolved_by_name, resolved_by_role, ip_address, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            f"idv_memo_stale_{suffix}",
+            app_id,
+            ref,
+            client_id,
+            "client",
+            "Memo Stale Ltd",
+            "pending",
+            "",
+            "manual_verified",
+            "manual_verification_completed",
+            "other",
+            json.dumps(["corporate_documents"]),
+            "Manual verification recorded for memo staleness gate fixture.",
+            "I confirm I have reviewed the evidence and accept responsibility for this IDV resolution.",
+            "",
+            "admin001",
+            "Admin",
+            "admin",
+            "127.0.0.1",
+            "pytest",
+            now,
+        ),
+    )
     db.commit()
     return app_id, ref
 

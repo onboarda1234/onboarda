@@ -16,6 +16,16 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 PROVIDER = "sumsub"
 PROVIDER_LABEL = "Sumsub Identity Verification"
 PROVIDER_SCOPE = "individual_kyc_identity_verification"
+CANONICAL_IDV_STATUSES = {
+    "verified",
+    "pending",
+    "failed",
+    "unable_to_verify",
+    "manual_verified",
+    "exception_approved",
+    "rejected",
+}
+IDV_APPROVAL_ALLOW_STATUSES = {"verified", "manual_verified", "exception_approved"}
 
 VALID_STATUSES = {
     "not_started",
@@ -105,7 +115,7 @@ def _status_from_review_answer(answer: str) -> str:
     if answer == "GREEN":
         return "approved"
     if answer == "RED":
-        return "rejected"
+        return "failed"
     if answer == "pending":
         return "pending"
     return ""
@@ -114,6 +124,46 @@ def _status_from_review_answer(answer: str) -> str:
 def _is_failure_text(value: Any) -> bool:
     text = _norm(value)
     return any(token in text for token in ("fail", "error", "rejected", "unavailable"))
+
+
+def _canonical_idv_status(verification_status: str, review_answer: str = "") -> str:
+    status = str(verification_status or "").strip().lower()
+    answer = str(review_answer or "").strip().upper()
+    if status == "approved" or answer == "GREEN":
+        return "verified"
+    if status == "rejected":
+        return "rejected"
+    if status == "failed" or answer == "RED":
+        return "failed"
+    if status in {"unmatched", "unavailable"}:
+        return "unable_to_verify"
+    return "pending"
+
+
+def _canonical_status_label(status: str) -> str:
+    return {
+        "verified": "Verified",
+        "pending": "Pending",
+        "failed": "Failed",
+        "unable_to_verify": "Unable to Verify",
+        "manual_verified": "Manual Verification Completed",
+        "exception_approved": "Senior Exception Approved",
+        "rejected": "Rejected",
+    }.get(status, "Pending")
+
+
+def _canonical_blocking_flags(status: str, provider_status: str = "") -> List[str]:
+    if status in IDV_APPROVAL_ALLOW_STATUSES:
+        return []
+    if status == "failed":
+        return ["sumsub_idv_failed"]
+    if status == "unable_to_verify":
+        return ["idv_unable_to_verify"]
+    if status == "rejected":
+        return ["idv_rejected"]
+    if provider_status == "not_started":
+        return ["idv_missing"]
+    return ["idv_unresolved"]
 
 
 def _status_payload(
@@ -143,14 +193,14 @@ def _status_payload(
     blocking_flags = list(blocking_flags or [])
     warning_flags = list(warning_flags or [])
     rejection_labels = list(rejection_labels or [])
-    if verification_status in {"not_started", "pending", "rejected", "failed", "unmatched", "unavailable"}:
+    canonical_status = _canonical_idv_status(verification_status, review_answer)
+    if canonical_status not in IDV_APPROVAL_ALLOW_STATUSES:
         officer_action_required = True
     if verification_status == "not_started" and "sumsub_idv_not_started" not in warning_flags:
         warning_flags.append("sumsub_idv_not_started")
-    if verification_status == "rejected" and "sumsub_idv_rejected" not in blocking_flags:
-        blocking_flags.append("sumsub_idv_rejected")
-    if verification_status == "failed" and "sumsub_idv_failed" not in blocking_flags:
-        blocking_flags.append("sumsub_idv_failed")
+    for flag in _canonical_blocking_flags(canonical_status, verification_status):
+        if flag not in blocking_flags:
+            blocking_flags.append(flag)
     if verification_status == "unmatched" and "sumsub_idv_unmatched_webhook" not in warning_flags:
         warning_flags.append("sumsub_idv_unmatched_webhook")
     return {
@@ -166,6 +216,12 @@ def _status_payload(
         "applicant_id_present": bool(applicant_id),
         "external_user_id": external_user_id,
         "verification_status": verification_status,
+        "provider_verification_status": verification_status,
+        "idv_resolution_status": canonical_status,
+        "idv_resolution_status_label": _canonical_status_label(canonical_status),
+        "approval_ready": canonical_status in IDV_APPROVAL_ALLOW_STATUSES,
+        "approval_blocking": canonical_status not in IDV_APPROVAL_ALLOW_STATUSES,
+        "resolution_source": "provider" if evidence_backed or applicant_id else "derived",
         "review_answer": review_answer,
         "rejection_labels": rejection_labels,
         "last_provider_event_at": last_provider_event_at,
@@ -180,6 +236,76 @@ def _status_payload(
         "audit_refs": list(audit_refs or []),
         "raw_provider_payload_exposed": False,
     }
+
+
+def _fetch_resolutions(db: Any, application_id: str) -> List[Dict[str, Any]]:
+    return _fetchall_optional(
+        db,
+        "SELECT id, application_id, application_ref, person_id, person_type, person_name, "
+        "prior_provider_status, prior_review_answer, resolution_status, resolution_outcome, "
+        "reason_code, evidence_reviewed, rationale, confirmation_text, senior_approver_id, "
+        "resolved_by, resolved_by_name, resolved_by_role, ip_address, user_agent, created_at "
+        "FROM idv_resolutions WHERE application_id=? ORDER BY created_at DESC, id DESC",
+        (application_id,),
+    )
+
+
+def _resolution_matches_status(resolution: Mapping[str, Any], status: Mapping[str, Any]) -> bool:
+    r_pid = _norm(resolution.get("person_id"))
+    s_pid = _norm(status.get("person_id"))
+    if r_pid and s_pid and r_pid == s_pid:
+        return True
+    r_type = _norm(resolution.get("person_type"))
+    s_type = _norm(status.get("person_type"))
+    r_name = _norm(resolution.get("person_name"))
+    s_name = _norm(status.get("person_name"))
+    return bool(r_type and s_type and r_type == s_type and r_name and s_name and r_name == s_name)
+
+
+def _resolution_for_status(resolutions: Iterable[Mapping[str, Any]], status: Mapping[str, Any]) -> Dict[str, Any]:
+    for resolution in resolutions or []:
+        if _resolution_matches_status(resolution, status):
+            return _row_dict(resolution)
+    return {}
+
+
+def _apply_resolution(status: Dict[str, Any], resolution: Mapping[str, Any]) -> Dict[str, Any]:
+    if not resolution:
+        return dict(status)
+    resolved = dict(status)
+    canonical_status = str(resolution.get("resolution_status") or "").strip().lower()
+    if canonical_status not in CANONICAL_IDV_STATUSES:
+        canonical_status = "pending"
+    evidence = _safe_json(resolution.get("evidence_reviewed"), [])
+    if not isinstance(evidence, list):
+        evidence = []
+    warning_flags = list(resolved.get("warning_flags") or [])
+    if "manual_idv_resolution_recorded" not in warning_flags:
+        warning_flags.append("manual_idv_resolution_recorded")
+    resolved.update({
+        "idv_resolution_status": canonical_status,
+        "idv_resolution_status_label": _canonical_status_label(canonical_status),
+        "approval_ready": canonical_status in IDV_APPROVAL_ALLOW_STATUSES,
+        "approval_blocking": canonical_status not in IDV_APPROVAL_ALLOW_STATUSES,
+        "officer_action_required": canonical_status not in IDV_APPROVAL_ALLOW_STATUSES,
+        "officer_label": _canonical_status_label(canonical_status),
+        "resolution_source": "manual_resolution",
+        "blocking_flags": _canonical_blocking_flags(canonical_status, resolved.get("provider_verification_status")),
+        "warning_flags": warning_flags,
+        "manual_resolution": {
+            "id": resolution.get("id"),
+            "resolution_status": canonical_status,
+            "resolution_outcome": resolution.get("resolution_outcome"),
+            "reason_code": resolution.get("reason_code"),
+            "evidence_reviewed": evidence,
+            "resolved_by": resolution.get("resolved_by"),
+            "resolved_by_name": resolution.get("resolved_by_name"),
+            "resolved_by_role": resolution.get("resolved_by_role"),
+            "created_at": resolution.get("created_at"),
+            "senior_approver_id": resolution.get("senior_approver_id"),
+        },
+    })
+    return resolved
 
 
 def _person_from_row(row: Mapping[str, Any], person_type: str) -> Dict[str, Any]:
@@ -406,6 +532,7 @@ def build_sumsub_idv_statuses(
         "FROM sumsub_applicant_mappings WHERE application_id=?",
         (app_id,),
     )
+    resolutions = _fetch_resolutions(db, app_id)
 
     events = _fetchall_optional(
         db,
@@ -474,12 +601,22 @@ def build_sumsub_idv_statuses(
     counts: Dict[str, int] = {}
     action_required = 0
     for status in statuses:
+        resolved_status = _apply_resolution(status, _resolution_for_status(resolutions, status))
+        status.clear()
+        status.update(resolved_status)
         key = status.get("verification_status", "unavailable")
         counts[key] = counts.get(key, 0) + 1
         if status.get("officer_action_required"):
             action_required += 1
+    canonical_counts: Dict[str, int] = {}
+    approval_blocking = 0
+    for status in statuses:
+        key = status.get("idv_resolution_status", "pending")
+        canonical_counts[key] = canonical_counts.get(key, 0) + 1
+        if status.get("approval_blocking"):
+            approval_blocking += 1
 
-    return {
+    payload = {
         "provider": PROVIDER,
         "provider_label": PROVIDER_LABEL,
         "provider_scope": PROVIDER_SCOPE,
@@ -489,9 +626,69 @@ def build_sumsub_idv_statuses(
         "summary": {
             "total": len(statuses),
             "status_counts": counts,
+            "idv_resolution_status_counts": canonical_counts,
             "officer_action_required_count": action_required,
+            "approval_blocking_count": approval_blocking,
             "unmatched_webhook_count": unmatched.get("count", 0),
         },
         "unmatched_webhooks": unmatched,
         "raw_provider_payload_exposed": False,
+    }
+    payload["gate_summary"] = build_idv_gate_summary(payload)
+    return payload
+
+
+def build_idv_gate_summary(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    statuses = list(payload.get("statuses") or []) if isinstance(payload, Mapping) else []
+    blockers: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+    for idx, item in enumerate(statuses):
+        status = str(item.get("idv_resolution_status") or "pending").strip().lower()
+        if status not in CANONICAL_IDV_STATUSES:
+            status = "pending"
+        counts[status] = counts.get(status, 0) + 1
+        if status in IDV_APPROVAL_ALLOW_STATUSES:
+            continue
+        person = item.get("person_name") or "Unknown person"
+        review_answer = item.get("review_answer") or "unavailable"
+        source = item.get("resolution_source") or item.get("source_of_truth") or "derived"
+        title = "Identity verification unresolved"
+        if status == "failed":
+            title = "Identity verification failed and unresolved"
+        elif status == "unable_to_verify":
+            title = "Identity verification unable to verify"
+        elif status == "rejected":
+            title = "Identity verification rejected"
+        blockers.append({
+            "id": "idv_" + str(item.get("person_id") or idx),
+            "category": "Identity Verification",
+            "title": title,
+            "description": (
+                f"{person}: {_canonical_status_label(status)} "
+                f"(provider={item.get('provider_label') or PROVIDER_LABEL}, review_answer={review_answer}, source={source}). "
+                "Approval is blocked until IDV is verified, manually verified, or senior exception-approved."
+            ),
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "blocking": True,
+            "person_id": item.get("person_id"),
+            "person_type": item.get("person_type"),
+            "idv_resolution_status": status,
+        })
+    if not statuses:
+        return {
+            "required": False,
+            "approval_ready": True,
+            "status_counts": {},
+            "blocking_count": 0,
+            "blocking_reasons": [],
+            "blockers": [],
+        }
+    return {
+        "required": True,
+        "approval_ready": not blockers,
+        "status_counts": counts,
+        "blocking_count": len(blockers),
+        "blocking_reasons": [blocker["title"] for blocker in blockers],
+        "blockers": blockers,
     }

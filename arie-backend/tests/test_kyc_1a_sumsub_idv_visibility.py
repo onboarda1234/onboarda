@@ -59,6 +59,33 @@ def _db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE idv_resolutions (
+            id TEXT PRIMARY KEY,
+            application_id TEXT,
+            application_ref TEXT,
+            person_id TEXT,
+            person_type TEXT,
+            person_name TEXT,
+            prior_provider_status TEXT,
+            prior_review_answer TEXT,
+            resolution_status TEXT,
+            resolution_outcome TEXT,
+            reason_code TEXT,
+            evidence_reviewed TEXT,
+            rationale TEXT,
+            confirmation_text TEXT,
+            senior_approver_id TEXT,
+            resolved_by TEXT,
+            resolved_by_name TEXT,
+            resolved_by_role TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TEXT
+        )
+        """
+    )
     return conn
 
 
@@ -134,7 +161,7 @@ def test_green_webhook_returns_approved_with_evidence():
     assert item["source_of_truth"] == "webhook_processed_events"
 
 
-def test_red_webhook_returns_rejected_with_rejection_labels():
+def test_red_webhook_returns_failed_unresolved_with_rejection_labels():
     conn = _db()
     conn.execute(
         "INSERT INTO sumsub_applicant_mappings VALUES (?,?,?,?,?,?)",
@@ -157,10 +184,104 @@ def test_red_webhook_returns_rejected_with_rejection_labels():
     payload = build_sumsub_idv_statuses(conn, _application(), directors=[_director()])
     item = _status(payload)
 
-    assert item["verification_status"] == "rejected"
+    assert item["verification_status"] == "failed"
+    assert item["idv_resolution_status"] == "failed"
+    assert item["approval_ready"] is False
     assert item["review_answer"] == "RED"
     assert item["rejection_labels"] == ["FORGERY"]
-    assert "sumsub_idv_rejected" in item["blocking_flags"]
+    assert "sumsub_idv_failed" in item["blocking_flags"]
+
+
+def test_manual_verified_resolution_allows_idv_gate_without_changing_provider_status():
+    conn = _db()
+    conn.execute(
+        "INSERT INTO sumsub_applicant_mappings VALUES (?,?,?,?,?,?)",
+        ("app-1", "sumsub-red-123456", "dir-1", "Jane Director", "director", "2026-06-11T10:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO webhook_processed_events VALUES (?,?,?,?,?)",
+        ("applicantReviewed", "sumsub-red-123456", "dir-1", "RED", "2026-06-11T10:05:00Z"),
+    )
+    conn.execute(
+        """
+        INSERT INTO idv_resolutions
+        (id, application_id, application_ref, person_id, person_type, person_name,
+         prior_provider_status, prior_review_answer, resolution_status, resolution_outcome,
+         reason_code, evidence_reviewed, rationale, confirmation_text, senior_approver_id,
+         resolved_by, resolved_by_name, resolved_by_role, ip_address, user_agent, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            "res-1",
+            "app-1",
+            "APP-1",
+            "dir-1",
+            "director",
+            "Jane Director",
+            "failed",
+            "RED",
+            "manual_verified",
+            "manual_verification_completed",
+            "provider_coverage_limitation",
+            json.dumps(["passport", "certified_copy"]),
+            "Officer reviewed certified identity evidence.",
+            "confirmed",
+            "",
+            "co-1",
+            "Case Officer",
+            "co",
+            "127.0.0.1",
+            "pytest",
+            "2026-06-11T10:10:00Z",
+        ),
+    )
+
+    payload = build_sumsub_idv_statuses(conn, _application(), directors=[_director()])
+    item = _status(payload)
+
+    assert item["provider_verification_status"] == "failed"
+    assert item["idv_resolution_status"] == "manual_verified"
+    assert item["approval_ready"] is True
+    assert item["manual_resolution"]["reason_code"] == "provider_coverage_limitation"
+    assert payload["gate_summary"]["approval_ready"] is True
+
+
+def test_unable_to_verify_resolution_remains_approval_blocking():
+    conn = _db()
+    conn.execute(
+        "INSERT INTO idv_resolutions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "res-2",
+            "app-1",
+            "APP-1",
+            "dir-1",
+            "director",
+            "Jane Director",
+            "not_started",
+            "unavailable",
+            "unable_to_verify",
+            "provider_unable_to_verify",
+            "mauritius_id_not_supported",
+            json.dumps(["national_id"]),
+            "Provider cannot verify this document.",
+            "confirmed",
+            "",
+            "co-1",
+            "Case Officer",
+            "co",
+            "127.0.0.1",
+            "pytest",
+            "2026-06-11T10:10:00Z",
+        ),
+    )
+
+    payload = build_sumsub_idv_statuses(conn, _application(), directors=[_director()])
+    item = _status(payload)
+
+    assert item["idv_resolution_status"] == "unable_to_verify"
+    assert item["approval_ready"] is False
+    assert payload["gate_summary"]["approval_ready"] is False
+    assert "Identity verification unable to verify" in payload["gate_summary"]["blocking_reasons"]
 
 
 def test_legacy_prescreening_webhook_is_visible_but_marked_legacy_source():
@@ -278,6 +399,8 @@ def test_backoffice_renders_separate_sumsub_identity_verification_panel():
     assert "Sumsub Identity Verification" in html
     assert "individual_kyc_identity_verification" in html
     assert "renderSumsubIdvPanel(app) + renderPartySection(app)" in html
+    assert "Resolve IDV Exception" in html
+    assert "I confirm I have reviewed the evidence and accept responsibility for this IDV resolution." in html
     assert "Sumsub KYC Verification" not in html
 
 

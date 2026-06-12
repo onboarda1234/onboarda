@@ -554,6 +554,62 @@ class TestCaseCommandCentreRuntime:
         assert "No guidance blockers detected." in result["html"]
         assert "Final approval remains subject to backend approval gates." in result["html"]
 
+    def test_backend_gate_blockers_render_as_authoritative_primary_list(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        gateBlockers=[
+                            {
+                                "id": "idv-dir-1",
+                                "category": "Identity Verification",
+                                "title": "Identity verification unresolved",
+                                "description": "Jane Director: Pending. Approval is blocked until IDV is resolved.",
+                                "ctaLabel": "Resolve IDV",
+                                "tab": "kyc-docs",
+                                "anchorId": "sumsub-idv-panel",
+                            }
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                },
+            )
+        )
+
+        assert "Backend approval gate blockers are authoritative." in result["html"]
+        assert "Identity verification unresolved" in result["html"]
+        assert "Resolve IDV" in result["html"]
+        assert "1 blocker" in result["html"]
+        assert result["visibleBlockerCardCount"] == 1
+
+    def test_backend_gate_payload_clear_renders_backend_clear_message(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(gateBlockers=[]),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                },
+            )
+        )
+
+        assert "No backend approval blockers returned." in result["html"]
+        assert "Backend approval gate payload is clear." in result["html"]
+        assert "0 blockers" in result["html"]
+
     def test_backend_approval_gates_remain_unchanged(self):
         html = _read_backoffice()
         assert "function getApprovalReadiness(app)" in html

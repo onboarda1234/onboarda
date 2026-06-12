@@ -43,6 +43,7 @@ from screening_state import (
     build_screening_truth_summary,
     derive_screening_truth,
 )
+from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -389,6 +390,101 @@ def _audit_approval_edd_completion_satisfied(
         )
 
 
+def _row_to_dict(row: Any) -> Dict[str, Any]:
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return dict(row)
+    try:
+        return dict(row)
+    except Exception:
+        return {}
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _load_approval_idv_parties(db, app: Mapping[str, Any]) -> Tuple[List[Dict], List[Dict], List[Dict], Optional[Dict]]:
+    app_id = app.get("id")
+    directors: List[Dict] = []
+    ubos: List[Dict] = []
+    intermediaries: List[Dict] = []
+    client: Optional[Dict] = None
+    try:
+        directors = [_row_to_dict(row) for row in db.execute("SELECT * FROM directors WHERE application_id=?", (app_id,)).fetchall()]
+    except Exception:
+        directors = []
+    try:
+        ubos = [_row_to_dict(row) for row in db.execute("SELECT * FROM ubos WHERE application_id=?", (app_id,)).fetchall()]
+    except Exception:
+        ubos = []
+    try:
+        intermediaries = [_row_to_dict(row) for row in db.execute("SELECT * FROM intermediaries WHERE application_id=?", (app_id,)).fetchall()]
+    except Exception:
+        intermediaries = []
+    try:
+        client_id = app.get("client_id")
+        if client_id:
+            row = db.execute("SELECT id, email, company_name, status, created_at FROM clients WHERE id=?", (client_id,)).fetchone()
+            client = _row_to_dict(row) if row else None
+    except Exception:
+        client = None
+    return directors, ubos, intermediaries, client
+
+
+def _approval_idv_gate_summary(app: Mapping[str, Any], db) -> Dict[str, Any]:
+    existing = app.get("sumsub_idv_statuses") if isinstance(app, Mapping) else None
+    if isinstance(existing, Mapping):
+        return build_idv_gate_summary(existing)
+    directors, ubos, intermediaries, client = _load_approval_idv_parties(db, app)
+    payload = build_sumsub_idv_statuses(
+        db,
+        app,
+        directors=directors,
+        ubos=ubos,
+        intermediaries=intermediaries,
+        client=client,
+        include_unmatched=False,
+    )
+    return payload.get("gate_summary") or build_idv_gate_summary(payload)
+
+
+def _approval_gate_blocker(
+    blocker_id: str,
+    category: str,
+    title: str,
+    description: str,
+    *,
+    severity: str = "blocking",
+    blocking: bool = True,
+    source: str = "backend_approval_gate",
+    cta_label: str = "Review",
+    tab: str = "overview",
+    anchor_id: str = "",
+) -> Dict[str, Any]:
+    return {
+        "id": blocker_id,
+        "category": category,
+        "title": title,
+        "description": description,
+        "severity": severity,
+        "blocking": bool(blocking),
+        "source": source,
+        "ctaLabel": cta_label,
+        "tab": tab,
+        "anchorId": anchor_id,
+    }
+
+
 class ApprovalGateValidator:
     """
     Validates all preconditions before an application can be approved.
@@ -496,6 +592,16 @@ class ApprovalGateValidator:
                     f"result={screening_truth.get('screening_result')}, "
                     f"terminal={screening_truth.get('terminal')}. "
                     f"Reason: {reason}. Live terminal screening is required before approval."
+                )
+
+            idv_gate = _approval_idv_gate_summary(app, db)
+            if not idv_gate.get("approval_ready"):
+                reason = "; ".join(idv_gate.get("blocking_reasons") or ["identity_verification_unresolved"])
+                return (
+                    False,
+                    "Identity verification gate failed: "
+                    f"{reason}. Identity verification must be verified, manually verified, "
+                    "or senior exception-approved before final approval."
                 )
 
             # 3. Check compliance memo exists and meets quality gates
@@ -1041,6 +1147,245 @@ class ApprovalGateValidator:
         except Exception as e:
             logger.error(f"Error in dual approval validation: {e}", exc_info=True)
             return (False, f"Internal validation error: {str(e)}")
+
+
+def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
+    """Return officer-visible blockers from the backend approval gate model."""
+    blockers: List[Dict[str, Any]] = []
+    if not isinstance(app, dict):
+        return [_approval_gate_blocker(
+            "application_missing",
+            "Application",
+            "Application data unavailable",
+            "Application data is required before approval gates can be evaluated.",
+        )]
+
+    app_id = app.get("id")
+    status = str(app.get("status") or "").strip().lower()
+    pre_kyc_states = {
+        "draft",
+        "prescreening_submitted",
+        "pricing_review",
+        "pricing_accepted",
+        "pre_approval_review",
+        "pre_approved",
+        "kyc_documents",
+    }
+    if status in pre_kyc_states:
+        blockers.append(_approval_gate_blocker(
+            "case_stage",
+            "Case Stage",
+            "Application is not in compliance review",
+            f"Current status is '{status}'. Move the application into compliance review before final approval.",
+            cta_label="Review case stage",
+            tab="overview",
+            anchor_id="detail-company-name",
+        ))
+
+    risk_error = _approval_risk_integrity_error(app, "approve application")
+    if risk_error:
+        blockers.append(_approval_gate_blocker(
+            "risk_integrity",
+            "Risk",
+            "Risk is not approval-ready",
+            risk_error,
+            cta_label="Recompute risk",
+            tab="overview",
+            anchor_id="detail-risk-breakdown",
+        ))
+
+    prescreening = _json_object(app.get("prescreening_data"))
+    screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+    if not isinstance(screening_report, dict) or not screening_report:
+        blockers.append(_approval_gate_blocker(
+            "screening_missing",
+            "Screening",
+            "Screening report missing",
+            "No screening report is recorded. Screening must be run before approval.",
+            cta_label="Resolve screening",
+            tab="screening",
+            anchor_id="detail-screening-review",
+        ))
+    else:
+        try:
+            screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref", ""))
+        except Exception:
+            screening_reviews = []
+        screening_truth = build_screening_truth_summary(screening_report, prescreening, screening_reviews)
+        if screening_truth.get("approval_blocking"):
+            blockers.append(_approval_gate_blocker(
+                "screening_truth",
+                "Screening",
+                "Screening is not approval-ready",
+                "Screening truth gate failed: "
+                + "; ".join(screening_truth.get("blocking_reasons") or ["screening_not_terminal"]),
+                cta_label="Resolve screening",
+                tab="screening",
+                anchor_id="detail-screening-review",
+            ))
+
+        screening_ts = screening_report.get("screened_at") or screening_report.get("timestamp")
+        screening_input_updated_at = (
+            app.get("screening_input_updated_at")
+            or app.get("risk_inputs_updated_at")
+            or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
+            or app.get("submitted_at")
+        )
+        if not screening_ts:
+            blockers.append(_approval_gate_blocker(
+                "screening_timestamp_missing",
+                "Screening",
+                "Screening timestamp missing",
+                "Screening timestamp is missing from the screening report. A re-screen is required before approval.",
+                cta_label="Resolve screening",
+                tab="screening",
+                anchor_id="detail-screening-review",
+            ))
+        elif screening_input_updated_at:
+            try:
+                if _parse_approval_timestamp(screening_input_updated_at) > _parse_approval_timestamp(screening_ts) + timedelta(seconds=5):
+                    blockers.append(_approval_gate_blocker(
+                        "screening_stale",
+                        "Screening",
+                        "Screening is stale",
+                        "Screening was run before the latest screening-relevant application update. Re-screen before approval.",
+                        cta_label="Resolve screening",
+                        tab="screening",
+                        anchor_id="detail-screening-review",
+                    ))
+            except Exception:
+                blockers.append(_approval_gate_blocker(
+                    "screening_timestamp_parse",
+                    "Screening",
+                    "Screening freshness could not be verified",
+                    "Screening freshness cannot be verified because a timestamp could not be parsed.",
+                    cta_label="Resolve screening",
+                    tab="screening",
+                    anchor_id="detail-screening-review",
+                ))
+
+    try:
+        idv_gate = _approval_idv_gate_summary(app, db)
+        for blocker in idv_gate.get("blockers") or []:
+            mapped = dict(blocker)
+            mapped.setdefault("ctaLabel", "Resolve IDV")
+            mapped.setdefault("tab", "kyc-docs")
+            mapped.setdefault("anchorId", "sumsub-idv-panel")
+            mapped.setdefault("source", "backend_approval_gate")
+            blockers.append(mapped)
+    except Exception as exc:
+        blockers.append(_approval_gate_blocker(
+            "idv_gate_error",
+            "Identity Verification",
+            "Identity verification gate could not be evaluated",
+            f"Identity verification status lookup failed: {exc}",
+            cta_label="Resolve IDV",
+            tab="kyc-docs",
+            anchor_id="sumsub-idv-panel",
+        ))
+
+    memo_row = None
+    try:
+        memo_row = db.execute(
+            "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
+            "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at "
+            "FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()
+        memo_row = _row_to_dict(memo_row) if memo_row else None
+    except Exception:
+        memo_row = None
+    if not memo_row:
+        blockers.append(_approval_gate_blocker(
+            "memo_missing",
+            "Compliance Memo",
+            "Compliance memo missing",
+            "Compliance memo must be generated before approval.",
+            cta_label="Generate memo",
+            tab="overview",
+            anchor_id="detail-memo",
+        ))
+    else:
+        memo_review = str(memo_row.get("review_status") or "").lower()
+        memo_validation = str(memo_row.get("validation_status") or "").lower()
+        memo_supervisor = str(memo_row.get("supervisor_status") or "").upper()
+        memo_stale = _truthy_db_value(memo_row.get("is_stale"))
+        if memo_stale:
+            blockers.append(_approval_gate_blocker(
+                "memo_stale",
+                "Compliance Memo",
+                "Compliance memo is stale",
+                memo_row.get("stale_reason") or "Material facts changed after memo generation.",
+                cta_label="Open memo",
+                tab="overview",
+                anchor_id="detail-memo",
+            ))
+        if _truthy_db_value(memo_row.get("blocked")):
+            blockers.append(_approval_gate_blocker(
+                "memo_blocked",
+                "Compliance Memo",
+                "Compliance memo is blocked",
+                memo_row.get("block_reason") or "Blocking memo controls failed.",
+                cta_label="Open memo",
+                tab="overview",
+                anchor_id="detail-memo",
+            ))
+        if memo_review != "approved":
+            blockers.append(_approval_gate_blocker(
+                "memo_approval",
+                "Compliance Memo",
+                "Compliance memo is not approved",
+                f"Compliance memo review_status is '{memo_review or 'missing'}'; approved is required.",
+                cta_label="Open memo",
+                tab="overview",
+                anchor_id="detail-memo",
+            ))
+        if memo_validation not in {"pass", "pass_with_fixes"}:
+            blockers.append(_approval_gate_blocker(
+                "memo_validation",
+                "Compliance Memo",
+                "Compliance memo validation failed or is pending",
+                f"Compliance memo validation_status is '{memo_validation or 'missing'}'.",
+                cta_label="Open memo",
+                tab="overview",
+                anchor_id="memo-validation-panel",
+            ))
+        if memo_supervisor and memo_supervisor not in {"CONSISTENT", "CONSISTENT_WITH_WARNINGS"}:
+            blockers.append(_approval_gate_blocker(
+                "supervisor_inconsistent",
+                "Supervisor Review",
+                "Supervisor review is inconsistent",
+                f"Compliance memo supervisor_status is '{memo_supervisor}'.",
+                cta_label="Run supervisor",
+                tab="supervisor",
+                anchor_id="detail-tab-supervisor",
+            ))
+
+    if not blockers:
+        try:
+            can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+            if not can_approve:
+                blockers.append(_approval_gate_blocker(
+                    "approval_gate_validator",
+                    "Approval Gate",
+                    "Backend approval gate would reject approval",
+                    message,
+                    cta_label="Review blockers",
+                    tab="overview",
+                    anchor_id="detail-approval-blockers",
+                ))
+        except Exception as exc:
+            blockers.append(_approval_gate_blocker(
+                "approval_gate_error",
+                "Approval Gate",
+                "Backend approval gate could not be evaluated",
+                str(exc),
+                cta_label="Review blockers",
+                tab="overview",
+                anchor_id="detail-approval-blockers",
+            ))
+
+    return blockers
 
 
 # ============================================================================

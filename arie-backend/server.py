@@ -82,7 +82,7 @@ from security_hardening import (
     PasswordPolicy, ApplicationSchema, FileUploadValidator,
     TokenRevocationList, token_revocation_list,
     get_safe_health_response, determine_screening_mode,
-    store_screening_mode, PIIEncryptor
+    store_screening_mode, PIIEncryptor, collect_approval_gate_blockers
 )
 HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
@@ -101,7 +101,8 @@ except ImportError:
 from environment import (
     ENV, is_demo, is_production, is_staging, flags,
     enforce_startup_safety, get_environment_info,
-    get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket
+    get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket,
+    is_sumsub_aml_entitlement_proven,
 )
 from verification_state import (
     STATE_FAILED,
@@ -114,7 +115,7 @@ from verification_state import (
     verification_state_payload,
 )
 from screening_freshness_metadata import populate_screening_freshness_metadata
-from sumsub_idv_status import build_sumsub_idv_statuses
+from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
 
 # ── Sprint 2: Extracted modules ──────────────────────────
 from auth import (
@@ -5028,6 +5029,213 @@ class ApplicationIdentityVerificationsHandler(BaseHandler):
             db.close()
 
 
+_IDV_RESOLUTION_OUTCOME_TO_STATUS = {
+    "manual_verification_completed": "manual_verified",
+    "provider_unable_to_verify": "unable_to_verify",
+    "unsupported_document_or_jurisdiction": "unable_to_verify",
+    "senior_exception_approved": "exception_approved",
+    "reject_due_to_failed_idv": "rejected",
+}
+_IDV_RESOLUTION_REASONS = {
+    "mauritius_id_not_supported",
+    "passport_unreadable",
+    "name_mismatch_explained",
+    "provider_coverage_limitation",
+    "technical_provider_failure",
+    "other",
+}
+_IDV_RESOLUTION_EVIDENCE = {
+    "passport",
+    "national_id",
+    "proof_of_address",
+    "corporate_documents",
+    "certified_copy",
+    "other",
+}
+
+
+def _find_idv_status_for_resolution(idv_payload, payload):
+    statuses = (idv_payload or {}).get("statuses") or []
+    requested_person_id = str(payload.get("person_id") or "").strip()
+    requested_type = str(payload.get("person_type") or "").strip().lower()
+    requested_name = str(payload.get("person_name") or "").strip().lower()
+    for item in statuses:
+        if requested_person_id and requested_person_id == str(item.get("person_id") or "").strip():
+            return item
+        if requested_type and requested_name:
+            if requested_type == str(item.get("person_type") or "").strip().lower() and requested_name == str(item.get("person_name") or "").strip().lower():
+                return item
+    return statuses[0] if len(statuses) == 1 else None
+
+
+def _idv_resolution_role_error(app_row, user, outcome, reason):
+    role = str(user.get("role") or "").lower()
+    risk = str((app_row or {}).get("final_risk_level") or (app_row or {}).get("risk_level") or "").upper()
+    if role not in {"co", "sco", "admin"}:
+        return "Only CO, SCO, or Admin users can resolve identity verification."
+    senior_required = (
+        risk in {"HIGH", "VERY_HIGH"}
+        or outcome in {"senior_exception_approved", "reject_due_to_failed_idv"}
+        or reason == "name_mismatch_explained"
+    )
+    if senior_required and role not in {"sco", "admin"}:
+        return "SCO or Admin approval is required for this IDV resolution."
+    return ""
+
+
+class ApplicationIdentityVerificationResolutionHandler(BaseHandler):
+    """POST /api/applications/:id/kyc/identity-verifications/resolve."""
+
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        payload = self.get_json() or {}
+        outcome = str(payload.get("outcome") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        rationale = str(payload.get("rationale") or "").strip()
+        evidence_reviewed = payload.get("evidence_reviewed")
+        if isinstance(evidence_reviewed, str):
+            evidence_reviewed = [evidence_reviewed]
+        evidence_reviewed = [str(item or "").strip() for item in (evidence_reviewed or []) if str(item or "").strip()]
+        confirmation = payload.get("confirmation")
+        confirmed = bool(confirmation is True or str(confirmation or "").strip().lower() in {"true", "1", "yes", "confirmed"})
+
+        if outcome not in _IDV_RESOLUTION_OUTCOME_TO_STATUS:
+            return self.error("Valid resolution outcome is required", 400)
+        if reason not in _IDV_RESOLUTION_REASONS:
+            return self.error("Valid IDV reason is required", 400)
+        if not evidence_reviewed or any(item not in _IDV_RESOLUTION_EVIDENCE for item in evidence_reviewed):
+            return self.error("At least one valid evidence reviewed value is required", 400)
+        if len(rationale) < 12:
+            return self.error("Officer rationale is required", 400)
+        if not confirmed:
+            return self.error("Officer confirmation is required", 400)
+
+        db = get_db()
+        try:
+            app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            role_error = _idv_resolution_role_error(dict(app), user, outcome, reason)
+            if role_error:
+                return self.error(role_error, 403)
+
+            idv_payload = _build_application_sumsub_idv_payload(
+                db,
+                app,
+                include_unmatched=user.get("role") in {"admin", "sco"},
+            )
+            prior_status = _find_idv_status_for_resolution(idv_payload, payload)
+            if not prior_status:
+                return self.error("Matching identity verification subject not found", 404)
+
+            resolution_status = _IDV_RESOLUTION_OUTCOME_TO_STATUS[outcome]
+            resolution_id = uuid.uuid4().hex[:16]
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            before_state = {
+                "provider": prior_status.get("provider"),
+                "provider_label": prior_status.get("provider_label"),
+                "provider_verification_status": prior_status.get("provider_verification_status") or prior_status.get("verification_status"),
+                "idv_resolution_status": prior_status.get("idv_resolution_status"),
+                "review_answer": prior_status.get("review_answer"),
+                "person_id": prior_status.get("person_id"),
+                "person_type": prior_status.get("person_type"),
+                "person_name": prior_status.get("person_name"),
+            }
+            after_state = {
+                "id": resolution_id,
+                "resolution_status": resolution_status,
+                "resolution_outcome": outcome,
+                "reason_code": reason,
+                "evidence_reviewed": evidence_reviewed,
+                "person_id": prior_status.get("person_id"),
+                "person_type": prior_status.get("person_type"),
+                "person_name": prior_status.get("person_name"),
+                "resolved_by": user.get("sub"),
+                "resolved_by_role": user.get("role"),
+                "created_at": now,
+            }
+            db.execute(
+                """
+                INSERT INTO idv_resolutions (
+                    id, application_id, application_ref, person_id, person_type, person_name,
+                    prior_provider_status, prior_review_answer, resolution_status, resolution_outcome,
+                    reason_code, evidence_reviewed, rationale, confirmation_text, senior_approver_id,
+                    resolved_by, resolved_by_name, resolved_by_role, ip_address, user_agent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    resolution_id,
+                    app["id"],
+                    app["ref"],
+                    prior_status.get("person_id"),
+                    prior_status.get("person_type"),
+                    prior_status.get("person_name"),
+                    prior_status.get("provider_verification_status") or prior_status.get("verification_status"),
+                    prior_status.get("review_answer"),
+                    resolution_status,
+                    outcome,
+                    reason,
+                    json.dumps(evidence_reviewed, default=str),
+                    rationale,
+                    "Officer confirmed evidence review and responsibility",
+                    user.get("sub") if resolution_status == "exception_approved" else "",
+                    user.get("sub"),
+                    user.get("name"),
+                    user.get("role"),
+                    self.get_client_ip(),
+                    self.request.headers.get("User-Agent", ""),
+                    now,
+                ),
+            )
+            self.log_audit(
+                user,
+                "IDV Resolution",
+                app["ref"],
+                json.dumps({
+                    "application_id": app["id"],
+                    "application_ref": app["ref"],
+                    "subject_person_id": prior_status.get("person_id"),
+                    "subject_person_type": prior_status.get("person_type"),
+                    "prior_sumsub_status": before_state.get("provider_verification_status"),
+                    "prior_review_answer": before_state.get("review_answer"),
+                    "new_idv_resolution_status": resolution_status,
+                    "resolution_outcome": outcome,
+                    "reason_code": reason,
+                    "evidence_reviewed": evidence_reviewed,
+                    "officer_rationale": rationale,
+                    "officer_id": user.get("sub"),
+                    "officer_role": user.get("role"),
+                    "senior_approver": user.get("sub") if resolution_status == "exception_approved" else "",
+                    "created_at": now,
+                }, default=str, sort_keys=True),
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
+            db.commit()
+            refreshed = db.execute("SELECT * FROM applications WHERE id=?", (app["id"],)).fetchone()
+            refreshed_payload = _build_application_sumsub_idv_payload(
+                db,
+                refreshed,
+                include_unmatched=user.get("role") in {"admin", "sco"},
+            )
+            self.success({
+                "status": "resolved",
+                "resolution": after_state,
+                "sumsub_idv_statuses": refreshed_payload,
+                "idv_gate_summary": refreshed_payload.get("gate_summary") or build_idv_gate_summary(refreshed_payload),
+                "gate_blockers": collect_approval_gate_blockers(dict(refreshed), db),
+            })
+        finally:
+            db.close()
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -5230,6 +5438,10 @@ class ApplicationDetailHandler(BaseHandler):
         result["supervisor_requires_rerun"] = bool(result.get("memo_is_stale") and result.get("latest_memo"))
         if user["type"] != "client":
             result["officer_corrections"] = _list_application_corrections(db, result["id"])
+            idv_payload = result.get("sumsub_idv_statuses") or {}
+            result["idv_gate_summary"] = idv_payload.get("gate_summary") or build_idv_gate_summary(idv_payload)
+            result["gate_blockers"] = collect_approval_gate_blockers(result, db)
+            result["gate_blocker_count"] = len(result["gate_blockers"])
         result.setdefault("change_requests", [])
         if user["type"] == "client":
             result = _client_safe_application_detail(result)
@@ -16906,28 +17118,40 @@ def _apply_screening_queue_canonical_state(row):
     if status_key == "not_started":
         row["screening_state"] = "not_started"
         row["screening_result"] = "not_started"
+        row["screening_truth_state"] = "not_started"
+        row["screening_truth_reason"] = resolved.get("screening_queue_reason")
         row["terminal"] = False
     elif status_key == "screening_in_progress":
         row["screening_state"] = "pending_provider"
         row["screening_result"] = "pending"
+        row["screening_truth_state"] = "pending_provider"
+        row["screening_truth_reason"] = resolved.get("screening_queue_reason")
         row["terminal"] = False
     elif status_key == "failed":
         raw_state = str((resolved.get("raw_status") or {}).get("screening_state") or "").strip().lower()
         raw_key = str((resolved.get("raw_status") or {}).get("status_key") or "").strip().lower()
         row["screening_state"] = "not_configured" if raw_state == "not_configured" or raw_key == "screening_not_configured" else "failed"
         row["screening_result"] = "failed"
+        row["screening_truth_state"] = row["screening_state"]
+        row["screening_truth_reason"] = resolved.get("screening_queue_reason")
         row["terminal"] = False
     elif status_key == "clear":
         row["screening_state"] = "completed_clear"
         row["screening_result"] = "clear"
+        row["screening_truth_state"] = "completed_clear"
+        row["screening_truth_reason"] = "live_terminal_clear"
         row["terminal"] = True
     elif status_key == "cleared_by_officer":
         row["screening_state"] = "completed_match"
         row["screening_result"] = "cleared_by_officer"
+        row["screening_truth_state"] = "completed_match"
+        row["screening_truth_reason"] = resolved.get("screening_queue_reason")
         row["terminal"] = True
     elif status_key in ("review_required", "escalated", "follow_up_required"):
         row["screening_state"] = "completed_match" if hits > 0 else "pending_provider"
         row["screening_result"] = "match" if hits > 0 else status_key
+        row["screening_truth_state"] = "completed_match" if hits > 0 else "pending_provider"
+        row["screening_truth_reason"] = resolved.get("screening_queue_reason")
         row["terminal"] = bool(raw_terminal) if hits > 0 else False
     return row
 
@@ -17212,7 +17436,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 "total_hits": max(
                     int(company_facts["total_hits"] or 0),
                     int(company_media_alerts["total_hits"] or 0),
-                ) or (report or {}).get("total_hits", 0),
+                    len(company_results),
+                ),
                 "provider_evidence": _screening_provider_evidence(company_results),
                 "review_required": company_requires_review and (not company_review or company_review_fields.get("review_actionable")),
                 **company_review_fields,
@@ -18056,7 +18281,24 @@ class APIStatusHandler(BaseHandler):
         if not user:
             return
 
+        ca_status = _complyadvantage_runtime_status()
+        sumsub_aml_entitlement = is_sumsub_aml_entitlement_proven()
+        active_aml_provider = (
+            "ComplyAdvantage"
+            if ca_status.get("active")
+            else ("Entitlement-proven Sumsub" if sumsub_aml_entitlement else "Not active")
+        )
+        simulation_mode = "not_configured" if active_aml_provider == "Not active" else "disabled"
         self.success({
+            "provider_truth": {
+                "active_aml_screening_provider": active_aml_provider,
+                "identity_verification_provider": "Sumsub IDV/KYC",
+                "screening_abstraction_enabled": bool(ca_status.get("abstraction_enabled")),
+                "simulation_fallback_mode": simulation_mode,
+                "last_provider_status_check": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "sumsub_aml_entitlement_proven": sumsub_aml_entitlement,
+                "provider_labels_safe": ca_status.get("active") or active_aml_provider == "Not active" or sumsub_aml_entitlement,
+            },
             "opencorporates": {
                 "configured": bool(OPENCORPORATES_API_KEY),
                 "status": "live" if OPENCORPORATES_API_KEY else "simulated",
@@ -18070,9 +18312,13 @@ class APIStatusHandler(BaseHandler):
             "sumsub": {
                 "configured": bool(SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY),
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
+                "role": "Identity Verification Provider",
+                "provider_scope": "individual_kyc_identity_verification",
+                "aml_entitlement_proven": sumsub_aml_entitlement,
+                "aml_screening_enabled": sumsub_aml_entitlement,
                 "description": "Individual identity verification and KYC (document + selfie + liveness)"
             },
-            "complyadvantage": _complyadvantage_runtime_status(),
+            "complyadvantage": ca_status,
             "anthropic": {
                 "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
                 "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
@@ -27657,6 +27903,7 @@ def make_app():
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
         (r"/api/applications/([^/]+)/periodic-review-baseline", ApplicationPeriodicReviewBaselineHandler),
+        (r"/api/applications/([^/]+)/kyc/identity-verifications/resolve", ApplicationIdentityVerificationResolutionHandler),
         (r"/api/applications/([^/]+)/kyc/identity-verifications", ApplicationIdentityVerificationsHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/upload", ApplicationEnhancedRequirementUploadHandler),

@@ -256,6 +256,82 @@ def test_screening_queue_uses_top_level_company_results_when_subrecords_are_clea
     assert "Company adverse media match" in row["entity_context"]
 
 
+def test_entity_row_does_not_inherit_person_level_application_hits(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_entity_person_hits",
+            "ARF-ENTITY-PERSON-HITS",
+            "client_entity_person_hits",
+            "Entity Person Hits Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "screened_at": "2026-01-03T00:00:00Z",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "found": True,
+                        "provider": "complyadvantage",
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "matched": False,
+                        "results": [],
+                        "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                        "adverse_media": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                    },
+                    "director_screenings": [{
+                        "person_name": "Person Hit",
+                        "person_type": "director",
+                        "declared_pep": "No",
+                        "screening": {
+                            "matched": True,
+                            "results": [{
+                                "name": "Person Hit",
+                                "match_categories": ["sanction"],
+                                "provider_risk_identifier": "risk-person-hit-1",
+                            }],
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                        },
+                    }],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": ["ComplyAdvantage sanctions hit: Person Hit"],
+                    "total_hits": 1,
+                }
+            }),
+        ),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        ("app_entity_person_hits", "Person Hit", "Mauritius", "No"),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    rows = [r for r in payload["rows"] if r["application_ref"] == "ARF-ENTITY-PERSON-HITS"]
+    entity_row = next(r for r in rows if r["subject_type"] == "entity")
+    person_row = next(r for r in rows if r["subject_name"] == "Person Hit")
+
+    assert entity_row["total_hits"] == 0
+    assert entity_row["status_key"] == "clear"
+    assert entity_row["screening_truth_state"] == "completed_clear"
+    assert entity_row["defensible_clear"] is True
+    assert person_row["total_hits"] == 1
+    assert person_row["status_key"] == "review_required"
+    assert person_row["defensible_clear"] is False
+
+
 def test_screening_queue_surfaces_undeclared_provider_pep(db, temp_db):
     from server import _build_screening_queue_payload
 

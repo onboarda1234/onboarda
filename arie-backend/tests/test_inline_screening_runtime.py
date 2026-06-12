@@ -148,6 +148,7 @@ def _runtime_js(html, config):
                 function computeDocumentReadinessSummary() {{ return {{}}; }}
                 function getApplicationScreeningSummary(app) {{ return (app && app._screeningSummary) || {{}}; }}
                 function renderScreeningReviewPanel() {{}}
+                function getCurrentBoSessionId() {{ return 'inline-screening-test-session'; }}
                 async function loadScreeningQueue() {{}}
                 async function fetchApplicationDetail() {{ return CONFIG.currentApp || null; }}
                 function renderAuthoritativeAppDetail() {{}}
@@ -642,6 +643,7 @@ def _queue_runtime_js(html):
                 function openScreeningReviewByRow() {}
                 function openScreeningDispositionModalByRow() {}
                 function canClearScreeningDisposition() { return true; }
+                function getCurrentBoSessionId() { return 'inline-screening-test-session'; }
                 var tbody = {
                   _innerHTML: '',
                   rows: [],
@@ -1142,10 +1144,13 @@ class TestInlineScreeningRuntime:
         assert result["renderedRows"] == 1
         assert result["queueRowLabel"] == "No Match"
         assert result["calledPaths"]
-        assert result["calledPaths"][0].startswith("/screening/queue?")
-        assert "refresh=" in result["calledPaths"][0]
-        assert "limit=50" in result["calledPaths"][0]
-        assert "offset=0" in result["calledPaths"][0]
+        queue_paths = [
+            path for path in result["calledPaths"] if path.startswith("/screening/queue?")
+        ]
+        assert queue_paths
+        assert "refresh=" in queue_paths[0]
+        assert "limit=50" in queue_paths[0]
+        assert "offset=0" in queue_paths[0]
         assert "Pending" not in result["renderedHtml"]
         assert "Loading screening queue" not in result["renderedHtml"]
         assert "No Match" in result["renderedHtml"]
