@@ -42,6 +42,8 @@ def _runtime_js(html, config):
                 const CONFIG = {json.dumps(config)};
                 const elements = {{}};
                 const switchTabCalls = [];
+                const eddCalls = [];
+                const toastCalls = [];
 
                 function makeElement(id) {{
                   return {{
@@ -75,6 +77,9 @@ def _runtime_js(html, config):
                 }}
 
                 function switchDetailTab(tab) {{ switchTabCalls.push(tab); }}
+                function openEDDCaseFromApplication(caseId, applicationId, applicationRef) {{ eddCalls.push({{ type:'case', caseId, applicationId, applicationRef }}); }}
+                function openEDDQueueForApplication(applicationId, applicationRef) {{ eddCalls.push({{ type:'queue', applicationId, applicationRef }}); }}
+                function showToast(message, level) {{ toastCalls.push({{ message, level }}); }}
                 function getApplicationScreeningSummary() {{ return CONFIG.screeningSummary || {{}}; }}
                 function computeDocumentReadinessSummary() {{ return CONFIG.documentSummary || {{ missingCount:0, issueCount:0, pepIncompleteCount:0 }}; }}
                 function getEnhancedReviewSummary() {{ return CONFIG.enhancedSummary || {{}}; }}
@@ -98,14 +103,23 @@ def _runtime_js(html, config):
                 const app = CONFIG.app;
                 const blockers = getCaseCommandBlockers(app);
                 renderCaseCommandCentre(app);
+                let actionRunResult = null;
+                if (CONFIG.runActionKey) {
+                  const actionId = Object.keys(CASE_COMMAND_RENDERED_ACTIONS).find(id => CASE_COMMAND_RENDERED_ACTIONS[id].action_key === CONFIG.runActionKey);
+                  actionRunResult = actionId ? runCaseCommandAction(actionId) : false;
+                }
                 if (CONFIG.resolveTarget) {
                   activateCaseCommandTarget(CONFIG.resolveTarget.tab, CONFIG.resolveTarget.anchorId);
                 }
                 console.log(JSON.stringify({
                   blockers,
                   html: document.getElementById('detail-case-command-centre').innerHTML,
-                  visibleBlockerCardCount: (document.getElementById('detail-case-command-centre').innerHTML.match(/case-command-blocker-card/g) || []).length,
+                  actionTargets: CASE_COMMAND_RENDERED_ACTIONS,
+                  actionRunResult,
+                  visibleBlockerCardCount: (document.getElementById('detail-case-command-centre').innerHTML.match(/case-command-group-row/g) || []).length,
                   switchTabCalls,
+                  eddCalls,
+                  toastCalls,
                   targetScrollCalls: CONFIG.resolveTarget ? document.getElementById(CONFIG.resolveTarget.anchorId).scrollCalls : 0
                 }));
                 """
@@ -184,7 +198,8 @@ class TestCaseCommandCentreRuntime:
         )
         assert 'ARF-COMPACT-202 · Compact Review Ltd' in result["html"]
         assert 'case-command-centre-meta' in result["html"]
-        assert 'Stage' in result["html"]
+        assert 'Decision stage' in result["html"]
+        assert 'Activation status' in result["html"]
         assert 'Pricing Under Review' in result["html"]
         assert 'Risk' in result["html"]
         assert 'HIGH' in result["html"]
@@ -205,12 +220,14 @@ class TestCaseCommandCentreRuntime:
                         "screening_freshness": None,
                     },
                     "approvalReadiness": {"ready": False, "blockers": ["Screening has not been run."]},
+                    "runActionKey": "screening.resolve",
                 },
             )
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "screening-missing" in blocker_ids
         assert "Screening review is still required." in result["html"]
+        assert result["switchTabCalls"] == ["screening"]
 
     def test_screening_review_blocker_uses_application_screening_reviews(self):
         html = _read_backoffice()
@@ -294,6 +311,140 @@ class TestCaseCommandCentreRuntime:
         assert "memo-missing" in blocker_ids
         assert "Compliance memo has not been generated." in result["html"]
 
+    def test_memo_blockers_are_grouped_into_single_memo_package_row(self):
+        html = _read_backoffice()
+        app = _base_app(
+            latestMemo={
+                "sections": {"summary": {"content": "ok"}},
+                "validation_status": "pending",
+                "review_status": "draft",
+                "supervisor": {},
+            },
+            latestMemoMeta={"supervisor_status": "PENDING"},
+            memoIsStale=True,
+            memoStaleReason="Screening changed after memo generation.",
+        )
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": app,
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Memo package blocked"]},
+                    "runActionKey": "memo.open",
+                },
+            )
+        )
+        blocker_ids = [item["id"] for item in result["blockers"]]
+        assert {"memo-stale", "memo-approval", "supervisor-failed"}.issubset(set(blocker_ids))
+        assert result["visibleBlockerCardCount"] == 1
+        assert "Memo Package" in result["html"]
+        assert "Memo package has 3 unresolved controls" in result["html"]
+        assert "validation_status" not in result["html"]
+        assert "supervisor_status" not in result["html"]
+        assert result["switchTabCalls"] == ["overview"]
+
+    def test_backend_idv_blockers_are_grouped_and_route_to_idv_panel(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        gateBlockers=[
+                            {
+                                "id": "idv-dir-1",
+                                "category": "Identity Verification",
+                                "title": "Identity verification unresolved",
+                                "description": "Priya Declared PEP — identity verification is pending. Sumsub has not produced a final verification result yet.",
+                                "ctaLabel": "Review IDV",
+                                "tab": "kyc-docs",
+                                "anchorId": "sumsub-idv-panel",
+                                "blocker_group": "identity_verification",
+                                "action_key": "idv.review",
+                                "person_name": "Priya Declared PEP",
+                            },
+                            {
+                                "id": "idv-ubo-1",
+                                "category": "Identity Verification",
+                                "title": "Identity verification failed and unresolved",
+                                "description": "Jane UBO — identity verification is failed. Sumsub returned a failed identity verification result.",
+                                "ctaLabel": "Review IDV",
+                                "tab": "kyc-docs",
+                                "anchorId": "sumsub-idv-panel",
+                                "blocker_group": "identity_verification",
+                                "action_key": "idv.review",
+                                "person_name": "Jane UBO",
+                            },
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                    "runActionKey": "idv.review",
+                },
+            )
+        )
+        assert result["visibleBlockerCardCount"] == 1
+        assert "2 people need IDV attention" in result["html"]
+        assert "Review IDV" in result["html"]
+        assert "provider=" not in result["html"]
+        assert "review_answer=" not in result["html"]
+        assert "source=derived" not in result["html"]
+        assert result["switchTabCalls"] == ["kyc-docs"]
+
+    def test_backend_group_priority_keeps_screening_before_idv(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        gateBlockers=[
+                            {
+                                "id": "screening-stale",
+                                "category": "Screening",
+                                "title": "Screening is stale",
+                                "description": "Re-run screening before approval.",
+                                "ctaLabel": "Resolve screening",
+                                "tab": "screening",
+                                "anchorId": "detail-screening-review",
+                                "blocker_group": "screening",
+                                "action_key": "screening.resolve",
+                            },
+                            {
+                                "id": "idv-priya",
+                                "category": "Identity Verification",
+                                "title": "Identity verification unresolved",
+                                "description": "Priya — identity verification is pending. Sumsub has not produced a final verification result yet.",
+                                "ctaLabel": "Review IDV",
+                                "tab": "kyc-docs",
+                                "anchorId": "sumsub-idv-panel",
+                                "blocker_group": "identity_verification",
+                                "action_key": "idv.review",
+                                "person_name": "Priya",
+                            },
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                },
+            )
+        )
+        assert "Next: Re-run or resolve screening." in result["html"]
+        assert result["html"].index("Screening needs attention") < result["html"].index("1 person needs IDV attention")
+
     def test_enhanced_review_blocker_is_primary_and_deep_links_to_kyc(self):
         html = _read_backoffice()
         result = _run_node(
@@ -313,6 +464,7 @@ class TestCaseCommandCentreRuntime:
                         "next_action_code": "resolve_blockers",
                     },
                     "approvalReadiness": {"ready": False, "blockers": ["Enhanced review required"]},
+                    "runActionKey": "evidence.review",
                 },
             )
         )
@@ -323,8 +475,9 @@ class TestCaseCommandCentreRuntime:
         assert result["blockers"][0]["title"] == "Enhanced Evidence Requirements are still outstanding."
         assert "Resolve required onboarding evidence before approval." in result["html"]
         assert "Enhanced due diligence is still in progress." not in result["html"]
-        assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-enhanced-requirements-section")\'' in result["html"]
-        assert "Next: Resolve Enhanced Review." in result["html"]
+        assert 'data-action-key="evidence.review"' in result["html"]
+        assert "Next: Review missing documents and enhanced evidence." in result["html"]
+        assert result["switchTabCalls"] == ["kyc-docs"]
 
     def test_formal_investigation_blocker_targets_edd_owner_workflow(self):
         html = _read_backoffice()
@@ -340,6 +493,7 @@ class TestCaseCommandCentreRuntime:
                     },
                     "enhancedSummary": {},
                     "approvalReadiness": {"ready": False, "blockers": ["Formal investigation is open"]},
+                    "runActionKey": "edd.open",
                 },
             )
         )
@@ -349,7 +503,8 @@ class TestCaseCommandCentreRuntime:
         assert investigation["ctaLabel"] == "Open EDD"
         assert investigation["tab"] == "alerts"
         assert investigation["action"] == "openEDDQueueForApplication(101,\"ARF-TEST-101\")"
-        assert 'onclick=\'openEDDQueueForApplication(101,&quot;ARF-TEST-101&quot;)\'' in result["html"]
+        assert 'data-action-key="edd.open"' in result["html"]
+        assert result["eddCalls"] == [{"type": "queue", "applicationId": 101, "applicationRef": "ARF-TEST-101"}]
 
     def test_ccc1_mixed_owner_workflows_are_split_and_routed(self):
         html = _read_backoffice()
@@ -503,15 +658,17 @@ class TestCaseCommandCentreRuntime:
                     },
                     "documentSummary": {"missingCount": 2, "issueCount": 1, "pepIncompleteCount": 0},
                     "approvalReadiness": {"ready": False, "blockers": ["Document issues"]},
+                    "runActionKey": "documents.review",
                 },
             )
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "documents" in blocker_ids
         assert "Document review still needs attention." in result["html"]
-        assert 'onclick=\'activateCaseCommandTarget("kyc-docs","detail-kyc-documents-panel")\'' in result["html"]
+        assert 'data-action-key="documents.review"' in result["html"]
         assert result["visibleBlockerCardCount"] == len(result["blockers"])
-        assert "1 blocker" in result["html"]
+        assert "1 mandatory blocker" in result["html"]
+        assert result["switchTabCalls"] == ["kyc-docs"]
 
     def test_resolve_cta_helper_opens_the_requested_tab(self):
         html = _read_backoffice()
@@ -551,7 +708,7 @@ class TestCaseCommandCentreRuntime:
             )
         )
         assert result["blockers"] == []
-        assert "No guidance blockers detected." in result["html"]
+        assert "No grouped blockers detected." in result["html"]
         assert "Final approval remains subject to backend approval gates." in result["html"]
 
     def test_backend_gate_blockers_render_as_authoritative_primary_list(self):
@@ -583,11 +740,12 @@ class TestCaseCommandCentreRuntime:
             )
         )
 
-        assert "Backend approval gate blockers are authoritative." in result["html"]
+        assert "Backend approval gate blockers are authoritative" in result["html"]
         assert "Identity verification unresolved" in result["html"]
         assert "Resolve IDV" in result["html"]
-        assert "1 blocker" in result["html"]
+        assert "1 mandatory blocker" in result["html"]
         assert result["visibleBlockerCardCount"] == 1
+        assert 'data-action-key="idv.review"' in result["html"]
 
     def test_backend_gate_payload_clear_renders_backend_clear_message(self):
         html = _read_backoffice()
@@ -608,7 +766,7 @@ class TestCaseCommandCentreRuntime:
 
         assert "No backend approval blockers returned." in result["html"]
         assert "Backend approval gate payload is clear." in result["html"]
-        assert "0 blockers" in result["html"]
+        assert "0 mandatory blockers" in result["html"]
 
     def test_backend_approval_gates_remain_unchanged(self):
         html = _read_backoffice()
@@ -617,6 +775,34 @@ class TestCaseCommandCentreRuntime:
         assert "confirmBtn.disabled = true" in html
         assert "Open approval decision modal to review blockers." in html
         assert "Backend gates still perform final validation." in html
+
+    def test_case_command_action_map_and_top_actions_are_wired(self):
+        html = _read_backoffice()
+        required_actions = [
+            "screening.resolve",
+            "idv.review",
+            "documents.review",
+            "evidence.review",
+            "edd.open",
+            "memo.open",
+            "memo.validate",
+            "supervisor.run",
+            "periodic_review.open",
+            "override.open",
+            "escalate.open",
+            "reassign.open",
+        ]
+        for action in required_actions:
+            assert action in html
+        assert 'onclick="approveApplication()"' in html
+        assert 'onclick="rejectApplication()"' in html
+        assert 'onclick="requestMoreInfo()"' in html
+        assert 'onclick="openOfficerCorrectionModal()"' in html
+        assert 'onclick="openOverrideModal()"' in html
+        assert 'onclick="escalateCase()"' in html
+        assert 'onclick="reassignCase()"' in html
+        assert 'onclick="openExportPackModal()"' in html
+        assert "function runCaseCommandAction(actionId)" in html
 
     def test_ccc1_cold_cache_edd_open_loads_queue_before_error(self):
         html = _read_backoffice()

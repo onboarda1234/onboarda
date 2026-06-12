@@ -650,9 +650,20 @@ def build_idv_gate_summary(payload: Mapping[str, Any]) -> Dict[str, Any]:
         if status in IDV_APPROVAL_ALLOW_STATUSES:
             continue
         person = item.get("person_name") or "Unknown person"
-        review_answer = item.get("review_answer") or "unavailable"
-        source = item.get("resolution_source") or item.get("source_of_truth") or "derived"
+        provider_status = str(item.get("verification_status") or "").strip().lower()
         title = "Identity verification unresolved"
+        status_label = _canonical_status_label(status).lower()
+        status_sentence = f"identity verification is {status_label}"
+        provider_sentence = "Sumsub has not produced a final verification result yet."
+        if provider_status == "not_started":
+            status_sentence = "identity verification has not been started"
+            provider_sentence = "Create or link the Sumsub identity verification record before approval."
+        elif status == "failed":
+            provider_sentence = "Sumsub returned a failed identity verification result."
+        elif status == "unable_to_verify":
+            provider_sentence = "Sumsub could not verify this person from the available evidence."
+        elif status == "rejected":
+            provider_sentence = "Sumsub rejected this identity verification."
         if status == "failed":
             title = "Identity verification failed and unresolved"
         elif status == "unable_to_verify":
@@ -664,15 +675,26 @@ def build_idv_gate_summary(payload: Mapping[str, Any]) -> Dict[str, Any]:
             "category": "Identity Verification",
             "title": title,
             "description": (
-                f"{person}: {_canonical_status_label(status)} "
-                f"(provider={item.get('provider_label') or PROVIDER_LABEL}, review_answer={review_answer}, source={source}). "
+                f"{person} — {status_sentence}. {provider_sentence} "
                 "Approval is blocked until IDV is verified, manually verified, or senior exception-approved."
             ),
             "severity": "blocking",
             "source": "backend_approval_gate",
             "blocking": True,
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+                "target_view": "application_review",
+                "target_tab": "kyc-docs",
+                "target_section": "sumsub-idv-panel",
+                "scroll_anchor": "sumsub-idv-panel",
+                "action_mode": "focus_section",
+            },
             "person_id": item.get("person_id"),
             "person_type": item.get("person_type"),
+            "person_name": person,
             "idv_resolution_status": status,
         })
     if not statuses:

@@ -213,8 +213,8 @@ a { color:var(--brand); text-decoration:none; }
 .detail-collapsible-body > :last-child { margin-bottom:0; }
 .detail-collapsible-inline-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
 .detail-collapsible-section-label { font-size:11px; color:var(--text3); }
-.case-command-centre { margin:0 0 14px; border:1px solid var(--border1); border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%); box-shadow:0 10px 22px rgba(16,24,40,0.05); overflow:hidden; }
-.case-command-centre-header { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; padding:14px 16px 10px; border-bottom:1px solid var(--border1); flex-wrap:wrap; }
+.case-command-centre { margin:0 0 14px; border:1px solid var(--border1); border-radius:12px; background:#ffffff; box-shadow:0 8px 18px rgba(16,24,40,0.05); overflow:hidden; }
+.case-command-centre-header { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; padding:12px 14px 8px; border-bottom:1px solid var(--border1); flex-wrap:wrap; }
 .case-command-centre-eyebrow { font-size:11px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--brand); }
 .case-command-centre-title { font-size:16px; font-weight:800; color:var(--text1); line-height:1.25; margin-top:3px; }
 .case-command-centre-subtitle { font-size:11px; color:var(--text3); margin-top:5px; line-height:1.45; max-width:720px; }
@@ -222,27 +222,44 @@ a { color:var(--brand); text-decoration:none; }
 .case-command-centre-status.ready { background:#dcfce7; color:#166534; }
 .case-command-centre-status.requires-review { background:#eff6ff; color:#1d4ed8; }
 .case-command-centre-status.blocked { background:#fef3c7; color:#92400e; }
-.case-command-centre-meta { display:flex; flex-wrap:wrap; gap:8px; padding:10px 16px; }
-.case-command-centre-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border1); border-radius:999px; background:var(--surface); color:var(--text2); padding:6px 10px; font-size:12px; line-height:1.2; min-height:32px; }
+.case-command-centre-meta { display:flex; flex-wrap:wrap; gap:6px; padding:8px 14px; }
+.case-command-centre-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border1); border-radius:8px; background:var(--surface); color:var(--text2); padding:5px 8px; font-size:12px; line-height:1.2; min-height:28px; }
 .case-command-centre-chip-label { font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; color:var(--text3); }
 .case-command-centre-chip-value { font-weight:700; color:var(--text1); }
 .case-command-centre-chip.blockers { background:#fffaf0; border-color:#fde68a; color:#92400e; font-weight:700; }
-.case-command-centre-next { margin:0 16px 10px; border:1px solid rgba(37,99,235,0.18); border-radius:12px; background:rgba(37,99,235,0.06); padding:10px 12px; display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
+.case-command-centre-next { margin:0 14px 8px; border:1px solid rgba(37,99,235,0.18); border-radius:8px; background:rgba(37,99,235,0.06); padding:8px 10px; display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
 .case-command-centre-next .label { font-size:10px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:#1d4ed8; flex:0 0 auto; padding-top:2px; }
 .case-command-centre-next .value { font-size:13px; font-weight:700; color:var(--text1); line-height:1.4; }
-.case-command-centre-blockers { display:grid; grid-template-columns:repeat(auto-fit,minmax(235px,1fr)); gap:10px; padding:0 16px 16px; }
-.case-command-centre-empty { margin:0 16px 16px; border:1px solid #bbf7d0; border-radius:12px; background:#ecfdf3; padding:12px 14px; color:#166534; font-size:13px; line-height:1.45; }
-.case-command-blocker-card { border:1px solid var(--border1); border-radius:12px; background:var(--surface); padding:12px 14px; box-shadow:0 6px 14px rgba(15,23,42,0.04); }
-.case-command-blocker-card.blocking { border-color:#fde68a; background:#fffaf0; }
-.case-command-blocker-top { display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
-.case-command-blocker-chip { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; background:var(--surface2); color:var(--text2); font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; }
-.case-command-blocker-severity { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; font-size:10px; font-weight:800; }
-.case-command-blocker-severity.blocked { background:#fef3c7; color:#92400e; }
-.case-command-blocker-severity.review { background:#eff6ff; color:#1d4ed8; }
-.case-command-blocker-title { font-size:13px; font-weight:700; color:var(--text1); line-height:1.35; }
-.case-command-blocker-text { font-size:12px; color:var(--text2); line-height:1.45; margin-top:5px; }
-.case-command-blocker-actions { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+.case-command-centre-blockers { display:flex; flex-direction:column; gap:6px; padding:0 14px 12px; }
+.case-command-centre-empty { margin:0 14px 12px; border:1px solid #bbf7d0; border-radius:8px; background:#ecfdf3; padding:10px 12px; color:#166534; font-size:13px; line-height:1.45; }
+.case-command-group-row { border:1px solid var(--border1); border-radius:8px; background:var(--surface); overflow:hidden; }
+.case-command-group-row.blocking { border-color:#fde68a; background:#fffaf0; }
+.case-command-group-row[open] { box-shadow:0 6px 14px rgba(15,23,42,0.04); }
+.case-command-group-row summary { list-style:none; cursor:pointer; display:grid; grid-template-columns:minmax(130px,170px) minmax(0,1fr) auto auto; gap:10px; align-items:center; padding:9px 10px; }
+.case-command-group-row summary::-webkit-details-marker { display:none; }
+.case-command-group-tag { display:inline-flex; align-items:center; gap:6px; min-width:0; }
+.case-command-group-icon { width:22px; height:22px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; background:var(--surface2); font-size:12px; flex:0 0 auto; }
+.case-command-group-label { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:0.04em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-command-group-copy { min-width:0; }
+.case-command-group-title { font-size:13px; font-weight:800; color:var(--text1); line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-command-group-text { font-size:12px; color:var(--text2); line-height:1.35; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-command-group-count { display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:24px; border-radius:999px; background:var(--surface2); color:var(--text2); font-size:11px; font-weight:800; padding:0 8px; }
+.case-command-group-severity { display:inline-flex; align-items:center; padding:4px 8px; border-radius:999px; font-size:10px; font-weight:800; text-transform:uppercase; }
+.case-command-group-severity.blocked { background:#fef3c7; color:#92400e; }
+.case-command-group-severity.guidance { background:#eff6ff; color:#1d4ed8; }
+.case-command-group-actions { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
 .case-command-blocker-actions .btn { white-space:nowrap; }
+.case-command-group-details { border-top:1px solid var(--border1); padding:8px 10px 10px; background:rgba(255,255,255,0.62); }
+.case-command-detail-list { margin:0; padding:0; display:grid; gap:6px; list-style:none; }
+.case-command-detail-item { display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--text2); line-height:1.4; }
+.case-command-detail-dot { width:6px; height:6px; border-radius:999px; background:#f59e0b; flex:0 0 auto; margin-top:6px; }
+.case-command-secondary-heading { padding:2px 14px 6px; font-size:11px; font-weight:800; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; }
+@media (max-width:760px) {
+  .case-command-group-row summary { grid-template-columns:1fr; align-items:flex-start; }
+  .case-command-group-title,
+  .case-command-group-text { white-space:normal; }
+  .case-command-group-actions { justify-content:flex-start; }
+}
 
 /* ── Application Lifecycle Workspace ── */
 .lifecycle-detail-root { display:flex; flex-direction:column; gap:16px; padding-bottom:32px; }
@@ -8405,6 +8422,24 @@ function sumsubIdvRoleLabel(role) {
   return 'Unknown';
 }
 
+function sumsubIdvReviewOutcomeLabel(answer) {
+  var key = String(answer || '').trim().toUpperCase();
+  if (key === 'GREEN') return 'Verified by provider';
+  if (key === 'RED') return 'Provider rejected';
+  if (key === 'PENDING' || key === 'YELLOW' || key === 'pending') return 'Provider review pending';
+  return 'Final result unavailable';
+}
+
+function sumsubIdvSourceLabel(source) {
+  var key = String(source || '').trim().toLowerCase();
+  if (key === 'webhook_processed_events' || key === 'provider') return 'Provider webhook evidence';
+  if (key === 'sumsub_applicant_mappings') return 'Applicant record created';
+  if (key === 'idv_resolutions') return 'Manual officer resolution';
+  if (key === 'prescreening_data') return 'Application onboarding record';
+  if (key === 'derived') return 'Derived from available case records';
+  return 'Case records';
+}
+
 function renderSumsubIdvPanel(app) {
   var payload = (app && (app.sumsub_idv_statuses || app.sumsubIdvStatuses)) || {};
   var statuses = Array.isArray(payload.statuses) ? payload.statuses : [];
@@ -8451,13 +8486,13 @@ function renderSumsubIdvPanel(app) {
 	          sumsubIdvBadge(idvStatus) +
 	        '</div>' +
 	        '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:12px;">' +
-	          '<div><span style="color:var(--text3);">Review answer:</span> <strong>' + escapeHtml(item.review_answer || 'unavailable') + '</strong></div>' +
+	          '<div><span style="color:var(--text3);">Provider outcome:</span> <strong>' + escapeHtml(sumsubIdvReviewOutcomeLabel(item.review_answer)) + '</strong></div>' +
 	          '<div><span style="color:var(--text3);">IDV resolution:</span> <strong>' + escapeHtml(idvStatusLabel) + '</strong></div>' +
 	          '<div><span style="color:var(--text3);">Applicant ID:</span> <strong style="font-family:monospace;">' + escapeHtml(item.applicant_id || (item.applicant_id_present ? 'masked' : '-')) + '</strong></div>' +
 	          '<div><span style="color:var(--text3);">Approval gate:</span> ' + escapeHtml(item.approval_ready ? 'Ready' : 'Blocked') + '</div>' +
 	          '<div><span style="color:var(--text3);">Applicant created:</span> ' + escapeHtml(String(item.applicant_created_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
 	          '<div><span style="color:var(--text3);">Webhook received:</span> ' + escapeHtml(String(item.webhook_received_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
-	          '<div><span style="color:var(--text3);">Evidence source:</span> ' + escapeHtml(item.source_of_truth || 'derived') + '</div>' +
+	          '<div><span style="color:var(--text3);">Evidence basis:</span> ' + escapeHtml(sumsubIdvSourceLabel(item.source_of_truth || item.resolution_source)) + '</div>' +
 	          '<div><span style="color:var(--text3);">Evidence-backed:</span> ' + escapeHtml(item.evidence_backed ? 'Yes' : 'No') + '</div>' +
 	        '</div>';
 	      if (item.manual_resolution) {
@@ -20353,7 +20388,9 @@ function normalizeBackendGateBlocker(blocker, index) {
       tab: 'overview',
       anchorId: 'detail-approval-blockers',
       blocking: true,
-      priority: index
+      priority: index,
+      actionKey: 'approval.review',
+      actionTarget: caseCommandActionTarget('approval.review', { target_tab: 'overview', target_section: 'detail-approval-blockers', scroll_anchor: 'detail-approval-blockers' })
     };
   }
   return {
@@ -20366,8 +20403,163 @@ function normalizeBackendGateBlocker(blocker, index) {
     anchorId: blocker.anchorId || blocker.anchor_id || 'detail-approval-blockers',
     blocking: blocker.blocking !== false,
     priority: blocker.priority == null ? index : blocker.priority,
-    action: blocker.action || ''
+    action: blocker.action || '',
+    blockerGroup: blocker.blockerGroup || blocker.blocker_group || '',
+    blockerGroupLabel: blocker.blockerGroupLabel || blocker.blocker_group_label || '',
+    actionKey: blocker.actionKey || blocker.action_key || '',
+    actionLabel: blocker.actionLabel || blocker.action_label || blocker.ctaLabel || blocker.cta_label || '',
+    actionTarget: blocker.actionTarget || blocker.action_target || null,
+    affectedPeople: blocker.affectedPeople || blocker.affected_people || (blocker.person_name ? [blocker.person_name] : []),
+    count: blocker.count || 1
   };
+}
+
+var CASE_COMMAND_ACTION_TARGETS = {
+  'screening.resolve': { target_view:'application_review', target_tab:'screening', target_section:'detail-screening-review', scroll_anchor:'detail-screening-review', action_mode:'focus_section' },
+  'idv.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'sumsub-idv-panel', scroll_anchor:'sumsub-idv-panel', action_mode:'focus_section' },
+  'documents.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-kyc-documents-panel', scroll_anchor:'detail-kyc-documents-panel', action_mode:'focus_section' },
+  'evidence.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-enhanced-requirements-section', scroll_anchor:'detail-enhanced-requirements-section', action_mode:'focus_section' },
+  'edd.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'open_edd_context' },
+  'memo.open': { target_view:'application_review', target_tab:'overview', target_section:'detail-memo', scroll_anchor:'detail-memo', action_mode:'focus_section' },
+  'memo.validate': { target_view:'application_review', target_tab:'overview', target_section:'memo-validation-panel', scroll_anchor:'memo-validation-panel', action_mode:'focus_section' },
+  'supervisor.run': { target_view:'application_review', target_tab:'supervisor', target_section:'detail-tab-supervisor', scroll_anchor:'detail-tab-supervisor', action_mode:'focus_section' },
+  'periodic_review.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'focus_section' },
+  'override.open': { target_view:'application_review', target_tab:'overview', target_section:'btn-override', scroll_anchor:'btn-override', action_mode:'open_override' },
+  'escalate.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'open_escalation' },
+  'reassign.open': { target_view:'application_review', target_tab:'overview', target_section:'btn-reassign', scroll_anchor:'btn-reassign', action_mode:'open_reassign' },
+  'approval.review': { target_view:'application_review', target_tab:'overview', target_section:'detail-approval-blockers', scroll_anchor:'detail-approval-blockers', action_mode:'focus_section' },
+  'alerts.review': { target_view:'application_review', target_tab:'alerts', target_section:'detail-tab-alerts', scroll_anchor:'detail-tab-alerts', action_mode:'focus_section' },
+  'lifecycle.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'focus_section' }
+};
+
+var CASE_COMMAND_RENDERED_ACTIONS = {};
+
+function caseCommandActionTarget(actionKey, overrides) {
+  var base = Object.assign({}, CASE_COMMAND_ACTION_TARGETS[actionKey] || CASE_COMMAND_ACTION_TARGETS['approval.review']);
+  overrides = overrides || {};
+  Object.keys(overrides).forEach(function(key) {
+    if (overrides[key] !== undefined && overrides[key] !== null && overrides[key] !== '') base[key] = overrides[key];
+  });
+  return base;
+}
+
+function caseCommandRegisterAction(target) {
+  var id = 'case-command-action-' + String(Object.keys(CASE_COMMAND_RENDERED_ACTIONS).length);
+  CASE_COMMAND_RENDERED_ACTIONS[id] = target || caseCommandActionTarget('approval.review');
+  return id;
+}
+
+function runCaseCommandAction(actionId) {
+  var target = typeof actionId === 'string' ? CASE_COMMAND_RENDERED_ACTIONS[actionId] : actionId;
+  target = target || caseCommandActionTarget('approval.review');
+  if (target.disabled) {
+    if (typeof showToast === 'function') showToast(target.disabled_reason || 'This action is not available yet.', 'warn');
+    return false;
+  }
+  if (target.action_mode === 'open_edd_case' && typeof openEDDCaseFromApplication === 'function') {
+    openEDDCaseFromApplication(target.edd_case_id, target.target_application_id, target.filter_application_ref);
+    return true;
+  }
+  if (target.action_mode === 'open_edd_queue' && typeof openEDDQueueForApplication === 'function') {
+    openEDDQueueForApplication(target.target_application_id, target.filter_application_ref);
+    return true;
+  }
+  if (target.action_mode === 'open_override' && typeof openOverrideModal === 'function') {
+    openOverrideModal();
+    return true;
+  }
+  if (target.action_mode === 'open_escalation' && typeof escalateCase === 'function') {
+    escalateCase();
+    return true;
+  }
+  if (target.action_mode === 'open_reassign' && typeof reassignCase === 'function') {
+    reassignCase();
+    return true;
+  }
+  activateCaseCommandTarget(target.target_tab, target.scroll_anchor || target.target_section);
+  return true;
+}
+
+function caseCommandSanitizeText(text) {
+  var value = String(text || '').replace(/\s+/g, ' ').trim();
+  value = value.replace(/\s*\((?:[^)]*provider=[^)]*|[^)]*review_answer=[^)]*|[^)]*source=derived[^)]*)\)\.?/gi, '');
+  value = value.replace(/Compliance memo validation_status is 'pending'\.?/gi, 'Memo validation has not been completed.');
+  value = value.replace(/Compliance memo validation_status is '([^']+)'\.?/gi, function(_, status) {
+    return 'Memo validation needs attention: ' + String(status).replace(/_/g, ' ') + '.';
+  });
+  value = value.replace(/Compliance memo supervisor_status is 'PENDING'\.?/gi, 'Supervisor review has not been completed.');
+  value = value.replace(/Compliance memo supervisor_status is '([^']+)'\.?/gi, function(_, status) {
+    return 'Supervisor review needs attention: ' + String(status).replace(/_/g, ' ') + '.';
+  });
+  value = value.replace(/review_status is '[^']+'; approved is required\.?/gi, 'Memo approval has not been completed.');
+  value = value.replace(/provider=Sumsub Identity Verification/gi, 'Sumsub identity verification');
+  value = value.replace(/review_answer=unavailable/gi, 'final result unavailable');
+  value = value.replace(/source=derived/gi, 'derived status');
+  return value;
+}
+
+function caseCommandGroupKey(blocker) {
+  if (blocker && blocker.blockerGroup) return blocker.blockerGroup;
+  var actionKey = String((blocker && blocker.actionKey) || '').toLowerCase();
+  var text = [
+    blocker && blocker.id,
+    blocker && blocker.category,
+    blocker && blocker.title,
+    blocker && blocker.description
+  ].join(' ').toLowerCase();
+  if (actionKey.indexOf('screening.') === 0) return 'screening';
+  if (actionKey.indexOf('idv.') === 0) return 'identity_verification';
+  if (actionKey.indexOf('documents.') === 0 || actionKey.indexOf('evidence.') === 0) return 'documents_evidence';
+  if (actionKey.indexOf('edd.') === 0) return 'edd_investigation';
+  if (actionKey.indexOf('memo.') === 0 || actionKey.indexOf('supervisor.') === 0) return 'memo_package';
+  if (actionKey.indexOf('periodic_review.') === 0) return 'periodic_review';
+  if (text.indexOf('screening') >= 0) return 'screening';
+  if (text.indexOf('identity verification') >= 0 || text.indexOf('idv') >= 0) return 'identity_verification';
+  if (text.indexOf('enhanced') >= 0 || text.indexOf('document') >= 0 || text.indexOf('pep declaration') >= 0) return 'documents_evidence';
+  if (text.indexOf('edd') >= 0 || text.indexOf('investigation') >= 0) return 'edd_investigation';
+  if (text.indexOf('memo') >= 0 || text.indexOf('supervisor') >= 0) return 'memo_package';
+  if (text.indexOf('periodic review') >= 0) return 'periodic_review';
+  if (text.indexOf('monitoring alert') >= 0) return 'secondary_guidance';
+  return 'case_readiness';
+}
+
+function caseCommandGroupConfig(key) {
+  var configs = {
+    screening: { label:'Screening', icon:'S', priority:10, actionKey:'screening.resolve', actionLabel:'Resolve screening' },
+    identity_verification: { label:'Identity Verification', icon:'ID', priority:20, actionKey:'idv.review', actionLabel:'Review IDV' },
+    documents_evidence: { label:'Documents & Evidence', icon:'D', priority:30, actionKey:'documents.review', actionLabel:'Review documents' },
+    edd_investigation: { label:'EDD / Investigation', icon:'E', priority:40, actionKey:'edd.open', actionLabel:'Open EDD' },
+    memo_package: { label:'Memo Package', icon:'M', priority:50, actionKey:'memo.open', actionLabel:'Open memo' },
+    periodic_review: { label:'Periodic Review', icon:'P', priority:85, actionKey:'periodic_review.open', actionLabel:'Open review' },
+    secondary_guidance: { label:'Secondary Guidance', icon:'G', priority:90, actionKey:'alerts.review', actionLabel:'View alerts' },
+    case_readiness: { label:'Case Readiness', icon:'C', priority:70, actionKey:'approval.review', actionLabel:'Review blockers' }
+  };
+  return configs[key] || configs.case_readiness;
+}
+
+function caseCommandNormalizeActionTarget(blocker, groupKey, app) {
+  var config = caseCommandGroupConfig(groupKey);
+  var actionKey = blocker.actionKey || config.actionKey;
+  var target = Object.assign({}, blocker.actionTarget || caseCommandActionTarget(actionKey));
+  target.action_key = actionKey;
+  target.target_application_id = target.target_application_id || (app && app.id) || '';
+  target.filter_application_ref = target.filter_application_ref || (app && app.ref) || '';
+  if (!target.target_tab && blocker.tab) target.target_tab = blocker.tab;
+  if (!target.target_section && blocker.anchorId) target.target_section = blocker.anchorId;
+  if (!target.scroll_anchor && blocker.anchorId) target.scroll_anchor = blocker.anchorId;
+  if (blocker.action && groupKey === 'edd_investigation') {
+    if (String(blocker.action).indexOf('openEDDCaseFromApplication') === 0) {
+      var match = String(blocker.action).match(/openEDDCaseFromApplication\(([^,]+),/);
+      target.action_mode = 'open_edd_case';
+      if (match) {
+        try { target.edd_case_id = JSON.parse(match[1]); }
+        catch (err) { target.edd_case_id = match[1].replace(/^['"]|['"]$/g, ''); }
+      }
+    } else if (String(blocker.action).indexOf('openEDDQueueForApplication') === 0) {
+      target.action_mode = 'open_edd_queue';
+    }
+  }
+  return target;
 }
 
 function getCaseCommandBlockers(app) {
@@ -20406,7 +20598,7 @@ function getCaseCommandBlockers(app) {
   var openAlertCount = caseCommandOpenMonitoringAlertCount(app);
   var auditFailureMessage = caseCommandAuditFailureMessage();
 
-  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking, priority, action) {
+  var addBlocker = function(id, category, title, description, ctaLabel, tab, anchorId, blocking, priority, action, actionKey, actionTarget) {
     blockers.push({
       id: id,
       category: category,
@@ -20417,7 +20609,10 @@ function getCaseCommandBlockers(app) {
       anchorId: anchorId,
       blocking: blocking !== false,
       priority: priority == null ? 50 : priority,
-      action: action || ''
+      action: action || '',
+      actionKey: actionKey || '',
+      actionLabel: ctaLabel,
+      actionTarget: actionTarget || null
     });
   };
 
@@ -20459,7 +20654,9 @@ function getCaseCommandBlockers(app) {
       'screening',
       'detail-screening-review',
       true,
-      20
+      20,
+      '',
+      'screening.resolve'
     );
   } else if (!screening.screening_run_recorded) {
     addBlocker(
@@ -20471,7 +20668,9 @@ function getCaseCommandBlockers(app) {
       'screening',
       'detail-screening-review',
       true,
-      20
+      20,
+      '',
+      'screening.resolve'
     );
   } else if (screeningTruth && !screeningTruth.approval_ready) {
     var screeningState = screeningTruth.canonical_state ? String(screeningTruth.canonical_state).replace(/_/g, ' ') : 'pending review';
@@ -20484,7 +20683,9 @@ function getCaseCommandBlockers(app) {
       'screening',
       'detail-screening-review',
       true,
-      20
+      20,
+      '',
+      'screening.resolve'
     );
   } else if (screening.screening_freshness && screening.screening_freshness.status === 'expired') {
     addBlocker(
@@ -20496,7 +20697,9 @@ function getCaseCommandBlockers(app) {
       'screening',
       'detail-screening-review',
       true,
-      20
+      20,
+      '',
+      'screening.resolve'
     );
   }
 
@@ -20514,7 +20717,9 @@ function getCaseCommandBlockers(app) {
       'kyc-docs',
       'detail-kyc-documents-panel',
       true,
-      30
+      30,
+      '',
+      'documents.review'
     );
   }
 
@@ -20536,7 +20741,9 @@ function getCaseCommandBlockers(app) {
       'kyc-docs',
       'detail-enhanced-requirements-section',
       true,
-      10
+      10,
+      '',
+      'evidence.review'
     );
   }
 
@@ -20552,7 +20759,8 @@ function getCaseCommandBlockers(app) {
       eddItem ? null : 'detail-tab-alerts',
       true,
       40,
-      caseCommandEDDAction(app, eddItem)
+      caseCommandEDDAction(app, eddItem),
+      'edd.open'
     );
   }
 
@@ -20566,7 +20774,9 @@ function getCaseCommandBlockers(app) {
       'overview',
       'detail-memo',
       true,
-      50
+      50,
+      '',
+      'memo.open'
     );
   } else {
     if (app.memoIsStale || app.memoRequiresRegeneration) {
@@ -20579,7 +20789,9 @@ function getCaseCommandBlockers(app) {
         'overview',
         'detail-memo',
         true,
-        50
+        50,
+        '',
+        'memo.open'
       );
     } else if (memoValidation === 'pending') {
       addBlocker(
@@ -20591,7 +20803,9 @@ function getCaseCommandBlockers(app) {
         'overview',
         'memo-validation-panel',
         true,
-        50
+        50,
+        '',
+        'memo.validate'
       );
     } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
       addBlocker(
@@ -20603,7 +20817,9 @@ function getCaseCommandBlockers(app) {
         'overview',
         'memo-validation-panel',
         true,
-        50
+        50,
+        '',
+        'memo.validate'
       );
     }
 
@@ -20617,7 +20833,9 @@ function getCaseCommandBlockers(app) {
         'overview',
         'detail-memo',
         true,
-        50
+        50,
+        '',
+        'memo.open'
       );
     }
 
@@ -20631,7 +20849,9 @@ function getCaseCommandBlockers(app) {
         'supervisor',
         'detail-tab-supervisor',
         true,
-        55
+        55,
+        '',
+        'supervisor.run'
       );
     } else if (!supervisorVerdict) {
       addBlocker(
@@ -20643,7 +20863,9 @@ function getCaseCommandBlockers(app) {
         'supervisor',
         'detail-tab-supervisor',
         true,
-        55
+        55,
+        '',
+        'supervisor.run'
       );
     } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
       addBlocker(
@@ -20655,7 +20877,9 @@ function getCaseCommandBlockers(app) {
         'supervisor',
         'detail-tab-supervisor',
         true,
-        55
+        55,
+        '',
+        'supervisor.run'
       );
     }
   }
@@ -20670,7 +20894,9 @@ function getCaseCommandBlockers(app) {
       'alerts',
       'detail-tab-alerts',
       false,
-      90
+      90,
+      '',
+      'alerts.review'
     );
   }
 
@@ -20685,7 +20911,9 @@ function getCaseCommandBlockers(app) {
       'lifecycle',
       'detail-tab-lifecycle',
       false,
-      85
+      85,
+      '',
+      'periodic_review.open'
     );
   }
 
@@ -20703,7 +20931,9 @@ function getCaseCommandBlockers(app) {
       'lifecycle',
       'detail-tab-lifecycle',
       false,
-      90
+      90,
+      '',
+      'lifecycle.open'
     );
   }
 
@@ -20717,7 +20947,9 @@ function getCaseCommandBlockers(app) {
       'activity',
       'detail-activity',
       false,
-      95
+      95,
+      '',
+      'lifecycle.open'
     );
   }
 
@@ -20739,19 +20971,134 @@ function renderCaseCommandCentre(app) {
   var hasBackendPayload = hasAuthoritativeGateBlockerPayload(app);
   var authoritativeBlockers = getAuthoritativeGateBlockers(app).map(normalizeBackendGateBlocker);
   var guidanceBlockers = getCaseCommandBlockers(app);
-  var blockers = hasBackendPayload ? authoritativeBlockers : guidanceBlockers;
-  var readinessLabel = hasBackendPayload ? (blockers.length ? 'Blocked' : 'Ready') : (approvalReadiness.ready ? (blockers.length ? 'Requires Review' : 'Ready') : 'Blocked');
-  var readinessClass = hasBackendPayload ? (blockers.length ? 'blocked' : 'ready') : (approvalReadiness.ready ? (blockers.length ? 'requires-review' : 'ready') : 'blocked');
+  var rawBlockers = hasBackendPayload ? authoritativeBlockers : guidanceBlockers;
+  var blockingBlockers = rawBlockers.filter(function(blocker) { return blocker && blocker.blocking !== false; });
+  var advisoryBlockers = rawBlockers.filter(function(blocker) { return blocker && blocker.blocking === false; });
+  var approvalReadinessBlocked = !hasBackendPayload && approvalReadiness && approvalReadiness.ready === false;
+  var readinessLabel = (blockingBlockers.length || approvalReadinessBlocked) ? 'Blocked' : (advisoryBlockers.length ? 'Needs Review' : 'Ready');
+  var readinessClass = blockingBlockers.length ? 'blocked' : (advisoryBlockers.length ? 'requires-review' : 'ready');
   var riskLabel = app.finalRiskLevel || app.rawRiskLevel || app.risk || 'Unknown';
-  var nextBestAction = blockers.length
-    ? ('Next: ' + blockers[0].ctaLabel + '.')
-    : (hasBackendPayload ? 'No backend approval blockers returned.' : 'No guidance blockers detected. Final approval remains subject to backend approval gates.');
+
+  CASE_COMMAND_RENDERED_ACTIONS = {};
+
+  function buildGroups(items, guidanceOnly) {
+    var groups = {};
+    items.forEach(function(blocker) {
+      if (!blocker) return;
+      var key = caseCommandGroupKey(blocker);
+      var config = caseCommandGroupConfig(key);
+      if (!groups[key]) {
+        groups[key] = {
+          key: key,
+          label: blocker.blockerGroupLabel || config.label,
+          icon: config.icon,
+          priority: blocker.priority == null ? config.priority : Math.min(config.priority, blocker.priority),
+          actionKey: blocker.actionKey || config.actionKey,
+          actionLabel: blocker.actionLabel || blocker.ctaLabel || config.actionLabel,
+          actionTarget: caseCommandNormalizeActionTarget(blocker, key, app),
+          blocking: !guidanceOnly && blocker.blocking !== false,
+          blockers: [],
+          affectedPeople: []
+        };
+      }
+      var group = groups[key];
+      group.priority = Math.min(group.priority, blocker.priority == null ? group.priority : blocker.priority);
+      if (!group.actionKey || group.actionKey === 'approval.review') group.actionKey = blocker.actionKey || config.actionKey;
+      if (!group.actionLabel || group.actionLabel === 'Review blockers') group.actionLabel = blocker.actionLabel || blocker.ctaLabel || config.actionLabel;
+      group.actionTarget = group.actionTarget || caseCommandNormalizeActionTarget(blocker, key, app);
+      group.blocking = group.blocking || (!guidanceOnly && blocker.blocking !== false);
+      group.blockers.push(blocker);
+      (blocker.affectedPeople || []).forEach(function(person) {
+        if (person && group.affectedPeople.indexOf(person) < 0) group.affectedPeople.push(person);
+      });
+    });
+    return Object.keys(groups).map(function(key) { return groups[key]; }).sort(function(a, b) {
+      var ap = a.priority == null ? 50 : a.priority;
+      var bp = b.priority == null ? 50 : b.priority;
+      return ap - bp;
+    });
+  }
+
+  function groupTitle(group) {
+    var count = group.blockers.length;
+    if (group.key === 'screening') return count > 1 ? String(count) + ' screening controls need attention' : 'Screening needs attention';
+    if (group.key === 'identity_verification') {
+      var peopleCount = group.affectedPeople.length || count;
+      return peopleCount === 1 ? '1 person needs IDV attention' : String(peopleCount) + ' people need IDV attention';
+    }
+    if (group.key === 'documents_evidence') return count > 1 ? String(count) + ' document or evidence controls need attention' : 'Documents or evidence need attention';
+    if (group.key === 'edd_investigation') return 'EDD / Investigation is open';
+    if (group.key === 'memo_package') return count > 1 ? 'Memo package has ' + String(count) + ' unresolved controls' : 'Memo package needs attention';
+    if (group.key === 'periodic_review') return 'Periodic review is active';
+    return group.blockers[0] ? caseCommandSanitizeText(group.blockers[0].title) : group.label + ' needs attention';
+  }
+
+  function groupSummary(group) {
+    if (group.key === 'screening') {
+      return 'Resolve screening before reviewing downstream evidence or memo work.';
+    }
+    if (group.key === 'identity_verification') {
+      return 'Review Sumsub individual identity verification results for this application.';
+    }
+    if (group.key === 'documents_evidence') {
+      return 'Review missing documents, document warnings, PEP declarations, and enhanced evidence in one place.';
+    }
+    if (group.key === 'edd_investigation') {
+      return 'Open the current application investigation context before final activation.';
+    }
+    if (group.key === 'memo_package') {
+      return 'Generate, validate, approve, and complete supervisor review from the memo workflow.';
+    }
+    if (group.key === 'periodic_review') {
+      return 'Advisory workflow only unless it blocks this current approval path.';
+    }
+    return group.blockers[0] ? caseCommandSanitizeText(group.blockers[0].description) : 'Review this item for the current application.';
+  }
+
+  function nextBestAction(groups) {
+    if (!groups.length) return hasBackendPayload ? 'No backend approval blockers returned.' : 'No grouped blockers detected. Final approval remains subject to backend approval gates.';
+    var first = groups[0];
+    if (first.key === 'screening') return 'Next: Re-run or resolve screening.';
+    if (first.key === 'identity_verification') {
+      var people = first.affectedPeople.length || first.blockers.length;
+      return people === 1 ? 'Next: Resolve identity verification for 1 person.' : 'Next: Resolve identity verification for ' + String(people) + ' people.';
+    }
+    if (first.key === 'documents_evidence') return 'Next: Review missing documents and enhanced evidence.';
+    if (first.key === 'edd_investigation') return 'Next: Open the EDD / Investigation case.';
+    if (first.key === 'memo_package') return 'Next: Regenerate, validate, and approve the memo package.';
+    return 'Next: ' + first.actionLabel + '.';
+  }
+
+  function renderGroup(group, index) {
+    var openAttr = index === 0 && group.blocking ? ' open' : '';
+    var actionId = caseCommandRegisterAction(group.actionTarget || caseCommandActionTarget(group.actionKey));
+    var details = group.blockers.map(function(blocker) {
+      return '<li class="case-command-detail-item"><span class="case-command-detail-dot"></span><span><strong>' +
+        escapeHtml(caseCommandSanitizeText(blocker.title)) + ':</strong> ' +
+        escapeHtml(caseCommandSanitizeText(blocker.description)) + '</span></li>';
+    }).join('');
+    return '<details class="case-command-group-row ' + (group.blocking ? 'blocking' : 'guidance') + '"' + openAttr + ' data-action-key="' + escapeHtml(group.actionKey || '') + '">' +
+      '<summary>' +
+        '<div class="case-command-group-tag"><span class="case-command-group-icon">' + escapeHtml(group.icon) + '</span><span class="case-command-group-label">' + escapeHtml(group.label) + '</span></div>' +
+        '<div class="case-command-group-copy"><div class="case-command-group-title">' + escapeHtml(groupTitle(group)) + '</div><div class="case-command-group-text">' + escapeHtml(groupSummary(group)) + '</div></div>' +
+        '<span class="case-command-group-count">' + escapeHtml(String(group.blockers.length)) + '</span>' +
+        '<div class="case-command-group-actions"><span class="case-command-group-severity ' + (group.blocking ? 'blocked' : 'guidance') + '">' + escapeHtml(group.blocking ? 'Mandatory' : 'Guidance') + '</span><button class="btn btn-outline btn-sm" onclick="event.preventDefault(); event.stopPropagation(); runCaseCommandAction(\'' + actionId + '\')" data-action-key="' + escapeHtml(group.actionKey || '') + '">' + escapeHtml(group.actionLabel) + '</button></div>' +
+      '</summary>' +
+      '<div class="case-command-group-details"><ul class="case-command-detail-list">' + details + '</ul></div>' +
+    '</details>';
+  }
+
+  var mandatoryGroups = buildGroups(blockingBlockers, false);
+  var guidanceGroups = buildGroups(advisoryBlockers, true);
+  var allVisibleGroups = mandatoryGroups.concat(guidanceGroups);
+  var nextBestAction = nextBestAction(mandatoryGroups.length ? mandatoryGroups : guidanceGroups);
   var subtitle = hasBackendPayload
-    ? 'Backend approval gate blockers are authoritative. Guidance signals are secondary.'
-    : 'Guidance only - backend approval gates remain authoritative.';
+    ? 'Backend approval gate blockers are authoritative; advisory signals stay separate.'
+    : 'Display guidance is grouped by workflow; backend approval gates remain authoritative.';
 
   var metaChips = [
-    ['Stage', app.status || '—'],
+    ['Decision stage', app.status || '—'],
+    ['Activation status', readinessLabel === 'Blocked' ? ('Blocked — ' + String(blockingBlockers.length) + ' unresolved controls') : readinessLabel],
     ['Risk', riskLabel],
     ['Officer', app.assigned || 'Unassigned']
   ];
@@ -20762,22 +21109,10 @@ function renderCaseCommandCentre(app) {
       '<span class="case-command-centre-chip-value">' + escapeHtml(metric[1]) + '</span>' +
     '</span>';
   }).join('') +
-  '<span class="case-command-centre-chip blockers">' + escapeHtml(blockers.length === 1 ? '1 blocker' : (String(blockers.length) + ' blockers')) + '</span>';
+  '<span class="case-command-centre-chip blockers">' + escapeHtml(blockingBlockers.length === 1 ? '1 mandatory blocker' : (String(blockingBlockers.length) + ' mandatory blockers')) + '</span>';
 
-  var blockersHtml = blockers.map(function(blocker) {
-    var blockerAction = blocker.action || ('activateCaseCommandTarget(' + JSON.stringify(blocker.tab) + ',' + JSON.stringify(blocker.anchorId) + ')');
-    var blockerActionAttr = blocker.action ? escapeHtml(blockerAction) : blockerAction;
-    return '<div class="case-command-blocker-card ' + (blocker.blocking ? 'blocking' : '') + '">' +
-      '<div class="case-command-blocker-top">' +
-        '<span class="case-command-blocker-chip">' + escapeHtml(blocker.category) + '</span>' +
-      '</div>' +
-      '<div class="case-command-blocker-title">' + escapeHtml(blocker.title) + '</div>' +
-      '<div class="case-command-blocker-text">' + escapeHtml(blocker.description) + '</div>' +
-      '<div class="case-command-blocker-actions">' +
-        '<button class="btn btn-outline btn-sm" onclick=\'' + blockerActionAttr + '\'>' + escapeHtml(blocker.ctaLabel) + '</button>' +
-      '</div>' +
-    '</div>';
-  }).join('');
+  var mandatoryHtml = mandatoryGroups.map(renderGroup).join('');
+  var guidanceHtml = guidanceGroups.map(function(group, index) { return renderGroup(group, mandatoryGroups.length + index); }).join('');
 
   container.innerHTML =
     '<div class="case-command-centre">' +
@@ -20793,18 +21128,10 @@ function renderCaseCommandCentre(app) {
         metaHtml +
       '</div>' +
       '<div class="case-command-centre-next"><span class="label">Next best action</span><div class="value">' + escapeHtml(nextBestAction) + '</div></div>' +
-	      (blockers.length
-	        ? '<div class="case-command-centre-blockers">' + blockersHtml + '</div>'
-	        : '<div class="case-command-centre-empty"><strong>' + escapeHtml(hasBackendPayload ? 'No backend approval blockers returned.' : 'No guidance blockers detected.') + '</strong> ' + escapeHtml(hasBackendPayload ? 'Backend approval gate payload is clear.' : 'Final approval remains subject to backend approval gates.') + '</div>') +
-	      (hasBackendPayload && guidanceBlockers.length
-	        ? '<div style="padding:0 16px 16px;"><div style="font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Secondary guidance</div><div class="case-command-centre-blockers" style="padding:0;">' + guidanceBlockers.map(function(blocker) {
-	            return '<div class="case-command-blocker-card">' +
-	              '<div class="case-command-blocker-top"><span class="case-command-blocker-chip">' + escapeHtml(blocker.category) + '</span></div>' +
-	              '<div class="case-command-blocker-title">' + escapeHtml(blocker.title) + '</div>' +
-	              '<div class="case-command-blocker-text">' + escapeHtml(blocker.description) + '</div>' +
-	            '</div>';
-	          }).join('') + '</div></div>'
-	        : '') +
+	      (allVisibleGroups.length
+	        ? '<div class="case-command-centre-blockers">' + mandatoryHtml + '</div>' +
+            (guidanceGroups.length ? '<div class="case-command-secondary-heading">Secondary guidance</div><div class="case-command-centre-blockers">' + guidanceHtml + '</div>' : '')
+	        : '<div class="case-command-centre-empty"><strong>' + escapeHtml(hasBackendPayload ? 'No backend approval blockers returned.' : 'No grouped blockers detected.') + '</strong> ' + escapeHtml(hasBackendPayload ? 'Backend approval gate payload is clear.' : 'Final approval remains subject to backend approval gates.') + '</div>') +
 	    '</div>';
 }
 
