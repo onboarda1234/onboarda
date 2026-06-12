@@ -20419,7 +20419,7 @@ var CASE_COMMAND_ACTION_TARGETS = {
   'idv.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'sumsub-idv-panel', scroll_anchor:'sumsub-idv-panel', action_mode:'focus_section' },
   'documents.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-kyc-documents-panel', scroll_anchor:'detail-kyc-documents-panel', action_mode:'focus_section' },
   'evidence.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-enhanced-requirements-section', scroll_anchor:'detail-enhanced-requirements-section', action_mode:'focus_section' },
-  'edd.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'open_edd_context' },
+  'edd.open': { target_view:'edd', target_section:'view-edd', scroll_anchor:'view-edd', action_mode:'open_edd_queue' },
   'memo.open': { target_view:'application_review', target_tab:'overview', target_section:'detail-memo', scroll_anchor:'detail-memo', action_mode:'focus_section' },
   'memo.validate': { target_view:'application_review', target_tab:'overview', target_section:'memo-validation-panel', scroll_anchor:'memo-validation-panel', action_mode:'focus_section' },
   'supervisor.run': { target_view:'application_review', target_tab:'supervisor', target_section:'detail-tab-supervisor', scroll_anchor:'detail-tab-supervisor', action_mode:'focus_section' },
@@ -20460,7 +20460,7 @@ function runCaseCommandAction(actionId) {
     openEDDCaseFromApplication(target.edd_case_id, target.target_application_id, target.filter_application_ref);
     return true;
   }
-  if (target.action_mode === 'open_edd_queue' && typeof openEDDQueueForApplication === 'function') {
+  if ((target.action_mode === 'open_edd_queue' || target.action_mode === 'open_edd_context') && typeof openEDDQueueForApplication === 'function') {
     openEDDQueueForApplication(target.target_application_id, target.filter_application_ref);
     return true;
   }
