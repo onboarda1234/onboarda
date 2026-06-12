@@ -41,7 +41,8 @@
 | **Logs** | AWS CloudWatch (`/ecs/regmind-staging`) |
 | **Health endpoints** | `GET /api/liveness` (public ALB/ECS liveness), `GET /api/health` (safe public health), `GET /api/readiness` (authenticated deep readiness) |
 | **AI engine** | Claude API via `anthropic` SDK. Fail-closed in staging/production. |
-| **KYC/AML** | Sumsub API (live credentials). Level name requires admin verification. |
+| **KYC / IDV** | Sumsub API for individual identity verification. Level name requires admin verification. |
+| **Screening / monitoring** | ComplyAdvantage for sanctions, PEP/RCA, adverse-media, customer/company screening, and ongoing monitoring. |
 | **PII encryption** | Fernet AES-128-CBC. Key pinned in Secrets Manager. |
 | **Rate limiting** | In-memory (per-container). Resets on restart. |
 | **Token revocation** | DB-backed revocation list with in-memory cache. Password resets revoke user sessions. |
@@ -232,7 +233,7 @@ Run these after every Phase hardening deployment before declaring the environmen
 4. **Evidence pack:** includes application notes, documents, RMI, memos, decision records, EDD cases, EDD findings/status/policy, and build metadata.
 5. **UNKNOWN risk:** dashboard and reports include an explicit `UNKNOWN`/`NOT RATED` bucket; missing risk scores render as null/em dash, never `0` or default `50`.
 6. **EDD lifecycle:** findings and SLA are required before senior review; closure requires SCO/admin and a different actor; `EDD Closure (dual-control)` audit rows target the ARF.
-7. **Screening truthfulness:** `/api/screening/status` lists ComplyAdvantage screening, Sumsub individual identity verification, OpenCorporates enrichment, and IP geolocation without advertising deprecated or unused screening providers.
+7. **Screening truthfulness:** `/api/screening/status` lists ComplyAdvantage screening, identity-verification provider scope, OpenCorporates enrichment, and IP geolocation without advertising deprecated or unused providers.
 8. **Diagnostics exposure:** unauthenticated `/metrics` and `/api/readiness` return `401`; `/api/liveness` is public and hardened; random 404 paths return `Server: RegMind` plus hardened headers.
 9. **Admin resets:** client/officer password-reset endpoints require confirmation token, enforce password policy, write audit rows, and revoke existing JWT sessions.
 10. **Operational queues:** `/api/edd/cases` hides fixture/smoke rows by default; only admin/SCO with `include_fixtures=1` or `show_fixtures=true` can include them.

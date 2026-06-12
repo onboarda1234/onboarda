@@ -73,6 +73,18 @@ def test_no_removed_provider_references_in_product_surfaces():
     assert _scan_for(variants) == []
 
 
+def test_backoffice_html_has_no_removed_provider_runtime_variants():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text(encoding="utf-8").lower()
+    variants = [
+        "open" + "sanctions",
+        "open" + "sanction",
+        "open " + "sanctions",
+        "open-" + "sanctions",
+        "open_" + "sanctions",
+    ]
+    assert [variant for variant in variants if variant in html] == []
+
+
 def test_sumsub_labels_are_identity_verification_only():
     prohibited = [
         "sumsub " + "aml",
@@ -111,7 +123,8 @@ def test_provider_status_panel_uses_backend_runtime_truth():
     assert "screening-provider-status-panel" in html
     assert "Active AML Screening Provider" in html
     assert "Identity Verification Provider" in html
-    assert "AML Entitlement (Sumsub)" in html
+    assert "IDV Status (Sumsub)" in html
+    assert "AML Entitlement (Sumsub)" not in html
     assert "Screening Abstraction" in html
     assert "loadScreeningProviderStatus" in html
     assert "Configured screening provider" not in html

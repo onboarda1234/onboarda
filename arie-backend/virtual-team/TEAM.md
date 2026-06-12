@@ -42,6 +42,8 @@ Invoke them by asking Claude to act in that role, e.g.:
   - Portal: `/arie-portal.html` (~7200 lines, client-facing SPA)
   - Backoffice: `/arie-backoffice.html` (~3700 lines, compliance officer SPA)
   - Server: `/arie-backend/server.py` (~4500 lines, Tornado REST API)
-- **External services:** Sumsub (KYC/AML), Claude API (AI agents), OpenCorporates (company registry)
+- **Identity verification service:** Sumsub (individual KYC/IDV)
+- **Screening and monitoring service:** ComplyAdvantage (sanctions/PEP/RCA/adverse media/customer and company monitoring)
+- **Other external services:** Claude API (AI agents), OpenCorporates (company registry)
 - **AI Agents:** 10 agents (4 active in pilot: Identity, FinCrime Screening, UBO Mapping, Compliance Memo)
 - **Target market:** Mauritius-based financial services, expanding to ADGM/DIFC

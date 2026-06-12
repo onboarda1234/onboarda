@@ -8426,7 +8426,7 @@ function renderSumsubIdvPanel(app) {
         '</div>' +
       '</summary>' +
       '<div class="prescreen-collapsible-body">' +
-        '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Sumsub is used for individual identity verification only. AML, PEP, sanctions, adverse-media and company screening are handled separately under screening/monitoring.</div>';
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Identity verification provider: Sumsub. Financial-crime checks are handled separately.</div>';
   if (!statuses.length) {
     html += '<div style="font-size:12px;color:var(--text3);padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No persisted individuals are available for identity verification display.</div>';
 	  } else {
@@ -10459,11 +10459,12 @@ function renderScreeningProviderStatusPanel() {
   var rows = [
     ['Active AML Screening Provider', providerTruthValue(status, 'active_aml_screening_provider', caActive ? 'ComplyAdvantage' : 'Not active')],
     ['Identity Verification Provider', providerTruthValue(status, 'identity_verification_provider', 'Sumsub IDV/KYC')],
-    ['AML Entitlement (Sumsub)', truth.sumsub_aml_entitlement_proven ? 'Proven' : 'Not proven'],
+    ['IDV Status (Sumsub)', sumsub.status || (sumsub.configured ? 'live' : 'not configured')],
     ['Screening Abstraction', truth.screening_abstraction_enabled ? 'Enabled' : 'Disabled'],
     ['Simulation / Fallback Mode', providerTruthValue(status, 'simulation_fallback_mode', 'unknown')],
     ['Last provider status check', providerTruthValue(status, 'last_provider_status_check', '-')]
   ];
+  var idvScope = sumsub.provider_scope || 'individual_kyc_identity_verification';
   panel.innerHTML =
     '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">Provider Status</div>' +
@@ -10478,7 +10479,7 @@ function renderScreeningProviderStatusPanel() {
         '</div>';
       }).join('') +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Sumsub status is identity verification only (' + escapeHtml(sumsub.provider_scope || 'individual_kyc_identity_verification') + '). ComplyAdvantage is AML / PEP / sanctions only when backend active=true.</div>';
+    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Identity verification provider scope: ' + escapeHtml(idvScope) + '. AML / PEP / sanctions provider: ComplyAdvantage when backend active=true.</div>';
 }
 
 async function loadScreeningProviderStatus(options) {
@@ -26574,7 +26575,6 @@ async function checkAPIStatus() {
 	      var truthRows = [
 	        ['Active AML Screening Provider', status.provider_truth.active_aml_screening_provider || 'Not active'],
 	        ['Identity Verification Provider', status.provider_truth.identity_verification_provider || 'Sumsub IDV/KYC'],
-	        ['AML Entitlement (Sumsub)', status.provider_truth.sumsub_aml_entitlement_proven ? 'Proven' : 'Not proven'],
 	        ['Screening Abstraction', status.provider_truth.screening_abstraction_enabled ? 'Enabled' : 'Disabled'],
 	        ['Simulation / Fallback Mode', status.provider_truth.simulation_fallback_mode || 'unknown']
 	      ];

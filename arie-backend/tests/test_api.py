@@ -244,7 +244,11 @@ class TestAuthenticatedAccess:
         assert ("open" + "sanctions") not in serialized
         assert ("open_" + "sanctions") not in serialized
         assert ("sumsub " + "aml") not in serialized
+        assert "entitlement-proven sumsub" not in serialized
+        assert "sumsub_aml_entitlement_proven" not in serialized
+        assert "aml_screening_enabled" not in body["sumsub"]
         assert "complyadvantage" in body
+        assert body["provider_truth"]["active_aml_screening_provider"] in {"ComplyAdvantage", "Not active"}
         assert body["sumsub"]["description"] == "Individual identity verification and KYC (document + selfie + liveness)"
 
     def test_admin_health_does_not_expose_unused_provider(self, api_server):
@@ -265,6 +269,30 @@ class TestAuthenticatedAccess:
         integrations = payload.get("integrations", {})
         assert "sumsub_identity_verification" in integrations
         assert "complyadvantage" in integrations
+
+    def test_runtime_config_resource_status_payloads_do_not_expose_removed_provider(self, api_server):
+        """Protected runtime config/resource/status payloads must not leak unused provider labels."""
+        from auth import create_token
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+        paths = [
+            "/api/screening/status",
+            "/api/health",
+            "/api/resources",
+            "/api/config/system-settings",
+            "/api/config/ai-agents",
+        ]
+        for path in paths:
+            resp = http_requests.get(f"{api_server}{path}", headers=headers, timeout=5)
+            assert resp.status_code == 200, f"{path}: {resp.status_code} {resp.text[:200]}"
+            serialized = json.dumps(resp.json()).lower()
+            assert ("open" + "sanctions") not in serialized
+            assert ("open " + "sanctions") not in serialized
+            assert ("open-" + "sanctions") not in serialized
+            assert ("open_" + "sanctions") not in serialized
+            assert "entitlement-proven sumsub" not in serialized
+            assert ("sumsub " + "aml") not in serialized
 
     def test_applications_endpoint_returns_true_total_with_pagination(self, api_server):
         """Application list pagination must not redefine total as returned-row count."""

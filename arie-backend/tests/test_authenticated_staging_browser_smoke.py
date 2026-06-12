@@ -86,6 +86,9 @@ def test_authenticated_staging_browser_smoke_records_browser_evidence():
     assert "screenshots" in text
     assert "report.json" in text
     assert "screenshot(page" in text
+    assert "providerLabelFindings" in text
+    assert "scanRemovedProviderLabels" in text
+    assert "noRemovedProviderLabels" in text
 
 
 def test_authenticated_staging_browser_smoke_classifies_known_role_denials_as_non_blocking():
