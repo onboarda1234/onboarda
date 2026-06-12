@@ -114,7 +114,15 @@ const report = {
   badResponses: [],
   knownRoleDeniedResponses: [],
   unexpectedBadResponses: [],
+  providerLabelFindings: [],
 };
+
+const removedProviderPatterns = [
+  "open" + "\\s*sanctions",
+  "open" + "[-_]?sanctions",
+  "open" + "\\s*sanction",
+  "open" + "[-_]?sanction",
+];
 
 function ensureOutDir() {
   fs.mkdirSync(outDir, { recursive: true });
@@ -146,6 +154,60 @@ async function screenshot(page, name) {
   const file = path.join(outDir, `${name}.png`);
   await page.screenshot({ path: file, fullPage: true });
   report.screenshots.push(file);
+}
+
+async function scanRemovedProviderLabels(page, surface) {
+  const findings = await page.evaluate(({ patterns, surfaceName }) => {
+    const regexes = patterns.map((pattern) => new RegExp(pattern, "i"));
+    const visible = (el) => {
+      if (!el || !el.innerText) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const selectorFor = (el) => {
+      if (!el) return "";
+      if (el.id) return `#${el.id}`;
+      const parts = [];
+      let node = el;
+      while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+        let part = node.tagName.toLowerCase();
+        if (node.classList && node.classList.length) {
+          part += "." + Array.from(node.classList).slice(0, 3).join(".");
+        }
+        parts.unshift(part);
+        node = node.parentElement;
+      }
+      return parts.join(" > ");
+    };
+    const matches = [];
+    for (const el of Array.from(document.querySelectorAll("body *"))) {
+      if (!visible(el)) continue;
+      const ownText = el.innerText.trim().replace(/\s+/g, " ");
+      if (!ownText) continue;
+      if (regexes.some((regex) => regex.test(ownText))) {
+        matches.push({ surface: surfaceName, source: "visible_dom", selector: selectorFor(el), text: ownText.slice(0, 240) });
+      }
+    }
+    for (const storageName of ["localStorage", "sessionStorage"]) {
+      const storage = window[storageName];
+      for (let i = 0; i < storage.length; i += 1) {
+        const key = storage.key(i);
+        const value = storage.getItem(key) || "";
+        if (regexes.some((regex) => regex.test(`${key} ${value}`))) {
+          matches.push({ surface: surfaceName, source: storageName, selector: key, text: value.slice(0, 240) });
+        }
+      }
+    }
+    return matches;
+  }, { patterns: removedProviderPatterns, surfaceName: surface });
+  report.providerLabelFindings.push(...findings);
+}
+
+async function captureSurface(page, name, surface) {
+  await scanRemovedProviderLabels(page, surface);
+  await screenshot(page, name);
 }
 
 async function visible(page, selector) {
@@ -400,12 +462,12 @@ async function main() {
     report.checks.shellNavigationInteractive = true;
     await page.waitForSelector("#applications-body tr", { timeout: 30000 });
     report.checks.applicationsPageLoads = await visible(page, "#view-applications.active");
-    await screenshot(page, "applications");
+    await captureSurface(page, "applications", "Applications");
 
     await openApplicationDetail(page);
     report.checks.applicationDetailLoads = await visible(page, "#view-app-detail.active");
     report.checks.lifecycleTabLoads = await visible(page, "#detail-tab-lifecycle");
-    await screenshot(page, "application-detail-lifecycle");
+    await captureSurface(page, "application-detail-lifecycle", "Application Detail - Lifecycle");
 
     const tabChecks = [
       ["kyc-docs", "kycDocumentsTabLoads"],
@@ -416,36 +478,36 @@ async function main() {
     for (const [tab, checkName] of tabChecks) {
       await clickDetailTab(page, tab);
       report.checks[checkName] = await visible(page, `#detail-tab-${tab}`);
-      await screenshot(page, `application-detail-${tab}`);
+      await captureSurface(page, `application-detail-${tab}`, `Application Detail - ${tab}`);
     }
 
     await clickNav(page, "cases");
     report.checks.caseManagementLoads = await visible(page, "#view-cases.active");
-    await screenshot(page, "case-management");
+    await captureSurface(page, "case-management", "Case Management");
 
     await clickNav(page, "monitoring");
     report.checks.ongoingMonitoringLoads = await visible(page, "#view-monitoring.active");
     report.checks.monitoringAlertsLoad = await visible(page, "#monitoring-alerts-tab");
-    await screenshot(page, "ongoing-monitoring-alerts");
+    await captureSurface(page, "ongoing-monitoring-alerts", "Monitoring Alerts");
     await page.locator('#view-monitoring .tab:has-text("Monitoring Agents")').click();
     await page.waitForFunction(() => document.getElementById("monitoring-agents-tab")?.style.display !== "none", {
       timeout: 30000,
     });
     report.checks.monitoringAgentsLoad = await visible(page, "#monitoring-agents-tab");
-    await screenshot(page, "ongoing-monitoring-agents");
+    await captureSurface(page, "ongoing-monitoring-agents", "Monitoring Agents");
 
     await clickNav(page, "lifecycle");
     await page.waitForSelector("#lifecycle-body tr", { timeout: 30000 });
     report.checks.lifecycleQueueLoads = await visible(page, "#view-lifecycle.active");
-    await screenshot(page, "lifecycle-queue");
+    await captureSurface(page, "lifecycle-queue", "Lifecycle Queue");
 
     await clickNav(page, "edd");
     report.checks.eddWorkflowLoads = await visible(page, "#view-edd.active");
-    await screenshot(page, "edd");
+    await captureSurface(page, "edd", "EDD");
 
     await clickNav(page, "change-mgmt");
     report.checks.changeManagementLoads = await visible(page, "#view-change-mgmt.active");
-    await screenshot(page, "change-management");
+    await captureSurface(page, "change-management", "Change Management");
 
     report.checks.noTokenInjection = report.tokenInjectionUsed === false;
     report.checks.noAuthBypass = report.authBypassUsed === false;
@@ -456,6 +518,7 @@ async function main() {
     report.checks.noApi500Responses = report.badResponses.filter((entry) => entry.status >= 500).length === 0;
     report.checks.noUnexpectedBadApiResponses = report.unexpectedBadResponses.length === 0;
     report.checks.noFailedRequests = report.failedRequests.length === 0;
+    report.checks.noRemovedProviderLabels = report.providerLabelFindings.length === 0;
 
     report.observations.knownOfficerRoleDeniedResponses = report.knownRoleDeniedResponses.length;
   } finally {

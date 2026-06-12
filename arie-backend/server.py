@@ -102,7 +102,6 @@ from environment import (
     ENV, is_demo, is_production, is_staging, flags,
     enforce_startup_safety, get_environment_info,
     get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket,
-    is_sumsub_aml_entitlement_proven,
 )
 from verification_state import (
     STATE_FAILED,
@@ -18282,12 +18281,7 @@ class APIStatusHandler(BaseHandler):
             return
 
         ca_status = _complyadvantage_runtime_status()
-        sumsub_aml_entitlement = is_sumsub_aml_entitlement_proven()
-        active_aml_provider = (
-            "ComplyAdvantage"
-            if ca_status.get("active")
-            else ("Entitlement-proven Sumsub" if sumsub_aml_entitlement else "Not active")
-        )
+        active_aml_provider = "ComplyAdvantage" if ca_status.get("active") else "Not active"
         simulation_mode = "not_configured" if active_aml_provider == "Not active" else "disabled"
         self.success({
             "provider_truth": {
@@ -18296,8 +18290,8 @@ class APIStatusHandler(BaseHandler):
                 "screening_abstraction_enabled": bool(ca_status.get("abstraction_enabled")),
                 "simulation_fallback_mode": simulation_mode,
                 "last_provider_status_check": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "sumsub_aml_entitlement_proven": sumsub_aml_entitlement,
-                "provider_labels_safe": ca_status.get("active") or active_aml_provider == "Not active" or sumsub_aml_entitlement,
+                "sumsub_provider_scope": "individual_kyc_identity_verification",
+                "provider_labels_safe": True,
             },
             "opencorporates": {
                 "configured": bool(OPENCORPORATES_API_KEY),
@@ -18314,8 +18308,6 @@ class APIStatusHandler(BaseHandler):
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
                 "role": "Identity Verification Provider",
                 "provider_scope": "individual_kyc_identity_verification",
-                "aml_entitlement_proven": sumsub_aml_entitlement,
-                "aml_screening_enabled": sumsub_aml_entitlement,
                 "description": "Individual identity verification and KYC (document + selfie + liveness)"
             },
             "complyadvantage": ca_status,

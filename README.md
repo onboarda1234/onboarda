@@ -18,7 +18,8 @@ The platform ships as two branded surfaces:
 | Backend | Python 3.11 / [Tornado](https://www.tornadoweb.org/) |
 | Database | PostgreSQL (production) · SQLite (local dev) |
 | AI | [Anthropic Claude](https://www.anthropic.com/) (risk-based Sonnet/Opus routing for memo generation) |
-| KYC Provider | [Sumsub](https://sumsub.com/) (identity verification, AML/PEP screening) |
+| KYC Provider | [Sumsub](https://sumsub.com/) (individual identity verification) |
+| Screening Provider | ComplyAdvantage (sanctions, PEP/RCA, adverse media, customer/company screening, ongoing monitoring) |
 | Document Storage | AWS S3 |
 | PDF Generation | [WeasyPrint](https://weasyprint.org/) |
 | Frontend | Vanilla JS — single-file HTML (no build step) |
@@ -117,12 +118,14 @@ Applicant submits via Portal
 **Monitoring Agents (6–10):**
 
 6. **Periodic Review Preparation** — Officer-triggered review scheduling, state machine, and data collection (automatic scheduler not yet implemented)
-7. **Adverse Media & PEP Monitoring** — PEP screening and adverse-media signal parsing from Sumsub results (external adverse-media API call not yet implemented)
+7. **Adverse Media & PEP Monitoring** — PEP screening and adverse-media signal parsing from ComplyAdvantage results (external adverse-media API call not yet implemented)
 8. **Behaviour & Risk Drift** — Transaction pattern analysis and risk drift detection
 9. **Regulatory Impact** — Regulatory change assessment for existing clients
 10. **Ongoing Compliance Review** — Continuous compliance posture evaluation
 
-> **Note**: Monitoring agents 6–10 are scaffolded with full state machines, endpoints, and audit trails. Automatic scheduling (agent 6) and real-time external adverse-media calls (agent 7) are not yet implemented. The active screening provider is Sumsub; ComplyAdvantage is a registered alternative provider behind a disabled feature flag (`ENABLE_SCREENING_ABSTRACTION=false` by default).
+> **Note**: Monitoring agents 6–10 are scaffolded with full state machines, endpoints, and audit trails. Automatic scheduling (agent 6) and real-time external adverse-media calls (agent 7) are not yet implemented.
+> Individual identity verification uses Sumsub.
+> Screening and monitoring use ComplyAdvantage.
 
 ---
 
