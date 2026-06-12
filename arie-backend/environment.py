@@ -450,6 +450,19 @@ def get_sumsub_aml_level_name() -> str:
     """
     return os.environ.get("SUMSUB_AML_LEVEL_NAME", "aml-screening")
 
+def is_sumsub_aml_entitlement_proven() -> bool:
+    """Return whether AML/KYB entitlement for Sumsub has been explicitly proven.
+
+    Sumsub IDV/KYC credentials alone are not treated as AML, PEP, sanctions, or
+    KYB entitlement.  The proof flag is intentionally separate from level-name
+    configuration so a legacy default cannot make officer-facing screening
+    labels look reliance-grade.
+    """
+    value = os.environ.get("SUMSUB_AML_ENTITLEMENT_PROVEN")
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on", "proven"}
+
 def get_sumsub_company_level_name() -> str:
     """Company/KYB level.  Empty string means 'not configured'."""
     return os.environ.get("SUMSUB_COMPANY_LEVEL_NAME", "")

@@ -95,3 +95,23 @@ def test_complyadvantage_is_not_labelled_identity_verification():
         "ca " + "identity verification",
     ]
     assert _scan_for(prohibited) == []
+
+
+def test_screening_queue_filter_is_result_source_not_runtime_provider_selector():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text()
+    assert "Result Source Filter" in html
+    assert "Provider/source" not in html
+    assert "ComplyAdvantage screening source" in html
+    assert "Sumsub IDV/KYC source" in html
+    assert "OpenCorporates registry source" in html
+
+
+def test_provider_status_panel_uses_backend_runtime_truth():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text()
+    assert "screening-provider-status-panel" in html
+    assert "Active AML Screening Provider" in html
+    assert "Identity Verification Provider" in html
+    assert "AML Entitlement (Sumsub)" in html
+    assert "Screening Abstraction" in html
+    assert "loadScreeningProviderStatus" in html
+    assert "Configured screening provider" not in html

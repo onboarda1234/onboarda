@@ -1411,8 +1411,12 @@ def _queue_state_integrity_flags(row: dict, *, hits_exist: bool, non_terminal: b
 
     if raw_claims_clear and hits_exist and not officer_cleared:
         add("unreviewed_hits_claimed_clear")
+    if raw_claims_clear and _truthy_review_flag(row.get("review_required")) and not officer_cleared:
+        add("review_required_claimed_clear")
     if _truthy_review_flag(row.get("defensible_clear")) and hits_exist and not officer_cleared:
         add("unreviewed_hits_claimed_defensible_clear")
+    if _truthy_review_flag(row.get("defensible_clear")) and _truthy_review_flag(row.get("review_required")) and not officer_cleared:
+        add("review_required_claimed_defensible_clear")
     if raw_claims_clear and non_terminal:
         add("non_terminal_claimed_clear")
     if _truthy_review_flag(row.get("defensible_clear")) and non_terminal:
@@ -1644,6 +1648,15 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
             row=row,
         )
 
+    raw_status = _queue_status_token(row, "status_key")
+    if raw_status in {"review_required", "declared_pep_review"} or _queue_status_token(row, "pep_declared_status") == "declared":
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED,
+            reason="Provider returned hits requiring officer review." if hits_exist else "Explicit review state requires officer review.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
     conflict = _queue_conflict_detected(row, hits_exist=hits_exist, non_terminal=non_terminal)
     if disposition_status == QUEUE_STATUS_CLEARED_BY_OFFICER and (non_terminal or not terminal):
         return _queue_resolution(
@@ -1670,7 +1683,6 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
             row=row,
         )
 
-    raw_status = _queue_status_token(row, "status_key")
     if disposition_status == QUEUE_STATUS_CLEARED_BY_OFFICER:
         return _queue_resolution(
             disposition_status,
@@ -1679,10 +1691,14 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
             defensible_clear=True,
             row=row,
         )
-    if raw_status in {"review_required", "declared_pep_review"} or _queue_status_token(row, "pep_declared_status") == "declared":
+    if (
+        _truthy_review_flag(row.get("review_required"))
+        and not _truthy_review_flag(row.get("review_resolved"))
+        and not non_terminal
+    ):
         return _queue_resolution(
             QUEUE_STATUS_REVIEW_REQUIRED,
-            reason="Provider returned hits requiring officer review." if hits_exist else "Explicit review state requires officer review.",
+            reason="Explicit review_required flag requires officer review." if not hits_exist else "Provider returned hits requiring officer review.",
             requires_review=True,
             defensible_clear=False,
             row=row,

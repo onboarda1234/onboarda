@@ -14,6 +14,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ["ENVIRONMENT"] = "testing"
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
+# Most legacy AML adapter tests for Sumsub exercise the old mechanics.  Sprint
+# 1 keeps runtime defaulting to IDV-only unless entitlement is explicitly
+# proven, so the test harness opts in while dedicated entitlement tests opt out.
+os.environ.setdefault("SUMSUB_AML_ENTITLEMENT_PROVEN", "true")
 
 _OFFICER_ROLES = {"admin", "sco", "co", "analyst"}
 

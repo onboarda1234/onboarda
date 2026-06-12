@@ -39,6 +39,7 @@ from environment import (
     get_sumsub_level_name, get_sumsub_individual_level_name,
     get_sumsub_company_level_name, get_sumsub_aml_level_name,
     get_opencorporates_api_key, get_ip_geolocation_api_key,
+    is_sumsub_aml_entitlement_proven,
 )
 
 logger = logging.getLogger("arie")
@@ -56,6 +57,20 @@ SUMSUB_LEVEL_NAME = get_sumsub_level_name()
 SUMSUB_INDIVIDUAL_LEVEL_NAME = get_sumsub_individual_level_name()
 SUMSUB_COMPANY_LEVEL_NAME = get_sumsub_company_level_name()
 SUMSUB_AML_LEVEL_NAME = get_sumsub_aml_level_name()
+
+
+def _sumsub_aml_entitlement_not_configured(name, entity_type):
+    return {
+        "matched": False,
+        "results": [],
+        "source": "sumsub_idv_only",
+        "provider": "sumsub",
+        "api_status": "not_configured",
+        "reason": "AML/PEP/sanctions entitlement for Sumsub is not proven; Sumsub is configured for IDV/KYC only.",
+        "provider_scope": "identity_verification_only",
+        "entity_type": entity_type,
+        "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+    }
 
 def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
@@ -77,6 +92,14 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
     Returns: { matched: bool, results: [...], source: str, api_status: str }
     """
+    if not is_sumsub_aml_entitlement_proven():
+        logger.warning(
+            "AML/KYB entitlement for Sumsub not proven — returning not_configured for %s '%s'",
+            entity_type,
+            name,
+        )
+        return _sumsub_aml_entitlement_not_configured(name, entity_type)
+
     # ── Company screening: short-circuit when no company/KYB level exists ──
     company_level = get_sumsub_company_level_name() if entity_type == "Company" else ""
     if entity_type == "Company" and not company_level:

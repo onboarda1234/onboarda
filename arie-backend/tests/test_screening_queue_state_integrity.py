@@ -336,6 +336,38 @@ def test_canonical_queue_payload_suppresses_top_level_legacy_clear_signal():
     _assert_no_impossible_queue_states([row])
 
 
+def test_canonical_queue_payload_overwrites_stale_clear_truth_on_unresolved_hits():
+    from server import _apply_screening_queue_canonical_state
+
+    row = _apply_screening_queue_canonical_state({
+        "application_ref": "ARF-SQ1-CA-CONTRADICTION",
+        "subject_name": "CA Contradiction Person",
+        "subject_type": "director",
+        "status_key": "screened_no_match",
+        "status_label": "No Match",
+        "screening_state": "completed_clear",
+        "screening_truth_state": "completed_clear",
+        "screening_truth_reason": "live_terminal_clear",
+        "provider_mode": "live_provider",
+        "provider_availability": "available",
+        "screening_result": "match",
+        "terminal": True,
+        "defensible_clear": True,
+        "review_required": True,
+        "total_hits": 2,
+    })
+
+    assert row["status_key"] == "review_required"
+    assert row["status_label"] == "Review Required"
+    assert row["screening_state"] == "completed_match"
+    assert row["screening_truth_state"] == "completed_match"
+    assert row["screening_result"] == "match"
+    assert row["defensible_clear"] is False
+    assert row["review_required"] is True
+    assert "review_required_claimed_clear" in row["state_integrity_flags"]
+    _assert_no_impossible_queue_states([row])
+
+
 def test_screening_queue_payload_cannot_expose_impossible_officer_states(db, temp_db):
     from server import _build_screening_queue_payload
 
