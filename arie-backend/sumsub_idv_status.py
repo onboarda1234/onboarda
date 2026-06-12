@@ -421,8 +421,9 @@ def build_sumsub_idv_statuses(
         db,
         "SELECT action, target, detail, created_at FROM audit_log "
         "WHERE action IN ('KYC Applicant Created', 'KYC Applicant Creation Failed') "
-        "OR action LIKE 'KYC applicantReviewed:%' "
-        "ORDER BY created_at DESC LIMIT 200"
+        "OR action LIKE ? "
+        "ORDER BY created_at DESC LIMIT 200",
+        ("KYC applicantReviewed:%",),
     )
 
     people = _collect_people(app, directors, ubos, intermediaries, client)
