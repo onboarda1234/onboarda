@@ -8,7 +8,7 @@
 | Branch | `codex/kyc-1a-sumsub-idv-backoffice-visibility` |
 | origin/main SHA at branch start | `7372ed71cbc90ca24793738c95704f7143d78bee` |
 | Branch base SHA | `7372ed71cbc90ca24793738c95704f7143d78bee` |
-| Local implementation commit | `7ec69e011f6546e2757e14f62b41abf98acdc1d8` |
+| Local implementation commit | `2d797d92786922d1e0d9cdfb8bb4eecf95a9981e` |
 | PR | `#459` - KYC-1A: Add Sumsub IDV back-office visibility |
 | Deployed `/api/version` SHA | Pending post-merge staging validation |
 | Staging matches final main SHA | Pending post-merge staging validation |
