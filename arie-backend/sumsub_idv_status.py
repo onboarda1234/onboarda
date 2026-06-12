@@ -419,10 +419,10 @@ def build_sumsub_idv_statuses(
 
     audits = _fetchall_optional(
         db,
-        "SELECT action, target, detail, created_at FROM audit_log "
+        "SELECT action, target, detail, timestamp AS created_at FROM audit_log "
         "WHERE action IN ('KYC Applicant Created', 'KYC Applicant Creation Failed') "
         "OR action LIKE ? "
-        "ORDER BY created_at DESC LIMIT 200",
+        "ORDER BY timestamp DESC LIMIT 200",
         ("KYC applicantReviewed:%",),
     )
 
