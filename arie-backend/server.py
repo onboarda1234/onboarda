@@ -114,6 +114,7 @@ from verification_state import (
     verification_state_payload,
 )
 from screening_freshness_metadata import populate_screening_freshness_metadata
+from sumsub_idv_status import build_sumsub_idv_statuses
 
 # ── Sprint 2: Extracted modules ──────────────────────────
 from auth import (
@@ -4688,6 +4689,29 @@ def _client_safe_application_detail(result):
     return safe
 
 
+def _build_application_sumsub_idv_payload(db, app_row, *, include_unmatched=False, parties=None):
+    app_dict = dict(app_row or {})
+    if parties is None:
+        directors, ubos, intermediaries = get_application_parties(db, app_dict.get("id"))
+    else:
+        directors, ubos, intermediaries = parties
+    client = None
+    if app_dict.get("client_id"):
+        client = db.execute(
+            "SELECT id, email, company_name, status, created_at FROM clients WHERE id=?",
+            (app_dict.get("client_id"),),
+        ).fetchone()
+    return build_sumsub_idv_statuses(
+        db,
+        app_dict,
+        directors=directors,
+        ubos=ubos,
+        intermediaries=intermediaries,
+        client=dict(client) if client else None,
+        include_unmatched=include_unmatched,
+    )
+
+
 CASE_MANAGEMENT_FILTERS = {
     "all",
     "applications",
@@ -4979,6 +5003,31 @@ class CaseManagementWorklistHandler(BaseHandler):
             db.close()
 
 
+class ApplicationIdentityVerificationsHandler(BaseHandler):
+    """GET /api/applications/:id/kyc/identity-verifications — Sumsub IDV visibility."""
+
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            payload = _build_application_sumsub_idv_payload(
+                db,
+                app,
+                include_unmatched=user.get("role") in {"admin", "sco"},
+            )
+            self.success(payload)
+        finally:
+            db.close()
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -5114,6 +5163,13 @@ class ApplicationDetailHandler(BaseHandler):
             result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {},
             screening_reviews,
         )
+        if user["type"] != "client":
+            result["sumsub_idv_statuses"] = _build_application_sumsub_idv_payload(
+                db,
+                result,
+                include_unmatched=user.get("role") in {"admin", "sco"},
+                parties=(result["directors"], result["ubos"], result["intermediaries"]),
+            )
         # Bug #4: Parse risk_dimensions from JSON string for API consumers
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
             result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
@@ -27601,6 +27657,7 @@ def make_app():
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
         (r"/api/applications/([^/]+)/periodic-review-baseline", ApplicationPeriodicReviewBaselineHandler),
+        (r"/api/applications/([^/]+)/kyc/identity-verifications", ApplicationIdentityVerificationsHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/upload", ApplicationEnhancedRequirementUploadHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/request", ApplicationEnhancedRequirementRequestHandler),

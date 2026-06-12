@@ -7955,6 +7955,7 @@ async function fetchApplicationDetail(ref) {
     rmiRequests: detail.rmi_requests || [],
     monitoringAlerts: detail.monitoring_alerts || [],
     changeRequests: detail.change_requests || [],
+    sumsub_idv_statuses: detail.sumsub_idv_statuses || null,
     screeningReviews: detail.screening_reviews || [],
     _raw_prescreening: psData,
     prescreeningData: psData,
@@ -8320,6 +8321,96 @@ function renderPartySection(app) {
   '</div>';
 }
 
+function sumsubIdvBadge(status) {
+  var key = String(status || 'unavailable').toLowerCase();
+  if (key === 'approved') return '<span class="badge success">Verified</span>';
+  if (key === 'rejected') return '<span class="badge high">Rejected</span>';
+  if (key === 'failed') return '<span class="badge high">Failed</span>';
+  if (key === 'unmatched') return '<span class="badge pending">Unmatched</span>';
+  if (key === 'applicant_created') return '<span class="badge pending">Applicant Created</span>';
+  if (key === 'pending') return '<span class="badge pending">Pending Verification</span>';
+  if (key === 'not_started') return '<span class="badge draft">Not Started</span>';
+  return '<span class="badge draft">Unavailable</span>';
+}
+
+function sumsubIdvRoleLabel(role) {
+  var key = String(role || 'unknown').toLowerCase();
+  if (key === 'ubo') return 'UBO';
+  if (key === 'director') return 'Director';
+  if (key === 'intermediary') return 'Intermediary';
+  if (key === 'client') return 'Client';
+  if (key === 'applicant') return 'Applicant';
+  return 'Unknown';
+}
+
+function renderSumsubIdvPanel(app) {
+  var payload = (app && (app.sumsub_idv_statuses || app.sumsubIdvStatuses)) || {};
+  var statuses = Array.isArray(payload.statuses) ? payload.statuses : [];
+  var summary = payload.summary || {};
+  var unmatched = payload.unmatched_webhooks || {};
+  var unmatchedItems = Array.isArray(unmatched.items) ? unmatched.items : [];
+  var html = '<div class="prescreen-collapsible-card" id="sumsub-idv-panel" style="border-left:4px solid #0f766e;">' +
+    '<details open>' +
+      '<summary>' +
+        '<div class="prescreen-collapsible-copy">' +
+          '<div class="prescreen-collapsible-title">Individual Identity Verification</div>' +
+          '<div class="prescreen-collapsible-subtitle">Sumsub Identity Verification · Scope: individual_kyc_identity_verification</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap;">' +
+          '<span class="badge draft">People: ' + escapeHtml(String(summary.total != null ? summary.total : statuses.length)) + '</span>' +
+          '<span class="badge pending">Action required: ' + escapeHtml(String(summary.officer_action_required_count || 0)) + '</span>' +
+          '<span class="prescreen-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>' +
+        '</div>' +
+      '</summary>' +
+      '<div class="prescreen-collapsible-body">' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Sumsub is used for individual identity verification only. AML, PEP, sanctions, adverse-media and company screening are handled separately under screening/monitoring.</div>';
+  if (!statuses.length) {
+    html += '<div style="font-size:12px;color:var(--text3);padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No persisted individuals are available for identity verification display.</div>';
+  } else {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;">';
+    statuses.forEach(function(item) {
+      item = item || {};
+      var labels = Array.isArray(item.rejection_labels) ? item.rejection_labels : [];
+      var flags = []
+        .concat(Array.isArray(item.blocking_flags) ? item.blocking_flags : [])
+        .concat(Array.isArray(item.warning_flags) ? item.warning_flags : []);
+      html += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+        '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px;">' +
+          '<div>' +
+            '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(item.person_name || 'Unknown person') + '</div>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(sumsubIdvRoleLabel(item.person_type)) + ' · Sumsub Identity Verification</div>' +
+          '</div>' +
+          sumsubIdvBadge(item.verification_status) +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:12px;">' +
+          '<div><span style="color:var(--text3);">Review answer:</span> <strong>' + escapeHtml(item.review_answer || 'unavailable') + '</strong></div>' +
+          '<div><span style="color:var(--text3);">Applicant ID:</span> <strong style="font-family:monospace;">' + escapeHtml(item.applicant_id || (item.applicant_id_present ? 'masked' : '-')) + '</strong></div>' +
+          '<div><span style="color:var(--text3);">Applicant created:</span> ' + escapeHtml(String(item.applicant_created_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
+          '<div><span style="color:var(--text3);">Webhook received:</span> ' + escapeHtml(String(item.webhook_received_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
+          '<div><span style="color:var(--text3);">Evidence source:</span> ' + escapeHtml(item.source_of_truth || 'derived') + '</div>' +
+          '<div><span style="color:var(--text3);">Evidence-backed:</span> ' + escapeHtml(item.evidence_backed ? 'Yes' : 'No') + '</div>' +
+        '</div>';
+      if (labels.length) {
+        html += '<div style="margin-top:8px;font-size:12px;color:#991b1b;"><strong>Rejection labels:</strong> ' + escapeHtml(labels.join(', ')) + '</div>';
+      }
+      if (flags.length) {
+        html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">' + flags.map(function(flag) {
+          return '<span class="badge pending">' + escapeHtml(String(flag).replace(/_/g, ' ')) + '</span>';
+        }).join('') + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  if (unmatchedItems.length) {
+    html += '<div style="margin-top:12px;padding:10px;border:1px solid #d97706;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;">' +
+      '<strong>Unmatched Sumsub webhook events:</strong> ' + escapeHtml(String(unmatchedItems.length)) + ' pending event(s) require admin/SCO reconciliation.' +
+    '</div>';
+  }
+  html += '</div></details></div>';
+  return html;
+}
+
 function openPartyCorrectionModal(partyType, partyId) {
   openOfficerCorrectionModal();
   var target = document.getElementById('officer-correction-target');
@@ -8483,7 +8574,7 @@ function renderAuthoritativeAppDetail(app, options) {
   ];
   renderPrescreenSummary(app, prescreenFields);
 
-  document.getElementById('detail-persons').innerHTML = renderPartySection(app);
+  document.getElementById('detail-persons').innerHTML = renderSumsubIdvPanel(app) + renderPartySection(app);
   renderOfficerCorrectionWarning(app);
   renderOfficerCorrectionHistory(app);
 
@@ -12426,25 +12517,6 @@ function renderScreeningReviewPanel(app, focus) {
     focus = currentScreeningReviewFocus;
   }
 
-  // Sumsub webhook KYC verification result (Finding S-13)
-  var wh = screeningSummary.sumsub_webhook;
-  if (wh) {
-    var whColor = wh.review_answer === 'GREEN' ? '#16a34a' : wh.review_answer === 'RED' ? '#dc2626' : '#d97706';
-    var whBadge = wh.review_answer || 'PENDING';
-    html += '<div class="card" style="margin-bottom:16px;border-left:4px solid ' + whColor + ';background:rgba(43,47,143,0.03);">';
-    html += '<div class="card-header"><div class="card-title" style="display:flex;align-items:center;gap:8px;">Sumsub KYC Verification <span class="badge" style="background:' + whColor + ';color:#fff;font-size:10px;">' + escapeHtml(whBadge) + '</span></div></div>';
-    html += '<div style="padding:12px 18px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
-    html += '<div><span style="color:var(--text3);">Applicant ID:</span> <strong style="font-family:monospace;">' + escapeHtml(wh.sumsub_applicant_id || '-') + '</strong></div>';
-    html += '<div><span style="color:var(--text3);">External User:</span> ' + escapeHtml(wh.external_user_id || '-') + '</div>';
-    html += '<div><span style="color:var(--text3);">Received:</span> ' + escapeHtml(String(wh.received_at || '-').replace('T', ' ').slice(0, 19)) + '</div>';
-    html += '<div><span style="color:var(--text3);">Event:</span> ' + escapeHtml(wh.event_type || '-') + '</div>';
-    if (wh.review_answer === 'RED') {
-      var labels = Array.isArray(wh.rejection_labels) ? wh.rejection_labels : [];
-      html += '<div style="grid-column:span 2;"><span style="color:var(--text3);">Rejection Labels:</span> <span style="color:#dc2626;font-weight:600;">' + (labels.length ? escapeHtml(labels.join(', ')) : 'None') + '</span></div>';
-      if (wh.moderation_comment) html += '<div style="grid-column:span 2;"><span style="color:var(--text3);">Comment:</span> ' + escapeHtml(wh.moderation_comment) + '</div>';
-    }
-    html += '</div></div>';
-  }
   html += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">';
   html += '<div class="card" style="flex:1 1 300px;min-width:280px;max-width:360px;">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;"><div><div class="card-title">Screening Subjects</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Select one subject to review comparison, evidence, and disposition state.</div></div><div style="margin-left:auto;font-size:11px;color:var(--text3);font-weight:700;">' + escapeHtml(String(triageSubjects.length)) + ' total</div></div>';
