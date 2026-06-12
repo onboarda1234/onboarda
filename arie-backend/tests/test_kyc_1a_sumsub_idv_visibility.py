@@ -213,6 +213,28 @@ def test_optional_tables_missing_returns_not_started_not_error():
     assert payload["provider_scope"] == "individual_kyc_identity_verification"
 
 
+def test_audit_lookup_uses_parameterized_like_for_postgres_safety():
+    class GuardedConnection:
+        def __init__(self, conn):
+            self.conn = conn
+            self.saw_parameterized_review_like = False
+
+        def execute(self, sql, params=()):
+            assert "LIKE 'KYC applicantReviewed:%'" not in sql
+            if "action LIKE ?" in sql:
+                assert params == ("KYC applicantReviewed:%",)
+                self.saw_parameterized_review_like = True
+            return self.conn.execute(sql, params)
+
+    conn = _db()
+    guarded = GuardedConnection(conn)
+
+    payload = build_sumsub_idv_statuses(guarded, _application(), directors=[_director()])
+
+    assert guarded.saw_parameterized_review_like is True
+    assert _status(payload)["verification_status"] == "not_started"
+
+
 def test_application_idv_endpoint_is_registered_and_does_not_call_live_sumsub():
     server = (BACKEND_ROOT / "server.py").read_text()
     assert "/api/applications/([^/]+)/kyc/identity-verifications" in server
