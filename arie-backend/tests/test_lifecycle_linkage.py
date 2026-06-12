@@ -126,9 +126,8 @@ def canonical_audit_writer():
     Shape and column set match BaseHandler.log_audit exactly (see
     arie-backend/base_handler.py) so that tests exercise the canonical
     persistence path, not just an in-memory sink. Instantiated here
-    rather than importing BaseHandler because BaseHandler is a
-    protected file and we must not couple tests to its constructor
-    surface.
+    rather than importing BaseHandler so these tests stay focused on
+    the audit-writer contract instead of BaseHandler construction.
     """
     def writer(user, action, target, detail, db=None,
                before_state=None, after_state=None):

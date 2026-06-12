@@ -29,7 +29,7 @@
 -- will raise "duplicate column name" -- this matches the contract of
 -- migrations 001..007 in this repo.
 --
--- EX-CONTROL IMPACT: none. No file in PROTECTED_FILES is modified.
+-- EX-CONTROL IMPACT: none. Existing runtime control code is not modified.
 -- No existing column is altered. No existing row is mutated. No
 -- existing index is dropped. EX-01..EX-13 regressions are impossible
 -- by construction.

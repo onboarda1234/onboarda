@@ -38,7 +38,7 @@
 -- SCOPE
 -- -----
 -- * Additive only.
--- * No protected file is modified by this migration.
+-- * Existing runtime control code is not modified by this migration.
 -- * No EX-01..EX-13 control critical file is touched.
 -- * `compliance_memos`, `edd_cases`, `periodic_reviews` are unchanged.
 
