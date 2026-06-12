@@ -470,8 +470,11 @@ def _approval_gate_blocker(
     cta_label: str = "Review",
     tab: str = "overview",
     anchor_id: str = "",
+    blocker_group: str = "",
+    blocker_group_label: str = "",
+    action_key: str = "",
 ) -> Dict[str, Any]:
-    return {
+    blocker = {
         "id": blocker_id,
         "category": category,
         "title": title,
@@ -483,6 +486,21 @@ def _approval_gate_blocker(
         "tab": tab,
         "anchorId": anchor_id,
     }
+    if blocker_group:
+        blocker["blocker_group"] = blocker_group
+    if blocker_group_label:
+        blocker["blocker_group_label"] = blocker_group_label
+    if action_key:
+        blocker["action_key"] = action_key
+        blocker["action_label"] = cta_label
+        blocker["action_target"] = {
+            "target_view": "application_review",
+            "target_tab": tab,
+            "target_section": anchor_id,
+            "scroll_anchor": anchor_id,
+            "action_mode": "focus_section",
+        }
+    return blocker
 
 
 class ApprovalGateValidator:
@@ -1205,6 +1223,9 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             cta_label="Resolve screening",
             tab="screening",
             anchor_id="detail-screening-review",
+            blocker_group="screening",
+            blocker_group_label="Screening",
+            action_key="screening.resolve",
         ))
     else:
         try:
@@ -1222,6 +1243,9 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                 cta_label="Resolve screening",
                 tab="screening",
                 anchor_id="detail-screening-review",
+                blocker_group="screening",
+                blocker_group_label="Screening",
+                action_key="screening.resolve",
             ))
 
         screening_ts = screening_report.get("screened_at") or screening_report.get("timestamp")
@@ -1240,6 +1264,9 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                 cta_label="Resolve screening",
                 tab="screening",
                 anchor_id="detail-screening-review",
+                blocker_group="screening",
+                blocker_group_label="Screening",
+                action_key="screening.resolve",
             ))
         elif screening_input_updated_at:
             try:
@@ -1252,6 +1279,9 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                         cta_label="Resolve screening",
                         tab="screening",
                         anchor_id="detail-screening-review",
+                        blocker_group="screening",
+                        blocker_group_label="Screening",
+                        action_key="screening.resolve",
                     ))
             except Exception:
                 blockers.append(_approval_gate_blocker(
@@ -1259,10 +1289,13 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                     "Screening",
                     "Screening freshness could not be verified",
                     "Screening freshness cannot be verified because a timestamp could not be parsed.",
-                    cta_label="Resolve screening",
-                    tab="screening",
-                    anchor_id="detail-screening-review",
-                ))
+                cta_label="Resolve screening",
+                tab="screening",
+                anchor_id="detail-screening-review",
+                blocker_group="screening",
+                blocker_group_label="Screening",
+                action_key="screening.resolve",
+            ))
 
     try:
         idv_gate = _approval_idv_gate_summary(app, db)
@@ -1272,6 +1305,10 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             mapped.setdefault("tab", "kyc-docs")
             mapped.setdefault("anchorId", "sumsub-idv-panel")
             mapped.setdefault("source", "backend_approval_gate")
+            mapped.setdefault("blocker_group", "identity_verification")
+            mapped.setdefault("blocker_group_label", "Identity Verification")
+            mapped.setdefault("action_key", "idv.review")
+            mapped.setdefault("action_label", "Review IDV")
             blockers.append(mapped)
     except Exception as exc:
         blockers.append(_approval_gate_blocker(
@@ -1282,6 +1319,9 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             cta_label="Resolve IDV",
             tab="kyc-docs",
             anchor_id="sumsub-idv-panel",
+            blocker_group="identity_verification",
+            blocker_group_label="Identity Verification",
+            action_key="idv.review",
         ))
 
     memo_row = None
@@ -1301,9 +1341,12 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             "Compliance Memo",
             "Compliance memo missing",
             "Compliance memo must be generated before approval.",
-            cta_label="Generate memo",
+            cta_label="Open memo",
             tab="overview",
             anchor_id="detail-memo",
+            blocker_group="memo_package",
+            blocker_group_label="Memo Package",
+            action_key="memo.open",
         ))
     else:
         memo_review = str(memo_row.get("review_status") or "").lower()
@@ -1319,6 +1362,9 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                 cta_label="Open memo",
                 tab="overview",
                 anchor_id="detail-memo",
+                blocker_group="memo_package",
+                blocker_group_label="Memo Package",
+                action_key="memo.open",
             ))
         if _truthy_db_value(memo_row.get("blocked")):
             blockers.append(_approval_gate_blocker(
@@ -1329,36 +1375,48 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                 cta_label="Open memo",
                 tab="overview",
                 anchor_id="detail-memo",
+                blocker_group="memo_package",
+                blocker_group_label="Memo Package",
+                action_key="memo.open",
             ))
         if memo_review != "approved":
             blockers.append(_approval_gate_blocker(
                 "memo_approval",
                 "Compliance Memo",
                 "Compliance memo is not approved",
-                f"Compliance memo review_status is '{memo_review or 'missing'}'; approved is required.",
+                "Memo approval has not been completed.",
                 cta_label="Open memo",
                 tab="overview",
                 anchor_id="detail-memo",
+                blocker_group="memo_package",
+                blocker_group_label="Memo Package",
+                action_key="memo.open",
             ))
         if memo_validation not in {"pass", "pass_with_fixes"}:
             blockers.append(_approval_gate_blocker(
                 "memo_validation",
                 "Compliance Memo",
                 "Compliance memo validation failed or is pending",
-                f"Compliance memo validation_status is '{memo_validation or 'missing'}'.",
+                "Memo validation has not been completed." if memo_validation in {"", "pending"} else "Memo validation needs officer review before approval.",
                 cta_label="Open memo",
                 tab="overview",
                 anchor_id="memo-validation-panel",
+                blocker_group="memo_package",
+                blocker_group_label="Memo Package",
+                action_key="memo.validate",
             ))
         if memo_supervisor and memo_supervisor not in {"CONSISTENT", "CONSISTENT_WITH_WARNINGS"}:
             blockers.append(_approval_gate_blocker(
                 "supervisor_inconsistent",
                 "Supervisor Review",
                 "Supervisor review is inconsistent",
-                f"Compliance memo supervisor_status is '{memo_supervisor}'.",
+                "Supervisor review has not been completed." if memo_supervisor == "PENDING" else "Supervisor review needs attention before approval.",
                 cta_label="Run supervisor",
                 tab="supervisor",
                 anchor_id="detail-tab-supervisor",
+                blocker_group="memo_package",
+                blocker_group_label="Memo Package",
+                action_key="supervisor.run",
             ))
 
     if not blockers:
