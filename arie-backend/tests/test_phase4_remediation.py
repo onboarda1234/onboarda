@@ -2,7 +2,7 @@
 Phase 4 Remediation Tests — Environment / safety hardening.
 
 Finding 5: environment.py must accept "development" and not silently remap to "demo".
-Finding 13: Backoffice must reference sumsub_webhook in screening summary.
+Finding 13: Backoffice must surface Sumsub IDV evidence.
 """
 import os
 import pytest
@@ -39,15 +39,16 @@ class TestFinding5_DevelopmentEnvironment:
 
 
 class TestFinding13_WebhookDisplayWired:
-    """Backoffice must render sumsub_webhook data."""
+    """Backoffice must render Sumsub IDV evidence separately from screening."""
 
     def test_backoffice_references_sumsub_webhook(self):
-        """Backoffice HTML must contain sumsub_webhook rendering code."""
+        """Backoffice HTML must retain webhook-derived IDV field rendering."""
         bo_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
         if not os.path.exists(bo_path):
             bo_path = os.path.join(os.path.dirname(__file__), "..", "arie-backoffice.html")
         with open(bo_path, encoding="utf-8") as f:
             html = f.read()
-        assert "sumsub_webhook" in html, "Backoffice does not reference sumsub_webhook — Finding 13 NOT fixed"
+        assert "sumsub_webhook" in html, "Backoffice does not retain webhook-derived IDV fields"
+        assert "Individual Identity Verification" in html
         assert "review_answer" in html, "Backoffice does not display review_answer"
         assert "rejection_labels" in html, "Backoffice does not display rejection_labels"
