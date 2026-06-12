@@ -8,7 +8,7 @@
 -- SCOPE: additive only. No column renames. No FKs. No CHECK constraints
 -- (SQLite cannot add CHECK via ALTER TABLE; the application layer
 -- enforces the vocabulary -- see periodic_review_engine.py). No changes
--- to PROTECTED_FILES. No memo / artifact pointer is added to lifecycle
+-- to existing runtime control code. No memo / artifact pointer is added to lifecycle
 -- rows in PR-03 -- onboarding memo identity remains per-application
 -- per-version and is intentionally separate from periodic-review
 -- lifecycle context.
@@ -31,7 +31,7 @@
 -- IDEMPOTENCY: provided by the migration runner via schema_version.
 -- Manual re-execution outside the runner is not supported.
 --
--- EX-CONTROL IMPACT: none. No file in PROTECTED_FILES is modified by
+-- EX-CONTROL IMPACT: none. Existing runtime control code is not modified by
 -- this migration. No existing column is altered. No existing row is
 -- mutated. EX-01..EX-13 regressions are impossible by construction.
 

@@ -27,13 +27,10 @@ no broad refactor. It is intended to be the smallest safe surface that
 makes monitoring alerts operationally useful.
 
 EX-control impact:
-- None of EX-01..EX-13 are touched. This module does not modify any
-  protected file (memo_handler, rule_engine, validation_engine,
-  supervisor_engine, screening, sumsub_client, security_hardening,
-  auth, base_handler, party_utils, db.py, etc). It only writes to
-  monitoring_alerts / periodic_reviews / edd_cases via existing
-  columns added by migration 008 and via the existing INSERT shapes
-  used elsewhere in server.py.
+- None of EX-01..EX-13 runtime control surfaces are changed. This
+  module only writes to monitoring_alerts / periodic_reviews /
+  edd_cases via existing columns added by migration 008 and via the
+  existing INSERT shapes used elsewhere in server.py.
 """
 from __future__ import annotations
 

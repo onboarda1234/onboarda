@@ -39,7 +39,8 @@ Soft-reference lookup indexes are created for every new
 
 Delivered via
 `arie-backend/migrations/scripts/migration_008_lifecycle_linkage.sql`.
-No modification of `db.py` or any other protected file.
+No modification of `db.py` schema initialization or existing runtime
+control code.
 
 ### Enum enforcement scope (PR-01)
 
@@ -175,14 +176,10 @@ The following are **not** in PR-01 and are explicitly deferred:
 
 ## EX-control impact
 
-None. No file in `PROTECTED_FILES` (basename match, per
-`arie-backend/protected_controls.py`) is modified. The EX-01..EX-13
-register continues to pass `verify_control_coverage()` and
-`check_protected_files_in_diff` against the PR diff returns an empty
-violation list. No existing column is altered, no existing row is
-mutated, and no existing index is dropped, so
-EX-02 / EX-07 / EX-09 / EX-11 / EX-12 regressions are impossible by
-construction.
+None. Existing EX-01..EX-13 runtime enforcement code is unchanged. No
+existing column is altered, no existing row is mutated, and no existing
+index is dropped, so EX-02 / EX-07 / EX-09 / EX-11 / EX-12 regressions
+are impossible by construction.
 
 ## Rollback
 
@@ -214,5 +211,5 @@ PR-02+ should:
 5. Wire the audit events into the backoffice trace view.
 
 At every step, the invariants in this PR hold: `lifecycle_linkage.py`
-remains the single write path, mutating helpers cannot run without an
-`audit_writer`, and no protected file is modified.
+remains the single write path and mutating helpers cannot run without
+an `audit_writer`.

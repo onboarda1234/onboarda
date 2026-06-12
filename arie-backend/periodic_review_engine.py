@@ -19,7 +19,7 @@ This module is **provider-agnostic** by design:
 * it does not flip ``ENABLE_SCREENING_ABSTRACTION``
 * it does not read ``screening_reports_normalized`` as authoritative
 * it does not generate or rewrite onboarding memos
-  (``memo_handler.py`` is protected and untouched)
+  (``memo_handler.py`` is untouched)
 * it does not implement client-facing information requests; it only
   emits the *review-side required-item generation contract* so a future
   PR can wire those items to a real information-request engine
@@ -37,11 +37,10 @@ recording. The contract mirrors ``BaseHandler.log_audit`` exactly:
 
 EX-control posture
 ------------------
-This module is additive and lives outside ``PROTECTED_FILES``. It does
-not modify any protected file. It reuses ``lifecycle_linkage`` (PR-01)
+This module is additive and leaves the existing EX-01..EX-13 runtime
+control surfaces unchanged. It reuses ``lifecycle_linkage`` (PR-01)
 for the bidirectional alert/EDD/review linkage it needs and reuses the
-existing duplicate-prevention predicate for active EDD lookup. No
-EX-01..EX-13 control surface is touched.
+existing duplicate-prevention predicate for active EDD lookup.
 """
 from __future__ import annotations
 

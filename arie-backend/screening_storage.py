@@ -6,7 +6,7 @@ in the screening_reports_normalized table.
 
 SAFETY: This table is non-authoritative in Sprint 1-2.
 SAFETY: No EX-validated control reads this storage.
-SAFETY: Does not modify db.py (protected file).
+SAFETY: Does not modify db.py schema initialization.
 
 GDPR / DSAR Treatment (Sprint 3 Obj 2b):
     screening_reports_normalized is EXCLUDED from DSAR/export because it

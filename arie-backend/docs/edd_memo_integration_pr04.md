@@ -8,7 +8,8 @@ PR-04 makes EDD findings feed the *correct* active decision artifact
 * mutating `compliance_memos` history,
 * overwriting an onboarding memo with periodic-review-lifecycle material,
 * creating a third, disconnected EDD memo universe,
-* touching any file in `PROTECTED_FILES`,
+* changing existing memo, screening, validation, or approval-gate
+  runtime contracts,
 * activating any provider integration (no ComplyAdvantage, no
   `ENABLE_SCREENING_ABSTRACTION` flip).
 
@@ -48,12 +49,11 @@ periodic-review memo (if any) does this case touch?*.
 * `arie-backend/tests/test_edd_memo_integration.py` — 40 unit tests.
 * `arie-backend/docs/edd_memo_integration_pr04.md` — this design note.
 
-**No protected file is touched.** `memo_handler.py`, `pdf_generator.py`,
-`db.py`, `validation_engine.py`, `supervisor_engine.py`,
-`security_hardening.py`, `auth.py`, `base_handler.py`, etc. are all
-unchanged. `server.py` is unchanged in this PR — handler wiring is
-intentionally deferred so PR-04 stays minimal and surgical (see
-*Deferred items* below).
+Existing memo, PDF, schema initialization, validation, supervisor,
+security, auth, and base handler runtime contracts are unchanged.
+`server.py` is unchanged in this PR — handler wiring is intentionally
+deferred so PR-04 stays minimal and surgical (see *Deferred items*
+below).
 
 ## Exact implementation
 
@@ -250,11 +250,10 @@ Full suite (3363 tests) passes after PR-04.
 
 ## EX-01..EX-13 control posture
 
-No file in `PROTECTED_FILES` is modified by this PR. No EX-control
-critical file is touched. Migration 010 is additive (`CREATE TABLE
-IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`); no existing column is
-altered, no row is mutated. EX-01..EX-13 regressions are impossible
-by construction.
+No EX-control runtime enforcement path is changed by this PR.
+Migration 010 is additive (`CREATE TABLE IF NOT EXISTS`, `CREATE
+INDEX IF NOT EXISTS`); no existing column is altered and no existing
+row is mutated.
 
 ## Deferred items (PR-05 and later)
 
@@ -262,14 +261,14 @@ by construction.
   expected to add CRUD routes (`POST /api/edd/cases/:id/findings`,
   `POST /api/edd/cases/:id/attach-memo`, `GET …`).
 * **Officer UI / queue clarity**: deliberately out of scope for PR-04.
-* **Memo-handler consumption of attached findings**: `memo_handler.py`
-  is protected (EX-03). Surface integration into memo generation is
-  deferred — a future PR may add an additive call site that asks
+* **Memo-handler consumption of attached findings**: surface
+  integration into memo generation is deferred — a future PR may add
+  an additive call site that asks
   `get_memo_context_findings(...)` and renders findings into the
   rendered memo body. Until then, the linkage is auditable and
   queryable by back-office tooling without touching `memo_handler.py`.
-* **PDF rendering of findings**: `pdf_generator.py` is protected
-  (PR-04 does not touch it).
+* **PDF rendering of findings**: PR-04 does not touch
+  `pdf_generator.py`.
 * **Promoting periodic-review memo to its own row**: the schema slot
   (`edd_memo_attachments.memo_id`) is already there for the future
   `periodic_review_memos` table; PR-04 deliberately does not introduce
@@ -281,9 +280,9 @@ by construction.
 
 ## Blocker report
 
-None. No protected boundary required touching. No broader-risk issue
-was encountered. The change is additive-only and stays inside the
-documented PR-04 envelope.
+None. No runtime control boundary required changing. No broader-risk
+issue was encountered. The change is additive-only and stays inside
+the documented PR-04 envelope.
 
 ---
 
@@ -383,10 +382,9 @@ When PR-05 (or any other consumer) reads from `edd_memo_attachments`:
 
 ### EX-01..EX-13 control posture
 
-No file in `PROTECTED_FILES` is modified. No EX-control critical file
-is touched. Migration 011 is additive (`CREATE UNIQUE INDEX
-IF NOT EXISTS`); no existing column or row is altered. EX-01..EX-13
-regressions are impossible by construction.
+No EX-control runtime enforcement path is changed. Migration 011 is
+additive (`CREATE UNIQUE INDEX IF NOT EXISTS`); no existing column or
+row is altered.
 
 ### Deferred hardening (intentionally out of scope for PR-04a)
 
@@ -410,4 +408,3 @@ regressions are impossible by construction.
   be PG 15+.
 * **Promoting periodic-review memo to its own row** — unchanged from
   PR-04: still deferred.
-

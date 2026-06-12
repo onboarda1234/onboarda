@@ -13,7 +13,8 @@ Design contract
 * Additive. Does NOT change the shape or semantics of any existing endpoint.
 * Predicate-driven, NOT id-driven. The classifier is environment-portable.
 * Unioned predicates -- a row is quarantined if EITHER predicate is true.
-* No protected file is modified by this module being added.
+* Existing lifecycle, monitoring, and EDD runtime contracts are not
+  modified by this module being added.
 * No invented linkage. We do not "fix" ghost rows by promoting them; we
   surface them as a third bucket alongside active and historical.
 
