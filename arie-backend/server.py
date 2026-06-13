@@ -4799,6 +4799,7 @@ def _build_terminal_decision_basis(db, app):
     gate_snapshot = extra.get("approval_gate_snapshot")
     if not isinstance(gate_snapshot, dict):
         gate_snapshot = None
+    actor = (selected or {}).get("actor")
     basis = {
         "available": bool(selected),
         "decision_record_count": len(records),
@@ -4806,7 +4807,7 @@ def _build_terminal_decision_basis(db, app):
         "decision_type": (selected or {}).get("decision_type"),
         "timestamp": (selected or {}).get("timestamp"),
         "risk_level": (selected or {}).get("risk_level"),
-        "actor_role": ((selected or {}).get("actor") or {}).get("role") if isinstance((selected or {}).get("actor"), dict) else None,
+        "actor_role": actor.get("role") if isinstance(actor, dict) else None,
         "source": (selected or {}).get("source"),
         "key_flags": (selected or {}).get("key_flags") or [],
         "approval_gate_snapshot": gate_snapshot,

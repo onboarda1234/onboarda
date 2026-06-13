@@ -6,7 +6,7 @@
   "console_messages": [],
   "local_url": "http://127.0.0.1:54708/arie-backoffice.html",
   "screenshots": [
-    "/Users/Aisha/onboarda-pr3-terminal-record-gate-reconciliation/docs/audits/evidence/remediation_sprints/PR-3_terminal-record-gate-reconciliation_20260613T124710Z/screenshots/branch_browser_terminal_record_context.png",
-    "/Users/Aisha/onboarda-pr3-terminal-record-gate-reconciliation/docs/audits/evidence/remediation_sprints/PR-3_terminal-record-gate-reconciliation_20260613T124710Z/screenshots/branch_browser_active_gate_blocked.png"
+    "docs/audits/evidence/remediation_sprints/PR-3_terminal-record-gate-reconciliation_20260613T124710Z/screenshots/branch_browser_terminal_record_context.png",
+    "docs/audits/evidence/remediation_sprints/PR-3_terminal-record-gate-reconciliation_20260613T124710Z/screenshots/branch_browser_active_gate_blocked.png"
   ]
 }
