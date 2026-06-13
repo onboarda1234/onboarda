@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-06-13T04:39:17.891Z",
+  "url": "http://127.0.0.1:57957/arie-backoffice.html",
+  "viewportDesktop": "1440x1000",
+  "viewportMobile": "390x844",
+  "summary": {
+    "overviewNoFullIdv": true,
+    "cccCompactIdv": true,
+    "reviewIdvRoutesToSectionB": true,
+    "compactRows": true,
+    "defaultRawFieldsHidden": true,
+    "advancedDetailsExpandable": true,
+    "resolveModalOpens": true,
+    "unmatchedAdminNoticeCompact": true,
+    "mobileCompact": true
+  },
+  "details": {
+    "compactRowCount": 3,
+    "kycVisible": true,
+    "sectionVisible": true,
+    "routeHash": "",
+    "mobileFirstRow": {
+      "x": 72,
+      "y": 1115.859375,
+      "width": 255,
+      "height": 208.53125
+    },
+    "mutationRequests": [],
+    "consoleErrors": [],
+    "pageErrors": [],
+    "failedRequests": [],
+    "badResponses": []
+  },
+  "evidence": {
+    "overview": "/Users/Aisha/Projects/onboarda-kyc1a-ux-work/docs/audits/kyc1a_idv_section_b_browser_20260613/overview-no-full-idv.png",
+    "sectionB": "/Users/Aisha/Projects/onboarda-kyc1a-ux-work/docs/audits/kyc1a_idv_section_b_browser_20260613/section-b-compact-idv.png",
+    "expandedDetails": "/Users/Aisha/Projects/onboarda-kyc1a-ux-work/docs/audits/kyc1a_idv_section_b_browser_20260613/expanded-idv-details.png",
+    "modal": "/Users/Aisha/Projects/onboarda-kyc1a-ux-work/docs/audits/kyc1a_idv_section_b_browser_20260613/resolve-idv-modal.png",
+    "mobile": "/Users/Aisha/Projects/onboarda-kyc1a-ux-work/docs/audits/kyc1a_idv_section_b_browser_20260613/mobile-section-b-idv.png"
+  }
+}

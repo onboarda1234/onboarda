@@ -393,15 +393,56 @@ def test_application_idv_endpoint_is_registered_and_does_not_call_live_sumsub():
     assert "get_sumsub_client" not in handler_region
 
 
-def test_backoffice_renders_separate_sumsub_identity_verification_panel():
+def test_backoffice_places_sumsub_identity_verification_under_section_b_compactly():
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
     assert "Individual Identity Verification" in html
-    assert "Sumsub Identity Verification" in html
-    assert "individual_kyc_identity_verification" in html
-    assert "renderSumsubIdvPanel(app) + renderPartySection(app)" in html
+    assert "Identity verification provider: Sumsub. Financial-crime screening is handled separately." in html
+    assert "renderSumsubIdvPanel(app) + renderPartySection(app)" not in html
+    assert "document.getElementById('detail-persons').innerHTML = renderPartySection(app)" in html
+    assert "body += renderSumsubIdvPanel(app)" in html
+    assert "id=\"individual-identity-verification\"" in html
+    assert "data-section=\"section-b-identity-verification\"" in html
+    assert "idv-compact-table" in html
+    assert "idv-compact-row header" in html
+    assert "Person</div><div>Role</div><div>IDV status</div><div>Evidence</div><div>Last update</div><div>Action" in html
     assert "Resolve IDV Exception" in html
     assert "I confirm I have reviewed the evidence and accept responsibility for this IDV resolution." in html
     assert "Sumsub KYC Verification" not in html
+
+
+def test_backoffice_idv_default_rows_hide_operational_fields_inside_details():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text()
+    panel_start = html.index("function renderSumsubIdvPanel(app)")
+    panel_end = html.index("function canResolveIdvException()", panel_start)
+    panel = html[panel_start:panel_end]
+
+    row_start = panel.index("'<div class=\"idv-compact-row\"")
+    details_start = panel.index("'<details class=\"idv-compact-details\"", row_start)
+    default_row = panel[row_start:details_start]
+    details = panel[details_start:]
+
+    hidden_by_default = [
+        "Provider outcome:",
+        "Applicant ID:",
+        "Applicant created:",
+        "Webhook received:",
+        "Evidence basis:",
+        "Evidence-backed:",
+    ]
+    for label in hidden_by_default:
+        assert label not in default_row
+        assert label in details
+    assert "Technical details" in details
+
+
+def test_backoffice_unmatched_webhook_notice_is_compact_admin_sco_only():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text()
+    assert "function canViewUnmatchedSumsubWebhookNotice()" in html
+    assert "role === 'admin' || role === 'sco'" in html
+    assert "idv-admin-notice" in html
+    assert "Admin notice:" in html
+    assert "Open reconciliation" in html
+    assert "Unmatched Sumsub webhook events:" not in html
 
 
 def test_backoffice_sumsub_labels_do_not_claim_screening_responsibility():

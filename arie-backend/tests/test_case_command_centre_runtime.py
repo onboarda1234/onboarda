@@ -369,7 +369,7 @@ class TestCaseCommandCentreRuntime:
                                 "description": "Priya Declared PEP — identity verification is pending. Sumsub has not produced a final verification result yet.",
                                 "ctaLabel": "Review IDV",
                                 "tab": "kyc-docs",
-                                "anchorId": "sumsub-idv-panel",
+                                "anchorId": "individual-identity-verification",
                                 "blocker_group": "identity_verification",
                                 "action_key": "idv.review",
                                 "person_name": "Priya Declared PEP",
@@ -381,7 +381,7 @@ class TestCaseCommandCentreRuntime:
                                 "description": "Jane UBO — identity verification is failed. Sumsub returned a failed identity verification result.",
                                 "ctaLabel": "Review IDV",
                                 "tab": "kyc-docs",
-                                "anchorId": "sumsub-idv-panel",
+                                "anchorId": "individual-identity-verification",
                                 "blocker_group": "identity_verification",
                                 "action_key": "idv.review",
                                 "person_name": "Jane UBO",
@@ -405,6 +405,13 @@ class TestCaseCommandCentreRuntime:
         assert "review_answer=" not in result["html"]
         assert "source=derived" not in result["html"]
         assert result["switchTabCalls"] == ["kyc-docs"]
+        idv_targets = [
+            target for target in result["actionTargets"].values()
+            if target.get("action_key") == "idv.review"
+        ]
+        assert idv_targets
+        assert idv_targets[0]["target_section"] == "section-b-identity-verification"
+        assert idv_targets[0]["scroll_anchor"] == "individual-identity-verification"
 
     def test_backend_group_priority_keeps_screening_before_idv(self):
         html = _read_backoffice()
@@ -432,7 +439,7 @@ class TestCaseCommandCentreRuntime:
                                 "description": "Priya — identity verification is pending. Sumsub has not produced a final verification result yet.",
                                 "ctaLabel": "Review IDV",
                                 "tab": "kyc-docs",
-                                "anchorId": "sumsub-idv-panel",
+                                "anchorId": "individual-identity-verification",
                                 "blocker_group": "identity_verification",
                                 "action_key": "idv.review",
                                 "person_name": "Priya",
@@ -732,7 +739,7 @@ class TestCaseCommandCentreRuntime:
                                 "description": "Jane Director: Pending. Approval is blocked until IDV is resolved.",
                                 "ctaLabel": "Resolve IDV",
                                 "tab": "kyc-docs",
-                                "anchorId": "sumsub-idv-panel",
+                                "anchorId": "individual-identity-verification",
                             }
                         ]
                     ),

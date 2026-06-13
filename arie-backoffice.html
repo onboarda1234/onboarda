@@ -254,11 +254,37 @@ a { color:var(--brand); text-decoration:none; }
 .case-command-detail-item { display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--text2); line-height:1.4; }
 .case-command-detail-dot { width:6px; height:6px; border-radius:999px; background:#f59e0b; flex:0 0 auto; margin-top:6px; }
 .case-command-secondary-heading { padding:2px 14px 6px; font-size:11px; font-weight:800; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; }
+.idv-compact-panel { border:1px solid var(--border1); border-left:4px solid #0f766e; border-radius:10px; background:var(--surface); margin:12px 0 0; overflow:hidden; }
+.idv-compact-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; padding:12px 14px; border-bottom:1px solid var(--border1); background:rgba(15,118,110,0.05); }
+.idv-compact-title { font-size:13px; font-weight:800; color:var(--text1); }
+.idv-compact-subtitle { font-size:11px; color:var(--text3); line-height:1.45; margin-top:3px; }
+.idv-compact-meta { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.idv-compact-body { padding:12px 14px; }
+.idv-compact-table-wrap { overflow-x:auto; }
+.idv-compact-table { display:grid; gap:6px; min-width:760px; }
+.idv-compact-row { display:grid; grid-template-columns:minmax(150px,1.35fr) minmax(82px,0.6fr) minmax(126px,0.8fr) minmax(126px,0.85fr) minmax(116px,0.7fr) minmax(122px,0.7fr); gap:8px; align-items:center; border:1px solid var(--border1); border-radius:8px; padding:8px 10px; background:var(--surface2); }
+.idv-compact-row.header { border:none; border-radius:0; background:transparent; padding:0 10px 2px; font-size:10px; font-weight:800; color:var(--text3); letter-spacing:0.05em; text-transform:uppercase; }
+.idv-compact-person { font-size:12px; font-weight:800; color:var(--text1); line-height:1.25; }
+.idv-compact-muted { font-size:11px; color:var(--text3); line-height:1.35; }
+.idv-compact-evidence { font-size:12px; color:var(--text2); line-height:1.35; }
+.idv-compact-actions { display:flex; gap:6px; align-items:center; justify-content:flex-end; flex-wrap:wrap; }
+.idv-compact-details { grid-column:1 / -1; border-top:1px solid var(--border1); padding-top:8px; margin-top:2px; }
+.idv-compact-details summary { cursor:pointer; font-size:11px; font-weight:800; color:var(--brand); list-style:inside; }
+.idv-compact-detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:7px; margin-top:8px; font-size:11px; color:var(--text2); }
+.idv-admin-notice { margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:8px 10px; border:1px solid #fde68a; border-radius:8px; background:#fffbeb; color:#92400e; font-size:11px; line-height:1.4; }
 @media (max-width:760px) {
   .case-command-group-row summary { grid-template-columns:1fr; align-items:flex-start; }
   .case-command-group-title,
   .case-command-group-text { white-space:normal; }
   .case-command-group-actions { justify-content:flex-start; }
+  .idv-compact-table { min-width:0; }
+  .idv-compact-row,
+  .idv-compact-row.header { grid-template-columns:minmax(0,1fr) auto; gap:6px; padding:8px; }
+  .idv-compact-row.header { display:none; }
+  .idv-compact-person,
+  .idv-compact-actions,
+  .idv-compact-details { grid-column:1 / -1; }
+  .idv-compact-actions { justify-content:flex-start; }
 }
 
 /* ── Application Lifecycle Workspace ── */
@@ -7585,7 +7611,9 @@ function renderIdentityEnhancedRequirementCard(req) {
   '</div>';
 }
 
-function renderStandardKycDocumentTaxonomy(app) {
+function renderStandardKycDocumentTaxonomy(app, options) {
+  options = options || {};
+  var includeIdv = options.includeIdv !== false;
   var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
   var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
   var groups = {
@@ -7617,6 +7645,9 @@ function renderStandardKycDocumentTaxonomy(app) {
             : renderUnifiedKycDocumentCard(app, item.doc, item.linkedRequirement);
         }).join('')
       : '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No uploaded documents in this group yet.</div>';
+    if (key === 'identity' && includeIdv) {
+      body += renderSumsubIdvPanel(app);
+    }
     var expanded = group.items.some(function(item) {
       return item.requirement ? enhancedRequirementNeedsAttention(item.requirement) : kycDocumentNeedsAttention(item.doc);
     });
@@ -8400,15 +8431,15 @@ function renderPartySection(app) {
 function sumsubIdvBadge(status) {
   var key = String(status || 'unavailable').toLowerCase();
   if (key === 'verified' || key === 'approved') return '<span class="badge success">Verified</span>';
-  if (key === 'manual_verified') return '<span class="badge success">Manual Verified</span>';
-  if (key === 'exception_approved') return '<span class="badge success">Exception Approved</span>';
-  if (key === 'unable_to_verify') return '<span class="badge high">Unable to Verify</span>';
+  if (key === 'manual_verified') return '<span class="badge success">Manual verified</span>';
+  if (key === 'exception_approved') return '<span class="badge success">Exception approved</span>';
+  if (key === 'unable_to_verify') return '<span class="badge high">Unavailable</span>';
   if (key === 'rejected') return '<span class="badge high">Rejected</span>';
   if (key === 'failed') return '<span class="badge high">Failed</span>';
   if (key === 'unmatched') return '<span class="badge pending">Unmatched</span>';
-  if (key === 'applicant_created') return '<span class="badge pending">Applicant Created</span>';
-  if (key === 'pending') return '<span class="badge pending">Pending Verification</span>';
-  if (key === 'not_started') return '<span class="badge draft">Not Started</span>';
+  if (key === 'applicant_created') return '<span class="badge pending">Applicant created</span>';
+  if (key === 'pending') return '<span class="badge pending">Pending</span>';
+  if (key === 'not_started') return '<span class="badge draft">Not started</span>';
   return '<span class="badge draft">Unavailable</span>';
 }
 
@@ -8440,6 +8471,30 @@ function sumsubIdvSourceLabel(source) {
   return 'Case records';
 }
 
+function sumsubIdvDefaultEvidenceLabel(item) {
+  item = item || {};
+  var status = String(item.idv_resolution_status || item.verification_status || '').toLowerCase();
+  if (status === 'manual_verified') return 'Manual exception';
+  if (status === 'exception_approved') return 'Exception approved';
+  if (item.evidence_backed) return 'Provider evidence';
+  if (item.applicant_id || item.applicant_id_present) return 'No final result';
+  return 'No Sumsub result';
+}
+
+function sumsubIdvLastUpdate(item) {
+  item = item || {};
+  var raw = item.manual_resolution && item.manual_resolution.created_at
+    ? item.manual_resolution.created_at
+    : (item.webhook_received_at || item.applicant_created_at || '');
+  if (!raw) return '-';
+  return String(raw).replace('T', ' ').slice(0, 19);
+}
+
+function canViewUnmatchedSumsubWebhookNotice() {
+  var role = String((currentUser && currentUser.role) || '').toLowerCase();
+  return role === 'admin' || role === 'sco';
+}
+
 function renderSumsubIdvPanel(app) {
   var payload = (app && (app.sumsub_idv_statuses || app.sumsubIdvStatuses)) || {};
   var statuses = Array.isArray(payload.statuses) ? payload.statuses : [];
@@ -8447,79 +8502,87 @@ function renderSumsubIdvPanel(app) {
   var unmatched = payload.unmatched_webhooks || {};
   var unmatchedItems = Array.isArray(unmatched.items) ? unmatched.items : [];
   SUMSUB_IDV_ROWS = {};
-  var html = '<div class="prescreen-collapsible-card" id="sumsub-idv-panel" style="border-left:4px solid #0f766e;">' +
-    '<details open>' +
-      '<summary>' +
-        '<div class="prescreen-collapsible-copy">' +
-          '<div class="prescreen-collapsible-title">Individual Identity Verification</div>' +
-          '<div class="prescreen-collapsible-subtitle">Sumsub Identity Verification · Scope: individual_kyc_identity_verification</div>' +
-        '</div>' +
-        '<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap;">' +
-          '<span class="badge draft">People: ' + escapeHtml(String(summary.total != null ? summary.total : statuses.length)) + '</span>' +
-          '<span class="badge pending">Action required: ' + escapeHtml(String(summary.officer_action_required_count || 0)) + '</span>' +
-          '<span class="prescreen-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>' +
-        '</div>' +
-      '</summary>' +
-      '<div class="prescreen-collapsible-body">' +
-        '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Identity verification provider: Sumsub. Financial-crime checks are handled separately.</div>';
+  var total = summary.total != null ? summary.total : statuses.length;
+  var actionRequired = summary.officer_action_required_count || 0;
+  var manualCount = statuses.filter(function(item) {
+    var status = String((item && (item.idv_resolution_status || item.verification_status)) || '').toLowerCase();
+    return status === 'manual_verified' || status === 'exception_approved';
+  }).length;
+  var html = '<div class="idv-compact-panel" id="individual-identity-verification" data-section="section-b-identity-verification">' +
+    '<div class="idv-compact-header">' +
+      '<div>' +
+        '<div class="idv-compact-title">Individual Identity Verification</div>' +
+        '<div class="idv-compact-subtitle">Identity verification provider: Sumsub. Financial-crime screening is handled separately.</div>' +
+      '</div>' +
+      '<div class="idv-compact-meta">' +
+        '<span class="badge draft">People: ' + escapeHtml(String(total)) + '</span>' +
+        '<span class="badge pending">Action required: ' + escapeHtml(String(actionRequired)) + '</span>' +
+        (manualCount ? '<span class="badge success">Manual: ' + escapeHtml(String(manualCount)) + '</span>' : '') +
+      '</div>' +
+    '</div>' +
+    '<div class="idv-compact-body">';
   if (!statuses.length) {
     html += '<div style="font-size:12px;color:var(--text3);padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">No persisted individuals are available for identity verification display.</div>';
-	  } else {
-	    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;">';
-	    statuses.forEach(function(item) {
-	      item = item || {};
-	      var rowKey = 'idv_' + String(Object.keys(SUMSUB_IDV_ROWS).length);
-	      SUMSUB_IDV_ROWS[rowKey] = item;
-	      var labels = Array.isArray(item.rejection_labels) ? item.rejection_labels : [];
-	      var flags = []
-	        .concat(Array.isArray(item.blocking_flags) ? item.blocking_flags : [])
-	        .concat(Array.isArray(item.warning_flags) ? item.warning_flags : []);
-	      var idvStatus = item.idv_resolution_status || item.verification_status;
-	      var idvStatusLabel = item.idv_resolution_status_label || item.officer_label || idvStatus || 'Pending';
-	      var canResolve = canResolveIdvException() && item.approval_ready !== true;
-	      html += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-	        '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px;">' +
-	          '<div>' +
-	            '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(item.person_name || 'Unknown person') + '</div>' +
-	            '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(sumsubIdvRoleLabel(item.person_type)) + ' · Sumsub Identity Verification</div>' +
-	          '</div>' +
-	          sumsubIdvBadge(idvStatus) +
-	        '</div>' +
-	        '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:12px;">' +
-	          '<div><span style="color:var(--text3);">Provider outcome:</span> <strong>' + escapeHtml(sumsubIdvReviewOutcomeLabel(item.review_answer)) + '</strong></div>' +
-	          '<div><span style="color:var(--text3);">IDV resolution:</span> <strong>' + escapeHtml(idvStatusLabel) + '</strong></div>' +
-	          '<div><span style="color:var(--text3);">Applicant ID:</span> <strong style="font-family:monospace;">' + escapeHtml(item.applicant_id || (item.applicant_id_present ? 'masked' : '-')) + '</strong></div>' +
-	          '<div><span style="color:var(--text3);">Approval gate:</span> ' + escapeHtml(item.approval_ready ? 'Ready' : 'Blocked') + '</div>' +
-	          '<div><span style="color:var(--text3);">Applicant created:</span> ' + escapeHtml(String(item.applicant_created_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
-	          '<div><span style="color:var(--text3);">Webhook received:</span> ' + escapeHtml(String(item.webhook_received_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
-	          '<div><span style="color:var(--text3);">Evidence basis:</span> ' + escapeHtml(sumsubIdvSourceLabel(item.source_of_truth || item.resolution_source)) + '</div>' +
-	          '<div><span style="color:var(--text3);">Evidence-backed:</span> ' + escapeHtml(item.evidence_backed ? 'Yes' : 'No') + '</div>' +
-	        '</div>';
-	      if (item.manual_resolution) {
-	        html += '<div style="margin-top:8px;font-size:12px;color:var(--text2);"><strong>Manual resolution:</strong> ' + escapeHtml(String(item.manual_resolution.resolution_outcome || '').replace(/_/g, ' ')) + ' · ' + escapeHtml(String(item.manual_resolution.reason_code || '').replace(/_/g, ' ')) + '</div>';
-	      }
-	      if (labels.length) {
-	        html += '<div style="margin-top:8px;font-size:12px;color:#991b1b;"><strong>Rejection labels:</strong> ' + escapeHtml(labels.join(', ')) + '</div>';
-	      }
-      if (flags.length) {
-        html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">' + flags.map(function(flag) {
-	          return '<span class="badge pending">' + escapeHtml(String(flag).replace(/_/g, ' ')) + '</span>';
-	        }).join('') + '</div>';
-	      }
-	      if (canResolve) {
-	        html += '<div style="display:flex;justify-content:flex-end;margin-top:10px;"><button class="btn btn-outline btn-sm" onclick="openIdvResolutionModal(\'' + rowKey + '\')">Resolve IDV Exception</button></div>';
-	      }
-	      html += '</div>';
-	    });
-	    html += '</div>';
+  } else {
+    html += '<div class="idv-compact-table-wrap"><div class="idv-compact-table">' +
+      '<div class="idv-compact-row header"><div>Person</div><div>Role</div><div>IDV status</div><div>Evidence</div><div>Last update</div><div>Action</div></div>';
+    statuses.forEach(function(item) {
+      item = item || {};
+      var rowKey = 'idv_' + String(Object.keys(SUMSUB_IDV_ROWS).length);
+      SUMSUB_IDV_ROWS[rowKey] = item;
+      var labels = Array.isArray(item.rejection_labels) ? item.rejection_labels : [];
+      var flags = []
+        .concat(Array.isArray(item.blocking_flags) ? item.blocking_flags : [])
+        .concat(Array.isArray(item.warning_flags) ? item.warning_flags : []);
+      var idvStatus = item.idv_resolution_status || item.verification_status;
+      var idvStatusLabel = item.idv_resolution_status_label || item.officer_label || idvStatus || 'Pending';
+      var canResolve = canResolveIdvException() && item.approval_ready !== true;
+      var detailsId = 'idv-details-' + rowKey;
+      html += '<div class="idv-compact-row" data-idv-row="' + escapeHtml(rowKey) + '">' +
+        '<div><div class="idv-compact-person">' + escapeHtml(item.person_name || 'Unknown person') + '</div><div class="idv-compact-muted">Individual KYC identity</div></div>' +
+        '<div class="idv-compact-muted">' + escapeHtml(sumsubIdvRoleLabel(item.person_type)) + '</div>' +
+        '<div>' + sumsubIdvBadge(idvStatus) + '<div class="idv-compact-muted" style="margin-top:3px;">' + escapeHtml(String(idvStatusLabel).replace(/_/g, ' ')) + '</div></div>' +
+        '<div class="idv-compact-evidence">' + escapeHtml(sumsubIdvDefaultEvidenceLabel(item)) + '</div>' +
+        '<div class="idv-compact-muted">' + escapeHtml(sumsubIdvLastUpdate(item)) + '</div>' +
+        '<div class="idv-compact-actions">' +
+          '<button class="btn btn-outline btn-sm" onclick="event.preventDefault();document.getElementById(\'' + detailsId + '\').open = !document.getElementById(\'' + detailsId + '\').open" style="font-size:11px;">View</button>' +
+          (canResolve ? '<button class="btn btn-outline btn-sm" onclick="openIdvResolutionModal(\'' + rowKey + '\')" style="font-size:11px;">Resolve IDV Exception</button>' : '') +
+        '</div>' +
+        '<details class="idv-compact-details" id="' + detailsId + '">' +
+          '<summary>Technical details</summary>' +
+          '<div class="idv-compact-detail-grid">' +
+            '<div><strong>Provider outcome:</strong> ' + escapeHtml(sumsubIdvReviewOutcomeLabel(item.review_answer)) + '</div>' +
+            '<div><strong>Review answer:</strong> ' + escapeHtml(item.review_answer || '-') + '</div>' +
+            '<div><strong>Applicant ID:</strong> <span style="font-family:monospace;">' + escapeHtml(item.applicant_id || (item.applicant_id_present ? 'masked' : '-')) + '</span></div>' +
+            '<div><strong>Applicant created:</strong> ' + escapeHtml(String(item.applicant_created_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
+            '<div><strong>Webhook received:</strong> ' + escapeHtml(String(item.webhook_received_at || '-').replace('T', ' ').slice(0, 19)) + '</div>' +
+            '<div><strong>Evidence basis:</strong> ' + escapeHtml(sumsubIdvSourceLabel(item.source_of_truth || item.resolution_source)) + '</div>' +
+            '<div><strong>Evidence-backed:</strong> ' + escapeHtml(item.evidence_backed ? 'Yes' : 'No') + '</div>' +
+            '<div><strong>Approval gate:</strong> ' + escapeHtml(item.approval_ready ? 'Ready' : 'Blocked') + '</div>' +
+            (labels.length ? '<div><strong>Rejection labels:</strong> ' + escapeHtml(labels.join(', ')) + '</div>' : '') +
+            (item.manual_resolution ? '<div><strong>Manual resolution reason:</strong> ' + escapeHtml(String(item.manual_resolution.reason_code || '').replace(/_/g, ' ')) + '</div>' : '') +
+            (item.manual_resolution ? '<div><strong>Manual resolution outcome:</strong> ' + escapeHtml(String(item.manual_resolution.resolution_outcome || '').replace(/_/g, ' ')) + '</div>' : '') +
+            (flags.length ? '<div><strong>Audit flags:</strong> ' + escapeHtml(flags.map(function(flag) { return String(flag).replace(/_/g, ' '); }).join(', ')) + '</div>' : '') +
+          '</div>' +
+        '</details>' +
+      '</div>';
+    });
+    html += '</div></div>';
   }
-  if (unmatchedItems.length) {
-    html += '<div style="margin-top:12px;padding:10px;border:1px solid #d97706;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;">' +
-      '<strong>Unmatched Sumsub webhook events:</strong> ' + escapeHtml(String(unmatchedItems.length)) + ' pending event(s) require admin/SCO reconciliation.' +
+  if (unmatchedItems.length && canViewUnmatchedSumsubWebhookNotice()) {
+    html += '<div class="idv-admin-notice">' +
+      '<span><strong>Admin notice:</strong> ' + escapeHtml(String(unmatchedItems.length)) + ' unmatched Sumsub webhook event(s) need reconciliation.</span>' +
+      '<button class="btn btn-outline btn-sm" disabled title="Reconciliation workflow pending." style="font-size:11px;">Open reconciliation</button>' +
     '</div>';
   }
-  html += '</div></details></div>';
+  html += '</div></div>';
   return html;
+}
+
+function clearExistingSumsubIdvPanels() {
+  Array.prototype.forEach.call(document.querySelectorAll('#individual-identity-verification'), function(panel) {
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+  });
 }
 
 function canResolveIdvException() {
@@ -8757,7 +8820,7 @@ function renderAuthoritativeAppDetail(app, options) {
   ];
   renderPrescreenSummary(app, prescreenFields);
 
-  document.getElementById('detail-persons').innerHTML = renderSumsubIdvPanel(app) + renderPartySection(app);
+  document.getElementById('detail-persons').innerHTML = renderPartySection(app);
   renderOfficerCorrectionWarning(app);
   renderOfficerCorrectionHistory(app);
 
@@ -8845,7 +8908,8 @@ function renderAuthoritativeAppDetail(app, options) {
   }
 
   var docsHtml = renderStandardKycDocumentTaxonomy(app);
-  document.getElementById('detail-documents').innerHTML = docsHtml;
+  document.getElementById('detail-documents').innerHTML = renderStandardKycDocumentTaxonomy(app, { includeIdv:false });
+  clearExistingSumsubIdvPanels();
   document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
   var documentHistoryContainer = document.getElementById('detail-document-history-container');
   if (documentHistoryContainer) documentHistoryContainer.innerHTML = renderDocumentVerificationHistory(app);
@@ -9638,7 +9702,10 @@ function renderUnifiedEnhancedRequirementTaxonomy(requirements) {
   renderUnifiedPortalDisclosures(requirements);
   renderUnifiedInternalControls(requirements);
   var docsContainer = document.getElementById('detail-docs-with-verification');
-  if (docsContainer && currentApp) docsContainer.innerHTML = renderStandardKycDocumentTaxonomy(currentApp);
+  if (docsContainer && currentApp) {
+    clearExistingSumsubIdvPanels();
+    docsContainer.innerHTML = renderStandardKycDocumentTaxonomy(currentApp);
+  }
 }
 
 function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {
@@ -20357,7 +20424,12 @@ function activateCaseCommandTarget(tab, anchorId) {
   if (!anchorId) return;
   var target = document.getElementById(anchorId);
   if (!target) return;
-  var nestedDetails = target.matches && target.matches('details') ? target : (target.querySelector ? target.querySelector('details') : null);
+  var ancestor = target.parentElement;
+  while (ancestor) {
+    if (ancestor.tagName && ancestor.tagName.toLowerCase() === 'details' && !ancestor.open) ancestor.open = true;
+    ancestor = ancestor.parentElement;
+  }
+  var nestedDetails = target.matches && target.matches('details') ? target : null;
   if (nestedDetails && !nestedDetails.open) nestedDetails.open = true;
   if (typeof target.scrollIntoView === 'function') {
     try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
@@ -20416,7 +20488,7 @@ function normalizeBackendGateBlocker(blocker, index) {
 
 var CASE_COMMAND_ACTION_TARGETS = {
   'screening.resolve': { target_view:'application_review', target_tab:'screening', target_section:'detail-screening-review', scroll_anchor:'detail-screening-review', action_mode:'focus_section' },
-  'idv.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'sumsub-idv-panel', scroll_anchor:'sumsub-idv-panel', action_mode:'focus_section' },
+  'idv.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'section-b-identity-verification', scroll_anchor:'individual-identity-verification', action_mode:'focus_section' },
   'documents.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-kyc-documents-panel', scroll_anchor:'detail-kyc-documents-panel', action_mode:'focus_section' },
   'evidence.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-enhanced-requirements-section', scroll_anchor:'detail-enhanced-requirements-section', action_mode:'focus_section' },
   'edd.open': { target_view:'edd', target_section:'view-edd', scroll_anchor:'view-edd', action_mode:'open_edd_queue' },
@@ -20547,6 +20619,13 @@ function caseCommandNormalizeActionTarget(blocker, groupKey, app) {
   if (!target.target_tab && blocker.tab) target.target_tab = blocker.tab;
   if (!target.target_section && blocker.anchorId) target.target_section = blocker.anchorId;
   if (!target.scroll_anchor && blocker.anchorId) target.scroll_anchor = blocker.anchorId;
+  if (actionKey === 'idv.review') {
+    target.target_view = 'application_review';
+    target.target_tab = 'kyc-docs';
+    target.target_section = 'section-b-identity-verification';
+    target.scroll_anchor = 'individual-identity-verification';
+    target.action_mode = 'focus_section';
+  }
   if (blocker.action && groupKey === 'edd_investigation') {
     if (String(blocker.action).indexOf('openEDDCaseFromApplication') === 0) {
       var match = String(blocker.action).match(/openEDDCaseFromApplication\(([^,]+),/);
