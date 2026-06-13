@@ -129,10 +129,12 @@ def _insert_app_and_memo(db, *,
     db.execute("""
         INSERT INTO compliance_memos
         (application_id, version, memo_data, review_status, validation_status,
-         supervisor_status, blocked, block_reason, created_at)
-        VALUES (?, 1, ?, ?, ?, ?, 0, NULL, ?)
+         supervisor_status, blocked, block_reason, approval_reason, created_at)
+        VALUES (?, 1, ?, ?, ?, ?, 0, NULL, ?, ?)
     """, (app_id, memo_data, review_status, validation_status,
-          supervisor_status, memo_created))
+          supervisor_status,
+          "Fixture approval reason" if review_status == "approved" else None,
+          memo_created))
     db.commit()
 
     row = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()

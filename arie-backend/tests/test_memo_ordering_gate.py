@@ -56,15 +56,17 @@ def _insert_app(db):
 
 
 def _insert_memo(db, app_id, *, review_status, version="v1.0",
-                 validation_status="pass", supervisor_status="CONSISTENT"):
+                 validation_status="pass", supervisor_status="CONSISTENT",
+                 approval_reason=None):
     """Insert a compliance memo. Each call sleeps 0.01s to guarantee distinct created_at."""
     time.sleep(0.01)
     db.execute(
         """
         INSERT INTO compliance_memos
         (application_id, memo_data, generated_by, ai_recommendation,
-         review_status, quality_score, validation_status, supervisor_status, memo_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         review_status, quality_score, validation_status, supervisor_status,
+         memo_version, approval_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_id,
@@ -76,6 +78,7 @@ def _insert_memo(db, app_id, *, review_status, version="v1.0",
             validation_status,
             supervisor_status,
             version,
+            approval_reason,
         ),
     )
     db.commit()
@@ -93,7 +96,13 @@ def test_newer_approved_memo_allows_decision(db):
     # Older memo — draft
     _insert_memo(db, app_id, review_status="draft", version="v1.0")
     # Newer memo — approved
-    _insert_memo(db, app_id, review_status="approved", version="v1.0")
+    _insert_memo(
+        db,
+        app_id,
+        review_status="approved",
+        version="v1.0",
+        approval_reason="Canonical memo approved for ordering test",
+    )
 
     app = dict(db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
@@ -111,7 +120,13 @@ def test_newer_draft_memo_blocks_decision(db):
     app_id = _insert_app(db)
 
     # Older memo — approved
-    _insert_memo(db, app_id, review_status="approved", version="v1.0")
+    _insert_memo(
+        db,
+        app_id,
+        review_status="approved",
+        version="v1.0",
+        approval_reason="Older memo approved for ordering test",
+    )
     # Newer memo — draft
     _insert_memo(db, app_id, review_status="draft", version="v1.0")
 

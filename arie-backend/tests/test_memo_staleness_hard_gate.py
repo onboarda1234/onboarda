@@ -108,15 +108,16 @@ def _insert_approved_memo(db, app_id, *, created_at=None, raw_output_hash=None, 
         INSERT INTO compliance_memos
         (application_id, memo_data, review_status, validation_status,
          supervisor_status, quality_score, approved_by, approved_at,
-         raw_output_hash, created_at)
+         raw_output_hash, approval_reason, created_at)
         VALUES (?, ?, 'approved', 'pass', 'CONSISTENT', 9.1, 'admin001',
-                ?, ?, ?)
+                ?, ?, ?, ?)
         """,
         (
             app_id,
             json.dumps(memo_data),
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             raw_output_hash,
+            "Fixture approval reason",
             created_at or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         ),
     )

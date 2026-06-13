@@ -39,6 +39,8 @@ SUPERVISOR_INCONSISTENT = json.dumps({
     "supervisor": {"verdict": "INCONSISTENT", "can_approve": False},
 })
 
+_APPROVAL_REASON_UNSET = object()
+
 
 def _insert_resolved_enhanced_requirement(db, app_id):
     """Keep supervisor-warning tests focused now that Step 7 enforces EDD requirements."""
@@ -115,10 +117,12 @@ def _insert_app(db, *, app_id=None, ref=None):
 
 def _insert_memo(db, app_id, *, validation_status="pass",
                  supervisor_status="CONSISTENT", review_status="draft",
-                 approval_reason=None, memo_data=None):
+                 approval_reason=_APPROVAL_REASON_UNSET, memo_data=None):
     """Insert a compliance memo for the given application."""
     if memo_data is None:
         memo_data = VALID_SUPERVISOR_CONSISTENT
+    if approval_reason is _APPROVAL_REASON_UNSET:
+        approval_reason = "Fixture approval reason" if review_status == "approved" else None
     params = [
         app_id, memo_data, "system", "APPROVE_WITH_CONDITIONS",
         review_status, 8.5, validation_status, supervisor_status,
@@ -221,7 +225,7 @@ class TestMissingReasonRejected:
                          (app_id,)).fetchone()
         can, msg = ApprovalGateValidator.validate_approval(dict(app), db)
         assert can is False
-        assert "CONSISTENT_WITH_WARNINGS" in msg
+        assert "approval_reason" in msg
 
     def test_warnings_with_empty_reason_blocked(self, db):
         """CONSISTENT_WITH_WARNINGS with empty approval_reason is blocked."""
@@ -236,7 +240,7 @@ class TestMissingReasonRejected:
                          (app_id,)).fetchone()
         can, msg = ApprovalGateValidator.validate_approval(dict(app), db)
         assert can is False
-        assert "senior approver" in msg or "CONSISTENT_WITH_WARNINGS" in msg
+        assert "approval_reason" in msg
 
 
 # ── 5. CONSISTENT_WITH_WARNINGS + non-senior role → rejects ─────────────────
@@ -434,4 +438,4 @@ class TestDecisionGateReachable:
                          (app_id,)).fetchone()
         can, msg = ApprovalGateValidator.validate_approval(dict(app), db)
         assert can is False
-        assert "CONSISTENT_WITH_WARNINGS" in msg
+        assert "approval_reason" in msg

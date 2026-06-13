@@ -22,6 +22,8 @@ VALID_SUPERVISOR = json.dumps({
     "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
 })
 
+_APPROVAL_REASON_UNSET = object()
+
 
 def _insert_resolved_enhanced_requirement(db, app_id):
     """Keep these memo-policy tests focused now that Step 7 enforces EDD requirements."""
@@ -98,8 +100,10 @@ def _insert_app(db, *, app_id=None, ref=None):
 
 def _insert_memo(db, app_id, *, validation_status="pass",
                  supervisor_status="CONSISTENT", review_status="draft",
-                 approval_reason=None):
+                 approval_reason=_APPROVAL_REASON_UNSET):
     """Insert a compliance memo for the given application."""
+    if approval_reason is _APPROVAL_REASON_UNSET:
+        approval_reason = "Fixture approval reason" if review_status == "approved" else None
     params = [
         app_id, VALID_SUPERVISOR, "system", "APPROVE_WITH_CONDITIONS",
         review_status, 8.5, validation_status, supervisor_status,
@@ -224,7 +228,7 @@ class TestMissingReasonRejected:
                          (app_id,)).fetchone()
         can, msg = ApprovalGateValidator.validate_approval(dict(app), db)
         assert can is False
-        assert "senior approver" in msg or "pass_with_fixes" in msg
+        assert "approval_reason" in msg
 
     def test_pass_with_fixes_approved_with_empty_reason_blocked(self, db):
         """Memo with empty-string approval_reason is blocked."""
@@ -237,7 +241,7 @@ class TestMissingReasonRejected:
                          (app_id,)).fetchone()
         can, msg = ApprovalGateValidator.validate_approval(dict(app), db)
         assert can is False
-        assert "senior approver" in msg or "pass_with_fixes" in msg
+        assert "approval_reason" in msg
 
 
 # ── 6. validation_status == "fail" is still rejected ────────────────────────
@@ -359,4 +363,4 @@ class TestDecisionGateReachable:
                          (app_id,)).fetchone()
         can, msg = ApprovalGateValidator.validate_approval(dict(app), db)
         assert can is False
-        assert "pass_with_fixes" in msg
+        assert "approval_reason" in msg

@@ -3735,8 +3735,8 @@ class TestGovernanceAttemptAudit:
         conn.execute("""
             INSERT INTO compliance_memos (
                 application_id, memo_data, generated_by, ai_recommendation,
-                review_status, quality_score, validation_status, supervisor_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                review_status, quality_score, validation_status, supervisor_status, approval_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             app_id,
             json.dumps({
@@ -3750,6 +3750,7 @@ class TestGovernanceAttemptAudit:
             8.5,
             "pass",
             "CONSISTENT",
+            "Fixture approval reason",
         ))
 
     def _insert_enhanced_requirement(self, conn, app_id, *, status="accepted", mandatory=1, blocking_approval=1):
@@ -5917,8 +5918,8 @@ class TestMonitoringEnrollmentActuation:
             """
             INSERT INTO compliance_memos
                 (application_id, memo_data, generated_by, ai_recommendation,
-                 review_status, quality_score, validation_status, supervisor_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 review_status, quality_score, validation_status, supervisor_status, approval_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 app_id,
@@ -5940,6 +5941,7 @@ class TestMonitoringEnrollmentActuation:
                 9.0,
                 "pass",
                 "CONSISTENT",
+                "Fixture approval reason",
             ),
         )
         conn.commit()

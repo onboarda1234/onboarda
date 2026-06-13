@@ -68,7 +68,7 @@ def _create_app_with_flagged_doc(db, *, doc_type="memarts", verification_status=
             app_id,
             json.dumps({"ai_source": "deterministic", "metadata": {"ai_source": "deterministic"}}),
             "system", "APPROVE_WITH_CONDITIONS", "approved", 8.5,
-            "pass", "CONSISTENT", None,
+            "pass", "CONSISTENT", "Fixture approval reason",
         ),
     )
     db.execute(

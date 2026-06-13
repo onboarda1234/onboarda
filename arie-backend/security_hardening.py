@@ -44,6 +44,7 @@ from screening_state import (
     derive_screening_truth,
 )
 from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
+from memo_governance import latest_compliance_memo_row
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -623,12 +624,14 @@ class ApprovalGateValidator:
                 )
 
             # 3. Check compliance memo exists and meets quality gates
-            memo_row = db.execute(
-                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
-                "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at "
-                "FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-                (app_id,)
-            ).fetchone()
+            memo_row = latest_compliance_memo_row(
+                db,
+                app_id,
+                columns=(
+                    "id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
+                    "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at"
+                ),
+            )
             if not memo_row:
                 return (False, "Compliance memo must be generated before approval. "
                         "Generate via POST /api/applications/{id}/memo first.")
@@ -670,6 +673,13 @@ class ApprovalGateValidator:
             if memo_review != 'approved':
                 return (False, f"Compliance memo review_status is '{memo_review}', must be 'approved'. "
                         "Memo must be reviewed and approved before application approval.")
+            approval_reason_current = memo_row.get('approval_reason') or ''
+            if not approval_reason_current.strip():
+                return (
+                    False,
+                    "Compliance memo approval_reason is required. "
+                    "Approve the canonical memo with documented officer rationale before application approval."
+                )
 
             # 3c. Memo validation must have an explicit positive pass
             # Senior-approval-with-findings policy (EX-06): 'pass_with_fixes'
@@ -1326,12 +1336,14 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
 
     memo_row = None
     try:
-        memo_row = db.execute(
-            "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
-            "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at "
-            "FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-            (app_id,),
-        ).fetchone()
+        memo_row = latest_compliance_memo_row(
+            db,
+            app_id,
+            columns=(
+                "id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
+                "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at"
+            ),
+        )
         memo_row = _row_to_dict(memo_row) if memo_row else None
     except Exception:
         memo_row = None
@@ -1388,6 +1400,19 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                 cta_label="Open memo",
                 tab="overview",
                 anchor_id="detail-memo",
+                blocker_group="memo_package",
+                blocker_group_label="Memo Package",
+                action_key="memo.open",
+            ))
+        elif not str(memo_row.get("approval_reason") or "").strip():
+            blockers.append(_approval_gate_blocker(
+                "memo_approval_reason_missing",
+                "Compliance Memo",
+                "Memo approval reason is missing",
+                "Approve the canonical memo with documented officer rationale before final application approval.",
+                cta_label="Open memo",
+                tab="overview",
+                anchor_id="memo-approval-reason",
                 blocker_group="memo_package",
                 blocker_group_label="Memo Package",
                 action_key="memo.open",

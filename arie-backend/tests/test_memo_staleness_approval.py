@@ -83,10 +83,10 @@ def _insert_memo(db, app_id, created_at=None):
         """INSERT INTO compliance_memos
            (application_id, version, memo_data, generated_by, ai_recommendation,
             review_status, quality_score, validation_status, supervisor_status,
-            blocked, created_at)
+            blocked, approval_reason, created_at)
            VALUES (?, 1, ?, 'system', 'APPROVE_WITH_CONDITIONS',
-                   'approved', 8.5, 'pass', 'CONSISTENT', 0, ?)""",
-        (app_id, memo_data, now)
+                   'approved', 8.5, 'pass', 'CONSISTENT', 0, ?, ?)""",
+        (app_id, memo_data, "Fixture approval reason", now)
     )
     db.commit()
 

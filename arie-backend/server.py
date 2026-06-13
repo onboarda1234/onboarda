@@ -115,6 +115,13 @@ from verification_state import (
 )
 from screening_freshness_metadata import populate_screening_freshness_metadata
 from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
+from memo_governance import (
+    CANONICAL_MEMO_ORDER_SQL,
+    MEMO_SELECTOR_VERSION,
+    latest_compliance_memo_row,
+    latest_compliance_memo_row_for_identifier,
+    memo_selection_metadata,
+)
 
 # ── Sprint 2: Extracted modules ──────────────────────────
 from auth import (
@@ -5583,32 +5590,40 @@ class ApplicationDetailHandler(BaseHandler):
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
             result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
         _decorate_application_risk_integrity(result)
-        latest_memo = db.execute("""
-            SELECT id, version, memo_data, review_status, validation_status, blocked, block_reason,
-                   quality_score, memo_version, approved_by, approved_at, created_at,
-                   is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
-            FROM compliance_memos
-            WHERE application_id = ?
-            ORDER BY version DESC, id DESC
-            LIMIT 1
-        """, (result["id"],)).fetchone()
+        latest_memo = latest_compliance_memo_row(
+            db,
+            result["id"],
+            columns="""
+                id, version, memo_data, review_status, validation_status, blocked, block_reason,
+                quality_score, memo_version, approved_by, approved_at, approval_reason, created_at,
+                is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
+            """,
+        )
         if latest_memo:
             latest_memo_dict = dict(latest_memo)
+            latest_memo_selection = memo_selection_metadata(latest_memo_dict)
             stale_view = _memo_staleness_view(result, latest_memo_dict)
             latest_memo_final_status = "stale" if stale_view["is_stale"] else _memo_final_status(latest_memo_dict)
             latest_memo_data = parse_json_field(latest_memo_dict.get("memo_data"), {})
             latest_memo_data.setdefault("metadata", {})
+            latest_memo_data["memo_id"] = latest_memo_dict.get("id")
+            latest_memo_data["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
+            latest_memo_data["memo_selection"] = latest_memo_selection
             latest_memo_data["review_status"] = latest_memo_dict.get("review_status")
             latest_memo_data["validation_status"] = latest_memo_dict.get("validation_status")
             latest_memo_data["final_status"] = latest_memo_final_status
             latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
             latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
+            latest_memo_data["approval_reason"] = latest_memo_dict.get("approval_reason") or ""
             latest_memo_data["is_stale"] = stale_view["is_stale"]
             latest_memo_data["stale_reason"] = stale_view["reason"]
             latest_memo_data["stale_trigger"] = stale_view["trigger"]
             latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
             latest_memo_data["memo_generated"] = latest_memo_dict.get("created_at")
             latest_memo_data["application_ref"] = result.get("ref")
+            latest_memo_data["metadata"]["memo_id"] = latest_memo_dict.get("id")
+            latest_memo_data["metadata"]["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
+            latest_memo_data["metadata"]["memo_selection"] = latest_memo_selection
             latest_memo_data["metadata"]["blocked"] = bool(latest_memo_dict.get("blocked"))
             latest_memo_data["metadata"]["block_reason"] = latest_memo_dict.get("block_reason")
             latest_memo_data["metadata"]["quality_score"] = latest_memo_dict.get("quality_score")
@@ -5634,6 +5649,9 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_dict["stale_reason"] = stale_view["reason"]
             latest_memo_dict["stale_trigger"] = stale_view["trigger"]
             latest_memo_dict["stale_reasons"] = stale_view["reasons"]
+            latest_memo_dict["memo_selection"] = latest_memo_selection
+            latest_memo_dict["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
+            latest_memo_dict["selector"] = MEMO_SELECTOR_VERSION
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
             result["memo_is_stale"] = stale_view["is_stale"]
@@ -5912,7 +5930,7 @@ class ApplicationDetailHandler(BaseHandler):
                     return self.error("Cannot approve: screening used simulated data in production.", 400)
 
                 # Require compliance memo before approval decision
-                memo = db.execute("SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", (real_id,)).fetchone()
+                memo = latest_compliance_memo_row(db, real_id)
                 if not memo:
                     db.close()
                     return self.error("Cannot approve: compliance memo must be generated before decision.", 400)
@@ -6294,16 +6312,11 @@ class ApplicationCorrectionHandler(BaseHandler):
                 app_dict["id"],
                 app_row=dict(refreshed_app) if refreshed_app else None,
             )
-            latest_memo = db.execute(
-                """
-                SELECT id, created_at, is_stale
-                FROM compliance_memos
-                WHERE application_id = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                (app_dict["id"],),
-            ).fetchone()
+            latest_memo = latest_compliance_memo_row(
+                db,
+                app_dict["id"],
+                columns="id, created_at, is_stale",
+            )
             latest_memo_dict = dict(latest_memo) if latest_memo else {}
             memo_requires_regeneration = bool(
                 latest_memo and (substantive_change or _memo_stale_bool(latest_memo_dict.get("is_stale")))
@@ -14203,25 +14216,31 @@ class ApplicationEvidencePackHandler(BaseHandler):
 
         memos = self._dict_rows(
             db.execute(
-                """
+                f"""
                 SELECT id, application_id, version, memo_version, raw_output_hash, memo_data,
                        review_status, reviewed_by, review_notes, quality_score, validation_status,
-                       validation_issues, validation_run_at, approved_by, approved_at,
+                       validation_issues, validation_run_at, approved_by, approved_at, approval_reason,
                        supervisor_status, supervisor_summary, supervisor_contradictions,
                        rule_violations, rule_engine_status, blocked, block_reason,
                        pdf_generated_at, created_at
                 FROM compliance_memos
                 WHERE application_id = ?
-                ORDER BY version DESC, id DESC
+                {CANONICAL_MEMO_ORDER_SQL}
                 """,
                 (app_dict["id"],)
             ).fetchall(),
             json_fields=("memo_data", "validation_issues", "supervisor_contradictions", "rule_violations"),
         )
-        for memo in memos:
+        for index, memo in enumerate(memos):
             memo["reviewed_by_name"] = resolve_user_display_name(db, memo.get("reviewed_by"))
             memo["approved_by_name"] = resolve_user_display_name(db, memo.get("approved_by"))
             memo["final_status"] = _memo_final_status(memo)
+            memo["is_current"] = index == 0
+            memo["memo_selection"] = memo_selection_metadata(memo) if memo["is_current"] else {
+                **memo_selection_metadata(memo),
+                "is_current": False,
+                "is_historical": True,
+            }
 
         decisions = self._dict_rows(
             db.execute(
@@ -19644,10 +19663,7 @@ def _mark_latest_memo_stale(
     before_state=None,
     after_state=None,
 ):
-    latest = db.execute(
-        "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY version DESC, id DESC LIMIT 1",
-        (application_id,),
-    ).fetchone()
+    latest = latest_compliance_memo_row(db, application_id)
     if not latest:
         return {"marked": False, "reason": reason, "trigger": trigger}
     row = dict(latest)
@@ -19823,18 +19839,15 @@ def _ensure_memo_fresh_or_mark_stale(db, app_row, memo_row, *, actor=None, ip_ad
 
 
 def _latest_compliance_memo_row(db, application_id):
-    return db.execute(
-        """
-        SELECT id, version, memo_data, review_status, validation_status, blocked,
-               block_reason, quality_score, memo_version, raw_output_hash, created_at,
-               is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
-        FROM compliance_memos
-        WHERE application_id = ?
-        ORDER BY version DESC, id DESC
-        LIMIT 1
+    return latest_compliance_memo_row(
+        db,
+        application_id,
+        columns="""
+            id, version, memo_data, review_status, validation_status, blocked,
+            block_reason, quality_score, memo_version, raw_output_hash, created_at,
+            is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
         """,
-        (application_id,),
-    ).fetchone()
+    )
 
 
 def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
@@ -20308,11 +20321,8 @@ class MemoValidateHandler(BaseHandler):
             return
 
         db = get_db()
-        # Fetch latest memo for this application
-        memo_row = db.execute(
-            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
-            (app_id, app_id)
-        ).fetchone()
+        # Fetch canonical latest memo for this application.
+        memo_row = latest_compliance_memo_row_for_identifier(db, app_id)
 
         if not memo_row:
             db.close()
@@ -20346,6 +20356,9 @@ class MemoValidateHandler(BaseHandler):
 
         # Run validation engine
         validation = validate_compliance_memo(memo_data)
+        validation["memo_id"] = memo_row["id"]
+        validation["canonical_memo_id"] = memo_row["id"]
+        validation["memo_selection"] = memo_selection_metadata(memo_row)
 
         # Store results
         try:
@@ -21279,10 +21292,7 @@ class MemoApproveHandler(BaseHandler):
             (app_id, app_id),
         ).fetchone()
         attempt_target = app_row["ref"] if app_row else app_id
-        memo_row = db.execute(
-            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
-            (app_id, app_id)
-        ).fetchone()
+        memo_row = latest_compliance_memo_row_for_identifier(db, app_id)
 
         body = {}
         try:
@@ -21336,6 +21346,13 @@ class MemoApproveHandler(BaseHandler):
         signoff_error = _validate_officer_signoff(body.get("officer_signoff"), "memo")
         if signoff_error:
             return reject_memo_approval(signoff_error, 400)
+        approval_reason = str(body.get("approval_reason") or "").strip()
+        if not approval_reason:
+            return reject_memo_approval(
+                "approval_reason is required when approving a compliance memo. "
+                "Provide the officer rationale for relying on the canonical memo.",
+                400,
+            )
 
         # ── SERVER-SIDE 5-GATE APPROVAL ENFORCEMENT ──
         # Gate 1: Check if memo is blocked by rule engine
@@ -21360,14 +21377,7 @@ class MemoApproveHandler(BaseHandler):
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with outstanding findings.",
                     403
                 )
-            # body parsed at EX-11 sign-off validation gate (before Gate 1)
-            approval_reason = (body.get("approval_reason") or "").strip()
-            if not approval_reason:
-                return reject_memo_approval(
-                    "approval_reason is required when approving a memo with validation status 'pass_with_fixes'. "
-                    "Provide a documented reason for approving despite outstanding findings.",
-                    400
-                )
+            # approval_reason was parsed and required before Gate 1.
         else:
             return reject_memo_approval(
                 f"Cannot approve memo with validation status '{val_status}'. "
@@ -21479,18 +21489,7 @@ class MemoApproveHandler(BaseHandler):
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with supervisor warnings.",
                     403
                 )
-            # Parse approval_reason if not already parsed by Gate 2.
-            # When val_status == "pass_with_fixes", Gate 2 has already validated
-            # and set approval_reason to a non-empty string (empty is rejected).
-            # body parsed at EX-11 sign-off validation gate (before Gate 1)
-            if val_status != "pass_with_fixes":
-                approval_reason = (body.get("approval_reason") or "").strip()
-            if not approval_reason:
-                return reject_memo_approval(
-                    "approval_reason is required when approving a memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
-                    "Provide a documented reason for approving despite supervisor warnings.",
-                    400
-                )
+            # approval_reason was parsed and required before Gate 1.
             supervisor_warnings_approval = True
         else:
             return reject_memo_approval(
@@ -21505,36 +21504,26 @@ class MemoApproveHandler(BaseHandler):
                 "This memo requires Senior Compliance Officer review before approval.", 403)
 
         now_ts = datetime.now().isoformat()
-        needs_reason = val_status == "pass_with_fixes" or supervisor_warnings_approval
         try:
-            if needs_reason:
-                # Store approval with reason — validation_status and supervisor verdict stay unchanged
-                db.execute(
-                    "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
-                    (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
-                )
-                # Build context-aware audit detail
-                context_parts = []
-                if val_status == "pass_with_fixes":
-                    context_parts.append("outstanding findings")
-                if supervisor_warnings_approval:
-                    context_parts.append("supervisor warnings")
-                context_desc = " and ".join(context_parts)
-                audit_detail = (
-                    f"Compliance memo approved with {context_desc} by {user.get('name', 'Unknown')} "
-                    f"(role: {user.get('role', 'unknown')}). "
-                )
-                if val_status == "pass_with_fixes":
-                    audit_detail += f"Validation status: pass_with_fixes. "
-                if supervisor_warnings_approval:
-                    audit_detail += f"Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
-                audit_detail += f"Approval reason: {approval_reason}"
-            else:
-                db.execute(
-                    "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ? WHERE id = ?",
-                    (user.get("sub", ""), now_ts, user.get("sub", ""), memo_row["id"])
-                )
-                audit_detail = f"Compliance memo approved by {user.get('name', 'Unknown')}"
+            db.execute(
+                "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
+                (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
+            )
+            context_parts = []
+            if val_status == "pass_with_fixes":
+                context_parts.append("outstanding findings")
+            if supervisor_warnings_approval:
+                context_parts.append("supervisor warnings")
+            context_desc = f" with {' and '.join(context_parts)}" if context_parts else ""
+            audit_detail = (
+                f"Compliance memo approved{context_desc} by {user.get('name', 'Unknown')} "
+                f"(role: {user.get('role', 'unknown')}). "
+            )
+            if val_status == "pass_with_fixes":
+                audit_detail += "Validation status: pass_with_fixes. "
+            if supervisor_warnings_approval:
+                audit_detail += "Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
+            audit_detail += f"Approval reason: {approval_reason}"
 
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, audit_detail, self.get_client_ip()))
@@ -21553,14 +21542,20 @@ class MemoApproveHandler(BaseHandler):
             logger.error(f"Failed to store memo approval for {app_id}: {e}", exc_info=True)
         db.close()
 
-        response = {"status": "approved", "approved_by": user.get("name", ""), "approved_at": now_ts}
+        response = {
+            "status": "approved",
+            "memo_id": memo_row["id"],
+            "canonical_memo_id": memo_row["id"],
+            "memo_selection": memo_selection_metadata(memo_row),
+            "approved_by": user.get("name", ""),
+            "approved_at": now_ts,
+            "approval_reason": approval_reason,
+        }
         if val_status == "pass_with_fixes":
             response["validation_status"] = "pass_with_fixes"
-            response["approval_reason"] = approval_reason
             response["senior_approval"] = True
         if supervisor_warnings_approval:
             response["supervisor_verdict"] = "CONSISTENT_WITH_WARNINGS"
-            response["approval_reason"] = approval_reason
             response["supervisor_warnings_approval"] = True
         self.success(response)
 
@@ -21573,14 +21568,15 @@ class MemoValidationResultsHandler(BaseHandler):
             return
 
         db = get_db()
-        memo_row = db.execute(
-            "SELECT quality_score, validation_status, validation_issues, validation_run_at, "
-            "review_status, approved_by, approved_at, memo_version, is_stale, stale_reason, "
-            "stale_reasons, stale_trigger, stale_marked_at FROM compliance_memos "
-            "WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) "
-            "ORDER BY created_at DESC LIMIT 1",
-            (app_id, app_id)
-        ).fetchone()
+        memo_row = latest_compliance_memo_row_for_identifier(
+            db,
+            app_id,
+            columns="""
+                id, quality_score, validation_status, validation_issues, validation_run_at,
+                review_status, approved_by, approved_at, approval_reason, memo_version,
+                is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
+            """,
+        )
         db.close()
 
         if not memo_row:
@@ -21600,12 +21596,16 @@ class MemoValidationResultsHandler(BaseHandler):
             "review_status": memo_row["review_status"],
             "approved_by": memo_row["approved_by"],
             "approved_at": memo_row["approved_at"],
+            "memo_id": memo_row["id"],
+            "canonical_memo_id": memo_row["id"],
+            "memo_selection": memo_selection_metadata(memo_dict),
             "memo_version": memo_row["memo_version"],
             "is_stale": _memo_stale_bool(memo_dict.get("is_stale")),
             "stale_reason": memo_dict.get("stale_reason") or "",
             "stale_trigger": memo_dict.get("stale_trigger") or "",
             "stale_reasons": _memo_stale_entries(memo_dict.get("stale_reasons")),
             "stale_marked_at": memo_dict.get("stale_marked_at"),
+            "approval_reason": memo_dict.get("approval_reason") or "",
         })
 
 
@@ -21630,11 +21630,8 @@ class MemoPDFDownloadHandler(BaseHandler):
 
         real_id = app["id"]
 
-        # Fetch latest memo
-        memo_row = db.execute(
-            "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
-            (real_id,)
-        ).fetchone()
+        # Fetch canonical latest memo
+        memo_row = latest_compliance_memo_row(db, real_id)
         if not memo_row:
             db.close()
             return self.error("No compliance memo found. Generate a memo first.", 404)
@@ -21737,6 +21734,8 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "application_ref": app["ref"],
                 "company_name": app["company_name"],
                 "memo_id": memo_row["id"],
+                "canonical_memo_id": memo_row["id"],
+                "memo_selection": memo_selection_metadata(memo_row),
                 "memo_version": memo_version,
                 "pdf_sha256": pdf_sha256,
                 "pdf_bytes": len(pdf_bytes),
@@ -21746,6 +21745,7 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "validation_status": validation_result.get("validation_status"),
                 "quality_score": validation_result.get("quality_score"),
                 "supervisor_status": supervisor_result.get("verdict"),
+                "approval_reason": memo_row.get("approval_reason") or "",
                 "authoritative_case_risk": authoritative_risk,
                 "risk_source": authoritative_risk.get("source"),
                 "risk_calculated_at": authoritative_risk.get("calculated_at"),
@@ -21786,10 +21786,7 @@ class MemoSupervisorHandler(BaseHandler):
             return
 
         db = get_db()
-        memo_row = db.execute(
-            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
-            (app_id, app_id)
-        ).fetchone()
+        memo_row = latest_compliance_memo_row_for_identifier(db, app_id)
 
         if not memo_row:
             db.close()
@@ -21930,6 +21927,9 @@ class MemoSupervisorHandler(BaseHandler):
                 "entry were rolled back. Please retry.",
                 500,
             )
+        supervisor_result["memo_id"] = memo_row["id"]
+        supervisor_result["canonical_memo_id"] = memo_row["id"]
+        supervisor_result["memo_selection"] = memo_selection_metadata(memo_row)
         self.success(supervisor_result)
 
 
@@ -21941,10 +21941,11 @@ class MemoSupervisorResultHandler(BaseHandler):
             return
 
         db = get_db()
-        memo_row = db.execute(
-            "SELECT memo_data FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
-            (app_id, app_id)
-        ).fetchone()
+        memo_row = latest_compliance_memo_row_for_identifier(
+            db,
+            app_id,
+            columns="id, memo_data",
+        )
         db.close()
 
         if not memo_row:
@@ -21959,6 +21960,9 @@ class MemoSupervisorResultHandler(BaseHandler):
         if not supervisor:
             return self.error("Supervisor has not been run on this memo yet.", 404)
 
+        supervisor["memo_id"] = memo_row["id"]
+        supervisor["canonical_memo_id"] = memo_row["id"]
+        supervisor["memo_selection"] = memo_selection_metadata(memo_row)
         self.success(supervisor)
 
 
@@ -22146,9 +22150,7 @@ class ApplicationDecisionHandler(BaseHandler):
                 return self.error(reason, 403)
 
             # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
-            memo_exists = db.execute(
-                "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", (real_id,)
-            ).fetchone()
+            memo_exists = latest_compliance_memo_row(db, real_id)
             if not memo_exists:
                 reason = (
                     "Approval blocked: compliance memo must be generated before approval. "
@@ -22394,10 +22396,7 @@ class ApplicationDecisionHandler(BaseHandler):
             # Try to derive confidence from supervisor result in the compliance memo
             supervisor_result = None
             try:
-                memo_row = db.execute(
-                    "SELECT memo_data FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
-                    (real_id,)
-                ).fetchone()
+                memo_row = latest_compliance_memo_row(db, real_id, columns="id, memo_data")
                 if memo_row:
                     memo_data = json.loads(memo_row["memo_data"]) if memo_row["memo_data"] else {}
                     supervisor_result = memo_data.get("supervisor")
