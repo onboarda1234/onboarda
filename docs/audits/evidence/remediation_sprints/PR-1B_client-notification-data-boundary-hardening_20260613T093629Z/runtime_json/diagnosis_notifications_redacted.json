@@ -1,0 +1,73 @@
+{
+  "base_url": "https://staging.regmind.co",
+  "endpoint": "GET /api/notifications",
+  "field_findings": [],
+  "generated_at": "2026-06-13T09:37:00.173309Z",
+  "login_status": 200,
+  "notification_count": 47,
+  "pass": false,
+  "role": "client",
+  "status": 200,
+  "text_findings": [
+    {
+      "index": 15,
+      "keys": [
+        "application_id",
+        "created_at",
+        "documents_list",
+        "id",
+        "message",
+        "notification_type",
+        "read_status",
+        "rmi_request_id",
+        "title"
+      ],
+      "message_excerpt": "Our compliance team requires additional information for application [APP_REF]. Please update your pre-screening data and resubmit. Officer notes: testing of PEP",
+      "notification_type": "pre_approval_rmi",
+      "patterns": [
+        "officer\\s+notes?"
+      ],
+      "title": "Additional Information Required"
+    },
+    {
+      "index": 44,
+      "keys": [
+        "application_id",
+        "created_at",
+        "documents_list",
+        "id",
+        "message",
+        "notification_type",
+        "read_status",
+        "rmi_request",
+        "rmi_request_id",
+        "title"
+      ],
+      "message_excerpt": "Our compliance team requires additional documents for application [APP_REF] by 2026-05-11. Reason: Need structured source of funds and bank statement evidence for runtime audit.",
+      "notification_type": "documents_required",
+      "patterns": [
+        "audit"
+      ],
+      "title": "Additional Documents Required"
+    }
+  ],
+  "unsafe_patterns": [
+    "officer\\s+notes?",
+    "officer_notes",
+    "internal\\s+notes?",
+    "internal_notes",
+    "review\\s+notes?",
+    "review_notes",
+    "compliance\\s+rationale",
+    "assigned\\s+(officer|user)",
+    "memo",
+    "supervisor",
+    "gate",
+    "provider",
+    "audit",
+    "internal\\s+risk",
+    "risk\\s+score",
+    "risk\\s+dimensions",
+    "raw\\s+status"
+  ]
+}
