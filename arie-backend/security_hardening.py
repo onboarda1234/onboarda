@@ -2357,6 +2357,34 @@ class TokenRevocationList:
         except Exception as e:
             logger.debug(f"Could not load revoked tokens from DB: {e}")
 
+    def _db_lookup_active(self, jti: str) -> float:
+        """Look up one active revocation entry in persistent storage.
+
+        Workers may have already loaded the revocation table before another
+        worker handles logout.  A miss in the local cache is therefore not
+        authoritative until the current JTI has been checked in the database.
+        """
+        if not jti:
+            return 0
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            try:
+                row = db.execute(
+                    "SELECT expires_at FROM revoked_tokens WHERE jti = ? AND expires_at > ?",
+                    (jti, time.time()),
+                ).fetchone()
+            finally:
+                db.close()
+            if not row:
+                return 0
+            expiry = row[0] if isinstance(row, (tuple, list)) else row["expires_at"]
+            self._revoked[jti] = expiry
+            return expiry
+        except Exception as e:
+            logger.debug("Could not look up revoked token in DB: %s", e)
+            return 0
+
     def _db_persist(self, jti: str, expires_at: float) -> None:
         """Persist a revocation to DB."""
         try:
@@ -2414,7 +2442,8 @@ class TokenRevocationList:
         self._db_load_all()
 
         if jti not in self._revoked:
-            return False
+            if not self._db_lookup_active(jti):
+                return False
 
         expiry = self._revoked[jti]
         if time.time() > expiry:
@@ -2465,6 +2494,8 @@ class TokenRevocationList:
             Expiry timestamp (Unix time), or 0 if not found
         """
         self._db_load_all()
+        if jti not in self._revoked:
+            self._db_lookup_active(jti)
         return self._revoked.get(jti, 0)
 
 
