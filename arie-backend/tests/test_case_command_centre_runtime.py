@@ -80,6 +80,20 @@ def _runtime_js(html, config):
                 function openEDDCaseFromApplication(caseId, applicationId, applicationRef) {{ eddCalls.push({{ type:'case', caseId, applicationId, applicationRef }}); }}
                 function openEDDQueueForApplication(applicationId, applicationRef) {{ eddCalls.push({{ type:'queue', applicationId, applicationRef }}); }}
                 function showToast(message, level) {{ toastCalls.push({{ message, level }}); }}
+                function screeningTruthBlockedReasons(screeningTruth) {{
+                  if (!screeningTruth) return [];
+                  if (Array.isArray(screeningTruth.approval_blocked_reasons)) return screeningTruth.approval_blocked_reasons;
+                  if (Array.isArray(screeningTruth.blocking_reasons)) return screeningTruth.blocking_reasons;
+                  return [];
+                }}
+                function screeningTruthBlocksApproval(screeningTruth) {{
+                  if (!screeningTruth) return false;
+                  if (screeningTruth.approval_blocking === true) return true;
+                  if (screeningTruth.screening_gate_ready === false) return true;
+                  if (screeningTruth.approval_gate_ready === false) return true;
+                  if (screeningTruth.approval_ready === false) return true;
+                  return screeningTruthBlockedReasons(screeningTruth).length > 0;
+                }}
                 function getApplicationScreeningSummary() {{ return CONFIG.screeningSummary || {{}}; }}
                 function computeDocumentReadinessSummary() {{ return CONFIG.documentSummary || {{ missingCount:0, issueCount:0, pepIncompleteCount:0 }}; }}
                 function getEnhancedReviewSummary() {{ return CONFIG.enhancedSummary || {{}}; }}
@@ -337,6 +351,66 @@ class TestCaseCommandCentreRuntime:
         assert "screening-review" in blocker_ids
         assert "A screening result still needs officer review." in result["html"]
         assert "Resolve screening" in result["html"]
+
+    def test_uncleared_terminal_match_still_blocks_case_command_centre(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {
+                            "canonical_state": "completed_match",
+                            "screening_terminal": True,
+                            "screening_result": "match",
+                            "defensible_clear": False,
+                            "screening_gate_ready": False,
+                            "approval_ready": False,
+                            "approval_blocking": True,
+                            "approval_blocked_reasons": ["company_watchlist:live_terminal_match"],
+                        },
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Screening review pending."]},
+                },
+            )
+        )
+        blocker_ids = [item["id"] for item in result["blockers"]]
+        assert "screening-review" in blocker_ids
+        assert "A screening result still needs officer review." in result["html"]
+        assert "company_watchlist:live_terminal_match" in result["html"]
+        assert "ready for approval" not in result["html"].lower()
+        assert "approval ready" not in result["html"].lower()
+
+    def test_non_review_screening_gate_blocker_uses_generic_copy(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {
+                            "canonical_state": "not_configured",
+                            "screening_terminal": False,
+                            "defensible_clear": False,
+                            "screening_gate_ready": False,
+                            "approval_ready": False,
+                            "approval_blocking": True,
+                            "approval_blocked_reasons": ["screening:provider_not_configured"],
+                        },
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Screening not configured."]},
+                },
+            )
+        )
+        assert "A screening result is blocking approval." in result["html"]
+        assert "Resolve the screening gate blocker before approval." in result["html"]
+        assert "A screening result still needs officer review." not in result["html"]
 
     def test_screening_review_blocker_uses_authoritative_queue_rows(self):
         html = _read_backoffice()

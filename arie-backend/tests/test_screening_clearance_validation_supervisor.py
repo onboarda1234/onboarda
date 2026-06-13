@@ -101,9 +101,15 @@ def _production_shaped_memo():
                 "terminal": True,
                 "canonical_state": "completed_match",
                 "screening_result": "match",
+                "screening_terminal": True,
+                "screening_provider_clear": False,
+                "screening_gate_ready": True,
+                "approval_gate_ready": True,
                 "approval_ready": True,
+                "approval_ready_scope": "screening_truth_gate_only",
                 "approval_blocking": False,
-                "defensible_clear": False,
+                "defensible_clear": True,
+                "approval_blocked_reasons": [],
                 "has_formally_cleared_match": True,
                 "has_uncleared_completed_match": False,
                 "completed_match_blocking": False,
@@ -120,7 +126,12 @@ def _production_shaped_memo():
                     "has_formally_cleared_match": True,
                     "has_uncleared_completed_match": False,
                     "completed_match_blocking": False,
+                    "screening_gate_ready": True,
+                    "approval_gate_ready": True,
+                    "approval_ready": True,
+                    "approval_ready_scope": "screening_truth_gate_only",
                     "approval_blocking": False,
+                    "approval_blocked_reasons": [],
                 },
             },
             "rule_engine": {"violations": [], "enforcements": [], "engine_status": "CLEAN"},
@@ -274,6 +285,8 @@ def test_generated_false_positive_cleared_validates_as_pass():
     assert summary["canonical_state"] == "completed_match"
     assert summary["has_formally_cleared_match"] is True
     assert summary["approval_blocking"] is False
+    assert summary["defensible_clear"] is True
+    assert summary["screening_gate_ready"] is True
     assert "false positive" in screening_text
     assert "not a clear no-match result" in screening_text
     assert validation["validation_status"] == "pass"

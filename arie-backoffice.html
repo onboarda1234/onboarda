@@ -10253,13 +10253,48 @@ function deriveScreeningTruth(record) {
   } else if (providerMode === 'simulated_fallback') {
     availability = 'simulated';
   }
+  var dispositionCode = String(
+    record.review_disposition_code ||
+    record.canonical_disposition ||
+    record.disposition_code ||
+    record.review_disposition ||
+    record.disposition ||
+    record.screening_review_disposition ||
+    ''
+  ).trim().toLowerCase();
+  var falsePositiveCodes = [
+    'false_positive_cleared',
+    'false_positive',
+    'identity_mismatch',
+    'provider_no_relevant_match',
+    'duplicate_or_irrelevant',
+    'low_risk_context_accepted'
+  ];
+  var requiresFourEyes = record.requires_four_eyes === true ||
+    ['1', 'true', 't', 'yes', 'y'].indexOf(String(record.requires_four_eyes || '').trim().toLowerCase()) >= 0;
+  var formallyClearedMatch = canonicalState === 'completed_match' &&
+    falsePositiveCodes.indexOf(dispositionCode) >= 0 &&
+    !!(record.reviewer_id || record.reviewer_name || record.reviewed_by) &&
+    !!(record.review_rationale || record.rationale || record.review_reason || record.review_notes || record.notes) &&
+    !!(record.reviewed_at || record.review_updated_at || record.created_at || record.updated_at) &&
+    !!(record.audit_confirmed || record.audit_log_id || record.review_audit_id) &&
+    (!requiresFourEyes || !!(record.second_reviewer_id || record.second_reviewed_by || record.second_reviewer_name));
+  var approvalBlocking = ['sandbox_provider', 'simulated_fallback', 'not_configured', 'pending', 'failed'].indexOf(canonicalState) >= 0 ||
+    (canonicalState === 'completed_match' && !formallyClearedMatch);
+  var reason = canonicalState === 'completed_match'
+    ? (formallyClearedMatch ? 'live_terminal_match_cleared' : 'live_terminal_match')
+    : (canonicalState === 'completed_clear' ? 'live_terminal_clear' : 'provider_not_terminal');
+  var defensibleClear = (canonicalState === 'completed_clear' && providerMode === 'live_provider') || formallyClearedMatch;
   return {
     canonical_state: canonicalState,
     provider_mode: providerMode,
     provider_availability: availability,
     screening_result: screeningResult,
     terminal: terminal,
-    defensible_clear: canonicalState === 'completed_clear' && providerMode === 'live_provider',
+    defensible_clear: defensibleClear,
+    approval_blocking: approvalBlocking,
+    formally_cleared_match: formallyClearedMatch,
+    reason: reason,
     legacy_status: canonicalState === 'completed_clear' ? 'clear' : (canonicalState === 'completed_match' ? 'match' : (canonicalState === 'not_configured' ? 'not_configured' : (canonicalState === 'failed' ? 'unavailable' : 'pending')))
   };
 }
@@ -10285,16 +10320,64 @@ function deriveScreeningTruthSummary(report) {
   });
   var hasMatch = evidence.some(function(item) { return item.screening_result === 'match'; });
   var providerMode = terminal ? 'live_provider' : canonicalState;
+  var screeningProviderClear = terminal && canonicalState === 'completed_clear' && !hasMatch && providerMode === 'live_provider';
+  var blockingReasons = evidence.filter(function(item) {
+    return item.approval_blocking;
+  }).map(function(item) {
+    return 'screening:' + (item.reason || 'approval_blocking');
+  });
+  if (!terminal && !blockingReasons.length) blockingReasons.push('screening:not_terminal');
+  var hasFormallyClearedMatch = evidence.some(function(item) {
+    return item.canonical_state === 'completed_match' && item.formally_cleared_match;
+  });
+  var hasUnclearedCompletedMatch = evidence.some(function(item) {
+    return item.canonical_state === 'completed_match' && !item.formally_cleared_match;
+  });
+  var defensibleClear = screeningProviderClear || (
+    terminal &&
+    canonicalState === 'completed_match' &&
+    hasFormallyClearedMatch &&
+    !hasUnclearedCompletedMatch &&
+    blockingReasons.length === 0
+  );
+  var screeningGateReady = terminal && defensibleClear && blockingReasons.length === 0;
+  var providerAvailability = evidence.some(function(item) { return item.provider_availability === 'failed'; }) ? 'failed' : (evidence.some(function(item) { return item.provider_availability === 'not_configured'; }) ? 'not_configured' : (evidence.some(function(item) { return item.provider_availability === 'sandbox'; }) ? 'sandbox' : (evidence.some(function(item) { return item.provider_availability === 'simulated'; }) ? 'simulated' : (terminal ? 'available' : 'pending'))));
   return {
     canonical_state: canonicalState,
     provider_mode: providerMode,
-    provider_availability: evidence.some(function(item) { return item.provider_availability === 'failed'; }) ? 'failed' : (evidence.some(function(item) { return item.provider_availability === 'not_configured'; }) ? 'not_configured' : (evidence.some(function(item) { return item.provider_availability === 'sandbox'; }) ? 'sandbox' : (evidence.some(function(item) { return item.provider_availability === 'simulated'; }) ? 'simulated' : (terminal ? 'available' : 'pending')))),
+    provider_availability: providerAvailability,
     screening_result: canonicalState === 'completed_clear' && !hasMatch ? 'clear' : (hasMatch ? 'match' : 'unknown'),
     terminal: terminal,
-    defensible_clear: terminal && canonicalState === 'completed_clear' && providerMode === 'live_provider',
-    approval_ready: terminal && (canonicalState === 'completed_clear' || canonicalState === 'completed_match'),
-    blocking_reasons: terminal ? [] : ['screening:not_terminal']
+    screening_terminal: terminal,
+    screening_provider_clear: screeningProviderClear,
+    defensible_clear: defensibleClear,
+    screening_gate_ready: screeningGateReady,
+    approval_gate_ready: screeningGateReady,
+    approval_ready: screeningGateReady,
+    approval_ready_scope: 'screening_truth_gate_only',
+    approval_blocking: !screeningGateReady,
+    blocking_reasons: blockingReasons,
+    approval_blocked_reasons: blockingReasons,
+    has_formally_cleared_match: hasFormallyClearedMatch,
+    has_uncleared_completed_match: hasUnclearedCompletedMatch,
+    completed_match_blocking: canonicalState === 'completed_match' && blockingReasons.length > 0
   };
+}
+
+function screeningTruthBlockedReasons(screeningTruth) {
+  if (!screeningTruth) return [];
+  if (Array.isArray(screeningTruth.approval_blocked_reasons)) return screeningTruth.approval_blocked_reasons;
+  if (Array.isArray(screeningTruth.blocking_reasons)) return screeningTruth.blocking_reasons;
+  return [];
+}
+
+function screeningTruthBlocksApproval(screeningTruth) {
+  if (!screeningTruth) return false;
+  if (screeningTruth.approval_blocking === true) return true;
+  if (screeningTruth.screening_gate_ready === false) return true;
+  if (screeningTruth.approval_gate_ready === false) return true;
+  if (screeningTruth.approval_ready === false) return true;
+  return screeningTruthBlockedReasons(screeningTruth).length > 0;
 }
 
 function getApplicationScreeningSummary(app) {
@@ -20288,8 +20371,13 @@ function getApplicationApprovalBlockers(app) {
   var screening = getApplicationScreeningSummary(app);
   if (!screening.screening_run_recorded) blockers.push('Screening has not been run.');
   var screeningTruth = screening.screening_truth_summary || null;
-  if (screeningTruth && !screeningTruth.approval_ready) {
-    blockers.push('Screening is not live and terminal: ' + (screeningTruth.canonical_state || 'unknown') + ' / ' + (screeningTruth.provider_mode || 'unknown') + '.');
+  if (screeningTruth && screeningTruthBlocksApproval(screeningTruth)) {
+    var screeningReasons = screeningTruthBlockedReasons(screeningTruth);
+    blockers.push(
+      'Screening gate is blocked: ' +
+      (screeningReasons.length ? screeningReasons.join('; ') : ((screeningTruth.canonical_state || 'unknown') + ' / ' + (screeningTruth.provider_mode || 'unknown'))) +
+      '.'
+    );
   } else if (screening.screening_mode && screening.screening_mode !== 'live') {
     blockers.push('Screening is not recorded as live.');
   }
@@ -20771,13 +20859,24 @@ function getCaseCommandBlockers(app) {
       '',
       'screening.resolve'
     );
-  } else if (screeningTruth && !screeningTruth.approval_ready) {
+  } else if (screeningTruth && screeningTruthBlocksApproval(screeningTruth)) {
     var screeningState = screeningTruth.canonical_state ? String(screeningTruth.canonical_state).replace(/_/g, ' ') : 'pending review';
+    var screeningReasons = screeningTruthBlockedReasons(screeningTruth);
+    var screeningReasonText = screeningReasons.join('; ');
+    var screeningNeedsOfficerReview = /officer_review|review_required|live_terminal_match|completed_match/i.test(screeningReasonText);
+    var screeningBlockerSummary = screeningNeedsOfficerReview
+      ? 'A screening result still needs officer review.'
+      : 'A screening result is blocking approval.';
+    var screeningBlockerDetail = screeningNeedsOfficerReview
+      ? 'Review the screening evidence before approval.'
+      : 'Resolve the screening gate blocker before approval.';
     addBlocker(
       'screening-review',
       'Screening',
-      'A screening result still needs officer review.',
-      'Current screening state: ' + screeningState + '. Review the screening evidence before approval.',
+      screeningBlockerSummary,
+      'Current screening state: ' + screeningState + '. ' +
+        (screeningReasons.length ? 'Blocking reason: ' + screeningReasonText + '. ' : '') +
+        screeningBlockerDetail,
       'Resolve screening',
       'screening',
       'detail-screening-review',

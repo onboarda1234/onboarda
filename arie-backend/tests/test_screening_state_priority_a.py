@@ -327,6 +327,9 @@ class TestScreeningTerminalitySummary:
             assert summary["terminal"] is False
             assert summary["defensible_clear"] is False
             assert summary["approval_blocking"] is True
+            assert summary["approval_ready"] is False
+            assert summary["screening_gate_ready"] is False
+            assert summary["approval_blocked_reasons"]
 
     def test_pending_possible_match_metadata_is_not_terminal_match(self):
         from screening_state import build_screening_terminality_summary
@@ -402,7 +405,45 @@ class TestScreeningTerminalitySummary:
         assert summary["has_formally_cleared_match"] is True
         assert summary["has_uncleared_completed_match"] is False
         assert summary["approval_blocking"] is False
+        assert summary["defensible_clear"] is True
+        assert summary["screening_gate_ready"] is True
+        assert summary["approval_ready"] is True
+        assert summary["approval_blocked_reasons"] == []
+
+    def test_uncleared_completed_match_is_not_approval_ready_when_blocking(self):
+        from screening_state import build_screening_truth_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "company_screening": {
+                "found": True,
+                "sanctions": {
+                    "matched": True,
+                    "results": [{"name": "Watchlist Hit", "is_sanctioned": True}],
+                    "source": "complyadvantage",
+                    "api_status": "live",
+                },
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        }
+
+        summary = build_screening_truth_summary(
+            report,
+            {"company_name": "Uncleared Match Ltd"},
+            [],
+        )
+
+        assert summary["canonical_state"] == "completed_match"
+        assert summary["screening_terminal"] is True
+        assert summary["screening_provider_clear"] is False
         assert summary["defensible_clear"] is False
+        assert summary["approval_blocking"] is True
+        assert summary["approval_ready"] is False
+        assert summary["approval_gate_ready"] is False
+        assert summary["screening_gate_ready"] is False
+        assert summary["has_uncleared_completed_match"] is True
+        assert summary["approval_blocked_reasons"]
 
     @pytest.mark.parametrize(
         "disposition,code",
@@ -450,6 +491,8 @@ class TestScreeningTerminalitySummary:
 
         assert summary["canonical_state"] == "completed_match"
         assert summary["approval_blocking"] is True
+        assert summary["approval_ready"] is False
+        assert summary["screening_gate_ready"] is False
         assert summary["has_uncleared_completed_match"] is True
 
     def test_terminal_material_match_is_preserved(self):

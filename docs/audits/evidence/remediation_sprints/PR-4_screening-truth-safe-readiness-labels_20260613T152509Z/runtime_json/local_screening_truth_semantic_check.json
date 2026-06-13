@@ -1,0 +1,31 @@
+{
+  "base_origin_main_sha": "e61800bedc61752885313ab9e70718f6c4a021f3",
+  "remediation_id": "FSI-007",
+  "scenario": "live_terminal_completed_match_without_officer_clearance",
+  "before_fix_on_origin_main": {
+    "canonical_state": "completed_match",
+    "terminal": true,
+    "screening_result": "match",
+    "defensible_clear": false,
+    "approval_ready": true,
+    "approval_blocking": true,
+    "blocking_reasons": [
+      "company_watchlist:live_terminal_match"
+    ],
+    "has_uncleared_completed_match": true
+  },
+  "after_fix_on_branch": {
+    "canonical_state": "completed_match",
+    "screening_terminal": true,
+    "screening_provider_clear": false,
+    "defensible_clear": false,
+    "screening_gate_ready": false,
+    "approval_ready": false,
+    "approval_gate_ready": false,
+    "approval_blocking": true,
+    "approval_blocked_reasons": [
+      "company_watchlist:live_terminal_match"
+    ],
+    "has_uncleared_completed_match": true
+  }
+}
