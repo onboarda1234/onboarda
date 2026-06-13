@@ -8068,6 +8068,9 @@ async function fetchApplicationDetail(ref) {
     changeRequests: detail.change_requests || [],
     sumsub_idv_statuses: detail.sumsub_idv_statuses || null,
     idvGateSummary: detail.idv_gate_summary || null,
+    approvalGatePresentation: detail.approval_gate_presentation || null,
+    currentGateDiagnostics: detail.current_gate_diagnostics || null,
+    decisionBasis: detail.decision_basis || null,
     gateBlockers: detail.gate_blockers || [],
     gateBlockerCount: detail.gate_blocker_count || 0,
     screeningReviews: detail.screening_reviews || [],
@@ -20232,6 +20235,7 @@ function renderMemoApprovalBlockers(result) {
 function getApplicationApprovalBlockers(app) {
   var blockers = [];
   if (!app) return ['No application is selected.'];
+  if (isTerminalGatePresentation(app)) return [];
   var backendGateBlockers = Array.isArray(app.gateBlockers) ? app.gateBlockers : (Array.isArray(app.gate_blockers) ? app.gate_blockers : null);
   if (backendGateBlockers) {
     return backendGateBlockers.map(function(blocker) {
@@ -20304,6 +20308,23 @@ function getApplicationApprovalBlockers(app) {
     blockers.push('Complete PEP declaration details before approval.');
   }
   return blockers;
+}
+
+function isTerminalGatePresentation(app) {
+  var presentation = app && (app.approvalGatePresentation || app.approval_gate_presentation);
+  return !!(presentation && presentation.mode === 'terminal_decision_context');
+}
+
+function terminalGatePresentation(app) {
+  return (app && (app.approvalGatePresentation || app.approval_gate_presentation)) || null;
+}
+
+function terminalGateDiagnostics(app) {
+  return (app && (app.currentGateDiagnostics || app.current_gate_diagnostics)) || null;
+}
+
+function terminalDecisionBasis(app) {
+  return (app && (app.decisionBasis || app.decision_basis)) || null;
 }
 
 function getApprovalReadiness(app) {
@@ -21037,11 +21058,120 @@ function getCaseCommandBlockers(app) {
   });
 }
 
+function renderTerminalCaseCommandCentre(app, container) {
+  var presentation = terminalGatePresentation(app) || {};
+  var diagnostics = terminalGateDiagnostics(app) || {};
+  var basis = terminalDecisionBasis(app) || {};
+  var statusLabel = app.status || presentation.terminal_status || 'Terminal';
+  var riskLabel = app.finalRiskLevel || app.rawRiskLevel || app.risk || 'Unknown';
+  var diagnosticCount = Number(diagnostics.blocker_count != null ? diagnostics.blocker_count : presentation.current_gate_blocker_count) || 0;
+  var legacyIncomplete = !!presentation.legacy_evidence_incomplete;
+  var snapshot = basis.approval_gate_snapshot || {};
+  var snapshotAvailable = !!(basis.approval_gate_snapshot_available || snapshot.checked_at);
+  var classification = legacyIncomplete
+    ? 'Legacy evidence incomplete'
+    : (snapshotAvailable ? 'Decision-time gate snapshot available' : 'Terminal decision recorded');
+  var nextAction = legacyIncomplete
+    ? 'Review historical decision evidence before relying on this terminal record.'
+    : (diagnosticCount > 0
+      ? 'Review current diagnostics only if this client is reopened or materially changed.'
+      : 'No approval action is required on this terminal record.');
+  var basisTitle = basis.available
+    ? 'Decision record found'
+    : 'Decision evidence incomplete';
+  var basisText = basis.available
+    ? [
+        basis.decision_type ? 'Decision: ' + String(basis.decision_type).replace(/_/g, ' ') : '',
+        basis.timestamp ? 'Recorded: ' + formatDetailDate(basis.timestamp) : '',
+        basis.risk_level ? 'Risk: ' + basis.risk_level : '',
+        snapshotAvailable ? 'Decision-time approval gate: pass' : ''
+      ].filter(Boolean).join(' · ')
+    : 'No matching terminal decision record was returned for this application status.';
+  if (basis.evidence_warning) {
+    basisText += (basisText ? ' ' : '') + basis.evidence_warning;
+  }
+  var diagnosticLabel = diagnostics.label || presentation.current_gate_diagnostics_label || 'Current-state diagnostics only; not the historical approval basis.';
+  var diagnosticBlockers = Array.isArray(diagnostics.blockers) ? diagnostics.blockers : [];
+  var diagnosticPreview = diagnosticBlockers.slice(0, 3).map(function(blocker) {
+    var title = blocker && (blocker.title || blocker.id || 'Current diagnostic');
+    var description = blocker && (blocker.description || blocker.reason || '');
+    return '<li class="case-command-detail-item"><span class="case-command-detail-dot"></span><span><strong>' +
+      escapeHtml(caseCommandSanitizeText(title)) + ':</strong> ' +
+      escapeHtml(caseCommandSanitizeText(description || 'Review this current-state diagnostic if the record is reopened.')) +
+      '</span></li>';
+  }).join('');
+  if (diagnosticCount > 3) {
+    diagnosticPreview += '<li class="case-command-detail-item"><span class="case-command-detail-dot"></span><span>' +
+      escapeHtml(String(diagnosticCount - 3) + ' additional current diagnostic item(s) hidden from this summary.') +
+      '</span></li>';
+  }
+  if (!diagnosticPreview) {
+    diagnosticPreview = '<li class="case-command-detail-item"><span class="case-command-detail-dot"></span><span>No current approval-gate diagnostics returned.</span></li>';
+  }
+  var activityActionId = caseCommandRegisterAction({
+    target_view: 'application_review',
+    target_tab: 'activity',
+    target_section: 'detail-activity',
+    scroll_anchor: 'detail-activity',
+    action_mode: 'focus_section'
+  });
+  var metaChips = [
+    ['Decision stage', statusLabel],
+    ['Record classification', classification],
+    ['Current diagnostics', diagnosticCount ? String(diagnosticCount) + ' current item(s)' : 'None'],
+    ['Risk', riskLabel],
+    ['Officer', app.assigned || 'Unassigned']
+  ];
+  var metaHtml = metaChips.map(function(metric) {
+    return '<span class="case-command-centre-chip">' +
+      '<span class="case-command-centre-chip-label">' + escapeHtml(metric[0]) + '</span>' +
+      '<span class="case-command-centre-chip-value">' + escapeHtml(metric[1]) + '</span>' +
+    '</span>';
+  }).join('');
+
+  container.innerHTML =
+    '<div class="case-command-centre terminal-context">' +
+      '<div class="case-command-centre-header">' +
+        '<div>' +
+          '<div class="case-command-centre-eyebrow">Case Command Centre</div>' +
+          '<div class="case-command-centre-title">' + escapeHtml(app.company || app.name || 'Terminal record') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="case-command-centre-meta">' + metaHtml + '</div>' +
+      '<div class="case-command-centre-next"><span class="label">Next best action</span><div class="value">' + escapeHtml(nextAction) + '</div></div>' +
+      '<div class="case-command-centre-blockers">' +
+        '<details class="case-command-group-row ' + (legacyIncomplete ? 'blocking' : 'guidance') + '" open>' +
+          '<summary>' +
+            '<div class="case-command-group-tag"><span class="case-command-group-icon">D</span><span class="case-command-group-label">Decision Basis</span></div>' +
+            '<div class="case-command-group-copy"><div class="case-command-group-title">' + escapeHtml(basisTitle) + '</div><div class="case-command-group-text">' + escapeHtml(basisText) + '</div></div>' +
+            '<span class="case-command-group-count">1</span>' +
+            '<div class="case-command-group-actions"><span class="case-command-group-severity ' + (legacyIncomplete ? 'blocked' : 'guidance') + '">' + escapeHtml(legacyIncomplete ? 'Evidence Review' : 'Historical') + '</span><button class="btn btn-outline btn-sm" onclick="event.preventDefault(); event.stopPropagation(); runCaseCommandAction(\'' + activityActionId + '\')">View activity</button></div>' +
+          '</summary>' +
+        '</details>' +
+        '<details class="case-command-group-row guidance">' +
+          '<summary>' +
+            '<div class="case-command-group-tag"><span class="case-command-group-icon">C</span><span class="case-command-group-label">Current Diagnostics</span></div>' +
+            '<div class="case-command-group-copy"><div class="case-command-group-title">Current-state diagnostics only</div><div class="case-command-group-text">' + escapeHtml(diagnosticLabel) + '</div></div>' +
+            '<span class="case-command-group-count">' + escapeHtml(String(diagnosticCount)) + '</span>' +
+            '<div class="case-command-group-actions"><span class="case-command-group-severity guidance">Not historical basis</span></div>' +
+          '</summary>' +
+          '<div class="case-command-group-details"><ul class="case-command-detail-list">' + diagnosticPreview + '</ul></div>' +
+        '</details>' +
+      '</div>' +
+    '</div>';
+}
+
 function renderCaseCommandCentre(app) {
   var container = document.getElementById('detail-case-command-centre');
   if (!container) return;
   if (!app) {
     container.innerHTML = '';
+    return;
+  }
+
+  CASE_COMMAND_RENDERED_ACTIONS = {};
+  if (isTerminalGatePresentation(app)) {
+    renderTerminalCaseCommandCentre(app, container);
     return;
   }
 
@@ -21055,8 +21185,6 @@ function renderCaseCommandCentre(app) {
   var approvalReadinessBlocked = !hasBackendPayload && approvalReadiness && approvalReadiness.ready === false;
   var readinessLabel = (blockingBlockers.length || approvalReadinessBlocked) ? 'Blocked' : (advisoryBlockers.length ? 'Needs Review' : 'Ready');
   var riskLabel = app.finalRiskLevel || app.rawRiskLevel || app.risk || 'Unknown';
-
-  CASE_COMMAND_RENDERED_ACTIONS = {};
 
   function buildGroups(items, guidanceOnly) {
     var groups = {};

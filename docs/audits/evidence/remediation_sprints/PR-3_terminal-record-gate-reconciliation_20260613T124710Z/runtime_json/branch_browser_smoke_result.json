@@ -1,0 +1,12 @@
+{
+  "terminal_pass": true,
+  "active_pass": true,
+  "terminal_text": "CASE COMMAND CENTRE\nBrowser Terminal Client Ltd\nDECISION STAGE\nApproved\nRECORD CLASSIFICATION\nLegacy evidence incomplete\nCURRENT DIAGNOSTICS\n2 current item(s)\nRISK\nMEDIUM\nOFFICER\nCase Officer\nNEXT BEST ACTION\nReview historical decision evidence before relying on this terminal record.\nD\nDECISION BASIS\nDecision evidence incomplete\nNo matching terminal decision record was returned for this application status. No matching terminal decision record was found for this application status.\n1\nEVIDENCE REVIEW\nView activity\nC\nCURRENT DIAGNOSTICS\nCurrent-state diagnostics only\nCurrent-state diagnostics only; not the historical approval basis.\n2\nNOT HISTORICAL BASIS",
+  "active_text": "CASE COMMAND CENTRE\nBrowser Active Client Ltd\nDECISION STAGE\nCompliance Review\nACTIVATION STATUS\nBlocked — 1 unresolved controls\nRISK\nMEDIUM\nOFFICER\nCase Officer\nNEXT BEST ACTION\nNext: Re-run or resolve screening.\nS\nSCREENING\nScreening needs attention\nResolve screening before reviewing downstream evidence or memo work.\n1\nMANDATORY\nResolve screening\nScreening report missing: No screening report is recorded. Screening must be run before approval.",
+  "console_messages": [],
+  "local_url": "http://127.0.0.1:54708/arie-backoffice.html",
+  "screenshots": [
+    "/Users/Aisha/onboarda-pr3-terminal-record-gate-reconciliation/docs/audits/evidence/remediation_sprints/PR-3_terminal-record-gate-reconciliation_20260613T124710Z/screenshots/branch_browser_terminal_record_context.png",
+    "/Users/Aisha/onboarda-pr3-terminal-record-gate-reconciliation/docs/audits/evidence/remediation_sprints/PR-3_terminal-record-gate-reconciliation_20260613T124710Z/screenshots/branch_browser_active_gate_blocked.png"
+  ]
+}

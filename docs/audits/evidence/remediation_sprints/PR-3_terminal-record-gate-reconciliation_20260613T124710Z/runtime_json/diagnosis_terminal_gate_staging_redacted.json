@@ -1,0 +1,1095 @@
+{
+  "application_count_seen": 332,
+  "base_url": "https://staging.regmind.co",
+  "non_terminal_control": [
+    {
+      "gate_blocker_count": 8,
+      "id": "13cabbdf214542ea",
+      "raw_detail_key": "non_terminal_detail_control",
+      "ref": "ARF-2026-900289",
+      "status": "edd_required"
+    }
+  ],
+  "raw_redacted": {
+    "applications_list_sample": {
+      "body_keys": [
+        "applications",
+        "limit",
+        "offset",
+        "returned",
+        "total"
+      ],
+      "status_code": 200
+    },
+    "decision_records_900178": {
+      "body": {
+        "count": 2,
+        "records": [
+          {
+            "actor_role": "admin",
+            "approval_gate_snapshot_available": false,
+            "decision_id": "213ca912-28fb-4125-860d-f00f1be4a417",
+            "decision_type": "approve",
+            "extra_keys": [
+              "decision_reason"
+            ],
+            "key_flags": [
+              "supervisor:warnings"
+            ],
+            "risk_level": "LOW",
+            "source": "manual",
+            "timestamp": "2026-05-20T05:41:45.806525"
+          },
+          {
+            "actor_role": "admin",
+            "approval_gate_snapshot_available": false,
+            "decision_id": "6896c69a-1ac9-4d43-9cff-e5dc9a27505a",
+            "decision_type": "approve",
+            "extra_keys": [
+              "can_approve",
+              "contradiction_count",
+              "recommendation",
+              "verdict"
+            ],
+            "key_flags": [
+              "verdict:CONSISTENT_WITH_WARNINGS"
+            ],
+            "risk_level": "LOW",
+            "source": "supervisor",
+            "timestamp": "2026-05-20T05:41:45.068881"
+          }
+        ]
+      },
+      "status_code": 200
+    },
+    "decision_records_900235": {
+      "body": {
+        "count": 0,
+        "records": []
+      },
+      "status_code": 200
+    },
+    "decision_records_900288": {
+      "body": {
+        "count": 0,
+        "records": []
+      },
+      "status_code": 200
+    },
+    "decision_records_mon311_05151513094d77_medium": {
+      "body": {
+        "count": 1,
+        "records": [
+          {
+            "actor_role": "admin",
+            "approval_gate_snapshot_available": false,
+            "decision_id": "2e7a3b16-ecca-4f90-b4ac-5271305e2949",
+            "decision_type": "approve",
+            "extra_keys": [
+              "decision_reason"
+            ],
+            "key_flags": [],
+            "risk_level": "MEDIUM",
+            "source": "manual",
+            "timestamp": "2026-05-15T15:14:14.459449"
+          }
+        ]
+      },
+      "status_code": 200
+    },
+    "decision_records_pr316_false_positive_7f1ad7f9": {
+      "body": {
+        "count": 2,
+        "records": [
+          {
+            "actor_role": "admin",
+            "approval_gate_snapshot_available": false,
+            "decision_id": "8ab88dd7-a51a-49a6-b399-5156902d64ee",
+            "decision_type": "approve",
+            "extra_keys": [
+              "decision_reason"
+            ],
+            "key_flags": [],
+            "risk_level": "LOW",
+            "source": "manual",
+            "timestamp": "2026-05-17T10:05:00.857130"
+          },
+          {
+            "actor_role": "admin",
+            "approval_gate_snapshot_available": false,
+            "decision_id": "303a5b6a-f131-47df-ba76-5c54e6406a36",
+            "decision_type": "approve",
+            "extra_keys": [
+              "can_approve",
+              "contradiction_count",
+              "recommendation",
+              "verdict"
+            ],
+            "key_flags": [
+              "verdict:CONSISTENT"
+            ],
+            "risk_level": "LOW",
+            "source": "supervisor",
+            "timestamp": "2026-05-17T10:05:00.794032"
+          }
+        ]
+      },
+      "status_code": 200
+    },
+    "non_terminal_detail_control": {
+      "body": {
+        "approval_gate_presentation": null,
+        "current_gate_diagnostics": null,
+        "decision_basis": null,
+        "decision_status": null,
+        "gate_blocker_count": 8,
+        "gate_blockers": [
+          {
+            "action_key": "screening.resolve",
+            "action_label": "Resolve screening",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-screening-review",
+              "target_section": "detail-screening-review",
+              "target_tab": "screening",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-screening-review",
+            "blocker_group": "screening",
+            "blocker_group_label": "Screening",
+            "blocking": true,
+            "category": "Screening",
+            "ctaLabel": "Resolve screening",
+            "description": "Screening truth gate failed: director_screening_0:live_terminal_match",
+            "id": "screening_truth",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "screening",
+            "title": "Screening is not approval-ready"
+          },
+          {
+            "action_key": "screening.resolve",
+            "action_label": "Resolve screening",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-screening-review",
+              "target_section": "detail-screening-review",
+              "target_tab": "screening",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-screening-review",
+            "blocker_group": "screening",
+            "blocker_group_label": "Screening",
+            "blocking": true,
+            "category": "Screening",
+            "ctaLabel": "Resolve screening",
+            "description": "Screening was run before the latest screening-relevant application update. Re-screen before approval.",
+            "id": "screening_stale",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "screening",
+            "title": "Screening is stale"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Demo Owner \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_828c61e4dcc1c46a",
+            "idv_resolution_status": "pending",
+            "person_id": "828c61e4dcc1c46a",
+            "person_name": "Demo Owner",
+            "person_type": "ubo",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Aisha Sudally \u2014 Onboarding \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_21eb50f952e54634",
+            "idv_resolution_status": "pending",
+            "person_id": "21eb50f952e54634",
+            "person_name": "Aisha Sudally \u2014 Onboarding",
+            "person_type": "client",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Enhanced requirement status or review metadata changed after memo generation.",
+            "id": "memo_stale",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo is stale"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Memo approval has not been completed.",
+            "id": "memo_approval",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo is not approved"
+          },
+          {
+            "action_key": "memo.validate",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "memo-validation-panel",
+              "target_section": "memo-validation-panel",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "memo-validation-panel",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Memo validation has not been completed.",
+            "id": "memo_validation",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo validation failed or is pending"
+          },
+          {
+            "action_key": "supervisor.run",
+            "action_label": "Run supervisor",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-tab-supervisor",
+              "target_section": "detail-tab-supervisor",
+              "target_tab": "supervisor",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-tab-supervisor",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Supervisor Review",
+            "ctaLabel": "Run supervisor",
+            "description": "Supervisor review has not been completed.",
+            "id": "supervisor_inconsistent",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "supervisor",
+            "title": "Supervisor review is inconsistent"
+          }
+        ],
+        "id": "13cabbdf214542ea",
+        "ref": "ARF-2026-900289",
+        "risk_level": "VERY_HIGH",
+        "status": "edd_required"
+      },
+      "status_code": 200
+    },
+    "officer_login": {
+      "body_keys": [
+        "csrf_token",
+        "token",
+        "user"
+      ],
+      "status_code": 200
+    },
+    "terminal_detail_900178": {
+      "body": {
+        "approval_gate_presentation": null,
+        "current_gate_diagnostics": null,
+        "decision_basis": null,
+        "decision_status": null,
+        "gate_blocker_count": 8,
+        "gate_blockers": [
+          {
+            "action_key": "screening.resolve",
+            "action_label": "Resolve screening",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-screening-review",
+              "target_section": "detail-screening-review",
+              "target_tab": "screening",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-screening-review",
+            "blocker_group": "screening",
+            "blocker_group_label": "Screening",
+            "blocking": true,
+            "category": "Screening",
+            "ctaLabel": "Resolve screening",
+            "description": "Screening was run before the latest screening-relevant application update. Re-screen before approval.",
+            "id": "screening_stale",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "screening",
+            "title": "Screening is stale"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "StaleRecover Director \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_322a095db9ab9fe3",
+            "idv_resolution_status": "pending",
+            "person_id": "322a095db9ab9fe3",
+            "person_name": "StaleRecover Director",
+            "person_type": "director",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Maya StaleRecover UBO \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_0e268a4acaa02b91",
+            "idv_resolution_status": "pending",
+            "person_id": "0e268a4acaa02b91",
+            "person_name": "Maya StaleRecover UBO",
+            "person_type": "ubo",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Audit Client extra 20260520053838 \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_190fb6d121564a1e",
+            "idv_resolution_status": "pending",
+            "person_id": "190fb6d121564a1e",
+            "person_name": "Audit Client extra 20260520053838",
+            "person_type": "client",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Back-office correction changed material memo inputs (verified_pep).",
+            "id": "memo_stale",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo is stale"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Memo approval has not been completed.",
+            "id": "memo_approval",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo is not approved"
+          },
+          {
+            "action_key": "memo.validate",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "memo-validation-panel",
+              "target_section": "memo-validation-panel",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "memo-validation-panel",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Memo validation has not been completed.",
+            "id": "memo_validation",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo validation failed or is pending"
+          },
+          {
+            "action_key": "supervisor.run",
+            "action_label": "Run supervisor",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-tab-supervisor",
+              "target_section": "detail-tab-supervisor",
+              "target_tab": "supervisor",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-tab-supervisor",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Supervisor Review",
+            "ctaLabel": "Run supervisor",
+            "description": "Supervisor review has not been completed.",
+            "id": "supervisor_inconsistent",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "supervisor",
+            "title": "Supervisor review is inconsistent"
+          }
+        ],
+        "id": "82d54af01b5543c2",
+        "ref": "ARF-2026-900178",
+        "risk_level": "HIGH",
+        "status": "approved"
+      },
+      "status_code": 200
+    },
+    "terminal_detail_900235": {
+      "body": {
+        "approval_gate_presentation": null,
+        "current_gate_diagnostics": null,
+        "decision_basis": null,
+        "decision_status": null,
+        "gate_blocker_count": 5,
+        "gate_blockers": [
+          {
+            "action_key": "screening.resolve",
+            "action_label": "Resolve screening",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-screening-review",
+              "target_section": "detail-screening-review",
+              "target_tab": "screening",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-screening-review",
+            "blocker_group": "screening",
+            "blocker_group_label": "Screening",
+            "blocking": true,
+            "category": "Screening",
+            "ctaLabel": "Resolve screening",
+            "description": "Screening truth gate failed: director_screening_0:live_terminal_match; ubo_screening_0:live_terminal_match",
+            "id": "screening_truth",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "screening",
+            "title": "Screening is not approval-ready"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Tariq Hassan \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_95631fca2e43480c",
+            "idv_resolution_status": "pending",
+            "person_id": "95631fca2e43480c",
+            "person_name": "Tariq Hassan",
+            "person_type": "director",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Tariq Hassan \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_798f430e38b896fa",
+            "idv_resolution_status": "pending",
+            "person_id": "798f430e38b896fa",
+            "person_name": "Tariq Hassan",
+            "person_type": "ubo",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Aisha Sudally \u2014 Onboarding \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_21eb50f952e54634",
+            "idv_resolution_status": "pending",
+            "person_id": "21eb50f952e54634",
+            "person_name": "Aisha Sudally \u2014 Onboarding",
+            "person_type": "client",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Compliance memo must be generated before approval.",
+            "id": "memo_missing",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo missing"
+          }
+        ],
+        "id": "9bef56cf68824155",
+        "ref": "ARF-2026-900235",
+        "risk_level": "HIGH",
+        "status": "rejected"
+      },
+      "status_code": 200
+    },
+    "terminal_detail_900288": {
+      "body": {
+        "approval_gate_presentation": null,
+        "current_gate_diagnostics": null,
+        "decision_basis": null,
+        "decision_status": null,
+        "gate_blocker_count": 2,
+        "gate_blockers": [
+          {
+            "action_key": "screening.resolve",
+            "action_label": "Resolve screening",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-screening-review",
+              "target_section": "detail-screening-review",
+              "target_tab": "screening",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-screening-review",
+            "blocker_group": "screening",
+            "blocker_group_label": "Screening",
+            "blocking": true,
+            "category": "Screening",
+            "ctaLabel": "Resolve screening",
+            "description": "No screening report is recorded. Screening must be run before approval.",
+            "id": "screening_missing",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "screening",
+            "title": "Screening report missing"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Compliance memo must be generated before approval.",
+            "id": "memo_missing",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo missing"
+          }
+        ],
+        "id": "8afb2968725346a4",
+        "ref": "ARF-2026-900288",
+        "risk_level": "LOW",
+        "status": "approved"
+      },
+      "status_code": 200
+    },
+    "terminal_detail_mon311_05151513094d77_medium": {
+      "body": {
+        "approval_gate_presentation": null,
+        "current_gate_diagnostics": null,
+        "decision_basis": null,
+        "decision_status": null,
+        "gate_blocker_count": 1,
+        "gate_blockers": [
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "PR311 Monitoring MEDIUM 05151513094d77 Ltd \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_client_05151513094d77_medium",
+            "idv_resolution_status": "pending",
+            "person_id": "client_05151513094d77_medium",
+            "person_name": "PR311 Monitoring MEDIUM 05151513094d77 Ltd",
+            "person_type": "client",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          }
+        ],
+        "id": "mon311_05151513094d77_medium",
+        "ref": "ARF-2026-MON311-05151513094D77-MEDIUM",
+        "risk_level": "MEDIUM",
+        "status": "approved"
+      },
+      "status_code": 200
+    },
+    "terminal_detail_pr316_false_positive_7f1ad7f9": {
+      "body": {
+        "approval_gate_presentation": null,
+        "current_gate_diagnostics": null,
+        "decision_basis": null,
+        "decision_status": null,
+        "gate_blocker_count": 7,
+        "gate_blockers": [
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Jane Doe \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_pr316_20260517100500_false_positive_7f1ad7f9_dir",
+            "idv_resolution_status": "pending",
+            "person_id": "pr316_20260517100500_false_positive_7f1ad7f9_dir",
+            "person_name": "Jane Doe",
+            "person_type": "director",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "Jane Doe \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_pr316_20260517100500_false_positive_7f1ad7f9_ubo",
+            "idv_resolution_status": "pending",
+            "person_id": "pr316_20260517100500_false_positive_7f1ad7f9_ubo",
+            "person_name": "Jane Doe",
+            "person_type": "ubo",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "idv.review",
+            "action_label": "Review IDV",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "sumsub-idv-panel",
+              "target_section": "sumsub-idv-panel",
+              "target_tab": "kyc-docs",
+              "target_view": "application_review"
+            },
+            "anchorId": "sumsub-idv-panel",
+            "blocker_group": "identity_verification",
+            "blocker_group_label": "Identity Verification",
+            "blocking": true,
+            "category": "Identity Verification",
+            "ctaLabel": "Resolve IDV",
+            "description": "PR316 Retest Client \u2014 identity verification has not been started. Create or link the Sumsub identity verification record before approval. Approval is blocked until IDV is verified, manually verified, or senior exception-approved.",
+            "id": "idv_qa_pr316_client",
+            "idv_resolution_status": "pending",
+            "person_id": "qa_pr316_client",
+            "person_name": "PR316 Retest Client",
+            "person_type": "client",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "kyc-docs",
+            "title": "Identity verification unresolved"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Enhanced requirement document submission changed memo evidence.",
+            "id": "memo_stale",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo is stale"
+          },
+          {
+            "action_key": "memo.open",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-memo",
+              "target_section": "detail-memo",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-memo",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Memo approval has not been completed.",
+            "id": "memo_approval",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo is not approved"
+          },
+          {
+            "action_key": "memo.validate",
+            "action_label": "Open memo",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "memo-validation-panel",
+              "target_section": "memo-validation-panel",
+              "target_tab": "overview",
+              "target_view": "application_review"
+            },
+            "anchorId": "memo-validation-panel",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Compliance Memo",
+            "ctaLabel": "Open memo",
+            "description": "Memo validation has not been completed.",
+            "id": "memo_validation",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "overview",
+            "title": "Compliance memo validation failed or is pending"
+          },
+          {
+            "action_key": "supervisor.run",
+            "action_label": "Run supervisor",
+            "action_target": {
+              "action_mode": "focus_section",
+              "scroll_anchor": "detail-tab-supervisor",
+              "target_section": "detail-tab-supervisor",
+              "target_tab": "supervisor",
+              "target_view": "application_review"
+            },
+            "anchorId": "detail-tab-supervisor",
+            "blocker_group": "memo_package",
+            "blocker_group_label": "Memo Package",
+            "blocking": true,
+            "category": "Supervisor Review",
+            "ctaLabel": "Run supervisor",
+            "description": "Supervisor review has not been completed.",
+            "id": "supervisor_inconsistent",
+            "severity": "blocking",
+            "source": "backend_approval_gate",
+            "tab": "supervisor",
+            "title": "Supervisor review is inconsistent"
+          }
+        ],
+        "id": "pr316_20260517100500_false_positive_7f1ad7f9",
+        "ref": "ARF-2026-PR316-FALSE_POSITIVE-7f1ad7f9",
+        "risk_level": "LOW",
+        "status": "approved"
+      },
+      "status_code": 200
+    },
+    "version": {
+      "body": {
+        "build_time": "2026-06-13T12:26:16Z",
+        "environment": "staging",
+        "git_sha": "3f00f491c75a5605440d56899bebb9e513cc1cb3",
+        "git_sha_short": "3f00f49",
+        "image_tag": "3f00f491c75a5605440d56899bebb9e513cc1cb3",
+        "service": "regmind-backend"
+      },
+      "status_code": 200
+    }
+  },
+  "raw_redacted_note": "Sensitive auth material is omitted. Application details are field-projected to FSI-003-relevant gate, decision, status, and blocker fields.",
+  "run_at": "2026-06-13T13:22:28.160945+00:00",
+  "source_of_truth_origin_main_sha": "3f00f491c75a5605440d56899bebb9e513cc1cb3",
+  "steps": [
+    {
+      "method": "GET",
+      "path": "/api/version",
+      "status_code": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/applications",
+      "status_code": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/applications/{ref}",
+      "status_code": "see raw_redacted selected records"
+    },
+    {
+      "method": "GET",
+      "path": "/api/applications/{ref}/decision-records",
+      "status_code": "see raw_redacted selected records"
+    }
+  ],
+  "terminal_candidate_count": 30,
+  "terminal_findings": [
+    {
+      "decision_record_count": 0,
+      "decision_time_gate_snapshot_available": false,
+      "gate_blocker_count": 2,
+      "id": "8afb2968725346a4",
+      "raw_decision_records_key": "decision_records_900288",
+      "raw_detail_key": "terminal_detail_900288",
+      "ref": "ARF-2026-900288",
+      "status": "approved"
+    },
+    {
+      "decision_record_count": 2,
+      "decision_time_gate_snapshot_available": false,
+      "gate_blocker_count": 8,
+      "id": "82d54af01b5543c2",
+      "raw_decision_records_key": "decision_records_900178",
+      "raw_detail_key": "terminal_detail_900178",
+      "ref": "ARF-2026-900178",
+      "status": "approved"
+    },
+    {
+      "decision_record_count": 0,
+      "decision_time_gate_snapshot_available": false,
+      "gate_blocker_count": 5,
+      "id": "9bef56cf68824155",
+      "raw_decision_records_key": "decision_records_900235",
+      "raw_detail_key": "terminal_detail_900235",
+      "ref": "ARF-2026-900235",
+      "status": "rejected"
+    },
+    {
+      "decision_record_count": 2,
+      "decision_time_gate_snapshot_available": false,
+      "gate_blocker_count": 7,
+      "id": "pr316_20260517100500_false_positive_7f1ad7f9",
+      "raw_decision_records_key": "decision_records_pr316_false_positive_7f1ad7f9",
+      "raw_detail_key": "terminal_detail_pr316_false_positive_7f1ad7f9",
+      "ref": "ARF-2026-PR316-FALSE_POSITIVE-7f1ad7f9",
+      "status": "approved"
+    },
+    {
+      "decision_record_count": 1,
+      "decision_time_gate_snapshot_available": false,
+      "gate_blocker_count": 1,
+      "id": "mon311_05151513094d77_medium",
+      "raw_decision_records_key": "decision_records_mon311_05151513094d77_medium",
+      "raw_detail_key": "terminal_detail_mon311_05151513094d77_medium",
+      "ref": "ARF-2026-MON311-05151513094D77-MEDIUM",
+      "status": "approved"
+    }
+  ],
+  "terminal_findings_note": "Compact read-only staging evidence. Earlier diagnosis identified 20 affected terminal examples across 30 terminal candidates; this file stores representative terminal examples and one non-terminal control."
+}

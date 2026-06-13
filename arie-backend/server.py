@@ -4598,6 +4598,9 @@ CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS = {
     "supervisor_requires_rerun",
     "gate_blockers",
     "gate_blocker_count",
+    "approval_gate_presentation",
+    "current_gate_diagnostics",
+    "decision_basis",
     "idv_gate_summary",
     "document_history",
     "application_notes",
@@ -4751,6 +4754,139 @@ def _client_safe_application_detail(result):
         safe["rmi_requests"] = [_client_safe_rmi_request(item) for item in safe["rmi_requests"]]
 
     return safe
+
+
+APPLICATION_TERMINAL_DECISION_STATUSES = {"approved", "rejected", "withdrawn", "closed"}
+APPLICATION_STATUS_DECISION_TYPE = {
+    "approved": "approve",
+    "rejected": "reject",
+}
+
+
+def _terminal_application_status(status):
+    return str(status or "").strip().lower() in APPLICATION_TERMINAL_DECISION_STATUSES
+
+
+def _decision_record_extra(record):
+    extra = record.get("extra") if isinstance(record, dict) else None
+    return extra if isinstance(extra, dict) else {}
+
+
+def _select_terminal_decision_record(db, app):
+    app_ref = (app or {}).get("ref")
+    status = str((app or {}).get("status") or "").strip().lower()
+    if not app_ref:
+        return None, []
+    try:
+        records = get_decision_records(db, app_ref, limit=10)
+    except Exception:
+        logger.exception("Failed to load decision records for terminal application %s", app_ref)
+        return None, []
+
+    expected_type = APPLICATION_STATUS_DECISION_TYPE.get(status)
+    selected = None
+    if expected_type:
+        selected = next(
+            (record for record in records if record.get("decision_type") == expected_type),
+            None,
+        )
+    return selected, records
+
+
+def _build_terminal_decision_basis(db, app):
+    selected, records = _select_terminal_decision_record(db, app)
+    extra = _decision_record_extra(selected or {})
+    gate_snapshot = extra.get("approval_gate_snapshot")
+    if not isinstance(gate_snapshot, dict):
+        gate_snapshot = None
+    basis = {
+        "available": bool(selected),
+        "decision_record_count": len(records),
+        "decision_record_id": (selected or {}).get("decision_id"),
+        "decision_type": (selected or {}).get("decision_type"),
+        "timestamp": (selected or {}).get("timestamp"),
+        "risk_level": (selected or {}).get("risk_level"),
+        "actor_role": ((selected or {}).get("actor") or {}).get("role") if isinstance((selected or {}).get("actor"), dict) else None,
+        "source": (selected or {}).get("source"),
+        "key_flags": (selected or {}).get("key_flags") or [],
+        "approval_gate_snapshot": gate_snapshot,
+        "approval_gate_snapshot_available": bool(gate_snapshot),
+    }
+    if not selected:
+        basis["evidence_warning"] = "No matching terminal decision record was found for this application status."
+    elif str(app.get("status") or "").strip().lower() == "approved" and not gate_snapshot:
+        basis["evidence_warning"] = "Approval decision record exists, but no decision-time approval gate snapshot is available."
+    return basis
+
+
+def _build_application_gate_presentation(db, app, current_blockers):
+    status = str((app or {}).get("status") or "").strip().lower()
+    blocker_count = len(current_blockers or [])
+    if not _terminal_application_status(status):
+        return {
+            "approval_gate_presentation": {
+                "mode": "active_approval_gate",
+                "is_terminal": False,
+                "terminal_status": None,
+                "current_gate_blocker_count": blocker_count,
+                "record_classification": "active_case",
+            },
+            "current_gate_diagnostics": None,
+            "decision_basis": None,
+            "gate_blockers": current_blockers or [],
+        }
+
+    basis = _build_terminal_decision_basis(db, app)
+    is_approved = status == "approved"
+    legacy_evidence_incomplete = (
+        not basis.get("available")
+        or (is_approved and not basis.get("approval_gate_snapshot_available"))
+    )
+    if legacy_evidence_incomplete:
+        classification = "legacy_evidence_incomplete"
+        guidance = (
+            "Terminal record: historical decision evidence is incomplete. "
+            "Review the decision record, audit trail, and export evidence before relying on this record."
+        )
+    elif is_approved:
+        classification = "decision_time_approval_basis_available"
+        guidance = (
+            "Terminal approved record: show decision-time approval basis. "
+            "Current gate diagnostics are not the historical approval basis."
+        )
+    else:
+        classification = "terminal_decision_recorded"
+        guidance = (
+            "Terminal record: final decision is already recorded. "
+            "Current approval blockers are not action-required approval tasks for this record."
+        )
+
+    return {
+        "approval_gate_presentation": {
+            "mode": "terminal_decision_context",
+            "is_terminal": True,
+            "terminal_status": status,
+            "record_classification": classification,
+            "decision_basis_available": bool(basis.get("available")),
+            "decision_time_gate_snapshot_available": bool(basis.get("approval_gate_snapshot_available")),
+            "legacy_evidence_incomplete": bool(legacy_evidence_incomplete),
+            "current_gate_blocker_count": blocker_count,
+            "current_gate_has_blockers": blocker_count > 0,
+            "current_gate_diagnostics_label": (
+                "Current-state diagnostics only; not the historical approval basis."
+            ),
+            "officer_guidance": guidance,
+        },
+        "current_gate_diagnostics": {
+            "applies_to": "current_state_only",
+            "label": "Current-state diagnostics only; not the historical approval basis.",
+            "blocking": False,
+            "blocker_count": blocker_count,
+            "blockers": current_blockers or [],
+        },
+        "decision_basis": basis,
+        "gate_blockers": [],
+    }
 
 
 def _build_application_sumsub_idv_payload(db, app_row, *, include_unmatched=False, parties=None):
@@ -5503,7 +5639,12 @@ class ApplicationDetailHandler(BaseHandler):
             result["officer_corrections"] = _list_application_corrections(db, result["id"])
             idv_payload = result.get("sumsub_idv_statuses") or {}
             result["idv_gate_summary"] = idv_payload.get("gate_summary") or build_idv_gate_summary(idv_payload)
-            result["gate_blockers"] = collect_approval_gate_blockers(result, db)
+            current_gate_blockers = collect_approval_gate_blockers(result, db)
+            gate_presentation = _build_application_gate_presentation(db, result, current_gate_blockers)
+            result["approval_gate_presentation"] = gate_presentation["approval_gate_presentation"]
+            result["current_gate_diagnostics"] = gate_presentation["current_gate_diagnostics"]
+            result["decision_basis"] = gate_presentation["decision_basis"]
+            result["gate_blockers"] = gate_presentation["gate_blockers"]
             result["gate_blocker_count"] = len(result["gate_blockers"])
         result.setdefault("change_requests", [])
         if user["type"] == "client":
@@ -21954,6 +22095,8 @@ class ApplicationDecisionHandler(BaseHandler):
             db.close()
             return self.error(reason, 403)
 
+        approval_gate_snapshot = None
+
         # ── EX-11: Backend enforcement of officer sign-off for AI advisory ──
         signoff_scope = "override" if override_ai else "decision"
         signoff_error = _validate_officer_signoff(data.get("officer_signoff"), signoff_scope)
@@ -22033,6 +22176,15 @@ class ApplicationDecisionHandler(BaseHandler):
                     reason, attempt_summary, db=db)
                 db.close()
                 return self.error(reason, 400)
+            approval_gate_snapshot = {
+                "checked_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "result": "pass",
+                "validator": "ApprovalGateValidator.validate_approval",
+                "blocker_count": 0,
+                "blockers": [],
+                "risk_level": approval_risk_level,
+                "risk_score": approval_risk_score,
+            }
 
             # ── EX-06: Dual-approval for high-risk cases using structured fields ──
             if approval_risk_level in ("HIGH", "VERY_HIGH"):
@@ -22247,6 +22399,8 @@ class ApplicationDecisionHandler(BaseHandler):
                 override_reason=override_reason,
                 supervisor_result=supervisor_result,
             )
+            if approval_gate_snapshot:
+                decision_record.setdefault("extra", {})["approval_gate_snapshot"] = approval_gate_snapshot
             save_decision_record(db, decision_record)
         except Exception as e:
             logger.error("Failed to record decision record for app %s: %s", app["ref"], e)
