@@ -474,6 +474,14 @@ def _truthy_flag(value) -> bool:
     }
 
 
+def _normalise_optional_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return _truthy_flag(value)
+
+
 def _normalise_state(value) -> Optional[str]:
     text = str(value or "").strip().lower()
     if not text:
@@ -1148,10 +1156,12 @@ def sanitize_screening_readiness_summary(summary: dict) -> dict:
         return summary
 
     sanitized = dict(summary)
-    terminal = bool(sanitized.get("screening_terminal", sanitized.get("terminal")))
+    terminal = _normalise_optional_bool(sanitized.get("screening_terminal", sanitized.get("terminal")))
+    if terminal is None:
+        terminal = False
     canonical_state = sanitized.get("canonical_state")
     screening_result = _normalise_token(sanitized.get("screening_result"))
-    provider_clear = sanitized.get("screening_provider_clear")
+    provider_clear = _normalise_optional_bool(sanitized.get("screening_provider_clear"))
     if provider_clear is None:
         provider_clear = bool(
             canonical_state == COMPLETED_CLEAR
@@ -1171,10 +1181,11 @@ def sanitize_screening_readiness_summary(summary: dict) -> dict:
         if str(reason or "").strip()
     ]
 
-    has_uncleared_completed_match = bool(sanitized.get("has_uncleared_completed_match"))
-    completed_match_blocking = bool(sanitized.get("completed_match_blocking"))
+    has_uncleared_completed_match = _truthy_flag(sanitized.get("has_uncleared_completed_match"))
+    completed_match_blocking = _truthy_flag(sanitized.get("completed_match_blocking"))
+    explicit_approval_blocking = _truthy_flag(sanitized.get("approval_blocking"))
     approval_blocking = bool(
-        sanitized.get("approval_blocking")
+        explicit_approval_blocking
         or has_uncleared_completed_match
         or completed_match_blocking
         or blocking_reasons
@@ -1196,19 +1207,22 @@ def sanitize_screening_readiness_summary(summary: dict) -> dict:
         sanitized["approval_blocked_reasons"] = blocking_reasons
         return sanitized
 
-    defensible_clear = bool(sanitized.get("defensible_clear"))
-    screening_gate_ready = bool(
-        sanitized.get("screening_gate_ready")
+    defensible_clear = _truthy_flag(sanitized.get("defensible_clear"))
+    screening_gate_ready_value = (
+        _normalise_optional_bool(sanitized.get("screening_gate_ready"))
         if "screening_gate_ready" in sanitized
         else defensible_clear
     )
+    screening_gate_ready = bool(screening_gate_ready_value)
     sanitized["screening_gate_ready"] = screening_gate_ready
-    sanitized["approval_gate_ready"] = bool(
-        sanitized.get("approval_gate_ready")
+    approval_gate_ready_value = (
+        _normalise_optional_bool(sanitized.get("approval_gate_ready"))
         if "approval_gate_ready" in sanitized
         else screening_gate_ready
     )
-    sanitized["approval_ready"] = bool(sanitized.get("approval_ready") and sanitized["approval_gate_ready"])
+    sanitized["approval_gate_ready"] = bool(approval_gate_ready_value)
+    approval_ready_value = _normalise_optional_bool(sanitized.get("approval_ready"))
+    sanitized["approval_ready"] = bool(approval_ready_value and sanitized["approval_gate_ready"])
     sanitized["approval_blocking"] = False
     sanitized["blocking_reasons"] = []
     sanitized["approval_blocked_reasons"] = []

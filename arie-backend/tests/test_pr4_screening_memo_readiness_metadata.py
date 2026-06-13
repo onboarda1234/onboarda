@@ -6,6 +6,8 @@ import uuid
 
 from tornado.testing import AsyncHTTPTestCase
 
+from branding import BRAND
+
 
 def _sync_test_db_path(path):
     os.environ["DB_PATH"] = path
@@ -75,12 +77,33 @@ def test_sanitize_screening_readiness_summary_clears_legacy_ready_blocking_contr
     assert sanitized["approval_blocked_reasons"] == ["director_screening_0:live_terminal_match"]
 
 
+def test_sanitize_screening_readiness_summary_normalizes_legacy_string_booleans():
+    from screening_state import sanitize_screening_readiness_summary
+
+    sanitized = sanitize_screening_readiness_summary(
+        {
+            "terminal": "false",
+            "screening_provider_clear": "false",
+            "defensible_clear": "false",
+            "approval_ready": "true",
+            "approval_blocking": "false",
+        }
+    )
+
+    assert sanitized["screening_terminal"] is False
+    assert sanitized["screening_provider_clear"] is False
+    assert sanitized["approval_blocking"] is False
+    assert sanitized["approval_gate_ready"] is False
+    assert sanitized["approval_ready"] is False
+
+
 class PR4ScreeningMemoReadinessMetadataTest(AsyncHTTPTestCase):
     def get_app(self):
         self._db_path_state = _capture_db_path_state()
+        brand_slug = BRAND.get("slug", "onboarda")
         self._db_path = os.path.join(
             tempfile.gettempdir(),
-            f"onboarda_pr4_memo_readiness_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
+            f"{brand_slug}_pr4_memo_readiness_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
         )
         try:
             os.unlink(self._db_path)

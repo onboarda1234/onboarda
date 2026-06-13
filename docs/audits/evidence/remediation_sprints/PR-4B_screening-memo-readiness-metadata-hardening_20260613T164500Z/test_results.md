@@ -24,7 +24,8 @@ PYTHONPATH=arie-backend pytest -q \
   arie-backend/tests/test_case_command_centre_runtime.py
 ```
 
-Result: `108 passed in 4.34s`.
+Initial result: `108 passed in 4.34s`.
+After CodeRabbit follow-up: `109 passed in 4.53s`.
 
 ```bash
 PYTHONPATH=arie-backend pytest -q \
@@ -34,4 +35,5 @@ PYTHONPATH=arie-backend pytest -q \
   arie-backend/tests/test_sprint35.py::TestLogout
 ```
 
-Result: `29 passed in 7.80s`.
+Initial result: `29 passed in 7.80s`.
+After CodeRabbit follow-up: `29 passed in 7.43s`.
