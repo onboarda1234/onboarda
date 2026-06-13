@@ -1136,6 +1136,85 @@ def build_screening_terminality_summary(
     }
 
 
+def sanitize_screening_readiness_summary(summary: dict) -> dict:
+    """Return a safe read-time projection for legacy screening readiness blobs.
+
+    Older memo rows can contain serialized screening summaries where
+    ``approval_ready`` was true while ``approval_blocking`` was also true. The
+    stored row is historical evidence, but officer-facing API payloads must not
+    keep emitting contradictory readiness guidance.
+    """
+    if not isinstance(summary, dict):
+        return summary
+
+    sanitized = dict(summary)
+    terminal = bool(sanitized.get("screening_terminal", sanitized.get("terminal")))
+    canonical_state = sanitized.get("canonical_state")
+    screening_result = _normalise_token(sanitized.get("screening_result"))
+    provider_clear = sanitized.get("screening_provider_clear")
+    if provider_clear is None:
+        provider_clear = bool(
+            canonical_state == COMPLETED_CLEAR
+            or (terminal and screening_result == "clear")
+        )
+
+    blocking_reasons = sanitized.get("approval_blocked_reasons")
+    if blocking_reasons is None:
+        blocking_reasons = sanitized.get("blocking_reasons")
+    if blocking_reasons is None:
+        blocking_reasons = []
+    if not isinstance(blocking_reasons, list):
+        blocking_reasons = [str(blocking_reasons)]
+    blocking_reasons = [
+        str(reason).strip()
+        for reason in blocking_reasons
+        if str(reason or "").strip()
+    ]
+
+    has_uncleared_completed_match = bool(sanitized.get("has_uncleared_completed_match"))
+    completed_match_blocking = bool(sanitized.get("completed_match_blocking"))
+    approval_blocking = bool(
+        sanitized.get("approval_blocking")
+        or has_uncleared_completed_match
+        or completed_match_blocking
+        or blocking_reasons
+    )
+
+    sanitized["screening_terminal"] = terminal
+    sanitized["screening_provider_clear"] = bool(provider_clear)
+    sanitized.setdefault("approval_ready_scope", "screening_truth_gate_only")
+
+    if approval_blocking:
+        if not blocking_reasons:
+            blocking_reasons = ["screening_blocker_requires_review"]
+        sanitized["defensible_clear"] = False
+        sanitized["screening_gate_ready"] = False
+        sanitized["approval_gate_ready"] = False
+        sanitized["approval_ready"] = False
+        sanitized["approval_blocking"] = True
+        sanitized["blocking_reasons"] = blocking_reasons
+        sanitized["approval_blocked_reasons"] = blocking_reasons
+        return sanitized
+
+    defensible_clear = bool(sanitized.get("defensible_clear"))
+    screening_gate_ready = bool(
+        sanitized.get("screening_gate_ready")
+        if "screening_gate_ready" in sanitized
+        else defensible_clear
+    )
+    sanitized["screening_gate_ready"] = screening_gate_ready
+    sanitized["approval_gate_ready"] = bool(
+        sanitized.get("approval_gate_ready")
+        if "approval_gate_ready" in sanitized
+        else screening_gate_ready
+    )
+    sanitized["approval_ready"] = bool(sanitized.get("approval_ready") and sanitized["approval_gate_ready"])
+    sanitized["approval_blocking"] = False
+    sanitized["blocking_reasons"] = []
+    sanitized["approval_blocked_reasons"] = []
+    return sanitized
+
+
 # ── Screening Queue officer-facing state resolver ─────────────────────
 
 QUEUE_STATUS_NOT_STARTED = "not_started"
