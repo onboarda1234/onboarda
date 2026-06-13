@@ -496,6 +496,31 @@ class BaseHandler(tornado.web.RequestHandler):
             return None
         return user
 
+    def require_backoffice_auth(self, roles=None, resource=None):
+        """Require an active officer token for internal compliance APIs."""
+        allowed_roles = set(roles or _OFFICER_ROLES)
+        user = self.require_auth()
+        if not user:
+            return None
+        actor_type = str(user.get("type") or "").strip().lower()
+        actor_role = str(user.get("role") or "").strip().lower()
+        if actor_type != "officer" or actor_role not in allowed_roles:
+            resource_id = str(resource or self.request.path or "internal_api")[:160]
+            self.log_authz_denial(
+                user,
+                "authz_denied_internal_api",
+                resource_id,
+                {
+                    "actor_type": actor_type,
+                    "actor_role": actor_role,
+                    "allowed_roles": sorted(allowed_roles),
+                    "method": self.request.method if hasattr(self, "request") else "",
+                },
+            )
+            self.error("Insufficient permissions", 403)
+            return None
+        return user
+
     def get_client_ip(self):
         remote_ip = self.request.remote_ip or ""
         x_real_ip = (self.request.headers.get("X-Real-IP") or "").strip()

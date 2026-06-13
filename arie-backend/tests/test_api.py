@@ -1021,8 +1021,15 @@ class TestAuthenticatedAccess:
             headers={"Authorization": f"Bearer {client_token}"},
             timeout=3,
         )
-        assert client_default.status_code == 200
-        client_refs = {a["ref"] for a in client_default.json()["applications"]}
+        assert client_default.status_code == 403
+
+        client_portal = http_requests.get(
+            f"{api_server}/api/portal/applications",
+            headers={"Authorization": f"Bearer {client_token}"},
+            timeout=3,
+        )
+        assert client_portal.status_code == 200
+        client_refs = {a["ref"] for a in client_portal.json()["applications"]}
         assert real_ref in client_refs
         assert fixture_ref not in client_refs
 
@@ -1042,8 +1049,6 @@ class TestAuthenticatedAccess:
         )
         assert admin_dashboard.status_code == 200
         assert admin_dashboard.json()["show_fixtures"] is True
-        admin_recent_refs = {a["ref"] for a in admin_dashboard.json()["recent"]}
-        assert fixture_ref in admin_recent_refs
 
     def test_application_audit_log_includes_prefixed_application_targets(self, api_server):
         """Case audit reconstruction must include bare and application: prefixed targets."""

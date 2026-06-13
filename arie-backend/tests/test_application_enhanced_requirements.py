@@ -1723,8 +1723,18 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
         headers=_client_headers("client001"),
         timeout=5,
     )
-    assert client_resp.status_code == 200, client_resp.text
-    assert all("enhanced_review_summary" not in app for app in client_resp.json()["applications"])
+    assert client_resp.status_code == 403, client_resp.text
+
+    client_portal_resp = requests.get(
+        f"{base_url}/api/portal/applications",
+        headers=_client_headers("client001"),
+        timeout=5,
+    )
+    assert client_portal_resp.status_code == 200, client_portal_resp.text
+    assert all(
+        "enhanced_review_summary" not in app
+        for app in client_portal_resp.json()["applications"]
+    )
 
 
 def test_applications_enhanced_filter_sql_uses_postgres_safe_flag_predicates():

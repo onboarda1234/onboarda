@@ -1,0 +1,34 @@
+{
+  "remediation_id": "FSI-001",
+  "base_origin_main_sha": "902ba4e59b8108173fe7b2991692ddff9a57c643",
+  "branch": "codex/pr1-security-client-api-boundary-hardening",
+  "evidence_type": "local_test_redacted_summary",
+  "client_forbidden": [
+    {"method": "GET", "endpoint": "/api/applications", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications?view=list&limit=1", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/screening/queue", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/screening/status", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{id}/memo/validation", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{id}/memo/supervisor", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{id}/audit-log", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{id}/evidence-pack", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{id}/kyc/identity-verifications", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{other_client_id}", "expected": 403, "actual": 403},
+    {"method": "GET", "endpoint": "/api/applications/{other_client_ref}", "expected": 403, "actual": 403}
+  ],
+  "client_allowed": [
+    {"method": "GET", "endpoint": "/api/portal/applications", "expected": 200, "actual": 200},
+    {"method": "GET", "endpoint": "/api/applications/{own_id}", "expected": 200, "actual": 200, "projection": "portal_safe"}
+  ],
+  "backoffice_allowed": [
+    {"role": "admin", "endpoint": "/api/applications?view=list&limit=5", "actual": 200},
+    {"role": "sco", "endpoint": "/api/applications?view=list&limit=5", "actual": 200},
+    {"role": "co", "endpoint": "/api/applications?view=list&limit=5", "actual": 200},
+    {"role": "analyst", "endpoint": "/api/applications?view=list&limit=5", "actual": 200},
+    {"role": "admin", "endpoint": "/api/screening/queue", "actual": 200},
+    {"role": "sco", "endpoint": "/api/screening/queue", "actual": 200},
+    {"role": "co", "endpoint": "/api/screening/queue", "actual": 200},
+    {"role": "analyst", "endpoint": "/api/screening/queue", "actual": 200}
+  ],
+  "redaction": "No tokens, cookies, CSRF values, provider secrets, or sensitive PII stored."
+}
