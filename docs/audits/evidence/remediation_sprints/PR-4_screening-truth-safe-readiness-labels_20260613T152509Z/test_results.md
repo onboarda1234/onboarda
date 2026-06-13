@@ -37,13 +37,13 @@ PYTHONPATH=arie-backend pytest -q arie-backend/tests/test_screening_state_priori
 Result:
 
 ```text
-116 passed in 3.19s
+117 passed in 3.47s
 ```
 
 Frontend/static note:
 
 ```text
-No configured frontend lint/build command exists. arie-backend/package.json contains only a placeholder test script. Back-office HTML/JS changes are covered by static and Node runtime tests in test_backoffice_ca_truthflow_static.py and test_case_command_centre_runtime.py.
+No configured frontend lint/build command exists. arie-backend/package.json contains only a placeholder test script. Back-office HTML/JS changes are covered by static and Node runtime tests in test_backoffice_ca_truthflow_static.py and test_case_command_centre_runtime.py, including CodeRabbit follow-up coverage for generic non-review screening blockers.
 ```
 
 ## Prior Remediation Regression Subset
@@ -57,7 +57,7 @@ PYTHONPATH=arie-backend pytest -q arie-backend/tests/test_pr1_client_api_boundar
 Result:
 
 ```text
-16 passed in 6.39s
+16 passed in 6.37s
 ```
 
 FSI-002:
@@ -69,5 +69,5 @@ PYTHONPATH=arie-backend pytest -q arie-backend/tests/test_sprint35.py::TestLogou
 Result:
 
 ```text
-13 passed in 1.44s
+13 passed in 1.45s
 ```

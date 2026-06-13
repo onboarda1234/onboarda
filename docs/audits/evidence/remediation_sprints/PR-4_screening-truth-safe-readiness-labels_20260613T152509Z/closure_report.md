@@ -77,13 +77,13 @@ PYTHONPATH=arie-backend pytest -q arie-backend/tests/test_screening_state_priori
 Result:
 
 ```text
-116 passed in 3.19s
+117 passed in 3.47s
 ```
 
 Frontend/static note:
 
 ```text
-No configured frontend lint/build command exists. Back-office HTML/JS changes are covered by static and Node runtime tests.
+No configured frontend lint/build command exists. Back-office HTML/JS changes are covered by static and Node runtime tests, including CodeRabbit follow-up coverage for generic non-review screening blockers.
 ```
 
 Regression commands:
@@ -96,8 +96,8 @@ PYTHONPATH=arie-backend pytest -q arie-backend/tests/test_sprint35.py::TestLogou
 Result:
 
 ```text
-16 passed in 6.39s
-13 passed in 1.44s
+16 passed in 6.37s
+13 passed in 1.45s
 ```
 
 ## Full suite results

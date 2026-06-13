@@ -384,6 +384,34 @@ class TestCaseCommandCentreRuntime:
         assert "ready for approval" not in result["html"].lower()
         assert "approval ready" not in result["html"].lower()
 
+    def test_non_review_screening_gate_blocker_uses_generic_copy(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {
+                            "canonical_state": "not_configured",
+                            "screening_terminal": False,
+                            "defensible_clear": False,
+                            "screening_gate_ready": False,
+                            "approval_ready": False,
+                            "approval_blocking": True,
+                            "approval_blocked_reasons": ["screening:provider_not_configured"],
+                        },
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Screening not configured."]},
+                },
+            )
+        )
+        assert "A screening result is blocking approval." in result["html"]
+        assert "Resolve the screening gate blocker before approval." in result["html"]
+        assert "A screening result still needs officer review." not in result["html"]
+
     def test_screening_review_blocker_uses_authoritative_queue_rows(self):
         html = _read_backoffice()
         result = _run_node(

@@ -477,7 +477,10 @@ def test_backoffice_screening_truth_fallback_does_not_mark_uncleared_matches_rea
 
     summary_region = _function_region(html, "deriveScreeningTruthSummary", "screeningTruthBlockedReasons")
     assert "screeningProviderClear" in summary_region
-    assert "screening:officer_review_required" in summary_region
+    assert "hasFormallyClearedMatch" in summary_region
+    assert "hasUnclearedCompletedMatch" in summary_region
+    assert "item.approval_blocking" in summary_region
+    assert "screening_gate_ready: screeningGateReady" in summary_region
     assert "approval_ready: screeningGateReady" in summary_region
     assert "terminal && (canonicalState === 'completed_clear' || canonicalState === 'completed_match')" not in summary_region
 
