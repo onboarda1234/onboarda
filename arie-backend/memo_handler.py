@@ -271,9 +271,15 @@ def _screening_source_summary(screening_report, screening_reviews=None):
         "provider_mode": truth_summary.get("provider_mode"),
         "screening_result": truth_summary.get("screening_result"),
         "terminal": truth_summary.get("terminal"),
+        "screening_terminal": truth_summary.get("screening_terminal"),
+        "screening_provider_clear": truth_summary.get("screening_provider_clear"),
         "defensible_clear": truth_summary.get("defensible_clear"),
+        "screening_gate_ready": truth_summary.get("screening_gate_ready"),
+        "approval_gate_ready": truth_summary.get("approval_gate_ready"),
         "approval_ready": truth_summary.get("approval_ready"),
+        "approval_ready_scope": truth_summary.get("approval_ready_scope"),
         "blocking_reasons": truth_summary.get("blocking_reasons") or [],
+        "approval_blocked_reasons": truth_summary.get("approval_blocked_reasons") or [],
     }
 
 
@@ -1275,12 +1281,12 @@ def build_compliance_memo(app, directors, ubos, documents):
         _screening_recommendation_statement = (
             f"Recommendation: {decision_label}. "
             + _screening_completion_phrase
-            + "; screening is not approval-ready and cannot support any future approval reliance."
+            + "; screening gate is blocked and cannot support any future approval reliance."
         )
         _screening_compliance_decision_statement = (
             f"this application remains subject to {decision_label}. "
             + _screening_completion_phrase
-            + "; screening is not approval-ready and cannot support approval reliance. "
+            + "; screening gate is blocked and cannot support approval reliance. "
         )
     else:
         _screening_recommendation_statement = (
@@ -1771,9 +1777,13 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "provider_mode": _screening_terminality.get("provider_mode"),
                 "screening_result": _screening_terminality.get("screening_result"),
                 "defensible_clear": bool(_screening_terminality.get("defensible_clear")),
+                "screening_gate_ready": bool(_screening_terminality.get("screening_gate_ready")),
+                "approval_gate_ready": bool(_screening_terminality.get("approval_gate_ready")),
                 "approval_ready": bool(_screening_terminality.get("approval_ready")),
+                "approval_ready_scope": _screening_terminality.get("approval_ready_scope"),
                 "approval_blocking": bool(_screening_terminality.get("approval_blocking")),
                 "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
+                "approval_blocked_reasons": _screening_terminality.get("approval_blocked_reasons") or [],
                 "has_formally_cleared_match": bool(_screening_terminality.get("has_formally_cleared_match")),
                 "has_uncleared_completed_match": bool(_screening_terminality.get("has_uncleared_completed_match")),
                 "completed_match_blocking": bool(_screening_terminality.get("completed_match_blocking")),
@@ -1862,7 +1872,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "original_decision": _original_screening_decision,
                 "enforced_decision": "REVIEW",
                 "reason": (
-                    "Screening truth is not approval-ready "
+                    "Screening truth gate is blocked "
                     f"(state={screening_canonical_state or 'unknown'}, "
                     f"provider_mode={screening_provider_mode or 'unknown'}, "
                     f"availability={screening_provider_availability or 'unknown'}). "
@@ -2175,9 +2185,13 @@ def build_compliance_memo(app, directors, ubos, documents):
             "provider_mode": _screening_terminality.get("provider_mode"),
             "screening_result": _screening_terminality.get("screening_result"),
             "defensible_clear": bool(_screening_terminality.get("defensible_clear")),
+            "screening_gate_ready": bool(_screening_terminality.get("screening_gate_ready")),
+            "approval_gate_ready": bool(_screening_terminality.get("approval_gate_ready")),
             "approval_ready": bool(_screening_terminality.get("approval_ready")),
+            "approval_ready_scope": _screening_terminality.get("approval_ready_scope"),
             "approval_blocking": bool(_screening_terminality.get("approval_blocking")),
             "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
+            "approval_blocked_reasons": _screening_terminality.get("approval_blocked_reasons") or [],
             "has_terminal_match": _has_terminal_match,
             "has_formally_cleared_match": bool(_screening_terminality.get("has_formally_cleared_match")),
             "has_uncleared_completed_match": bool(_screening_terminality.get("has_uncleared_completed_match")),

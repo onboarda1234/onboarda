@@ -468,7 +468,22 @@ def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_cle
 
     approval_region = _function_region(html, "getApplicationApprovalBlockers", "renderDecisionReadiness")
     assert "screening.screening_truth_summary" in approval_region
-    assert "!screeningTruth.approval_ready" in approval_region
+    assert "screeningTruthBlocksApproval(screeningTruth)" in approval_region
+    assert "Screening gate is blocked:" in approval_region
+
+
+def test_backoffice_screening_truth_fallback_does_not_mark_uncleared_matches_ready():
+    html = BACKOFFICE_HTML.read_text()
+
+    summary_region = _function_region(html, "deriveScreeningTruthSummary", "screeningTruthBlockedReasons")
+    assert "screeningProviderClear" in summary_region
+    assert "screening:officer_review_required" in summary_region
+    assert "approval_ready: screeningGateReady" in summary_region
+    assert "terminal && (canonicalState === 'completed_clear' || canonicalState === 'completed_match')" not in summary_region
+
+    helper_region = _function_region(html, "screeningTruthBlocksApproval", "getApplicationScreeningSummary")
+    assert "approval_blocking === true" in helper_region
+    assert "screening_gate_ready === false" in helper_region
 
 
 def test_backoffice_legacy_match_without_api_status_remains_terminal_match_fallback():

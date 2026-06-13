@@ -1237,8 +1237,8 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             blockers.append(_approval_gate_blocker(
                 "screening_truth",
                 "Screening",
-                "Screening is not approval-ready",
-                "Screening truth gate failed: "
+                "Screening gate is blocked",
+                "Screening truth gate is blocked: "
                 + "; ".join(screening_truth.get("blocking_reasons") or ["screening_not_terminal"]),
                 cta_label="Resolve screening",
                 tab="screening",

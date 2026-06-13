@@ -954,16 +954,44 @@ def build_screening_truth_summary(
         "screening_validity_days": prescreening.get("screening_validity_days"),
     }
 
+    screening_terminal = terminal
+    screening_provider_clear = bool(
+        screening_terminal
+        and canonical_state == COMPLETED_CLEAR
+        and provider_mode == LIVE_PROVIDER
+        and not has_match
+    )
+    formally_cleared_completed_match = bool(
+        screening_terminal
+        and canonical_state == COMPLETED_MATCH
+        and has_formally_cleared_match
+        and not has_uncleared_completed_match
+        and not blocking_reasons
+    )
+    defensible_clear = bool(screening_provider_clear or formally_cleared_completed_match)
+    screening_gate_ready = bool(screening_terminal and defensible_clear and not blocking_reasons)
+    approval_blocking = bool(blocking_reasons) or not screening_gate_ready
+    approval_blocked_reasons = (
+        blocking_reasons
+        or ([] if screening_gate_ready else ["screening:not_terminal"])
+    )
+
     return {
         "canonical_state": canonical_state,
         "provider_availability": provider_availability,
         "provider_mode": provider_mode,
         "screening_result": screening_result,
         "terminal": terminal,
-        "defensible_clear": terminal and canonical_state == COMPLETED_CLEAR and provider_mode == LIVE_PROVIDER,
-        "approval_ready": terminal and canonical_state in (COMPLETED_CLEAR, COMPLETED_MATCH),
-        "approval_blocking": bool(blocking_reasons) or not terminal,
-        "blocking_reasons": blocking_reasons or ([] if terminal else ["screening:not_terminal"]),
+        "screening_terminal": screening_terminal,
+        "screening_provider_clear": screening_provider_clear,
+        "defensible_clear": defensible_clear,
+        "screening_gate_ready": screening_gate_ready,
+        "approval_gate_ready": screening_gate_ready,
+        "approval_ready": screening_gate_ready,
+        "approval_ready_scope": "screening_truth_gate_only",
+        "approval_blocking": approval_blocking,
+        "blocking_reasons": approval_blocked_reasons,
+        "approval_blocked_reasons": approval_blocked_reasons,
         "has_non_terminal": not terminal,
         "has_failed": has_failed,
         "has_not_configured": has_not_configured,
@@ -1090,10 +1118,16 @@ def build_screening_terminality_summary(
         "provider_availability": truth_summary.get("provider_availability"),
         "provider_mode": truth_summary.get("provider_mode"),
         "screening_result": truth_summary.get("screening_result"),
+        "screening_terminal": truth_summary.get("screening_terminal"),
+        "screening_provider_clear": truth_summary.get("screening_provider_clear"),
         "defensible_clear": truth_summary.get("defensible_clear"),
+        "screening_gate_ready": truth_summary.get("screening_gate_ready"),
+        "approval_gate_ready": truth_summary.get("approval_gate_ready"),
         "approval_ready": truth_summary.get("approval_ready"),
+        "approval_ready_scope": truth_summary.get("approval_ready_scope"),
         "approval_blocking": truth_summary.get("approval_blocking"),
         "blocking_reasons": truth_summary.get("blocking_reasons") or [],
+        "approval_blocked_reasons": truth_summary.get("approval_blocked_reasons") or [],
         "has_formally_cleared_match": truth_summary.get("has_formally_cleared_match"),
         "has_uncleared_completed_match": truth_summary.get("has_uncleared_completed_match"),
         "completed_match_blocking": truth_summary.get("completed_match_blocking"),
