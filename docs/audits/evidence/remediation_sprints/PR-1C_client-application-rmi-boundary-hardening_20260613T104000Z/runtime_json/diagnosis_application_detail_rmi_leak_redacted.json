@@ -1,0 +1,71 @@
+{
+  "base": "https://staging.regmind.co/api",
+  "conclusion": "Notifications and PR-1 boundary controls passed, but client-owned application detail still exposed RMI creator metadata through rmi_requests[].created_by and rmi_requests[].created_by_name.",
+  "confirming_pass_cases": [
+    {
+      "detail": {
+        "hits": []
+      },
+      "name": "client /notifications has no forbidden internal text or fields",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 403
+      },
+      "name": "client denied screening queue",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 403
+      },
+      "name": "client denied internal applications list",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 403
+      },
+      "name": "client denied another client application by id",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 403
+      },
+      "name": "client denied another client application by ref",
+      "pass": true
+    }
+  ],
+  "expected_sha": "12be9e5c3d127400b6f74d7013bab1ae63d418b7",
+  "failing_case": {
+    "detail": {
+      "hits": [
+        {
+          "kind": "key",
+          "path": "$.rmi_requests[0].created_by",
+          "value": "created_by"
+        },
+        {
+          "kind": "key",
+          "path": "$.rmi_requests[0].created_by_name",
+          "value": "created_by_name"
+        }
+      ],
+      "status": 200
+    },
+    "name": "client owned application detail is portal-safe",
+    "pass": false
+  },
+  "source": "PR-1B post-merge staging API smoke",
+  "version_case": {
+    "detail": {
+      "git_sha": "12be9e5c3d127400b6f74d7013bab1ae63d418b7",
+      "image_tag": "12be9e5c3d127400b6f74d7013bab1ae63d418b7",
+      "status": 200
+    },
+    "name": "/api/version matches merged main SHA",
+    "pass": true
+  }
+}
