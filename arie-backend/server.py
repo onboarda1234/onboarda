@@ -4747,6 +4747,8 @@ def _client_safe_application_detail(result):
             safe[party_key] = [_client_safe_party_record(item) for item in safe[party_key]]
     if isinstance(safe.get("documents"), list):
         safe["documents"] = [_client_safe_document_record(item) for item in safe["documents"]]
+    if isinstance(safe.get("rmi_requests"), list):
+        safe["rmi_requests"] = [_client_safe_rmi_request(item) for item in safe["rmi_requests"]]
 
     return safe
 

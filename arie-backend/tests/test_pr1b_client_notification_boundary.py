@@ -285,6 +285,41 @@ class PR1BClientNotificationBoundaryTest(AsyncHTTPTestCase):
         assert "another client" not in body_text.lower()
         assert "Other Client Internal" not in body_text
 
+    def test_client_application_detail_sanitizes_rmi_requests(self):
+        response = self.fetch(
+            f"/api/applications/{self.app_id}",
+            headers=self._headers(self.client_token),
+        )
+        assert response.code == 200, response.body.decode()
+        body = self._json(response)
+        payload_text = json.dumps(body).lower()
+
+        forbidden_terms = (
+            "created_by",
+            "created_by_name",
+            "internal admin",
+            "officer notes",
+            "review notes",
+            "supervisor",
+            "provider raw",
+            "raw status",
+            "audit",
+            "internal risk",
+            "risk score",
+        )
+        for term in forbidden_terms:
+            assert term not in payload_text
+
+        assert body["rmi_requests"], "Client detail should retain safe RMI state"
+        request = body["rmi_requests"][0]
+        assert request["reason"] == (
+            "Additional information is required to continue your application review."
+        )
+        assert "created_by" not in request
+        assert "created_by_name" not in request
+        assert request["items"][0]["label"] == "Requested document"
+        assert request["items"][0]["description"] == ""
+
     def test_backoffice_user_cannot_use_client_notification_endpoint(self):
         response = self.fetch(
             "/api/notifications",
