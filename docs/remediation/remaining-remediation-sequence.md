@@ -1,0 +1,19 @@
+# Remaining Remediation Sequence
+
+This sequence is the initial remediation order after the 2026-06-13 master remaining reconciliation.
+
+Every PR must follow `docs/remediation/remaining-remediation-operating-protocol.md`.
+
+| PR | Purpose | Target remediation IDs | Expected validation type | Browser testing mandatory? | Staging runtime proof mandatory? |
+| --- | --- | --- | --- | --- | --- |
+| PR-0 remediation-control-framework | Establish mandatory remediation process, evidence structure, closure checklist, and sequence. Does not close product defects. | None | Documentation review, `git diff --check`, markdown checks if configured | No | No product defect closure; branch proof only for process docs |
+| PR-1 security/client-api-boundary-hardening | Prevent client users from accessing internal application, screening, provider, memo, gate, audit, review, risk, and officer fields. | FSI-001 | Security negative tests, targeted API tests, full relevant backend suite, staging API smoke | Yes, for client portal/back-office boundary smoke | Yes |
+| PR-2 auth/logout-token-revocation-enforcement | Ensure logout invalidates bearer and cookie session access. | FSI-002 | Auth/session negative tests, targeted auth tests, full relevant backend suite, staging API smoke | Yes, for login/logout workflow | Yes |
+| PR-3 terminal-record-gate-reconciliation | Resolve approved/terminal records that fail current gates through quarantine, labels, or decision-record-aware gate behavior. | FSI-003 | Data integrity tests, approval gate tests, audit/decision tests, staging API smoke | Yes, for application review visibility | Yes |
+| PR-4 screening-truth-safe-readiness-labels | Remove unsafe approval-ready terminology and make screening terminal, defensible clear, and approval-blocking semantics consistent. | FSI-007, LATER-7 related status cleanup | Screening state tests, provider label tests, CCC/UI tests, staging API smoke | Yes | Yes |
+| PR-5 memo-governance-unification | Use one canonical latest memo selector and allow UI to submit required approval reason with audit/export consistency. | FSI-005, FSI-006 | Memo selector tests, approval reason tests, supervisor/export tests, full relevant backend suite | Yes | Yes |
+| PR-6 idv-webhook-and-runtime-baseline | Fix Sumsub webhook renormalization DB handle behavior and prove backend/worker runtime alignment. | FSI-011, POST-INFRA | Webhook regression tests, worker/runtime validation, staging API smoke, ECS/task evidence | Browser only if IDV UI state is affected | Yes |
+| PR-7 pilot-role-and-provider-readiness | Prove live role matrix and clarify KYB/OpenCorporates/provider scope for pilot readiness. | FSI-012, PPR-001, PPR-009, KYCB | Role matrix API/browser validation, provider status smoke, staging proof | Yes, for each affected role | Yes |
+| PR-8 periodic-review-and-lifecycle-cleanup | Persist periodic review schedule settings, clean completed-review blockers, and fix lifecycle/monitoring display names. | FSI-004, FSI-008, FSI-009 | Periodic review tests, lifecycle queue tests, monitoring tests, staging API smoke | Yes | Yes |
+| PR-9 client-correction-confirmation-and-activity-log-polish | Add client confirmation discipline for material corrections and clean activity log formatting. | T-006, PPR-011 | Correction workflow tests, audit/activity log tests, staging smoke | Yes | Yes |
+| PR-10 production-scale-controls-backlog | Address lower-priority production-scale, reports/admin, PII logging, upload, LLM resilience, frontend modularity, HA/autoscaling/DR backlog. | LATER-1, LATER-2, LATER-5, LATER-6, LATER-8, LATER-9, LATER-10, LATER-11, LATER-12, PPR-012 | Depends on selected scope; must include targeted tests and staging proof for runtime-visible changes | Scope-dependent | Yes for runtime-visible changes |
