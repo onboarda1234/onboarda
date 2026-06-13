@@ -8225,11 +8225,18 @@ class PreApprovalDecisionHandler(BaseHandler):
 
             # Notify the client
             if app.get("client_id"):
+                title, client_message = _client_notification_safe_copy(
+                    "pre_approval",
+                    "Application Pre-Approved — Proceed to KYC Documents",
+                    (
+                        f"Your application {app['ref']} has passed initial compliance review. "
+                        "You can now proceed with KYC verification and document submission."
+                    ),
+                )
                 db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
                           (app["client_id"], real_id,
-                           "Application Pre-Approved — Proceed to KYC Documents",
-                           f"Your application {app['ref']} has passed initial compliance review. "
-                           f"You can now proceed with KYC verification and document submission.",
+                           title,
+                           client_message,
                            "pre_approval"))
 
         elif decision == "REJECT":
@@ -8251,12 +8258,19 @@ class PreApprovalDecisionHandler(BaseHandler):
 
             # Notify the client
             if app.get("client_id"):
+                title, client_message = _client_notification_safe_copy(
+                    "pre_approval_reject",
+                    "Application Update",
+                    (
+                        f"Your application {app['ref']} has been reviewed. "
+                        "Unfortunately, we are unable to proceed with your application at this time. "
+                        "Please contact our team for further information."
+                    ),
+                )
                 db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
                           (app["client_id"], real_id,
-                           "Application Update",
-                           f"Your application {app['ref']} has been reviewed. "
-                           f"Unfortunately, we are unable to proceed with your application at this time. "
-                           f"Please contact our compliance team for further information.",
+                           title,
+                           client_message,
                            "pre_approval_reject"))
 
         elif decision == "REQUEST_INFO":
@@ -8275,11 +8289,15 @@ class PreApprovalDecisionHandler(BaseHandler):
 
             # Notify the client
             if app.get("client_id"):
+                title, client_message = _client_notification_safe_copy(
+                    "pre_approval_rmi",
+                    "Additional Information Required",
+                    "Additional information is required to continue your application review.",
+                )
                 db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
                           (app["client_id"], real_id,
-                           "Additional Information Required",
-                           f"Our compliance team requires additional information for application {app['ref']}. "
-                           f"Please update your pre-screening data and resubmit. Officer notes: {notes}",
+                           title,
+                           client_message,
                            "pre_approval_rmi"))
 
         # Audit trail — authoritative in-transaction record carries before/after state
@@ -20692,6 +20710,207 @@ def _load_client_rmi_requests(db, client_id):
     return ordered
 
 
+_CLIENT_NOTIFICATION_SAFE_COPY = {
+    "approved": (
+        "Application Approved",
+        "Your application has been approved.",
+    ),
+    "rejected": (
+        "Application Update",
+        "Your application status has changed.",
+    ),
+    "pre_approval": (
+        "Application Pre-Approved",
+        "Your application has been updated. You can continue with the next step.",
+    ),
+    "pre_approved": (
+        "Application Pre-Approved",
+        "Your application has been updated. You can continue with the next step.",
+    ),
+    "pre_approval_rmi": (
+        "Additional Information Required",
+        "Additional information is required to continue your application review.",
+    ),
+    "pre_approval_reject": (
+        "Application Update",
+        "Your application status has changed.",
+    ),
+    "documents_required": (
+        "Additional Documents Required",
+        "A document requires your attention.",
+    ),
+    "request_documents": (
+        "Additional Documents Required",
+        "A document requires your attention.",
+    ),
+    "updated_document_required": (
+        "Document Requires Attention",
+        "A document requires your attention.",
+    ),
+    "periodic_review_required": (
+        "Periodic Review Required",
+        "A periodic review requires your attention.",
+    ),
+    "periodic_review_documents_required": (
+        "Periodic Review Documents Required",
+        "Documents are required for your periodic review.",
+    ),
+    "periodic_review_reminder": (
+        "Periodic Review Reminder",
+        "Your periodic review is due soon.",
+    ),
+    "periodic_review_overdue": (
+        "Periodic Review Overdue",
+        "Your periodic review is overdue.",
+    ),
+}
+
+_CLIENT_NOTIFICATION_DEFAULT_COPY = (
+    "Application Update",
+    "Your application has been updated.",
+)
+
+_CLIENT_NOTIFICATION_INTERNAL_FIELDS = {
+    "approval_gate",
+    "assigned_officer",
+    "assigned_to",
+    "assigned_user",
+    "audit",
+    "audit_log",
+    "compliance_rationale",
+    "decision_records",
+    "gate",
+    "internal_notes",
+    "internal_risk",
+    "memo",
+    "memo_data",
+    "officer_notes",
+    "provider",
+    "provider_status",
+    "raw_provider_response",
+    "raw_status",
+    "review_notes",
+    "risk_dimensions",
+    "risk_score",
+    "supervisor",
+    "supervisor_review",
+}
+
+_CLIENT_NOTIFICATION_UNSAFE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bofficer\s+notes?\b",
+        r"\bofficer_notes\b",
+        r"\binternal\s+notes?\b",
+        r"\binternal_notes\b",
+        r"\breview\s+notes?\b",
+        r"\breview_notes\b",
+        r"\bcompliance\s+rationale\b",
+        r"\bassigned\s+(officer|user)\b",
+        r"\bapproval\s+gate\b",
+        r"\bgate\s+(failed|blocker|blockers)\b",
+        r"\bsupervisor\b",
+        r"\bprovider\s+(raw|status|diagnostic|diagnostics)\b",
+        r"\braw\s+(provider|status)\b",
+        r"\baudit\b",
+        r"\binternal\s+risk\b",
+        r"\brisk\s+(score|dimensions?)\b",
+        r"\bmemo\b",
+        r"\bedd\s+(case|investigation|notes?)\b",
+    )
+)
+
+
+def _client_notification_text_is_safe(value):
+    text = str(value or "").strip()
+    if not text:
+        return True
+    return not any(pattern.search(text) for pattern in _CLIENT_NOTIFICATION_UNSAFE_PATTERNS)
+
+
+def _client_notification_safe_copy(notification_type, title=None, message=None):
+    notification_type = str(notification_type or "").strip()
+    if notification_type in _CLIENT_NOTIFICATION_SAFE_COPY:
+        return _CLIENT_NOTIFICATION_SAFE_COPY[notification_type]
+    safe_title, safe_message = _CLIENT_NOTIFICATION_DEFAULT_COPY
+    title_text = str(title or "").strip()
+    message_text = str(message or "").strip()
+    if title_text and _client_notification_text_is_safe(title_text):
+        safe_title = title_text
+    if message_text and _client_notification_text_is_safe(message_text):
+        safe_message = message_text
+    return safe_title, safe_message
+
+
+def _client_safe_documents_list(value):
+    parsed = safe_json_loads(value) if isinstance(value, str) else value
+    if not isinstance(parsed, list):
+        return None
+    safe_docs = []
+    for item in parsed[:25]:
+        label = _client_safe_rmi_text(item, "Requested document")
+        if label:
+            safe_docs.append(label)
+    return safe_docs
+
+
+def _client_safe_notification_row(row):
+    notification = dict(row)
+    notification_type = notification.get("notification_type")
+    safe_title, safe_message = _client_notification_safe_copy(
+        notification_type,
+        notification.get("title"),
+        notification.get("message"),
+    )
+    documents_list = _client_safe_documents_list(notification.get("documents_list"))
+    return {
+        "id": notification.get("id"),
+        "application_id": notification.get("application_id"),
+        "notification_type": notification_type,
+        "title": safe_title,
+        "message": safe_message,
+        "documents_list": documents_list,
+        "rmi_request_id": notification.get("rmi_request_id"),
+        "read_status": notification.get("read_status"),
+        "created_at": notification.get("created_at"),
+    }
+
+
+def _client_safe_rmi_text(value, fallback=""):
+    text = str(value or "").strip()
+    if text and _client_notification_text_is_safe(text):
+        return text
+    return fallback
+
+
+def _client_safe_rmi_request(req):
+    items = []
+    for item in req.get("items") or []:
+        label = _client_safe_rmi_text(
+            item.get("label") or item.get("doc_type"),
+            "Requested document",
+        )
+        description = _client_safe_rmi_text(item.get("description"), "")
+        items.append({
+            "id": item.get("id"),
+            "doc_type": item.get("doc_type") or "supporting_document",
+            "label": label,
+            "description": description,
+            "status": item.get("status") or "requested",
+        })
+    return {
+        "id": req.get("id"),
+        "application_id": req.get("application_id"),
+        "status": req.get("status"),
+        "reason": "Additional information is required to continue your application review.",
+        "deadline": req.get("deadline"),
+        "created_at": req.get("created_at"),
+        "updated_at": req.get("updated_at"),
+        "fulfilled_at": req.get("fulfilled_at"),
+        "items": items,
+    }
+
+
 def _sync_rmi_request_status(db, request_id):
     items = db.execute(
         "SELECT status FROM rmi_request_items WHERE request_id = ?",
@@ -20762,9 +20981,10 @@ def _create_structured_rmi_request(db, app, user, reason, deadline, items):
         # documents_list is a legacy notification mirror for older clients.
         # rmi_request_items is the authoritative source for request state.
         docs_list = [item["label"] for item in items]
-        message = (
-            f"Our compliance team requires additional documents for application {app['ref']} "
-            f"by {deadline}. Reason: {reason}"
+        title, message = _client_notification_safe_copy(
+            "documents_required",
+            "Additional Documents Required",
+            "A document requires your attention.",
         )
         db.execute(
             """INSERT INTO client_notifications
@@ -20773,7 +20993,7 @@ def _create_structured_rmi_request(db, app, user, reason, deadline, items):
             (
                 app["client_id"],
                 app["id"],
-                "Additional Documents Required",
+                title,
                 message,
                 "documents_required",
                 json.dumps(docs_list),
@@ -22134,11 +22354,16 @@ class ClientNotificationHandler(BaseHandler):
             "documents_required": "Documents Required",
             "rejected": "Application Rejected"
         }
+        safe_title, safe_message = _client_notification_safe_copy(
+            notification_type,
+            title_map.get(notification_type, "Documents Required"),
+            message,
+        )
 
         db.execute("""
             INSERT INTO client_notifications (application_id, client_id, notification_type, title, message, documents_list, read_status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
-        """, (app["id"], app.get("client_id"), notification_type, title_map.get(notification_type, "Documents Required"), message,
+        """, (app["id"], app.get("client_id"), notification_type, safe_title, safe_message,
               json.dumps(documents_list) if documents_list else None))
 
         # Log audit trail
@@ -22171,17 +22396,16 @@ class GetClientNotificationsHandler(BaseHandler):
             ORDER BY created_at DESC
         """, (user["sub"],)).fetchall()
 
-        result = [dict(n) for n in notifications]
+        result = [_client_safe_notification_row(n) for n in notifications]
         rmi_requests = _load_client_rmi_requests(db, user["sub"])
-        rmi_by_id = {req["id"]: req for req in rmi_requests}
+        safe_rmi_requests = [_client_safe_rmi_request(req) for req in rmi_requests]
+        rmi_by_id = {req["id"]: req for req in safe_rmi_requests}
         for n in result:
-            if n["documents_list"]:
-                n["documents_list"] = safe_json_loads(n["documents_list"])
             if n.get("rmi_request_id"):
                 n["rmi_request"] = rmi_by_id.get(n["rmi_request_id"])
 
         db.close()
-        self.success({"notifications": result, "rmi_requests": rmi_requests})
+        self.success({"notifications": result, "rmi_requests": safe_rmi_requests})
 
 
 class MarkNotificationReadHandler(BaseHandler):
