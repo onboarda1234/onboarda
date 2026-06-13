@@ -224,7 +224,7 @@ def persist_provider_comparison(
     return cursor.lastrowid
 
 
-def webhook_renormalize_from_committed_legacy(legacy_db, application_id) -> None:
+def webhook_renormalize_from_committed_legacy(application_id) -> None:
     """
     Re-normalize one application's committed legacy screening report.
 
@@ -232,7 +232,6 @@ def webhook_renormalize_from_committed_legacy(legacy_db, application_id) -> None
     state. Operational database/runtime failures are logged and swallowed;
     programmer errors from normalization logic propagate.
     """
-    _ = legacy_db
     from db import get_db
     from screening_normalizer import normalize_screening_report
 

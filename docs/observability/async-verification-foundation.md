@@ -54,9 +54,11 @@ the PR6 Postgres-backed queue. The worker:
 
 ## Staging ECS Worker Shape
 
-When deploy automation cannot edit `.github/workflows/*` because the GitHub
-token lacks `workflow` scope, deploy the worker manually as a separate Fargate
-service:
+The staging deploy workflow now updates the verification worker service with
+the same SHA-pinned image used by the API service. Manual deployment remains a
+break-glass fallback only.
+
+Worker service shape:
 
 - Cluster: `regmind-staging`.
 - Service name: `regmind-verification-worker`.
@@ -83,7 +85,7 @@ Task-definition JSON delta from the active API task definition:
 }
 ```
 
-CLI outline, using the active API task definition as the source:
+Break-glass CLI outline, using the active API task definition as the source:
 
 ```bash
 aws ecs describe-task-definition \
@@ -124,8 +126,31 @@ aws ecs describe-services \
   --services regmind-verification-worker
 ```
 
-The PR7A gate is not satisfied by a running service alone. Before PR7 can flip
-`FF_ASYNC_VERIFY=true`, staging must prove one controlled queued job moves
-`pending -> in_progress -> terminal`, updates `documents.verification_status`
-and `documents.verification_results`, writes system audit rows, and has no
-screening-provider regression.
+The runtime gate is not satisfied by a running service alone. Staging must also
+prove:
+
+- backend `/api/version` matches merged main;
+- backend and worker ECS task definitions use the same SHA-pinned image, unless
+  a version-pinned exception is explicitly documented;
+- worker desired/running counts are healthy;
+- one controlled queued job moves `pending -> in_progress -> terminal`;
+- `documents.verification_status` and `documents.verification_results` update;
+- system audit rows include `worker_id` and `job_id`;
+- no screening-provider regression is introduced.
+
+Read-only runtime baseline:
+
+```bash
+python arie-backend/scripts/staging_runtime_baseline.py \
+  --expected-sha <merged-main-sha> \
+  --strict
+```
+
+Safe synthetic worker smoke, to run inside the deployed task environment:
+
+```bash
+python arie-backend/scripts/verification_worker_smoke.py \
+  --run-id pr6smoke \
+  --worker-id pr6-smoke \
+  --cleanup
+```

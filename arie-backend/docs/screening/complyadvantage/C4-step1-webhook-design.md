@@ -115,7 +115,7 @@ Reusable functions:
 - `ensure_normalized_table(db) -> None` creates the table/indexes and commits DDL (`arie-backend/screening_storage.py:64-77`). Step 2 tests may reuse it; production should rely on migrations/init.
 - `compute_report_hash(report: dict) -> str` hashes generic reports (`arie-backend/screening_storage.py:80-86`). CA must instead use `compute_ca_screening_hash` for enriched CA state (§6.1).
 - `persist_normalized_report(db, client_id, application_id, normalized_report, source_report_hash, provider='sumsub', normalized_version='1.0') -> int` performs an idempotent upsert on `(application_id, provider, source_screening_report_hash)` (`arie-backend/screening_storage.py:89-121`). C4 can reuse this with `provider='complyadvantage'` and `normalized_version='2.0'`.
-- `webhook_renormalize_from_committed_legacy(legacy_db, application_id) -> None` is Sumsub-specific post-commit legacy re-normalization (`arie-backend/screening_storage.py:124-181`). C4 should not use it for CA provider truth.
+- `webhook_renormalize_from_committed_legacy(application_id) -> None` is Sumsub-specific post-commit legacy re-normalization that opens its own committed-read DB connection. C4 should not use it for CA provider truth.
 - `persist_normalization_failure(...)` inserts failed normalized attempts (`arie-backend/screening_storage.py:184-205`). C4 provider-truth write is required and should return HTTP 500 on write failure rather than silently storing failure only.
 
 ### 2.5 Webhook idempotency / DLQ infrastructure audit

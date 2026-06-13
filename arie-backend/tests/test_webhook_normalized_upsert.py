@@ -393,8 +393,8 @@ class TestWebhookNormalizedUpsert:
         assert len(_get_normalized_rows_for_app(app_id)) == 1
 
         from screening_storage import webhook_renormalize_from_committed_legacy
-        webhook_renormalize_from_committed_legacy(None, app_id)
-        webhook_renormalize_from_committed_legacy(None, app_id)
+        webhook_renormalize_from_committed_legacy(app_id)
+        webhook_renormalize_from_committed_legacy(app_id)
         assert len(_get_normalized_rows_for_app(app_id)) == 1
 
         changed = _call_handler(_make_payload(applicant_id, review_answer="RED"))
@@ -425,7 +425,7 @@ class TestWebhookNormalizedUpsert:
         _set_legacy_screening_report(app_id, report_b)
 
         from screening_storage import webhook_renormalize_from_committed_legacy
-        webhook_renormalize_from_committed_legacy(None, app_id)
+        webhook_renormalize_from_committed_legacy(app_id)
         rows_b = _get_normalized_rows_for_app(app_id)
         assert len(rows_b) == 2
         assert rows_a[0]["source_screening_report_hash"] != rows_b[1]["source_screening_report_hash"]
@@ -443,14 +443,14 @@ class TestWebhookNormalizedUpsert:
 
         monkeypatch.setattr(_snorm, "normalize_screening_report", _type_error)
         with pytest.raises(TypeError):
-            webhook_renormalize_from_committed_legacy(None, app_id)
+            webhook_renormalize_from_committed_legacy(app_id)
 
         def _attr_error(_report):
             raise AttributeError("simulated programmer bug")
 
         monkeypatch.setattr(_snorm, "normalize_screening_report", _attr_error)
         with pytest.raises(AttributeError):
-            webhook_renormalize_from_committed_legacy(None, app_id)
+            webhook_renormalize_from_committed_legacy(app_id)
 
     def test_renormalize_logs_no_pii(self, temp_db, monkeypatch, caplog):
         applicant_id = _make_unique_applicant_id()
@@ -483,7 +483,7 @@ class TestWebhookNormalizedUpsert:
         monkeypatch.setattr(_storage, "persist_normalized_report", _raise_operational)
 
         with caplog.at_level(logging.WARNING, logger="arie.screening_storage"):
-            _storage.webhook_renormalize_from_committed_legacy(None, app_id)
+            _storage.webhook_renormalize_from_committed_legacy(app_id)
 
         messages = [record.getMessage() for record in caplog.records]
         assert messages
@@ -502,6 +502,7 @@ class TestWebhookNormalizedUpsert:
         wh_code = src[wh_start:wh_end]
 
         assert "webhook_renormalize_from_committed_legacy" in wh_code
+        assert "webhook_renormalize_from_committed_legacy(db," not in wh_code
         assert "persist_normalized_report(" not in wh_code
         forbidden = (
             "persist_normalized_report(payload",
@@ -510,3 +511,28 @@ class TestWebhookNormalizedUpsert:
         )
         for needle in forbidden:
             assert needle not in wh_code
+
+    def test_webhook_renorm_call_contract_cannot_receive_closed_db_handle(self, temp_db, monkeypatch):
+        """Regression for FSI-011: the post-commit call must pass only app_id.
+
+        The webhook closes its legacy write connection before post-commit
+        renormalization. Passing that closed handle into the helper is an unsafe
+        contract even when the helper opens a fresh connection internally.
+        """
+        monkeypatch.setenv("ENABLE_SCREENING_ABSTRACTION", "true")
+
+        applicant_id = _make_unique_applicant_id()
+        app_id = _seed_application_with_mapping(applicant_id)
+
+        calls = []
+
+        def _capture(*args):
+            calls.append(args)
+
+        import screening_storage as _storage
+        monkeypatch.setattr(_storage, "webhook_renormalize_from_committed_legacy", _capture)
+
+        handler = _call_handler(_make_payload(applicant_id, review_answer="GREEN"))
+
+        assert handler._status_code == 200
+        assert calls == [(app_id,)]

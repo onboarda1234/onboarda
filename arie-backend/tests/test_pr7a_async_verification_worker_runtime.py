@@ -391,6 +391,55 @@ def test_default_executor_reuses_sync_handler_path_with_async_bypass(monkeypatch
     assert calls[0]["kwargs"]["close_db"] is False
 
 
+def test_default_executor_runs_real_sync_handler_contract_without_closing_worker_db(tmp_path, monkeypatch):
+    import server
+    from verification_worker import default_verification_executor
+
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        app, doc = _seed_doc(db)
+
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(
+            server,
+            "verify_document_layered",
+            lambda **_: {
+                "overall": "verified",
+                "checks": [{
+                    "label": "Synthetic worker check",
+                    "type": "test",
+                    "result": "pass",
+                    "message": "worker contract smoke",
+                }],
+            },
+        )
+
+        result = default_verification_executor(
+            db,
+            {"id": "vjob_real_contract", "document_id": doc["id"]},
+            "worker-pr6-real-contract",
+        )
+
+        assert result["verification_status"] == "verified"
+        assert result["document_already_updated"] is True
+
+        stored = db.execute(
+            "SELECT verification_status, verification_results FROM documents WHERE id=?",
+            (doc["id"],),
+        ).fetchone()
+        assert stored["verification_status"] == "verified"
+        assert json.loads(stored["verification_results"])["overall"] == "verified"
+
+        details = _state_transition_details(db)
+        assert [detail["trigger"] for detail in details] == [
+            "async_verify_worker_started",
+            "async_verify_worker_completed",
+        ]
+        assert {detail["actor_type"] for detail in details} == {"system"}
+        assert {detail["worker_id"] for detail in details} == {"worker-pr6-real-contract"}
+
+        db.execute("SELECT COUNT(*) AS c FROM documents").fetchone()
+
+
 def test_worker_runtime_does_not_use_in_process_queue_or_screening_abstraction():
     source = Path(__file__).resolve().parents[1].joinpath("verification_worker.py").read_text(
         encoding="utf-8"
