@@ -7611,8 +7611,8 @@ function renderIdentityEnhancedRequirementCard(req) {
   '</div>';
 }
 
-function renderStandardKycDocumentTaxonomy(app, options) {
-  options = options || {};
+function renderStandardKycDocumentTaxonomy(app) {
+  var options = arguments[1] || {};
   var includeIdv = options.includeIdv !== false;
   var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
   var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
