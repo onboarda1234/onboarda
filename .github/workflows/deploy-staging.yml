@@ -16,6 +16,8 @@ env:
   ECS_CLUSTER: regmind-staging
   ECS_SERVICE: regmind-backend
   ECS_TASK_FAMILY: regmind-staging
+  ECS_WORKER_SERVICE: regmind-verification-worker
+  ECS_WORKER_TASK_FAMILY: regmind-verification-worker
 
 jobs:
   # Run CI first
@@ -129,6 +131,75 @@ jobs:
           echo "task-definition-arn=$NEW_ARN" >> $GITHUB_OUTPUT
           echo "Registered new task definition: $NEW_ARN"
 
+      - name: Register verification worker task definition with SHA-pinned image
+        id: register-worker-task-def
+        env:
+          NEW_IMAGE: ${{ steps.build-image.outputs.image }}
+          GIT_SHA: ${{ steps.build-image.outputs.git_sha }}
+          BUILD_TIME: ${{ steps.build-image.outputs.build_time }}
+          IMAGE_TAG: ${{ steps.build-image.outputs.image_tag }}
+        run: |
+          echo "Fetching current worker task definition for family: $ECS_WORKER_TASK_FAMILY"
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition $ECS_WORKER_TASK_FAMILY \
+            --region $AWS_REGION \
+            --query 'taskDefinition' \
+            --output json)
+          export TASK_DEF
+
+          NEW_TASK_DEF=$(python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          td = json.loads(os.environ["TASK_DEF"])
+          container = td["containerDefinitions"][0]
+          container["image"] = os.environ["NEW_IMAGE"]
+          container["command"] = container.get("command") or [
+              "python",
+              "verification_worker.py",
+              "--poll-interval",
+              "1",
+          ]
+          env = container.setdefault("environment", [])
+
+          def upsert_env(name, value):
+              for item in env:
+                  if item.get("name") == name:
+                      item["value"] = value
+                      return
+              env.append({"name": name, "value": value})
+
+          # Keep worker provenance aligned with the API image. ECS task
+          # env values override Dockerfile ENV values, so stale task
+          # definitions can otherwise keep reporting and running old SHAs.
+          upsert_env("GIT_SHA", os.environ["GIT_SHA"])
+          upsert_env("BUILD_TIME", os.environ["BUILD_TIME"])
+          upsert_env("IMAGE_TAG", os.environ["IMAGE_TAG"])
+          for key in [
+              "taskDefinitionArn",
+              "revision",
+              "status",
+              "requiresAttributes",
+              "compatibilities",
+              "registeredAt",
+              "registeredBy",
+          ]:
+              td.pop(key, None)
+          json.dump(td, sys.stdout)
+          PY
+          )
+
+          echo "$NEW_TASK_DEF" > /tmp/new-worker-task-def.json
+          NEW_WORKER_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/new-worker-task-def.json \
+            --region $AWS_REGION \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "task-definition-arn=$NEW_WORKER_ARN" >> $GITHUB_OUTPUT
+          echo "Registered new worker task definition: $NEW_WORKER_ARN"
+
       - name: Deploy to ECS (rolling update)
         env:
           TASK_DEF_ARN: ${{ steps.register-task-def.outputs.task-definition-arn }}
@@ -148,6 +219,33 @@ jobs:
             --region $AWS_REGION; then
             echo "WARNING: ECS service did not stabilize within timeout"
             echo "Proceeding to health check to determine actual state..."
+          fi
+
+      - name: Deploy verification worker to ECS (rolling update)
+        env:
+          WORKER_TASK_DEF_ARN: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
+        run: |
+          echo "Deploying verification worker task definition: $WORKER_TASK_DEF_ARN"
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_WORKER_SERVICE \
+            --task-definition "$WORKER_TASK_DEF_ARN" \
+            --force-new-deployment \
+            --region $AWS_REGION > /dev/null
+
+          echo "Waiting for verification worker service to stabilize (up to 10 min)..."
+          if ! aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_WORKER_SERVICE \
+            --region $AWS_REGION; then
+            echo "FAIL: verification worker service did not stabilize within timeout"
+            aws ecs describe-services \
+              --cluster $ECS_CLUSTER \
+              --services $ECS_WORKER_SERVICE \
+              --region $AWS_REGION \
+              --query 'services[0].deployments' \
+              --output json || true
+            exit 1
           fi
 
       - name: Verify deployment health
@@ -193,5 +291,6 @@ jobs:
           echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Task Definition:** ${{ steps.register-task-def.outputs.task-definition-arn }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Worker Task Definition:** ${{ steps.register-worker-task-def.outputs.task-definition-arn }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
