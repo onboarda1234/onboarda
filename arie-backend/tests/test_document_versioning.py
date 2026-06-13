@@ -167,10 +167,10 @@ def _insert_approved_memo(app_id):
         """
         INSERT INTO compliance_memos
         (application_id, memo_data, review_status, validation_status,
-         supervisor_status, quality_score, approved_by, approved_at)
-        VALUES (?, ?, 'approved', 'pass', 'CONSISTENT', 9.2, 'admin001', datetime('now'))
+         supervisor_status, quality_score, approved_by, approved_at, approval_reason)
+        VALUES (?, ?, 'approved', 'pass', 'CONSISTENT', 9.2, 'admin001', datetime('now'), ?)
         """,
-        (app_id, json.dumps(memo_data)),
+        (app_id, json.dumps(memo_data), "Fixture approval reason"),
     )
     conn.commit()
     conn.close()
@@ -607,9 +607,9 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
     )
     conn.execute(
         """INSERT INTO compliance_memos
-           (application_id, memo_data, review_status, validation_status, supervisor_status, quality_score)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (app_id, json.dumps(memo_data), "approved", "pass", "CONSISTENT", 9),
+           (application_id, memo_data, review_status, validation_status, supervisor_status, quality_score, approval_reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (app_id, json.dumps(memo_data), "approved", "pass", "CONSISTENT", 9, "Fixture approval reason"),
     )
     conn.execute(
         """

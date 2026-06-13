@@ -1421,6 +1421,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <button class="memo-generate-btn" id="btn-generate-memo" onclick="generateComplianceMemo()" title="Regenerate memo from server">🔄 Generate Memo</button>
           <button class="memo-download-btn" id="btn-download-memo" onclick="downloadMemoPDF()" title="Download as PDF">📥 Download Memo (PDF)</button>
         </div>
+        <div id="memo-governance-summary" style="margin:16px 20px 0;"></div>
         <div class="memo-body" id="detail-memo"></div>
 
         <!-- Validation Panel -->
@@ -1451,6 +1452,11 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
             <div id="memo-approval-blockers" style="display:none;margin:12px 0;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
 
             <!-- Action Buttons -->
+            <div id="memo-approval-reason-panel" style="display:none;margin:12px 0;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface);">
+              <label for="memo-approval-reason" style="display:block;font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Approval reason required</label>
+              <textarea id="memo-approval-reason" rows="3" class="form-input" oninput="refreshMemoApprovalReasonState()" placeholder="Record the officer rationale for relying on this canonical memo. This is persisted in audit and evidence exports." style="resize:vertical;"></textarea>
+              <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required for every memo approval. Do not include secrets, tokens, or raw provider payloads.</div>
+            </div>
             <div class="officer-signoff-gate" id="memo-officer-signoff-gate">
               <label>
                 <input type="checkbox" id="memo-officer-signoff" />
@@ -8887,6 +8893,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var memoEl = document.getElementById('detail-memo');
   if (app.latestMemo && app.latestMemo.sections) {
     window._currentMemoData = app.latestMemo;
+    renderMemoGovernanceSummary(app, app.latestMemo || {});
     setMemoDownloadState(true);
     var staleBanner = '';
     if (app.memoIsStale) {
@@ -8911,6 +8918,7 @@ function renderAuthoritativeAppDetail(app, options) {
     }
   } else {
     window._currentMemoData = null;
+    renderMemoGovernanceSummary(app, {});
     setMemoDownloadState(false, 'No compliance memo exists yet. Generate the memo before downloading a PDF.');
     document.getElementById('memo-validation-panel').style.display = 'none';
     setMemoStatusBadge('Not Generated', 'pending');
@@ -20266,7 +20274,9 @@ function getMemoApprovalBlockers(app, validationResult) {
   } else if (status === 'fail') {
     blockers.push('Fix failed memo validation issues and re-run validation.');
   } else if (status === 'pass_with_fixes') {
-    blockers.push('PASS WITH FIXES approval requires an approval_reason in the memo-approval request; this UI does not capture or submit that reason yet.');
+    if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'sco') {
+      blockers.push('PASS WITH FIXES memo approval requires Senior Compliance Officer or Admin review.');
+    }
   } else if (status && status !== 'pass' && status !== 'pass_with_fixes') {
     blockers.push('Memo validation status is ' + status.replace(/_/g, ' ') + '; approval requires PASS or documented PASS WITH FIXES.');
   }
@@ -20278,7 +20288,9 @@ function getMemoApprovalBlockers(app, validationResult) {
   } else if (supervisorVerdict === 'INCONSISTENT' || supervisor.can_approve === false) {
     blockers.push('Resolve supervisor inconsistencies before memo approval.');
   } else if (supervisorVerdict === 'CONSISTENT_WITH_WARNINGS') {
-    blockers.push('Supervisor-warning approval requires an approval_reason in the memo-approval request; this UI does not capture or submit that reason yet.');
+    if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'sco') {
+      blockers.push('Supervisor-warning memo approval requires Senior Compliance Officer or Admin review.');
+    }
   }
   if (supervisor.requires_sco_review && currentUser && currentUser.role !== 'admin' && currentUser.role !== 'sco') {
     blockers.push('Senior Compliance Officer or Admin review is required for this memo.');
@@ -20288,6 +20300,9 @@ function getMemoApprovalBlockers(app, validationResult) {
   var appStatus = String((app && (app.statusRaw || app.status)) || '').toLowerCase();
   if (routing.route === 'edd' && appStatus !== 'edd_required' && appStatus !== 'edd_approved') {
     blockers.push('Route this case to a formal investigation before memo approval.');
+  }
+  if (reviewStatus !== 'approved' && !currentMemoApprovalReason()) {
+    blockers.push('Enter the approval reason before submitting memo approval.');
   }
 
   return blockers;
@@ -26075,6 +26090,114 @@ async function confirmDocumentReview() {
 // COMPLIANCE MEMO: Render, Generate, Download PDF
 // ══════════════════════════════════════════════════════════
 
+function currentMemoApprovalReason() {
+  var el = document.getElementById('memo-approval-reason');
+  return el ? String(el.value || '').trim() : '';
+}
+
+function memoApprovalAlreadyApproved(app, validationResult) {
+  var memoData = (app && app.latestMemo) || window._currentMemoData || {};
+  var memoMeta = (app && app.latestMemoMeta) || {};
+  return String((validationResult && validationResult.review_status) || memoData.review_status || memoMeta.review_status || '').toLowerCase() === 'approved';
+}
+
+function syncMemoApprovalReasonPanel(validationResult) {
+  var panel = document.getElementById('memo-approval-reason-panel');
+  if (!panel) return;
+  var app = window._currentDetailApp || {};
+  var memoData = window._currentMemoData || app.latestMemo || null;
+  var approved = memoApprovalAlreadyApproved(app, validationResult || {});
+  panel.style.display = memoData && memoData.sections && !approved ? 'block' : 'none';
+}
+
+function refreshMemoApprovalReasonState() {
+  renderValidationPanel(window._lastMemoValidationResult || {
+    validation_status: (window._currentMemoData && window._currentMemoData.validation_status) || 'pending',
+    review_status: (window._currentMemoData && window._currentMemoData.review_status) || ''
+  });
+}
+
+function memoGovernanceStatus(app, validationResult) {
+  app = app || {};
+  var memoData = window._currentMemoData || app.latestMemo || null;
+  var memoMeta = app.latestMemoMeta || {};
+  var result = validationResult || {};
+  if (!memoData || !memoData.sections) {
+    return { status:'NEEDS GENERATION', ready:false, primary:'Compliance memo has not been generated.', next:'Generate memo' };
+  }
+  var blockers = getMemoApprovalBlockers(app, result);
+  var validation = String(result.validation_status || memoData.validation_status || memoMeta.validation_status || 'pending').toLowerCase();
+  var review = String(result.review_status || memoData.review_status || memoMeta.review_status || '').toLowerCase();
+  var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
+  if (app.memoIsStale || app.memoRequiresRegeneration) {
+    return { status:'NEEDS REGENERATION', ready:false, primary:app.memoStaleReason || 'Application data changed after this memo was generated.', next:'Regenerate memo' };
+  }
+  if (validation === 'pending') {
+    return { status:'NEEDS VALIDATION', ready:false, primary:'Memo validation has not been run.', next:'Validate memo' };
+  }
+  if (validation === 'fail') {
+    return { status:'BLOCKED', ready:false, primary:'Memo validation failed.', next:'Resolve validation issues and re-validate' };
+  }
+  if (!supervisor || supervisor === 'PENDING') {
+    return { status:'NEEDS SUPERVISOR CHECK', ready:false, primary:'Supervisor review has not been completed.', next:'Run supervisor check' };
+  }
+  if (supervisor !== 'CONSISTENT' && supervisor !== 'CONSISTENT_WITH_WARNINGS') {
+    return { status:'BLOCKED', ready:false, primary:'Supervisor review blocks approval.', next:'Resolve supervisor findings' };
+  }
+  if (review === 'approved') {
+    return { status:'APPROVED', ready:true, primary:'Memo approval is recorded.', next:'Continue application decision workflow' };
+  }
+  if (!currentMemoApprovalReason()) {
+    return { status:'NEEDS APPROVAL REASON', ready:false, primary:'Approval reason is required before memo approval.', next:'Enter approval reason' };
+  }
+  return {
+    status: blockers.length ? 'BLOCKED' : 'APPROVAL READY',
+    ready: blockers.length === 0,
+    primary: blockers[0] || 'Canonical memo is ready for officer approval.',
+    next: blockers.length ? 'Resolve memo blocker' : 'Submit approval'
+  };
+}
+
+function renderMemoGovernanceSummary(app, validationResult) {
+  var el = document.getElementById('memo-governance-summary');
+  if (!el) return;
+  var status = memoGovernanceStatus(app || window._currentDetailApp, validationResult || {});
+  var badgeBg = status.ready ? '#dcfce7' : (status.status === 'BLOCKED' ? '#fee2e2' : '#fef3c7');
+  var badgeColor = status.ready ? '#166534' : (status.status === 'BLOCKED' ? '#991b1b' : '#92400e');
+  el.innerHTML =
+    '<div style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:12px;">' +
+      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Memo status</div><span style="display:inline-block;margin-top:4px;padding:3px 8px;border-radius:4px;background:' + badgeBg + ';color:' + badgeColor + ';font-weight:800;font-size:11px;">' + escapeHtml(status.status) + '</span></div>' +
+      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Approval readiness</div><div style="margin-top:6px;font-weight:700;color:' + (status.ready ? '#166534' : '#92400e') + ';">' + (status.ready ? 'Ready' : 'Blocked') + '</div></div>' +
+      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Primary blocker</div><div style="margin-top:6px;color:var(--text2);">' + escapeHtml(status.primary || 'None') + '</div></div>' +
+      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Next action</div><div style="margin-top:6px;color:var(--text1);font-weight:700;">' + escapeHtml(status.next || 'Review memo') + '</div></div>' +
+    '</div>';
+}
+
+function renderMemoDecisionSnapshot(data) {
+  var meta = (data && data.metadata) || {};
+  var sections = (data && data.sections) || {};
+  var summary = (sections.executive_summary && sections.executive_summary.content) || meta.executive_summary || 'Executive summary not recorded.';
+  var decision = meta.approval_recommendation || meta.recommended_decision || 'REVIEW';
+  var risks = [];
+  if (sections.risk_assessment && sections.risk_assessment.content) risks.push(sections.risk_assessment.content);
+  if (sections.red_flags_and_mitigants && Array.isArray(sections.red_flags_and_mitigants.red_flags)) {
+    risks = risks.concat(sections.red_flags_and_mitigants.red_flags);
+  }
+  var blockers = [];
+  if (meta.blocked) blockers.push(meta.block_reason || 'Memo controls blocked approval.');
+  if (meta.is_stale) blockers.push(meta.stale_reason || 'Memo is stale.');
+  return '<div class="memo-section">' +
+    '<div class="memo-section-title">Decision Summary</div>' +
+    '<div class="memo-text">' + escapeHtml(String(summary)).slice(0, 1200) + '</div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">' +
+      '<span style="font-size:11px;color:var(--text3);">Recommended decision</span><span class="memo-risk-badge medium">' + escapeHtml(String(decision).replace(/_/g, ' ')) + '</span>' +
+      '<span style="font-size:11px;color:var(--text3);">Risk</span><span class="memo-risk-badge ' + String(meta.risk_rating || 'medium').toLowerCase() + '">' + escapeHtml(String(meta.risk_rating || 'UNKNOWN')) + '</span>' +
+    '</div>' +
+    '<div style="margin-top:12px;font-size:12px;color:var(--text2);"><strong>Key risks:</strong> ' + escapeHtml(risks.length ? risks.join(' ') : 'No key risk summary recorded.').slice(0, 900) + '</div>' +
+    '<div style="margin-top:8px;font-size:12px;color:' + (blockers.length ? '#991b1b' : '#166534') + ';"><strong>Open blockers:</strong> ' + escapeHtml(blockers.length ? blockers.join('; ') : 'None recorded in memo metadata.') + '</div>' +
+  '</div>';
+}
+
 function renderMemoSections(data) {
   if (!data || !data.sections) return '<div class="memo-text" style="color:var(--text3);text-align:center;padding:40px;">No memo data available. Click "Generate Memo" to create one.</div>';
   var s = data.sections;
@@ -26120,11 +26243,7 @@ function renderMemoSections(data) {
     var srcColor = '#6b7280';
     html += '<div class="ai-simulated-banner" style="border-color:' + srcColor + ';background:#f9fafb;"><span class="ai-sim-icon">ℹ️</span><div><div class="ai-sim-text" style="color:' + srcColor + ';">AI Source: ' + escapeHtml(aiSource.toUpperCase()) + '</div><div class="ai-sim-sub" style="color:' + srcColor + ';">This output was not generated by live AI. Verify findings independently.</div></div></div>';
   } else if (aiSource === 'deterministic') {
-    html += '<div style="border:2px solid #2563eb;border-radius:8px;padding:10px 14px;margin-bottom:14px;background:#eff6ff;display:flex;align-items:center;gap:10px;">';
-    html += '<span style="font-size:18px;">⚙️</span>';
-    html += '<div><div style="font-size:11px;font-weight:700;color:#2563eb;">DETERMINISTIC (RULE-BASED) OUTPUT</div>';
-    html += '<div style="font-size:10px;color:#2563eb;">This output was generated by deterministic rule-based logic, not AI. Results are advisory and should be reviewed by the compliance officer.</div>';
-    html += '</div></div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px;">Source: Deterministic (Rule-Based). Technical rule-engine diagnostics are available in Full Memo / Diagnostics.</div>';
   } else if (memoSource === 'fallback') {
     html += '<div class="ai-simulated-banner" style="border-color:#d97706;"><span class="ai-sim-icon">⚠️</span><div><div class="ai-sim-text">Simulated — Fallback Source</div><div class="ai-sim-sub">The memo builder encountered an error and used a fallback template. Results may be incomplete. Not from live AI.</div></div></div>';
   }
@@ -26150,6 +26269,11 @@ function renderMemoSections(data) {
   if (conf) { html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Confidence:</span><span style="font-size:11px;font-weight:600;color:' + (conf>=0.8?'var(--green)':conf>=0.6?'var(--amber)':'var(--red)') + ';">' + Math.round(conf*100) + '%</span>'; }
   html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Ref: ' + (data.application_ref||'') + ' | Generated: ' + (data.memo_generated||'').substring(0,19).replace('T',' ') + '</span>';
   html += '</div>';
+
+  html += renderMemoDecisionSnapshot(data);
+  html += '<details class="memo-full-details" style="border:1px solid var(--border1);border-radius:8px;padding:12px;margin-top:12px;background:var(--surface);">';
+  html += '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text1);">Full Memo / Diagnostics</summary>';
+  html += '<div style="margin-top:12px;">';
 
   sectionOrder.forEach(function(key, idx) {
     var sec = s[key];
@@ -26364,6 +26488,7 @@ function renderMemoSections(data) {
     html += '</div>';
   }
 
+  html += '</div></details>';
   return html;
 }
 
@@ -26567,10 +26692,21 @@ async function approveMemo() {
   if (valStatus === 'PASS_WITH_FIXES' || valStatus === 'PASS WITH FIXES') {
     if (!confirm('This memo has validation issues that should be reviewed. Are you sure you want to approve?')) return;
   }
+  var approvalReason = currentMemoApprovalReason();
+  if (!approvalReason) {
+    alert('Approval reason required\n\nRecord the officer rationale for relying on this canonical memo before approval.');
+    var reasonInput = document.getElementById('memo-approval-reason');
+    if (reasonInput) reasonInput.focus();
+    refreshMemoApprovalReasonState();
+    return;
+  }
 
   btn.innerHTML = '⏳ Approving...'; btn.disabled = true;
   try {
-    var memoApproveBody = { officer_signoff: { acknowledged: true, scope: 'memo', source_context: 'ai_advisory' } };
+    var memoApproveBody = {
+      approval_reason: approvalReason,
+      officer_signoff: { acknowledged: !!memoSignoff.checked, scope: 'memo', source_context: 'ai_advisory' }
+    };
     var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') },
@@ -26583,6 +26719,7 @@ async function approveMemo() {
         window._currentMemoData.review_status = 'approved';
         window._currentMemoData.approved_by = approval.approved_by || window._currentMemoData.approved_by;
         window._currentMemoData.approved_at = approval.approved_at || window._currentMemoData.approved_at;
+        window._currentMemoData.approval_reason = approval.approval_reason || approvalReason;
       }
       setMemoStatusBadge('Approved', 'approved');
       await fetchValidationResults();
@@ -26616,6 +26753,10 @@ async function fetchValidationResults() {
 }
 
 function renderValidationPanel(result) {
+  result = result || {};
+  window._lastMemoValidationResult = result;
+  syncMemoApprovalReasonPanel(result);
+  renderMemoGovernanceSummary(window._currentDetailApp || {}, result);
   var panel = document.getElementById('memo-validation-panel');
   panel.style.display = '';
 
@@ -26677,6 +26818,8 @@ function renderValidationPanel(result) {
       issuesHtml += '<div><strong>' + (issue.category || 'General').replace(/_/g, ' ') + ':</strong> ' + (issue.message || issue.description || 'No details') + (fixText ? '<br><span style="color:var(--brand);font-size:11px;font-weight:600;">💡 Fix: ' + fixText + '</span>' : '') + '</div>';
       issuesHtml += '</div>';
     });
+  } else if (status === 'fail') {
+    issuesHtml = '<div style="text-align:center;padding:10px;color:var(--red);font-size:12px;font-weight:600;">Validation failed, but no issue detail was returned. Re-run validation or inspect memo diagnostics before approval.</div>';
   } else {
     issuesHtml = '<div style="text-align:center;padding:10px;color:var(--green);font-size:12px;font-weight:600;">✅ No issues found — memo meets quality standards</div>';
   }
@@ -26746,8 +26889,8 @@ function renderValidationPanel(result) {
     approveBtn.innerHTML = '✅ Approve Memo';
     setMemoStatusBadge('Validation Failed', 'rejected');
   } else if (status === 'pass_with_fixes') {
-    approveBtn.disabled = true;
-    approveBtn.title = memoApprovalBlockers.length ? memoApprovalBlockers.join(' ') : 'PASS WITH FIXES approval is blocked until this UI captures approval_reason.';
+    approveBtn.disabled = memoApprovalBlockers.length > 0;
+    approveBtn.title = memoApprovalBlockers.length ? memoApprovalBlockers.join(' ') : 'PASS WITH FIXES requires documented approval reason and senior review before approval.';
     approveBtn.style.background = '#92400e';
     approveBtn.innerHTML = '✅ Approve Memo';
     setMemoStatusBadge('Validated With Fixes', 'pending');

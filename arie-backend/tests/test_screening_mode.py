@@ -151,10 +151,10 @@ def test_approval_gate_rejects_simulated_nested_screening_report(db, temp_db):
     db.execute(
         """
         INSERT INTO compliance_memos
-        (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, approval_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (app_id, json.dumps({"ai_source": "deterministic"}), "system", "APPROVE", "approved", 8.5, "pass", "CONSISTENT"),
+        (app_id, json.dumps({"ai_source": "deterministic"}), "system", "APPROVE", "approved", 8.5, "pass", "CONSISTENT", "Fixture approval reason"),
     )
     db.commit()
 
@@ -212,10 +212,10 @@ def _insert_gate5_app(db, app_id, screening_report):
     db.execute(
         """
         INSERT INTO compliance_memos
-        (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, approval_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (app_id, json.dumps({"ai_source": "deterministic"}), "system", "APPROVE", "approved", 8.5, "pass", "CONSISTENT"),
+        (app_id, json.dumps({"ai_source": "deterministic"}), "system", "APPROVE", "approved", 8.5, "pass", "CONSISTENT", "Fixture approval reason"),
     )
     db.commit()
     return dict(db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone())

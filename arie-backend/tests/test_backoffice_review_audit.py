@@ -882,14 +882,18 @@ class TestDayThreeApprovalBlockerUX:
         assert "renderMemoApprovalBlockers(result)" in fn_region
         assert "memoApprovalBlockers" in fn_region
 
-    def test_pass_with_fixes_remains_blocked_until_ui_captures_reason(self):
+    def test_pass_with_fixes_approval_reason_is_captured_by_ui(self):
         html = self._read_backoffice()
-        assert "PASS WITH FIXES approval requires an approval_reason" in html
-        assert "this UI does not capture or submit that reason yet" in html
-        fn_start = html.index("PASS WITH FIXES approval is blocked until this UI captures approval_reason")
+        assert 'id="memo-approval-reason"' in html
+        assert "function currentMemoApprovalReason()" in html
+        assert "approval_reason: approvalReason" in html
+        assert "Enter the approval reason before submitting memo approval." in html
+        assert "this UI does not capture or submit that reason yet" not in html
+        fn_start = html.index("PASS WITH FIXES requires documented approval reason")
         fn_start = html.rfind("} else if (status === 'pass_with_fixes')", 0, fn_start)
-        fn_region = html[fn_start:fn_start + 450]
-        assert "approveBtn.disabled = true" in fn_region
+        fn_end = html.index("} else if (status === 'pass')", fn_start)
+        fn_region = html[fn_start:fn_end]
+        assert "approveBtn.disabled = memoApprovalBlockers.length > 0" in fn_region
         assert "memoApprovalBlockers.length" in fn_region
 
 

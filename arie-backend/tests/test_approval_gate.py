@@ -17,6 +17,7 @@ def _insert_application_and_memo(
     base_risk_level=None,
     pre_approval_decision=None,
     memo_data=None,
+    approval_reason=None,
 ):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-approval-gate-{suffix}"
@@ -75,8 +76,8 @@ def _insert_application_and_memo(
     db.execute(
         """
         INSERT INTO compliance_memos
-        (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, approval_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_id,
@@ -87,6 +88,9 @@ def _insert_application_and_memo(
             8.5,
             validation_status,
             supervisor_status,
+            approval_reason if approval_reason is not None else (
+                "Fixture approval reason" if review_status == "approved" else None
+            ),
         ),
     )
     db.commit()
@@ -265,22 +269,29 @@ def _insert_enhanced_requirement(
 def test_validate_approval_requires_explicit_validation_pass(db):
     from security_hardening import ApprovalGateValidator
 
-    app = _insert_application_and_memo(db, validation_status="pass_with_fixes")
+    app = _insert_application_and_memo(
+        db,
+        validation_status="pass_with_fixes",
+        approval_reason="",
+    )
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
 
     assert can_approve is False
-    assert "pass_with_fixes" in message
+    assert "approval_reason" in message
 
 
 def test_validate_approval_requires_explicit_supervisor_consistent(db):
     from security_hardening import ApprovalGateValidator
 
-    app = _insert_application_and_memo(db, supervisor_status="CONSISTENT_WITH_WARNINGS")
+    app = _insert_application_and_memo(
+        db,
+        supervisor_status="CONSISTENT_WITH_WARNINGS",
+        approval_reason="",
+    )
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
 
     assert can_approve is False
-    assert "supervisor_status" in message
-    assert "CONSISTENT_WITH_WARNINGS" in message
+    assert "approval_reason" in message
 
 
 def test_validate_approval_allows_explicit_positive_states(db):

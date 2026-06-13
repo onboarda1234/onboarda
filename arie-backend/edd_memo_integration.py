@@ -84,6 +84,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import lifecycle_linkage as ll
+from memo_governance import latest_compliance_memo_row
 from lifecycle_linkage import (
     MissingAuditWriter,
     _row_get,  # internal but stable helper -- mirror PR-01/PR-03 conventions
@@ -238,12 +239,7 @@ def _fetch_latest_onboarding_memo_id(db, application_id) -> Optional[int]:
     """
     if application_id is None:
         return None
-    row = db.execute(
-        "SELECT id FROM compliance_memos "
-        "WHERE application_id = ? "
-        "ORDER BY created_at DESC, id DESC LIMIT 1",
-        (application_id,),
-    ).fetchone()
+    row = latest_compliance_memo_row(db, application_id, columns="id")
     return _row_get(row, "id") if row else None
 
 

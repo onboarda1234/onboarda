@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from config import UPLOAD_DIR
+from memo_governance import latest_compliance_memo_row, memo_selection_metadata
 
 try:
     import weasyprint
@@ -346,10 +347,7 @@ def _load_case(db, app: dict[str, Any]) -> dict[str, Any]:
         "SELECT * FROM screening_reviews WHERE application_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC",
         (app_id,),
     )
-    memo = _row_dict(db.execute(
-        "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY version DESC, id DESC LIMIT 1",
-        (app_id,),
-    ).fetchone())
+    memo = _row_dict(latest_compliance_memo_row(db, app_id))
     audit = _rows(
         db,
         """
@@ -567,6 +565,8 @@ def render_compliance_memo(case: dict[str, Any]) -> bytes:
         ("Quality score", memo.get("quality_score")),
         ("Approved by", memo.get("approved_by")),
         ("Approved at", memo.get("approved_at")),
+        ("Approval reason", memo.get("approval_reason")),
+        ("Canonical memo id", memo_selection_metadata(memo).get("canonical_memo_id")),
         ("Created", memo.get("created_at")),
         ("Stale", memo.get("is_stale")),
         ("Stale reason", memo.get("stale_reason")),

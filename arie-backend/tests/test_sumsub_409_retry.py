@@ -262,8 +262,8 @@ def _insert_app_for_gate5(db, screening_report):
         """
         INSERT INTO compliance_memos
         (application_id, memo_data, generated_by, ai_recommendation,
-         review_status, quality_score, validation_status, supervisor_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         review_status, quality_score, validation_status, supervisor_status, approval_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_id,
@@ -275,6 +275,7 @@ def _insert_app_for_gate5(db, screening_report):
             8.5,
             "pass",
             "CONSISTENT",
+            "Fixture approval reason",
         ),
     )
     db.commit()
