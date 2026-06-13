@@ -88,6 +88,20 @@ def _runtime_js(html, config):
                   return (memoData && memoData.supervisor) || (memoMeta && memoMeta.supervisor) || {{}};
                 }}
                 function getApprovalReadiness() {{ return CONFIG.approvalReadiness || {{ ready:false, blockers:['Blocked'] }}; }}
+                function isTerminalGatePresentation(app) {{
+                  var presentation = app && (app.approvalGatePresentation || app.approval_gate_presentation);
+                  return !!(presentation && presentation.mode === 'terminal_decision_context');
+                }}
+                function terminalGatePresentation(app) {{
+                  return (app && (app.approvalGatePresentation || app.approval_gate_presentation)) || null;
+                }}
+                function terminalGateDiagnostics(app) {{
+                  return (app && (app.currentGateDiagnostics || app.current_gate_diagnostics)) || null;
+                }}
+                function terminalDecisionBasis(app) {{
+                  return (app && (app.decisionBasis || app.decision_basis)) || null;
+                }}
+                function formatDetailDate(value) {{ return String(value || ''); }}
 
                 var detailLifecycleSummaryOverview = CONFIG.lifecycleSummaryOverview || null;
                 var SCREENING_QUEUE = CONFIG.screeningQueue || {{ metrics:null, rows:[], generated_at:null, load_error:null }};
@@ -214,6 +228,63 @@ class TestCaseCommandCentreRuntime:
         assert 'Unassigned' in result["html"]
         assert 'Blocked —' in result["html"]
         assert 'case-command-centre-status' not in result["html"]
+
+    def test_terminal_record_renders_decision_context_not_approval_blockers(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        ref="ARF-TERMINAL-001",
+                        company="Terminal Client Ltd",
+                        status="Approved",
+                        statusRaw="approved",
+                        approvalGatePresentation={
+                            "mode": "terminal_decision_context",
+                            "is_terminal": True,
+                            "terminal_status": "approved",
+                            "legacy_evidence_incomplete": True,
+                            "current_gate_blocker_count": 2,
+                            "current_gate_diagnostics_label": "Current-state diagnostics only; not the historical approval basis.",
+                        },
+                        currentGateDiagnostics={
+                            "applies_to": "current_state_only",
+                            "label": "Current-state diagnostics only; not the historical approval basis.",
+                            "blocker_count": 2,
+                            "blockers": [
+                                {
+                                    "title": "Identity verification unresolved",
+                                    "description": "Current IDV state is unresolved under today's gate.",
+                                },
+                                {
+                                    "title": "Compliance memo is stale",
+                                    "description": "Current memo state changed after the historical decision.",
+                                },
+                            ],
+                        },
+                        decisionBasis={
+                            "available": False,
+                            "decision_record_count": 0,
+                            "evidence_warning": "No matching terminal decision record was found for this application status.",
+                        },
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Current gate blocker"]},
+                },
+            )
+        )
+        assert "Terminal Client Ltd" in result["html"]
+        assert "Legacy evidence incomplete" in result["html"]
+        assert "Decision evidence incomplete" in result["html"]
+        assert "Current-state diagnostics only" in result["html"]
+        assert "Not historical basis" in result["html"]
+        assert "Current gate blocker" not in result["html"]
+        assert "Blocked —" not in result["html"]
 
     def test_screening_blocker_is_shown(self):
         html = _read_backoffice()
