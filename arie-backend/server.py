@@ -3262,7 +3262,7 @@ class LogoutHandler(BaseHandler):
 class ApplicationsHandler(BaseHandler):
     """GET /api/applications — list, POST — create"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(resource="applications:list")
         if not user:
             return
 
@@ -4594,7 +4594,57 @@ CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS = {
     "screening_mode",
     "screening_reviews",
     "screening_truth_summary",
+    "sumsub_idv_statuses",
     "supervisor_requires_rerun",
+    "gate_blockers",
+    "gate_blocker_count",
+    "idv_gate_summary",
+    "document_history",
+    "application_notes",
+    "decision_records",
+    "compliance_memos",
+    "edd_cases",
+}
+
+CLIENT_DOCUMENT_FORBIDDEN_KEYS = {
+    "application_id",
+    "evidence_class",
+    "evidence_classification_note",
+    "evidence_classified_by",
+    "evidence_classified_at",
+    "review_comment",
+    "review_status",
+    "reviewed_at",
+    "reviewed_by",
+    "reviewed_by_name",
+    "reviewer_role",
+    "verification_results",
+    "workflow_test_acceptance_environment",
+    "workflow_test_acceptance_reason",
+    "workflow_test_accepted",
+    "workflow_test_accepted_at",
+    "workflow_test_accepted_by",
+}
+
+CLIENT_PRESCREENING_FORBIDDEN_KEYS = {
+    "aml_screening",
+    "approval_gate",
+    "compliance_findings",
+    "final_risk_level",
+    "internal_decision",
+    "kyc_applicants",
+    "provider_diagnostics",
+    "provider_status",
+    "raw_provider_response",
+    "risk_breakdown",
+    "risk_dimensions",
+    "risk_factors",
+    "risk_level",
+    "risk_score",
+    "sanctions_screening",
+    "screening_report",
+    "screening_results",
+    "sumsub_applicant_ids",
 }
 
 CLIENT_PRESCREENING_PRICING_FORBIDDEN_KEYS = {
@@ -4658,6 +4708,14 @@ def _client_safe_party_record(party):
     return item
 
 
+def _client_safe_document_record(document):
+    return {
+        key: value
+        for key, value in dict(document or {}).items()
+        if key not in CLIENT_DOCUMENT_FORBIDDEN_KEYS
+    }
+
+
 def _client_safe_application_detail(result):
     """Project application detail to the client portal's resume surface.
 
@@ -4673,6 +4731,8 @@ def _client_safe_application_detail(result):
     prescreening = safe.get("prescreening_data")
     if isinstance(prescreening, dict):
         prescreening = deepcopy(prescreening)
+        for key in CLIENT_PRESCREENING_FORBIDDEN_KEYS:
+            prescreening.pop(key, None)
         pricing = prescreening.get("pricing")
         if isinstance(pricing, dict):
             pricing = {
@@ -4685,6 +4745,8 @@ def _client_safe_application_detail(result):
     for party_key in ("directors", "ubos", "intermediaries"):
         if isinstance(safe.get(party_key), list):
             safe[party_key] = [_client_safe_party_record(item) for item in safe[party_key]]
+    if isinstance(safe.get("documents"), list):
+        safe["documents"] = [_client_safe_document_record(item) for item in safe["documents"]]
 
     return safe
 
@@ -17668,7 +17730,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
 class ScreeningQueueHandler(BaseHandler):
     """GET /api/screening/queue — authoritative screening queue payload"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(resource="screening:queue")
         if not user:
             return
 
@@ -18276,7 +18338,7 @@ class IPCheckHandler(BaseHandler):
 class APIStatusHandler(BaseHandler):
     """GET /api/screening/status — check which APIs are live vs simulated"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(resource="screening:provider_status")
         if not user:
             return
 
@@ -26988,12 +27050,15 @@ class PortalApplicationsHandler(BaseHandler):
             return
 
         client_id = user.get("sub")
+        from fixture_filter import fixture_app_exclude_clause
+
+        fixture_clause, fixture_params = fixture_app_exclude_clause("")
         db = get_db()
         try:
             rows = db.execute(
                 "SELECT id, ref, company_name, status, created_at, updated_at "
-                "FROM applications WHERE client_id = ? ORDER BY created_at DESC",
-                (client_id,),
+                f"FROM applications WHERE client_id = ? AND {fixture_clause} ORDER BY created_at DESC",
+                (client_id, *fixture_params),
             ).fetchall()
             apps = [dict(r) for r in rows]
             app_ids = [app["id"] for app in apps]

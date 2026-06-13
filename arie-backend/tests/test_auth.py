@@ -171,7 +171,7 @@ class TestInactiveTokenEnforcement:
 
                 active_me = self_inner.fetch("/api/auth/me", headers=bearer_headers)
                 assert active_me.code == 200, active_me.body.decode()
-                active_apps = self_inner.fetch("/api/applications?limit=1", headers=bearer_headers)
+                active_apps = self_inner.fetch("/api/portal/applications", headers=bearer_headers)
                 assert active_apps.code == 200, active_apps.body.decode()
                 active_cookie_me = self_inner.fetch("/api/auth/me", headers={"Cookie": cookie_header})
                 assert active_cookie_me.code == 200, active_cookie_me.body.decode()
@@ -181,7 +181,7 @@ class TestInactiveTokenEnforcement:
 
                 inactive_me = self_inner.fetch("/api/auth/me", headers=bearer_headers)
                 assert inactive_me.code in (401, 403), inactive_me.body.decode()
-                inactive_apps = self_inner.fetch("/api/applications?limit=1", headers=bearer_headers)
+                inactive_apps = self_inner.fetch("/api/portal/applications", headers=bearer_headers)
                 assert inactive_apps.code in (401, 403), inactive_apps.body.decode()
                 inactive_cookie_me = self_inner.fetch("/api/auth/me", headers={"Cookie": cookie_header})
                 assert inactive_cookie_me.code in (401, 403), inactive_cookie_me.body.decode()
