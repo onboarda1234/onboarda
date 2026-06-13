@@ -8,19 +8,28 @@ PORTAL_HTML = ROOT / "arie-portal.html"
 
 def test_overview_contains_compact_periodic_review_baseline_box():
     html = BACKOFFICE_HTML.read_text()
+    baseline_region = html[
+        html.index("function renderOverviewPeriodicReviewBaseline"):
+        html.index("async function loadOverviewPeriodicReviewBaseline")
+    ]
 
     assert 'id="detail-periodic-review-baseline"' in html
-    assert "Periodic Review Baseline" in html
-    assert "Officer-only setup metadata" in html
-    assert "overview-periodic-review-baseline-legacy-" in html
-    assert "overview-periodic-review-baseline-last-review-" in html
-    assert "overview-periodic-review-baseline-next-due-" in html
-    assert "Save baseline" in html
-    assert "Is this a legacy file?" in html
+    assert "Periodic Review Baseline" not in html
+    assert "Officer-only setup metadata" not in html
+    assert "periodic-baseline-compact" in baseline_region
+    assert "periodic-baseline-row" in baseline_region
+    assert "periodic-baseline-actions" in baseline_region
+    assert "overview-periodic-review-baseline-legacy-" in baseline_region
+    assert "overview-periodic-review-baseline-last-review-" in baseline_region
+    assert "overview-periodic-review-baseline-next-due-" in baseline_region
+    assert "Save baseline" in baseline_region
+    assert "Is this a legacy file?" in baseline_region
     assert "['n/a', 'N/A']" in html
     assert "Not applicable - no periodic-review baseline will be scheduled" in html
-    assert "Derived cadence" in html
-    assert "Cadence is derived from the current officer-visible risk level." in html
+    assert "Derived cadence" in baseline_region
+    assert "Cadence is derived from the current officer-visible risk level." not in baseline_region
+    assert "Officer note" not in baseline_region
+    assert 'type="hidden" value="' in baseline_region
     assert "/periodic-review-baseline" in html
     assert "Periodic review baseline can be configured after onboarding approval." in html
     assert "No periodic review case is available yet for baseline setup on this application." not in html

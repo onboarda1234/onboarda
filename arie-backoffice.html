@@ -218,15 +218,10 @@ a { color:var(--brand); text-decoration:none; }
 .case-command-centre-eyebrow { font-size:11px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--brand); }
 .case-command-centre-title { font-size:16px; font-weight:800; color:var(--text1); line-height:1.25; margin-top:3px; }
 .case-command-centre-subtitle { font-size:11px; color:var(--text3); margin-top:5px; line-height:1.45; max-width:720px; }
-.case-command-centre-status { display:inline-flex; align-items:center; gap:8px; padding:7px 11px; border-radius:999px; font-size:11px; font-weight:800; letter-spacing:0.05em; text-transform:uppercase; }
-.case-command-centre-status.ready { background:#dcfce7; color:#166534; }
-.case-command-centre-status.requires-review { background:#eff6ff; color:#1d4ed8; }
-.case-command-centre-status.blocked { background:#fef3c7; color:#92400e; }
 .case-command-centre-meta { display:flex; flex-wrap:wrap; gap:6px; padding:8px 14px; }
 .case-command-centre-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border1); border-radius:8px; background:var(--surface); color:var(--text2); padding:5px 8px; font-size:12px; line-height:1.2; min-height:28px; }
 .case-command-centre-chip-label { font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; color:var(--text3); }
 .case-command-centre-chip-value { font-weight:700; color:var(--text1); }
-.case-command-centre-chip.blockers { background:#fffaf0; border-color:#fde68a; color:#92400e; font-weight:700; }
 .case-command-centre-next { margin:0 14px 8px; border:1px solid rgba(37,99,235,0.18); border-radius:8px; background:rgba(37,99,235,0.06); padding:8px 10px; display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
 .case-command-centre-next .label { font-size:10px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:#1d4ed8; flex:0 0 auto; padding-top:2px; }
 .case-command-centre-next .value { font-size:13px; font-weight:700; color:var(--text1); line-height:1.4; }
@@ -254,6 +249,19 @@ a { color:var(--brand); text-decoration:none; }
 .case-command-detail-item { display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--text2); line-height:1.4; }
 .case-command-detail-dot { width:6px; height:6px; border-radius:999px; background:#f59e0b; flex:0 0 auto; margin-top:6px; }
 .case-command-secondary-heading { padding:2px 14px 6px; font-size:11px; font-weight:800; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; }
+.periodic-baseline-compact { margin:8px 0 12px; padding:10px 12px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); }
+.periodic-baseline-row { display:grid; grid-template-columns:minmax(140px,0.9fr) minmax(150px,1fr) minmax(150px,1fr) minmax(150px,1fr) auto; gap:8px; align-items:end; }
+.periodic-baseline-field { min-width:0; }
+.periodic-baseline-label { font-size:10px; font-weight:800; color:var(--text3); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px; white-space:nowrap; }
+.periodic-baseline-field .form-select,
+.periodic-baseline-field .form-input { min-height:32px; height:32px; padding:5px 9px; font-size:12px; border-radius:8px; }
+.periodic-baseline-readonly { min-height:32px; padding:7px 9px; border:1px solid var(--border1); border-radius:8px; background:var(--surface2); font-size:12px; color:var(--text1); font-weight:700; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.periodic-baseline-actions { display:flex; justify-content:flex-end; align-items:flex-end; }
+.periodic-baseline-actions .btn { min-height:32px; white-space:nowrap; }
+@media (max-width: 880px) {
+  .periodic-baseline-row { grid-template-columns:1fr; align-items:stretch; }
+  .periodic-baseline-actions { justify-content:flex-start; }
+}
 .idv-compact-panel { border:1px solid var(--border1); border-left:4px solid #0f766e; border-radius:10px; background:var(--surface); margin:12px 0 0; overflow:hidden; }
 .idv-compact-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; padding:12px 14px; border-bottom:1px solid var(--border1); background:rgba(15,118,110,0.05); }
 .idv-compact-title { font-size:13px; font-weight:800; color:var(--text1); }
@@ -1299,7 +1307,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <button class="btn btn-success btn-sm" onclick="approveApplication()" id="btn-approve" style="font-size:11px;">✅ Approve</button>
       <button class="btn btn-danger btn-sm" onclick="rejectApplication()" id="btn-reject" style="font-size:11px;">❌ Reject</button>
       <button class="btn btn-warning btn-sm" onclick="requestMoreInfo()" id="btn-rmi" style="font-size:11px;">📋 More Info</button>
-      <button class="btn btn-outline btn-sm" onclick="openOfficerCorrectionModal()" id="btn-open-officer-correction" style="font-size:11px;">✏️ Officer Correction</button>
       <button class="btn btn-outline btn-sm" onclick="openOverrideModal()" id="btn-override" style="font-size:11px;background:rgba(124,58,237,0.1);border-color:rgba(124,58,237,0.3);color:#7c3aed;">🔄 Override</button>
       <button class="btn btn-outline btn-sm" onclick="escalateCase()" style="font-size:11px;">⬆️ Escalate</button>
     </div>
@@ -15066,9 +15073,8 @@ function renderOverviewPeriodicReviewBaseline(detail) {
   }
   if (!detail || detail.id == null) {
     container.innerHTML =
-      '<div class="detail-section" style="margin-top:16px;">' +
-        '<div class="detail-section-title">Periodic Review Baseline</div>' +
-        '<div style="font-size:12px;color:var(--text2);line-height:1.5;">Application detail unavailable.</div>' +
+      '<div class="periodic-baseline-compact">' +
+        '<div style="font-size:12px;color:var(--text2);line-height:1.4;">Periodic review baseline unavailable.</div>' +
       '</div>';
     return;
   }
@@ -15083,23 +15089,16 @@ function renderOverviewPeriodicReviewBaseline(detail) {
   var cadenceLabel = baseline.derived_cadence_label || ((baseline.derived_cadence_months || 'Risk') + ' months');
   var nextDue = baseline.next_review_due || (canEdit ? 'Not scheduled yet' : (eligibility.message || 'Awaiting onboarding approval'));
   container.innerHTML =
-    '<div class="detail-section" style="margin-top:16px;">' +
-      '<div class="detail-section-title" style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
-        '<span>Periodic Review Baseline</span>' +
-        '<span style="font-size:11px;color:var(--text3);">Officer-only setup metadata</span>' +
+    '<div class="periodic-baseline-compact">' +
+      (!canEdit ? '<div style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);line-height:1.35;">' + escapeHtml(String(eligibility.message || 'Periodic review baseline can be configured after onboarding approval.')) + '</div>' : '') +
+      '<div class="periodic-baseline-row">' +
+        '<div class="periodic-baseline-field"><div class="periodic-baseline-label">Is this a legacy file?</div><select id="overview-periodic-review-baseline-legacy-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + '>' + periodicReviewBaselineLegacyOptions(legacyFile) + '</select></div>' +
+        '<div class="periodic-baseline-field" id="overview-periodic-review-baseline-last-review-wrap-' + detail.id + '"><div class="periodic-baseline-label">Last review date</div><input id="overview-periodic-review-baseline-last-review-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + ' /></div>' +
+        '<div class="periodic-baseline-field"><div class="periodic-baseline-label">Derived cadence</div><div class="periodic-baseline-readonly">' + escapeHtml(String(cadenceLabel)) + '</div></div>' +
+        '<div class="periodic-baseline-field"><div class="periodic-baseline-label">Next review due</div><div id="overview-periodic-review-baseline-next-due-' + detail.id + '" class="periodic-baseline-readonly">' + escapeHtml(String(nextDue)) + '</div></div>' +
+        '<div class="periodic-baseline-actions"><button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')"' + disabled + '>Save baseline</button></div>' +
       '</div>' +
-      (!canEdit ? '<div style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);line-height:1.45;">' + escapeHtml(String(eligibility.message || 'Periodic review baseline can be configured after onboarding approval.')) + '</div>' : '') +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;">' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Is this a legacy file?</div><select id="overview-periodic-review-baseline-legacy-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + '>' + periodicReviewBaselineLegacyOptions(legacyFile) + '</select></div>' +
-        '<div id="overview-periodic-review-baseline-last-review-wrap-' + detail.id + '"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Last review date</div><input id="overview-periodic-review-baseline-last-review-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + ' /></div>' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Derived cadence</div><div style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(cadenceLabel)) + '</div></div>' +
-        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Next review due</div><div id="overview-periodic-review-baseline-next-due-' + detail.id + '" style="min-height:40px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(String(nextDue)) + '</div></div>' +
-      '</div>' +
-      '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Officer note</div><input id="overview-periodic-review-baseline-note-' + detail.id + '" class="form-input" type="text" maxlength="500" placeholder="Optional short note" value="' + escapeHtml(String(note || '')) + '"' + disabled + ' /></div>' +
-      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
-        '<div style="font-size:11px;color:var(--text3);max-width:560px;">Cadence is derived from the current officer-visible risk level. Legacy files must provide the last review date; current files derive next due from onboarding approval/completion. Use N/A only when no manual baseline applies.</div>' +
-        '<button class="btn btn-primary btn-sm" onclick="saveOverviewPeriodicReviewBaseline(\'' + detail.id + '\')"' + disabled + '>Save baseline</button>' +
-      '</div>' +
+      '<input id="overview-periodic-review-baseline-note-' + detail.id + '" type="hidden" value="' + escapeHtml(String(note || '')) + '" />' +
     '</div>';
   refreshOverviewPeriodicReviewBaselinePreview(detail.id);
 }
@@ -21055,7 +21054,6 @@ function renderCaseCommandCentre(app) {
   var advisoryBlockers = rawBlockers.filter(function(blocker) { return blocker && blocker.blocking === false; });
   var approvalReadinessBlocked = !hasBackendPayload && approvalReadiness && approvalReadiness.ready === false;
   var readinessLabel = (blockingBlockers.length || approvalReadinessBlocked) ? 'Blocked' : (advisoryBlockers.length ? 'Needs Review' : 'Ready');
-  var readinessClass = blockingBlockers.length ? 'blocked' : (advisoryBlockers.length ? 'requires-review' : 'ready');
   var riskLabel = app.finalRiskLevel || app.rawRiskLevel || app.risk || 'Unknown';
 
   CASE_COMMAND_RENDERED_ACTIONS = {};
@@ -21171,9 +21169,7 @@ function renderCaseCommandCentre(app) {
   var guidanceGroups = buildGroups(advisoryBlockers, true);
   var allVisibleGroups = mandatoryGroups.concat(guidanceGroups);
   var nextBestAction = nextBestAction(mandatoryGroups.length ? mandatoryGroups : guidanceGroups);
-  var subtitle = hasBackendPayload
-    ? 'Backend approval gate blockers are authoritative; advisory signals stay separate.'
-    : 'Display guidance is grouped by workflow; backend approval gates remain authoritative.';
+  var centreTitle = app.company || app.name || 'Case Command Centre';
 
   var metaChips = [
     ['Decision stage', app.status || '—'],
@@ -21187,8 +21183,7 @@ function renderCaseCommandCentre(app) {
       '<span class="case-command-centre-chip-label">' + escapeHtml(metric[0]) + '</span>' +
       '<span class="case-command-centre-chip-value">' + escapeHtml(metric[1]) + '</span>' +
     '</span>';
-  }).join('') +
-  '<span class="case-command-centre-chip blockers">' + escapeHtml(blockingBlockers.length === 1 ? '1 mandatory blocker' : (String(blockingBlockers.length) + ' mandatory blockers')) + '</span>';
+  }).join('');
 
   var mandatoryHtml = mandatoryGroups.map(renderGroup).join('');
   var guidanceHtml = guidanceGroups.map(function(group, index) { return renderGroup(group, mandatoryGroups.length + index); }).join('');
@@ -21198,10 +21193,8 @@ function renderCaseCommandCentre(app) {
       '<div class="case-command-centre-header">' +
         '<div>' +
           '<div class="case-command-centre-eyebrow">Case Command Centre</div>' +
-          '<div class="case-command-centre-title">' + escapeHtml(app.ref || 'Application') + ' · ' + escapeHtml(app.company || 'Unknown company') + '</div>' +
-	          '<div class="case-command-centre-subtitle">' + escapeHtml(subtitle) + '</div>' +
+          '<div class="case-command-centre-title">' + escapeHtml(centreTitle) + '</div>' +
         '</div>' +
-        '<div class="case-command-centre-status ' + readinessClass + '">' + escapeHtml(readinessLabel) + '</div>' +
       '</div>' +
       '<div class="case-command-centre-meta">' +
         metaHtml +

@@ -202,7 +202,8 @@ class TestCaseCommandCentreRuntime:
                 },
             )
         )
-        assert 'ARF-COMPACT-202 · Compact Review Ltd' in result["html"]
+        assert 'Compact Review Ltd' in result["html"]
+        assert 'ARF-COMPACT-202 · Compact Review Ltd' not in result["html"]
         assert 'case-command-centre-meta' in result["html"]
         assert 'Decision stage' in result["html"]
         assert 'Activation status' in result["html"]
@@ -211,7 +212,8 @@ class TestCaseCommandCentreRuntime:
         assert 'HIGH' in result["html"]
         assert 'Officer' in result["html"]
         assert 'Unassigned' in result["html"]
-        assert '>Blocked<' in result["html"]
+        assert 'Blocked —' in result["html"]
+        assert 'case-command-centre-status' not in result["html"]
 
     def test_screening_blocker_is_shown(self):
         html = _read_backoffice()
@@ -680,7 +682,8 @@ class TestCaseCommandCentreRuntime:
         assert "Document review still needs attention." in result["html"]
         assert 'data-action-key="documents.review"' in result["html"]
         assert result["visibleBlockerCardCount"] == len(result["blockers"])
-        assert "1 mandatory blocker" in result["html"]
+        assert "1 mandatory blocker" not in result["html"]
+        assert "Blocked — 1 unresolved controls" in result["html"]
         assert result["switchTabCalls"] == ["kyc-docs"]
 
     def test_resolve_cta_helper_opens_the_requested_tab(self):
@@ -753,10 +756,12 @@ class TestCaseCommandCentreRuntime:
             )
         )
 
-        assert "Backend approval gate blockers are authoritative" in result["html"]
+        assert "Backend approval gate blockers are authoritative" not in result["html"]
         assert "Identity verification unresolved" in result["html"]
         assert "Resolve IDV" in result["html"]
-        assert "1 mandatory blocker" in result["html"]
+        assert "1 mandatory blocker" not in result["html"]
+        assert "Activation status" in result["html"]
+        assert "Blocked — 1 unresolved controls" in result["html"]
         assert result["visibleBlockerCardCount"] == 1
         assert 'data-action-key="idv.review"' in result["html"]
 
@@ -779,7 +784,7 @@ class TestCaseCommandCentreRuntime:
 
         assert "No backend approval blockers returned." in result["html"]
         assert "Backend approval gate payload is clear." in result["html"]
-        assert "0 mandatory blockers" in result["html"]
+        assert "0 mandatory blockers" not in result["html"]
 
     def test_backend_approval_gates_remain_unchanged(self):
         html = _read_backoffice()
@@ -810,7 +815,9 @@ class TestCaseCommandCentreRuntime:
         assert 'onclick="approveApplication()"' in html
         assert 'onclick="rejectApplication()"' in html
         assert 'onclick="requestMoreInfo()"' in html
-        assert 'onclick="openOfficerCorrectionModal()"' in html
+        topbar = html[html.index("<!-- Top bar: back button + action buttons (horizontal) -->"):html.index('<div id="detail-case-command-centre">')]
+        assert 'onclick="openOfficerCorrectionModal()"' not in topbar
+        assert "Add correction" in html
         assert 'onclick="openOverrideModal()"' in html
         assert 'onclick="escalateCase()"' in html
         assert 'onclick="reassignCase()"' in html

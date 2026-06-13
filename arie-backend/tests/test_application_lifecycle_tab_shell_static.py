@@ -42,7 +42,7 @@ def test_application_review_action_bar_and_overview_do_not_duplicate_notes_or_li
     assert 'id="btn-approve"' in topbar_html
     assert 'id="btn-reject"' in topbar_html
     assert 'id="btn-rmi"' in topbar_html
-    assert 'id="btn-open-officer-correction"' in topbar_html
+    assert 'openOfficerCorrectionModal()' not in topbar_html
     assert 'id="btn-override"' in topbar_html
     assert "escalateCase()" in topbar_html
     assert 'id="btn-reassign"' in topbar_html
@@ -203,12 +203,13 @@ def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_de
 def test_overview_periodic_review_baseline_box_is_simplified_backoffice_only_and_auditable():
     html = _read_backoffice()
     assert 'id="detail-periodic-review-baseline"' in html
-    assert "Periodic Review Baseline" in html
     assert "function renderOverviewPeriodicReviewBaseline" in html
     assert "function loadOverviewPeriodicReviewBaseline" in html
     assert "function saveOverviewPeriodicReviewBaseline" in html
     assert "canEditPeriodicReviewLegacyBaseline" in html
-    assert "Officer-only setup metadata" in html
+    assert "Periodic Review Baseline" not in html
+    assert "Officer-only setup metadata" not in html
+    assert "periodic-baseline-row" in html
     assert "Is this a legacy file?" in html
     assert "Last review date" in html
     assert "Derived cadence" in html
@@ -216,7 +217,7 @@ def test_overview_periodic_review_baseline_box_is_simplified_backoffice_only_and
     assert "legacy_file" in html
     assert "last_review_date" in html
     assert "['n/a', 'N/A']" in html
-    assert "Use N/A only when no manual baseline applies." in html
+    assert "Use N/A only when no manual baseline applies." not in html
     assert "legacyEl.disabled" in html
     assert "overview-periodic-review-baseline-cadence-" not in html
 
