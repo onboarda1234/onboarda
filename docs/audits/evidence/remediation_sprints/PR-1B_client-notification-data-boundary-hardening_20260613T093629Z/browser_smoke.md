@@ -9,7 +9,12 @@ Required staging browser checks:
 - Client portal login succeeds.
 - Client opens notifications/status messages area.
 - No `Officer notes`, internal notes, compliance rationale, memo, supervisor, gate, provider, audit, or internal-risk wording appears.
+- No exact reproduced leaked phrases appear:
+  - `Officer notes: testing of PEP`
+  - `runtime audit`
+  - `source of funds`
 - Safe notification text appears or unsafe legacy items are safely suppressed/sanitized.
+- Requested-document labels shown to the client remain useful and do not expose provider/audit/internal-risk wording.
 - No console/network errors caused by notification sanitization.
 - Back-office login succeeds.
 - Application review still loads.

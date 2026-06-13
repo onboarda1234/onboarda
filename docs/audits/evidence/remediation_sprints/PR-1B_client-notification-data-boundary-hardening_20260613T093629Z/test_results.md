@@ -57,7 +57,7 @@ Command:
 Result:
 
 ```text
-13 passed in 6.66s
+13 passed in 4.67s
 ```
 
 Coverage:

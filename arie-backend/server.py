@@ -22356,7 +22356,7 @@ class ClientNotificationHandler(BaseHandler):
         }
         safe_title, safe_message = _client_notification_safe_copy(
             notification_type,
-            title_map.get(notification_type, "Documents Required"),
+            title_map.get(notification_type),
             message,
         )
 

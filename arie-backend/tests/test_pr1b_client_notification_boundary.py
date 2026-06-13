@@ -6,6 +6,14 @@ import uuid
 
 from tornado.testing import AsyncHTTPTestCase
 
+from branding import BRAND
+
+
+TEST_DOMAIN = BRAND.get("domain", "example.test")
+TEST_BRAND_TOKEN = "".join(
+    ch.lower() if ch.isalnum() else "_" for ch in BRAND.get("name", "onboarda")
+).strip("_") or "onboarda"
+
 
 def _sync_test_db_path(path):
     os.environ["DB_PATH"] = path
@@ -17,11 +25,44 @@ def _sync_test_db_path(path):
             setattr(module, "_CFG_DB_PATH", path)
 
 
+def _capture_db_path_state():
+    state = {"env": os.environ.get("DB_PATH"), "modules": {}}
+    for module_name in ("config", "db", "server"):
+        module = sys.modules.get(module_name)
+        attrs = {}
+        if module is not None:
+            for attr in ("DB_PATH", "_CFG_DB_PATH"):
+                attrs[attr] = (
+                    hasattr(module, attr),
+                    getattr(module, attr, None),
+                )
+        state["modules"][module_name] = attrs
+    return state
+
+
+def _restore_db_path_state(state):
+    original_env = state.get("env")
+    if original_env is None:
+        os.environ.pop("DB_PATH", None)
+    else:
+        os.environ["DB_PATH"] = original_env
+    for module_name, attrs in state.get("modules", {}).items():
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        for attr, (existed, value) in attrs.items():
+            if existed:
+                setattr(module, attr, value)
+            elif hasattr(module, attr):
+                delattr(module, attr)
+
+
 class PR1BClientNotificationBoundaryTest(AsyncHTTPTestCase):
     def get_app(self):
+        self._db_path_state = _capture_db_path_state()
         self._db_path = os.path.join(
             tempfile.gettempdir(),
-            f"onboarda_pr1b_notifications_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
+            f"{TEST_BRAND_TOKEN}_pr1b_notifications_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
         )
         try:
             os.unlink(self._db_path)
@@ -61,15 +102,19 @@ class PR1BClientNotificationBoundaryTest(AsyncHTTPTestCase):
                     (id, email, password_hash, company_name, status)
                 VALUES (?, ?, ?, ?, 'active')
                 """,
-                (client_id, f"{client_id}@example.test", "test-only", company),
+                (client_id, f"{client_id}@{TEST_DOMAIN}", "test-only", company),
             )
 
         self.db.execute(
             """
             INSERT OR REPLACE INTO users
                 (id, email, password_hash, full_name, role, status)
-            VALUES ('admin001', 'admin001@example.test', 'test-only', 'PR1B Admin', 'admin', 'active')
-            """
+            VALUES (?, ?, 'test-only', 'PR1B Admin', 'admin', 'active')
+            """,
+            (
+                "admin001",
+                f"admin001@{TEST_DOMAIN}",
+            ),
         )
 
         for app_id, ref, client_id, company in (
@@ -167,6 +212,7 @@ class PR1BClientNotificationBoundaryTest(AsyncHTTPTestCase):
     def tearDown(self):
         self.db.close()
         super().tearDown()
+        _restore_db_path_state(getattr(self, "_db_path_state", {}))
 
     def _headers(self, token):
         return {"Authorization": f"Bearer {token}"}

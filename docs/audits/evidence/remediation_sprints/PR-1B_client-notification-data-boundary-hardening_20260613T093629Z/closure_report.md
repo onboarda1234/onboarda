@@ -64,7 +64,7 @@ Command:
 Result:
 
 ```text
-13 passed in 6.66s
+13 passed in 4.67s
 ```
 
 ## Full suite results
@@ -80,6 +80,14 @@ Result:
 ```text
 5253 passed, 25 skipped in 273.13s (0:04:33)
 ```
+
+After CodeRabbit feedback was addressed, targeted tests passed again. A second local full-suite attempt hit the known local native dependency failure:
+
+```text
+Exit 139 - segmentation fault during WeasyPrint/Pango CFFI import through evidence_pack_export.py
+```
+
+GitHub CI must pass on the final branch commit before merge.
 
 ## Browser test results, if applicable
 

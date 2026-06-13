@@ -22,8 +22,14 @@ Required staging checks:
 
 - Client `GET /api/notifications` returns safe JSON.
 - No `Officer notes` text.
+- No exact reproduced leaked phrases:
+  - `Officer notes: testing of PEP`
+  - `runtime audit`
+  - `source of funds`
 - No `officer_notes`, `internal_notes`, `review_notes`, memo, supervisor, gate, provider, audit, or internal risk data.
 - Safe notification title/message/status/date remains available.
+- Sanitized `documents_list` values remain useful but do not contain provider/audit/internal-risk wording.
+- Nested `rmi_request` values, where returned for portal functionality, expose only client-safe reason, deadline, status, and requested-item state.
 - Client cannot access another client's notification data.
 - PR-1 regression remains intact:
   - client denied from `/api/screening/queue`
