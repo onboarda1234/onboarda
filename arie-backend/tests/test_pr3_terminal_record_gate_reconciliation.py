@@ -186,6 +186,8 @@ class PR3TerminalRecordGateReconciliationTest(AsyncHTTPTestCase):
             "PR3-ACTIVE-BLOCKED",
             "in_review",
         )
+        # No screening_report is intentionally seeded for this active fixture;
+        # collect_approval_gate_blockers deterministically emits screening_missing.
         self.db.commit()
 
     def test_approved_record_with_decision_snapshot_separates_current_diagnostics(self):
@@ -249,6 +251,7 @@ class PR3TerminalRecordGateReconciliationTest(AsyncHTTPTestCase):
         assert body["approval_gate_presentation"]["mode"] == "active_approval_gate"
         assert body["gate_blocker_count"] > 0
         assert body["gate_blockers"], "Active records must retain blocking gate failures"
+        assert any(blocker.get("id") == "screening_missing" for blocker in body["gate_blockers"])
         assert body["current_gate_diagnostics"] is None
 
     def test_terminal_gate_fields_are_not_exposed_to_client_projection(self):
