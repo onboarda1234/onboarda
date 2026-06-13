@@ -31,6 +31,14 @@ def _find_free_port():
     return port
 
 
+def _simulate_stale_revocation_worker_cache():
+    """Simulate a worker that loaded revocations before another worker handled logout."""
+    from auth import _get_revocation_list
+    revocation = _get_revocation_list()
+    revocation._revoked = {}
+    revocation._db_loaded = True
+
+
 @pytest.fixture(scope="module")
 def api_server():
     """Start a real Tornado HTTP server for Sprint 3.5 tests."""
@@ -186,6 +194,22 @@ class TestLogout:
         assert replay_client.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
         assert http_requests.post(f"{api_server}/api/auth/logout", headers=headers, timeout=3).status_code == 200
 
+    def test_logout_revocation_survives_stale_worker_cache_for_bearer(self, api_server):
+        """A worker with a stale local cache must still reject a logged-out bearer token."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 200
+        assert http_requests.get(f"{api_server}/api/applications", headers=headers, timeout=3).status_code == 200
+
+        logout = http_requests.post(f"{api_server}/api/auth/logout", headers=headers, timeout=3)
+        assert logout.status_code == 200
+        _simulate_stale_revocation_worker_cache()
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
+        assert http_requests.get(f"{api_server}/api/applications", headers=headers, timeout=3).status_code == 401
+
     def test_logout_revokes_cookie_session_token(self, api_server):
         """Logout using cookie auth must revoke the cookie token, not just clear local UI state."""
         from auth import create_token
@@ -201,6 +225,71 @@ class TestLogout:
         replay_client = http_requests.Session()
         replay_client.cookies.set("arie_session", token)
         assert replay_client.get(f"{api_server}/api/auth/me", timeout=3).status_code == 401
+
+    def test_logout_revocation_survives_stale_worker_cache_for_cookie(self, api_server):
+        """A worker with a stale local cache must still reject a logged-out cookie token."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        cookies = {"arie_session": token}
+
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 200
+        assert http_requests.get(f"{api_server}/api/applications", cookies=cookies, timeout=3).status_code == 200
+
+        logout = http_requests.post(f"{api_server}/api/auth/logout", cookies=cookies, timeout=3)
+        assert logout.status_code == 200
+        _simulate_stale_revocation_worker_cache()
+
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 401
+        assert http_requests.get(f"{api_server}/api/applications", cookies=cookies, timeout=3).status_code == 401
+
+    def test_client_logout_revocation_survives_stale_worker_cache(self, api_server):
+        """Client bearer logout must revoke access to auth/me and portal routes across workers."""
+        from auth import create_token
+        from db import get_db
+
+        client_id = "s35-client-logout"
+        app_id = "s35-client-logout-app"
+        db = get_db()
+        db.execute(
+            """
+            INSERT OR REPLACE INTO clients
+                (id, email, password_hash, company_name, status)
+            VALUES (?, ?, ?, ?, 'active')
+            """,
+            (client_id, "s35-client-logout@example.test", "test-only", "S35 Client Logout Ltd"),
+        )
+        db.execute(
+            """
+            INSERT OR REPLACE INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                "S35-LOGOUT",
+                client_id,
+                "S35 Client Logout Ltd",
+                "Mauritius",
+                "Fintech",
+                "Company",
+                "kyc_submitted",
+            ),
+        )
+        db.commit()
+        db.close()
+
+        token = create_token(client_id, "client", "S35 Client Logout Ltd", "client")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 200
+        assert http_requests.get(f"{api_server}/api/portal/applications", headers=headers, timeout=3).status_code == 200
+
+        logout = http_requests.post(f"{api_server}/api/auth/logout", headers=headers, timeout=3)
+        assert logout.status_code == 200
+        _simulate_stale_revocation_worker_cache()
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
+        assert http_requests.get(f"{api_server}/api/portal/applications", headers=headers, timeout=3).status_code == 401
 
     def test_logout_revokes_bearer_and_cookie_tokens_when_both_present(self, api_server):
         """Logout must revoke both presented tokens, not only the auth-precedence winner."""

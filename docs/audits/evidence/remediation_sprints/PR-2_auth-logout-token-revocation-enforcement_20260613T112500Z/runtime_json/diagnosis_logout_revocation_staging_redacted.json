@@ -1,0 +1,2459 @@
+{
+  "base": "https://staging.regmind.co/api",
+  "cases": [
+    {
+      "detail": {
+        "git_sha": null,
+        "image_tag": null,
+        "status": 401
+      },
+      "name": "/api/version matches current main",
+      "pass": false
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "client bearer login issues token",
+      "pass": true
+    },
+    {
+      "detail": {
+        "me": 200,
+        "portal_apps": 200
+      },
+      "name": "client bearer works before logout",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "client bearer logout succeeds",
+      "pass": true
+    },
+    {
+      "detail": {
+        "me": 200,
+        "portal_apps": 401
+      },
+      "name": "same client bearer fails after logout",
+      "pass": false
+    },
+    {
+      "detail": {
+        "screening_queue": 401
+      },
+      "name": "revoked client bearer cannot access internal endpoint",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "repeated client bearer logout remains idempotent",
+      "pass": true
+    },
+    {
+      "detail": {
+        "cookie_present": "<redacted>",
+        "login": 200,
+        "me": 200
+      },
+      "name": "client cookie session works before logout",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "client cookie logout succeeds",
+      "pass": true
+    },
+    {
+      "detail": {
+        "me": 200,
+        "portal_apps": 401
+      },
+      "name": "same client cookie fails after logout",
+      "pass": false
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "back-office bearer login issues token",
+      "pass": true
+    },
+    {
+      "detail": {
+        "applications": 200,
+        "me": 200
+      },
+      "name": "back-office bearer works before logout",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "back-office bearer logout succeeds",
+      "pass": true
+    },
+    {
+      "detail": {
+        "applications": 401,
+        "me": 200
+      },
+      "name": "same back-office bearer fails after logout",
+      "pass": false
+    },
+    {
+      "detail": {
+        "cookie_present": "<redacted>",
+        "login": 200,
+        "me": 200
+      },
+      "name": "back-office cookie session works before logout",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "back-office cookie logout succeeds",
+      "pass": true
+    },
+    {
+      "detail": {
+        "applications": 200,
+        "me": 401
+      },
+      "name": "same back-office cookie fails after logout",
+      "pass": false
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "normal client login still works after logout",
+      "pass": true
+    },
+    {
+      "detail": {
+        "status": 200
+      },
+      "name": "normal back-office login still works after logout",
+      "pass": true
+    }
+  ],
+  "expected_sha": "b4d1f7387ab03eca849a451bedc98b5208e0ddba",
+  "finished_at": "2026-06-13T11:32:30Z",
+  "overall_pass": false,
+  "raw_redacted": {
+    "bo_bearer_after_apps": {
+      "body": {
+        "error": "Authentication required"
+      },
+      "method": "GET",
+      "path": "/applications?view=list&limit=1",
+      "set_cookie_present": "<redacted>",
+      "status": 401
+    },
+    "bo_bearer_after_me": {
+      "body": {
+        "id": "admin001",
+        "name": "Aisha Sudally",
+        "role": "admin",
+        "type": "officer"
+      },
+      "method": "GET",
+      "path": "/auth/me",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "bo_bearer_before_apps": {
+      "body": {
+        "applications": [
+          {
+            "assigned_name": null,
+            "assigned_to": null,
+            "brn": "PRS-FINAL-054405",
+            "company_name": "PRS Final Demo 20260608054405 Ltd",
+            "country": "Australia",
+            "created_at": "2026-06-08 05:44:05.784513",
+            "edd_trigger_flags": [],
+            "enhanced_review_summary": {
+              "accepted_count": 2,
+              "approval_blocked": true,
+              "blocking_unresolved_count": 5,
+              "enhanced_review_active": true,
+              "errors": [],
+              "invalid_waiver_count": 0,
+              "invalid_waivers": [],
+              "last_updated_at": "2026-06-12 17:02:14",
+              "mandatory_unresolved_count": 5,
+              "missing_generated_requirements": false,
+              "next_action": "Awaiting client submission",
+              "next_action_code": "awaiting_client",
+              "pending_client_count": 1,
+              "rejected_count": 0,
+              "status_label": "Pending client",
+              "submitted_awaiting_review_count": 1,
+              "total": 11,
+              "trigger_labels": [
+                "Have there been any changes in the company's directors?",
+                "HIGH / VERY_HIGH risk",
+                "PEP",
+                "Crypto / VASP"
+              ],
+              "type_counts": {
+                "evidence": 10,
+                "internal_control": 0,
+                "portal_disclosure": 1
+              },
+              "unresolved_count": 9,
+              "unresolved_requirements": [
+                {
+                  "action_needed": "Accept the requirement or record a valid senior waiver before approval",
+                  "audience": "client",
+                  "blocking_approval": true,
+                  "id": 2182,
+                  "mandatory": true,
+                  "requirement_key": "company_sof_evidence",
+                  "requirement_label": "Company Source of Funds evidence",
+                  "requirement_type": "document",
+                  "status": "generated",
+                  "trigger_key": "high_or_very_high_risk",
+                  "trigger_label": "HIGH / VERY_HIGH risk",
+                  "waived_at": null,
+                  "waived_by": null,
+                  "waiver_reason_present": false
+                },
+                {
+                  "action_needed": "Accept the requirement or record a valid senior waiver before approval",
+                  "audience": "client",
+                  "blocking_approval": true,
+                  "id": 2183,
+                  "mandatory": true,
+                  "requirement_key": "material_ubo_sow_evidence",
+                  "requirement_label": "UBO Source of Wealth evidence for material UBOs/controllers",
+                  "requirement_type": "document",
+                  "status": "generated",
+                  "trigger_key": "high_or_very_high_risk",
+                  "trigger_label": "HIGH / VERY_HIGH risk",
+                  "waived_at": null,
+                  "waived_by": null,
+                  "waiver_reason_present": false
+                },
+                {
+                  "action_needed": "Accept the requirement or record a valid senior waiver before approval",
+                  "audience": "client",
+                  "blocking_approval": true,
+                  "id": 2186,
+                  "mandatory": true,
+                  "requirement_key": "pep_bank_reference_ubo_ubo_final_demo_1",
+                  "requirement_label": "Bank Reference Letter \u2014 Demo Owner",
+                  "requirement_type": "document",
+                  "status": "generated",
+                  "trigger_key": "pep",
+                  "trigger_label": "PEP",
+                  "waived_at": null,
+                  "waived_by": null,
+                  "waiver_reason_present": false
+                },
+                {
+                  "action_needed": "Accept the requirement or record a valid senior waiver before approval",
+                  "audience": "client",
+                  "blocking_approval": true,
+                  "id": 2185,
+                  "mandatory": true,
+                  "requirement_key": "pep_sow_evidence_ubo_ubo_final_demo_1",
+                  "requirement_label": "Source of Wealth Evidence \u2014 Demo Owner",
+                  "requirement_type": "document",
+                  "status": "generated",
+                  "trigger_key": "pep",
+                  "trigger_label": "PEP",
+                  "waived_at": null,
+                  "waived_by": null,
+                  "waiver_reason_present": false
+                },
+                {
+                  "action_needed": "Accept the requirement or record a valid senior waiver before approval",
+                  "audience": "client",
+                  "blocking_approval": true,
+                  "id": 2191,
+                  "mandatory": true,
+                  "requirement_key": "licence_or_registration_evidence",
+                  "requirement_label": "Licence/registration evidence or confirmation of unlicensed status",
+                  "requirement_type": "document",
+                  "status": "generated",
+                  "trigger_key": "crypto_vasp",
+                  "trigger_label": "Crypto / VASP",
+                  "waived_at": null,
+                  "waived_by": null,
+                  "waiver_reason_present": false
+                }
+              ],
+              "waived_count": 0,
+              "warnings": []
+            },
+            "entity_type": "Private Company",
+            "final_risk_level": "VERY_HIGH",
+            "has_authoritative_risk": true,
+            "id": "13cabbdf214542ea",
+            "onboarding_lane": "EDD",
+            "ref": "ARF-2026-900289",
+            "risk_integrity_warnings": [
+              "EDD trigger reason unavailable"
+            ],
+            "risk_level": "VERY_HIGH",
+            "risk_score": 70.0,
+            "sector": "Crypto / Digital Assets Exchange",
+            "status": "edd_required"
+          }
+        ],
+        "limit": 1,
+        "offset": 0,
+        "pagination": {
+          "has_next": true,
+          "has_prev": false,
+          "limit": 1,
+          "offset": 0,
+          "returned": 1,
+          "total": 332
+        },
+        "returned": 1,
+        "total": 332,
+        "view": "list"
+      },
+      "method": "GET",
+      "path": "/applications?view=list&limit=1",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "bo_bearer_before_me": {
+      "body": {
+        "id": "admin001",
+        "name": "Aisha Sudally",
+        "role": "admin",
+        "type": "officer"
+      },
+      "method": "GET",
+      "path": "/auth/me",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "bo_bearer_logout": {
+      "body": {
+        "status": "logged_out"
+      },
+      "method": "POST",
+      "path": "/auth/logout",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "bo_cookie_before_me": "<redacted>",
+    "bo_cookie_login": "<redacted>",
+    "bo_cookie_logout": "<redacted>",
+    "bo_cookie_replay_after_apps": "<redacted>",
+    "bo_cookie_replay_after_me": "<redacted>",
+    "client_bearer_after_me": {
+      "body": {
+        "id": "21eb50f952e54634",
+        "name": "Aisha Sudally \u2014 Onboarding",
+        "role": "client",
+        "type": "client"
+      },
+      "method": "GET",
+      "path": "/auth/me",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "client_bearer_after_portal_apps": {
+      "body": {
+        "error": "Authentication required"
+      },
+      "method": "GET",
+      "path": "/portal/applications",
+      "set_cookie_present": "<redacted>",
+      "status": 401
+    },
+    "client_bearer_after_screening_queue": {
+      "body": {
+        "error": "Authentication required"
+      },
+      "method": "GET",
+      "path": "/screening/queue",
+      "set_cookie_present": "<redacted>",
+      "status": 401
+    },
+    "client_bearer_before_me": {
+      "body": {
+        "id": "21eb50f952e54634",
+        "name": "Aisha Sudally \u2014 Onboarding",
+        "role": "client",
+        "type": "client"
+      },
+      "method": "GET",
+      "path": "/auth/me",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "client_bearer_before_portal_apps": {
+      "body": {
+        "applications": [
+          {
+            "company_name": "PRS Final Demo 20260608054405 Ltd",
+            "created_at": "2026-06-08 05:44:05.784513",
+            "id": "13cabbdf214542ea",
+            "periodic_review_task": {
+              "application_id": "13cabbdf214542ea",
+              "attestation_status": "not_started",
+              "attestation_status_label": "Not started",
+              "company_name": "PRS Final Demo 20260608054405 Ltd",
+              "due_date": null,
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "attestation_required",
+                "client_action_required_label": "Complete the periodic review attestation",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 0,
+                  "missing_count": 0,
+                  "required_count": 0,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-09 10:51:26.738058",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-16 10:51:26.738058",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "Start review",
+              "review_id": 48,
+              "review_reference": "PR-48",
+              "saved_at": null,
+              "submitted_at": null,
+              "task_status": "not_started",
+              "task_status_label": "Not started"
+            },
+            "ref": "ARF-2026-900289",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA Draft High Volume Only 202606041136 Ltd",
+            "created_at": "2026-06-04 11:36:53.227147",
+            "id": "f22b49f389a64dbb",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900283",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA Draft Crypto VASP Only 202606041136 Ltd",
+            "created_at": "2026-06-04 11:36:50.208694",
+            "id": "19d64d2c99414b76",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900282",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA Draft PEP Only 202606041136 Ltd",
+            "created_at": "2026-06-04 11:36:47.355559",
+            "id": "9283b58f9e2044d8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900281",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA Draft High Risk Jurisdiction Only 202606041136 Ltd",
+            "created_at": "2026-06-04 11:36:44.628413",
+            "id": "1fac2f4dbd834edd",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900280",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA E2E Jurisdiction Volume Ownership Test 20260603171123 Ltd",
+            "created_at": "2026-06-03 17:11:23.258321",
+            "id": "949ff978f99b4ac6",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900279",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA E2E Crypto VASP Enhanced Test 20260603171030 Ltd",
+            "created_at": "2026-06-03 17:10:30.209778",
+            "id": "02ac3dc0e8084893",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900278",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA E2E PEP Enhanced Test 20260603171011 Ltd",
+            "created_at": "2026-06-03 17:10:11.500242",
+            "id": "6155373c30b74cc1",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900277",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H LOW VOLUME 1780487402833",
+            "created_at": "2026-06-03 11:50:02.963195",
+            "id": "a8a1c9737fb1442a",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900276",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H HIGH VOLUME 1780487275340",
+            "created_at": "2026-06-03 11:48:21.472099",
+            "id": "64fa2d15bb8a4320",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900275",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H LOW VOLUME 1780487275340",
+            "created_at": "2026-06-03 11:47:55.459885",
+            "id": "30ca519d0a864018",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900274",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H Browser Field Validation",
+            "created_at": "2026-06-03 11:28:23.627657",
+            "id": "922cf88fd7294e83",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900273",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-06-03 11:28:23.627657"
+          },
+          {
+            "company_name": "QA PR6H HIGH VOLUME 1780486032488",
+            "created_at": "2026-06-03 11:27:40.180271",
+            "id": "f25ec5086b734b10",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900272",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H LOW VOLUME 1780486032488",
+            "created_at": "2026-06-03 11:27:12.642706",
+            "id": "8ca69d15df3b4b14",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900271",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H HIGH VOLUME 1780485870912",
+            "created_at": "2026-06-03 11:24:58.813431",
+            "id": "7751f96191804f36",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900270",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6H LOW VOLUME 1780485870912",
+            "created_at": "2026-06-03 11:24:31.053382",
+            "id": "68a829dfa60646b4",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900269",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA All High Risk Enhanced Trigger Test 20260603094941 Ltd",
+            "created_at": "2026-06-03 09:49:43.861434",
+            "id": "066a134c7a184136",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900268",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6G Person Specific PEP SOW Browser Validation 20260603111003 Ltd",
+            "created_at": "2026-06-03 07:10:03.486282",
+            "id": "cf373715955b4e3c",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900267",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA PR6G Jurisdiction Rationale Browser Validation 20260603105615 Ltd",
+            "created_at": "2026-06-03 06:56:15.466704",
+            "id": "0dc13dca445d450b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900266",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "test",
+            "created_at": "2026-06-03 04:58:16.824357",
+            "id": "af3f9e2aaf57492f",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900265",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-06-03 04:58:16.824357"
+          },
+          {
+            "company_name": "QA High Risk Crypto VASP Enhanced Test Corrected 20260603040016 Ltd",
+            "created_at": "2026-06-03 04:00:18.320710",
+            "id": "d4d405e6e3e94179",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900264",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA High Risk Jurisdiction Volume Enhanced Test 20260603035050 Ltd",
+            "created_at": "2026-06-03 03:54:14.503993",
+            "id": "48f66e0ad26b4982",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900263",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA High Risk Crypto VASP Enhanced Test 20260603035050 Ltd",
+            "created_at": "2026-06-03 03:52:49.749259",
+            "id": "86f937eb459c40a5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900262",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA High Risk PEP Enhanced Test 20260603035050 Ltd",
+            "created_at": "2026-06-03 03:51:16.755632",
+            "id": "eb5580c6f26249cf",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900261",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA High Risk Portal Upload 20260602141826 Ltd",
+            "created_at": "2026-06-02 14:18:26.437599",
+            "id": "58722cd558204d19",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900260",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-GreylistCombo-1779775063674",
+            "created_at": "2026-05-26 05:57:45.958512",
+            "id": "f053295b747b4e7b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900236",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779775015092",
+            "created_at": "2026-05-26 05:56:56.147637",
+            "id": "9bef56cf68824155",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900235",
+            "status": "rejected",
+            "status_label": "Application Declined",
+            "updated_at": "2026-06-04 11:21:13.045143"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779774941442",
+            "created_at": "2026-05-26 05:55:46.138654",
+            "id": "592feae992774de1",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900234",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-GreylistCombo-1779773804118",
+            "created_at": "2026-05-26 05:36:48.124749",
+            "id": "dc80ab7f7e004a42",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900233",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779773750888",
+            "created_at": "2026-05-26 05:35:51.635336",
+            "id": "e9fd61f65a9e4483",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900232",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779773678805",
+            "created_at": "2026-05-26 05:34:39.621894",
+            "id": "f625082f01ef4009",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900231",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779772657918",
+            "created_at": "2026-05-26 05:18:07.975116",
+            "id": "2e7dee7096e64b25",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900230",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 05:18:07.975116"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-GreylistCombo-1779772261279",
+            "created_at": "2026-05-26 05:11:09.944697",
+            "id": "2389be0538dc430b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900229",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779772208148",
+            "created_at": "2026-05-26 05:10:14.391253",
+            "id": "c960f15dda844f9a",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900228",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779772086349",
+            "created_at": "2026-05-26 05:08:14.756397",
+            "id": "d5ef29b430d046a9",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900227",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779772050007",
+            "created_at": "2026-05-26 05:08:00.120120",
+            "id": "e1e55b9a0c18416c",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900226",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 05:08:00.120120"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779771769326",
+            "created_at": "2026-05-26 05:02:58.327507",
+            "id": "f3d5716f74224bba",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900225",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779771691701",
+            "created_at": "2026-05-26 05:01:41.594838",
+            "id": "6e0068c2ed864acd",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900224",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-GreylistCombo-1779771426342",
+            "created_at": "2026-05-26 04:57:15.903833",
+            "id": "6462684aed9b407f",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900223",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779771350164",
+            "created_at": "2026-05-26 04:55:56.208550",
+            "id": "f92d6fe44a7d44c5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900222",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779771228385",
+            "created_at": "2026-05-26 04:53:55.537138",
+            "id": "a5726dcf7f5f4a79",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900221",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-GreylistCombo-1779770907154",
+            "created_at": "2026-05-26 04:48:36.859311",
+            "id": "9e8c9b2068804ede",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900220",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779770825466",
+            "created_at": "2026-05-26 04:47:17.462382",
+            "id": "98867447145944c8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900219",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779770693638",
+            "created_at": "2026-05-26 04:45:03.496412",
+            "id": "cd79db707f2747c1",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900218",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-GreylistCombo-1779768053790",
+            "created_at": "2026-05-26 04:01:23.879822",
+            "id": "ba715a0ae75945f2",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900217",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 04:01:23.879822"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779767973870",
+            "created_at": "2026-05-26 03:59:43.071955",
+            "id": "48f49f922aa64b14",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900216",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779767851701",
+            "created_at": "2026-05-26 03:57:40.195492",
+            "id": "3f39778807ae4a6b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900215",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-RISK-HighRiskFloor-1779767733825",
+            "created_at": "2026-05-26 03:55:42.303459",
+            "id": "34395fdf5c524b4a",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900214",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 03:55:42.303459"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-LowRisk-1779767656453",
+            "created_at": "2026-05-26 03:54:24.837963",
+            "id": "10dacce18f5f41e8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900213",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-high-risk-1779766665496",
+            "created_at": "2026-05-26 03:38:15.583250",
+            "id": "26a21359a772471e",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900212",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 03:38:15.583250"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-low-risk-1779766542843",
+            "created_at": "2026-05-26 03:35:51.273644",
+            "id": "f39437be9d2c40a8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900211",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-high-risk-1779766293327",
+            "created_at": "2026-05-26 03:32:03.393101",
+            "id": "eed8e4bbd75340f9",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900210",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 03:32:03.393101"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-low-risk-1779766226828",
+            "created_at": "2026-05-26 03:30:32.941746",
+            "id": "1a08eda8ff184201",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900209",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-low-risk-1779758939665",
+            "created_at": "2026-05-26 01:29:08.089666",
+            "id": "a5f847e8fff54b77",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900208",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-low-risk-1779757937191",
+            "created_at": "2026-05-26 01:12:23.285073",
+            "id": "91425cb097f246d0",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900207",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-SaveResume-1779755543721",
+            "created_at": "2026-05-26 00:32:24.154503",
+            "id": "d0977c0155664db1",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900206",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-26 00:32:24.154503"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-low-risk-1779726688249",
+            "created_at": "2026-05-25 16:31:36.703326",
+            "id": "76f0a39a54574d79",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900205",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "SOAK-E2E-2026-05-25-SaveResume-1779721775843",
+            "created_at": "2026-05-25 15:10:05.915372",
+            "id": "cc4222f16e174648",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900204",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-25 15:10:05.915372"
+          },
+          {
+            "company_name": "Avena Decision Safety 6DEF58 Ltd",
+            "created_at": "2026-05-18 14:05:03.343569",
+            "id": "6e26fefa194241b9",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900165",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Navo Digital Assets 140214-6389B Ltd Retest PR329 CRYPTO 1779122728",
+            "created_at": "2026-05-18 14:02:15.025184",
+            "id": "6e73aa47a9124502",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900164",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Aster PEP Advisory 140059-D1B11 Ltd Retest PR329 PEP 1779122699",
+            "created_at": "2026-05-18 14:00:59.574677",
+            "id": "86990dbe17734460",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900163",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "RegMind Natural Clean NATA2130710",
+            "created_at": "2026-05-18 09:07:16.092849",
+            "id": "ed3a722c6cb24b18",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900158",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "RegMind Natural Clean NAT130251",
+            "created_at": "2026-05-18 09:02:56.098916",
+            "id": "011b1b506fc84741",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900157",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR313 Review Material 47c9a6 Ltd",
+            "created_at": "2026-05-16 13:50:51.487818",
+            "id": "ab053a7668854b94",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900149",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 InvalidState ad16c3 Ltd",
+            "created_at": "2026-05-16 12:41:25.389138",
+            "id": "57a74b4883dd49dc",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900148",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 LockedPEP 556fc9 Ltd",
+            "created_at": "2026-05-16 12:40:46.757208",
+            "id": "e136cff83a1141d2",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900147",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 CryptoVASP 55da48 Ltd",
+            "created_at": "2026-05-16 12:40:08.288656",
+            "id": "fb893aacbd8943d8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900146",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 DeclaredPEP 0bafd2 Ltd",
+            "created_at": "2026-05-16 12:39:23.146967",
+            "id": "2d33179d7d3a4c34",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900145",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 InvalidState 4ba45f Ltd",
+            "created_at": "2026-05-16 05:00:13.748745",
+            "id": "368d12972ed14122",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900144",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 LockedPEP 6ae5bf Ltd",
+            "created_at": "2026-05-16 04:59:47.558197",
+            "id": "3b6c4084fb1d4f61",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900143",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 CryptoVASP 27bf85 Ltd",
+            "created_at": "2026-05-16 04:59:15.719724",
+            "id": "ca3113c1d19e4bcc",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900142",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PR312 DeclaredPEP d0e508 Ltd",
+            "created_at": "2026-05-16 04:58:36.986030",
+            "id": "5ab548769b064cd5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900141",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E Replacement 5cb8e2 Ltd",
+            "created_at": "2026-05-15 15:46:55.731768",
+            "id": "004eaec64d6d4faf",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900140",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E CryptoVASP 53965f Ltd",
+            "created_at": "2026-05-15 15:41:35.910810",
+            "id": "37954d9cc3974136",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900139",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PEP 5aa826 Ltd",
+            "created_at": "2026-05-15 15:40:55.576803",
+            "id": "a959e1771aed42aa",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900138",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E Crypto VASP 3b9746",
+            "created_at": "2026-05-15 15:39:38.051202",
+            "id": "f5626dd9eeab4e18",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900137",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-05-15 15:39:41.337867"
+          },
+          {
+            "company_name": "E2E Declared PEP d703ea",
+            "created_at": "2026-05-15 15:39:32.523895",
+            "id": "7036ef0a89a84547",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900136",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-05-15 15:39:35.827425"
+          },
+          {
+            "company_name": "E2E Clean Low 432ddd Ltd",
+            "created_at": "2026-05-15 15:31:57.888173",
+            "id": "f6c8dc615aa84ff8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900135",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex FULL AUDIT PEP 202605131105266343 Ltd",
+            "created_at": "2026-05-13 11:05:26.913321",
+            "id": "641a2514f9d3490d",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900129",
+            "status": "pre_approval_review",
+            "status_label": "Pre-Approval Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex FULL AUDIT HIGHSECTOR 202605131105085c2d Ltd",
+            "created_at": "2026-05-13 11:05:08.474218",
+            "id": "6465c576d5654369",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900128",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex FULL AUDIT LOWBYPASS2 20260513110446d82a Ltd",
+            "created_at": "2026-05-13 11:04:47.806964",
+            "id": "b023244590d041b1",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900127",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex FULL AUDIT PEP 20260513110351 Ltd",
+            "created_at": "2026-05-13 11:03:51.689005",
+            "id": "f19a1c07c1184bf3",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900126",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex FULL AUDIT HIGHSECTOR 20260513110349 Ltd",
+            "created_at": "2026-05-13 11:03:49.489735",
+            "id": "c17d8ac215ba4803",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900125",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-13 11:03:49.489735"
+          },
+          {
+            "company_name": "Codex FULL AUDIT LOWBYPASS 20260513110344 Ltd",
+            "created_at": "2026-05-13 11:03:45.853751",
+            "id": "2ac7e03e25624bbc",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900124",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-13 11:03:45.853751"
+          },
+          {
+            "company_name": "Codex PR293 Final Low Clear 20260512055759 Ltd",
+            "created_at": "2026-05-12 05:58:00.521968",
+            "id": "0371eeaf08ec4ca5",
+            "periodic_review_task": {
+              "application_id": "0371eeaf08ec4ca5",
+              "attestation_status": "submitted",
+              "attestation_status_label": "Submitted",
+              "company_name": "Codex PR293 Final Low Clear 20260512055759 Ltd",
+              "due_date": "2029-05-12",
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "documents_required",
+                "client_action_required_label": "Upload requested periodic review documents",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 3,
+                  "missing_count": 1,
+                  "required_count": 1,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.666526",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.666526",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "View submitted attestation",
+              "review_id": 21,
+              "review_reference": "PR-21",
+              "saved_at": "2026-06-06T07:59:18.147054+00:00",
+              "submitted_at": "2026-06-06T08:08:43.121327+00:00",
+              "task_status": "submitted",
+              "task_status_label": "Submitted"
+            },
+            "ref": "ARF-2026-900116",
+            "status": "approved",
+            "status_label": "Approved \u2013 Ready for Activation",
+            "updated_at": "2026-05-12 05:58:33.002050"
+          },
+          {
+            "company_name": "Codex PR293 Crypto Opaque 20260512055318 Ltd",
+            "created_at": "2026-05-12 05:54:56.761273",
+            "id": "b999ec9676dc45e3",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900115",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR293 PEP UBO 20260512055318 Ltd",
+            "created_at": "2026-05-12 05:54:12.824846",
+            "id": "bde540fd351943bc",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900114",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR293 PEP Director 20260512055318 Ltd",
+            "created_at": "2026-05-12 05:53:19.360213",
+            "id": "52eabfd394714ef7",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900113",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR293 TERMINAL Screening 20260512055035 Ltd",
+            "created_at": "2026-05-12 05:50:38.066831",
+            "id": "51aa552c8a2342cd",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900112",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR293 PENDING Screening 20260512055035 Ltd",
+            "created_at": "2026-05-12 05:50:37.006496",
+            "id": "2dba7e29326b4fa5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900111",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR293 Low Clear 20260512054822 Ltd",
+            "created_at": "2026-05-12 05:48:23.828054",
+            "id": "43c48fce79054acd",
+            "periodic_review_task": {
+              "application_id": "43c48fce79054acd",
+              "attestation_status": "submitted",
+              "attestation_status_label": "Submitted",
+              "company_name": "Codex PR293 Low Clear 20260512054822 Ltd",
+              "due_date": "2029-05-12",
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "documents_required",
+                "client_action_required_label": "Upload requested periodic review documents",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 3,
+                  "missing_count": 1,
+                  "required_count": 1,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.688669",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.688669",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "View submitted attestation",
+              "review_id": 45,
+              "review_reference": "PR-45",
+              "saved_at": "2026-06-08T07:20:04.541830+00:00",
+              "submitted_at": "2026-06-08T07:20:04.541830+00:00",
+              "task_status": "submitted",
+              "task_status_label": "Submitted"
+            },
+            "ref": "ARF-2026-900110",
+            "status": "approved",
+            "status_label": "Approved \u2013 Ready for Activation",
+            "updated_at": "2026-05-12 05:50:04.750395"
+          },
+          {
+            "company_name": "Codex GE2E low_clean 2151e17f04 Ltd",
+            "created_at": "2026-05-11 11:25:20.400790",
+            "id": "010c0d7b821e4e9d",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900109",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex GE2E crypto_opaque a330606dd5 Ltd",
+            "created_at": "2026-05-11 11:22:55.971823",
+            "id": "55f5c286329141ff",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900108",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex GE2E pep_ubo 4f5e1b531a Ltd",
+            "created_at": "2026-05-11 11:21:46.876635",
+            "id": "287c83f627024bdb",
+            "periodic_review_task": {
+              "application_id": "287c83f627024bdb",
+              "attestation_status": "submitted",
+              "attestation_status_label": "Submitted",
+              "company_name": "Codex GE2E pep_ubo 4f5e1b531a Ltd",
+              "due_date": "2027-05-11",
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "documents_required",
+                "client_action_required_label": "Upload requested periodic review documents",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 3,
+                  "missing_count": 1,
+                  "required_count": 1,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.299699",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.299699",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "View submitted attestation",
+              "review_id": 19,
+              "review_reference": "PR-19",
+              "saved_at": "2026-06-06T09:54:09.484519+00:00",
+              "submitted_at": "2026-06-06T09:54:09.484519+00:00",
+              "task_status": "submitted",
+              "task_status_label": "Submitted"
+            },
+            "ref": "ARF-2026-900107",
+            "status": "approved",
+            "status_label": "Approved \u2013 Ready for Activation",
+            "updated_at": "2026-05-11 11:22:49.599708"
+          },
+          {
+            "company_name": "Codex GE2E pep_director 42fc37025f Ltd",
+            "created_at": "2026-05-11 11:20:34.998486",
+            "id": "7005921a11a54934",
+            "periodic_review_task": {
+              "application_id": "7005921a11a54934",
+              "attestation_status": "not_started",
+              "attestation_status_label": "Not started",
+              "company_name": "Codex GE2E pep_director 42fc37025f Ltd",
+              "due_date": "2027-05-11",
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "attestation_required",
+                "client_action_required_label": "Complete the periodic review attestation",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 0,
+                  "missing_count": 0,
+                  "required_count": 0,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.324894",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.324894",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "Start review",
+              "review_id": 44,
+              "review_reference": "PR-44",
+              "saved_at": null,
+              "submitted_at": null,
+              "task_status": "not_started",
+              "task_status_label": "Not started"
+            },
+            "ref": "ARF-2026-900106",
+            "status": "approved",
+            "status_label": "Approved \u2013 Ready for Activation",
+            "updated_at": "2026-06-07 04:26:53.101507"
+          },
+          {
+            "company_name": "Codex GE2E low_clean 6bcf45cf74 Ltd",
+            "created_at": "2026-05-11 11:19:38.262690",
+            "id": "9a89370ec9e44aa3",
+            "periodic_review_task": {
+              "application_id": "9a89370ec9e44aa3",
+              "attestation_status": "submitted",
+              "attestation_status_label": "Submitted",
+              "company_name": "Codex GE2E low_clean 6bcf45cf74 Ltd",
+              "due_date": null,
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "documents_required",
+                "client_action_required_label": "Upload requested periodic review documents",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 26,
+                  "missing_count": 14,
+                  "required_count": 14,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.971648",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.971648",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "View submitted attestation",
+              "review_id": 12,
+              "review_reference": "PR-12",
+              "saved_at": "2026-06-06T16:55:32.846409+00:00",
+              "submitted_at": "2026-06-06T16:55:32.846409+00:00",
+              "task_status": "submitted",
+              "task_status_label": "Submitted"
+            },
+            "ref": "ARF-2026-900105",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_rmi 92f2afe369 Ltd",
+            "created_at": "2026-05-11 10:37:07.012998",
+            "id": "16c639b65aaf412f",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900104",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 crypto_opaque afb6afe90e Ltd",
+            "created_at": "2026-05-11 10:35:33.816377",
+            "id": "412b817ebc40410e",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900103",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 pep_director a066ace330 Ltd",
+            "created_at": "2026-05-11 10:34:44.207347",
+            "id": "822929a3819645cd",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900102",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_rmi 3b9a05d9b8 Ltd",
+            "created_at": "2026-05-11 10:34:19.246662",
+            "id": "75750be9c86a4de6",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900101",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_clean 5fb665992e Ltd",
+            "created_at": "2026-05-11 10:32:20.729092",
+            "id": "9d9ee2bfae7e4036",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900100",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_clean 64d0f16704 Ltd",
+            "created_at": "2026-05-11 10:29:21.057240",
+            "id": "9c33d717de84426d",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900099",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_clean 300dd998aa Ltd",
+            "created_at": "2026-05-11 10:25:38.995224",
+            "id": "6960dd2c3f574faf",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900098",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_stale afd73c8a26 Ltd",
+            "created_at": "2026-05-11 07:57:41.224207",
+            "id": "95de0fa1398e4f66",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900097",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_rmi a5a54d7d7f Ltd",
+            "created_at": "2026-05-11 07:52:34.430702",
+            "id": "4637d30704a14228",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900096",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_stale 6d5f266432 Ltd",
+            "created_at": "2026-05-11 07:48:20.332106",
+            "id": "aaa33af5d5574b25",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900095",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 low_clean 45288b8548 Ltd",
+            "created_at": "2026-05-11 07:47:50.126607",
+            "id": "3d3cc1c3ca224e74",
+            "periodic_review_task": {
+              "application_id": "3d3cc1c3ca224e74",
+              "attestation_status": "submitted",
+              "attestation_status_label": "Submitted",
+              "company_name": "Codex PR288 low_clean 45288b8548 Ltd",
+              "due_date": "2029-05-11",
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "documents_required",
+                "client_action_required_label": "Upload requested periodic review documents",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 3,
+                  "missing_count": 2,
+                  "required_count": 2,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.643931",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.643931",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "View submitted attestation",
+              "review_id": 17,
+              "review_reference": "PR-17",
+              "saved_at": "2026-06-06T06:52:34.115582+00:00",
+              "submitted_at": "2026-06-06T06:52:34.115582+00:00",
+              "task_status": "submitted",
+              "task_status_label": "Submitted"
+            },
+            "ref": "ARF-2026-900094",
+            "status": "approved",
+            "status_label": "Approved \u2013 Ready for Activation",
+            "updated_at": "2026-05-11 07:48:19.883008"
+          },
+          {
+            "company_name": "Codex PR288 crypto_opaque 7745c4ea50 Ltd",
+            "created_at": "2026-05-11 07:47:05.281416",
+            "id": "10c5442d29a04a0a",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900093",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 pep_ubo fd8b6baa50 Ltd",
+            "created_at": "2026-05-11 07:46:19.254461",
+            "id": "c6aaecc53f414ada",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900092",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex PR288 pep_director 6d84aadd18 Ltd",
+            "created_at": "2026-05-11 07:45:31.140180",
+            "id": "0a4e059a327f4e9f",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900091",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex Current Crypto Opaque 20260511051631",
+            "created_at": "2026-05-11 05:17:12.627256",
+            "id": "e50a5a8e4a574f08",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900090",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex Current PEP UBO 20260511051631",
+            "created_at": "2026-05-11 05:16:53.519803",
+            "id": "084c3eae1a974c84",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900089",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Codex Current PEP Director 20260511051631",
+            "created_at": "2026-05-11 05:16:32.842831",
+            "id": "2bad13a836fa45b9",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900088",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "RegMind Crypto Opaque E2E 920276856 Ltd",
+            "created_at": "2026-05-11 05:06:52.454985",
+            "id": "c8df6d4c23714a00",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900087",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "RegMind PEP UBO E2E 920275882 Ltd",
+            "created_at": "2026-05-11 05:06:08.472398",
+            "id": "5ff09eb410374f8b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900086",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "RegMind PEP Director E2E 920275181 Ltd",
+            "created_at": "2026-05-11 05:05:21.488520",
+            "id": "a872a8a6dc724f87",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900085",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "RegMind Low Risk E2E 873725 Ltd",
+            "created_at": "2026-05-11 05:04:34.908275",
+            "id": "d964d26c8d8c4843",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900084",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "China Railway Tunnel Group Co. Ltd (Singapore Branch) - PR285 20260511043741",
+            "created_at": "2026-05-11 04:37:41.908534",
+            "id": "0f0b07dc9d024e3c",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900083",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "China Railway Tunnel Group Co. Ltd (Singapore Branch)",
+            "created_at": "2026-05-11 04:35:39.857528",
+            "id": "7a634434e7654cb0",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900082",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA284 LowClean 20260511070059 Ltd",
+            "created_at": "2026-05-11 03:02:41.852390",
+            "id": "57f20e533fe14a5b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900081",
+            "status": "compliance_review",
+            "status_label": "Compliance Review in Progress",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA284 CryptoOpaque 20260511070059 Ltd",
+            "created_at": "2026-05-11 03:02:19.713308",
+            "id": "a4b836980bca4987",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900080",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA284 PEPUBO 20260511070059 Ltd",
+            "created_at": "2026-05-11 03:01:40.414713",
+            "id": "f296bbb9dacc4cc5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900079",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA284 PEPDirector 20260511070059 Ltd",
+            "created_at": "2026-05-11 03:01:01.714216",
+            "id": "0f771f102962449d",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900078",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "China Railway Tunnel Group Co. Ltd (Singapore Branch)",
+            "created_at": "2026-05-11 02:04:31.009582",
+            "id": "df9e49217a224606",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900077",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA283 Isolated Crypto Opaque 20260511060227 Ltd",
+            "created_at": "2026-05-11 02:03:51.703232",
+            "id": "58ec99dc4d5846b0",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900076",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-11 02:03:51.703232"
+          },
+          {
+            "company_name": "QA283 Isolated PEP Director 20260511060227 Ltd",
+            "created_at": "2026-05-11 02:03:13.887452",
+            "id": "4c49d420f8764999",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900075",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-11 02:03:13.887452"
+          },
+          {
+            "company_name": "China Railway Tunnel Group Co. Ltd (Singapore Branch) - CA Remediation 20260511020226",
+            "created_at": "2026-05-11 02:02:26.895889",
+            "id": "192609b7f7c840e5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900074",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA283 CryptoOpaque 20260511055925 Ltd",
+            "created_at": "2026-05-11 02:00:50.923709",
+            "id": "6118bb4d15ba4b53",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900073",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-11 02:00:50.923709"
+          },
+          {
+            "company_name": "QA283 PEPUBO 20260511055925 Ltd",
+            "created_at": "2026-05-11 02:00:14.207745",
+            "id": "1053472639b1424c",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900072",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-05-11 02:00:49.848344"
+          },
+          {
+            "company_name": "QA283 PEPDirector 20260511055925 Ltd",
+            "created_at": "2026-05-11 01:59:46.353682",
+            "id": "719f8c67693a42d7",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900071",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-05-11 02:00:12.074296"
+          },
+          {
+            "company_name": "QA283 LowClean 20260511055925 Ltd",
+            "created_at": "2026-05-11 01:59:25.364080",
+            "id": "fb30795cd74c45ef",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900070",
+            "status": "compliance_review",
+            "status_label": "Compliance Review in Progress",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "QA283 Low Clean 20260511055647 Ltd",
+            "created_at": "2026-05-11 01:56:47.619480",
+            "id": "4cce761ff64444b7",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900069",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E DOCMISMATCH 20260510164730-docmismatch",
+            "created_at": "2026-05-10 16:49:42.762783",
+            "id": "0db6f3e789974611",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900068",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E PEP 20260510164730-pep",
+            "created_at": "2026-05-10 16:48:53.380639",
+            "id": "d9e2ba93eb2e4203",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900067",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E HIGH 20260510164730-high",
+            "created_at": "2026-05-10 16:48:11.801664",
+            "id": "70f72de27d944f66",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900066",
+            "status": "edd_required",
+            "status_label": "Enhanced Due Diligence Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "E2E LOW 20260510164730-low",
+            "created_at": "2026-05-10 16:47:40.266208",
+            "id": "2e9fb462316241f3",
+            "periodic_review_task": {
+              "application_id": "2e9fb462316241f3",
+              "attestation_status": "submitted",
+              "attestation_status_label": "Submitted",
+              "company_name": "E2E LOW 20260510164730-low",
+              "due_date": null,
+              "is_overdue": false,
+              "notification_summary": {
+                "client_action_required": "documents_required",
+                "client_action_required_label": "Upload requested periodic review documents",
+                "client_notification_status": "sent",
+                "client_notification_status_label": "Sent",
+                "document_notification_summary": {
+                  "count": 7,
+                  "missing_count": 2,
+                  "required_count": 2,
+                  "review_required_count": 0
+                },
+                "initial_notification_sent_at": "2026-06-07 11:58:36.948172",
+                "is_client_action_overdue": false,
+                "last_notification_error": null,
+                "last_reminder_sent_at": null,
+                "next_reminder_due_at": "2026-06-14 11:58:36.948172",
+                "notification_channel": "portal",
+                "notification_suppressed": false,
+                "officer_alert_status": null,
+                "officer_alerted_at": null,
+                "reminder_count": 0
+              },
+              "primary_action_label": "View submitted attestation",
+              "review_id": 8,
+              "review_reference": "PR-8",
+              "saved_at": "2026-06-06T16:41:10.424490+00:00",
+              "submitted_at": "2026-06-06T16:41:10.424490+00:00",
+              "task_status": "submitted",
+              "task_status_label": "Submitted"
+            },
+            "ref": "ARF-2026-900065",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "China Railway Tunnel Group Co. Ltd (Singapore Branch) - CA E2E 20260510163811",
+            "created_at": "2026-05-10 16:38:11.676290",
+            "id": "c4e6c12ed6ca4f39",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900064",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510162927 Ltd",
+            "created_at": "2026-05-10 16:29:27.588092",
+            "id": "26ddca719f6c4485",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900063",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510162902 Ltd",
+            "created_at": "2026-05-10 16:29:02.465722",
+            "id": "a345c2bcc8734d1e",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900062",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 16:29:02.465722"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510160404 Ltd",
+            "created_at": "2026-05-10 16:04:04.347316",
+            "id": "f7ea4407285f486b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900061",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510153431 Ltd",
+            "created_at": "2026-05-10 15:34:31.201685",
+            "id": "fd9888695e1d4abc",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900060",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510145607 Ltd",
+            "created_at": "2026-05-10 14:56:07.990116",
+            "id": "ca6a0de2f8db4271",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900059",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510143053 Ltd",
+            "created_at": "2026-05-10 14:30:53.514310",
+            "id": "b0847d985b2e4017",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900058",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 14:30:53.514310"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510134802 Ltd",
+            "created_at": "2026-05-10 13:48:04.628140",
+            "id": "324ad2591c664914",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900057",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 13:48:04.628140"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510132608 Ltd",
+            "created_at": "2026-05-10 13:26:10.158259",
+            "id": "651673834a264979",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900056",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 13:26:10.158259"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510130122 Ltd",
+            "created_at": "2026-05-10 13:01:24.399347",
+            "id": "7b57d91b1f674db2",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900055",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 13:01:24.399347"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510120012 Ltd",
+            "created_at": "2026-05-10 12:00:14.710054",
+            "id": "1679b675fa944fc8",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900054",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 12:00:14.710054"
+          },
+          {
+            "company_name": "D1 CA E2E Pravin Probe 20260510113204 Ltd",
+            "created_at": "2026-05-10 11:32:06.524637",
+            "id": "9d3200b799554e72",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900053",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 11:32:06.524637"
+          },
+          {
+            "company_name": "QA E2E EDD Crypto 1778409066 Ltd",
+            "created_at": "2026-05-10 10:31:12.311132",
+            "id": "cce9c283dbbd4bbe",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900052",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 10:31:12.311132"
+          },
+          {
+            "company_name": "QA E2E Low Standard 1778409066 Ltd",
+            "created_at": "2026-05-10 10:31:09.159517",
+            "id": "7f785329c3974aff",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900051",
+            "status": "draft",
+            "status_label": "Application Started",
+            "updated_at": "2026-05-10 10:31:09.159517"
+          },
+          {
+            "company_name": "Priority C Runtime Validation Ltd",
+            "created_at": "2026-04-24 04:42:06.655378",
+            "id": "acf4ade81e694d31",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-900012",
+            "status": "rmi_sent",
+            "status_label": "Further Information Requested",
+            "updated_at": "2026-06-09 11:12:32.445008"
+          },
+          {
+            "company_name": "Atlas Digital Assets DMCC",
+            "created_at": "2026-04-12 16:08:41.382458",
+            "id": "f2b2ec4e6ac54e30",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100453",
+            "status": "in_review",
+            "status_label": "Verification Ongoing",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "S ExistBank",
+            "created_at": "2026-04-10 11:20:10.301051",
+            "id": "caef9cc36b154528",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100445",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "S BusOver",
+            "created_at": "2026-04-10 11:19:55.590672",
+            "id": "ee8969b6c94941a5",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100444",
+            "status": "kyc_submitted",
+            "status_label": "KYC Documents Submitted",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "S MonVol",
+            "created_at": "2026-04-10 11:19:03.663943",
+            "id": "f7119617949f427e",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100443",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Replay Probe Co",
+            "created_at": "2026-04-10 11:16:04.923029",
+            "id": "b7a225c225a74b30",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100442",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "S Payments2",
+            "created_at": "2026-04-10 11:14:52.691642",
+            "id": "ca0a590187d14eac",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100441",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "S Payments",
+            "created_at": "2026-04-10 11:12:17.531814",
+            "id": "ba23a6b8bfbd4c41",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100440",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Bisect Address",
+            "created_at": "2026-04-10 11:09:08.732671",
+            "id": "47590e42cd5e4169",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100439",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Bisect Consent",
+            "created_at": "2026-04-10 11:09:06.622928",
+            "id": "ef3b1136931a466c",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100435",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Bisect SoWSoF",
+            "created_at": "2026-04-10 11:09:05.523850",
+            "id": "ed5dd9063e5f46d3",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100434",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Bisect EstActv",
+            "created_at": "2026-04-10 11:09:04.530594",
+            "id": "4f109e0f93aa4854",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100433",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Bisect FinFore",
+            "created_at": "2026-04-10 11:09:03.240301",
+            "id": "ec15e8ac349d4890",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100432",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Probe LOW Co",
+            "created_at": "2026-04-10 11:08:08.564409",
+            "id": "e5e32a714f20431b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100431",
+            "status": "pricing_review",
+            "status_label": "Pricing Under Review",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "Arthaveda Capital Ltd",
+            "created_at": "2026-04-09 11:32:57.521724",
+            "id": "7de43b0c795f448c",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100429",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          },
+          {
+            "company_name": "1947 OIL & GAS PLC",
+            "created_at": "2026-04-05 13:35:30.967535",
+            "id": "4b005704dcdb436b",
+            "periodic_review_task": null,
+            "ref": "ARF-2026-100425",
+            "status": "kyc_documents",
+            "status_label": "KYC Documents Required",
+            "updated_at": "2026-06-11 09:04:44.055660"
+          }
+        ],
+        "total": 166
+      },
+      "method": "GET",
+      "path": "/portal/applications",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "client_bearer_login": {
+      "body": {
+        "client": {
+          "company": "Aisha Sudally \u2014 Onboarding",
+          "email": "<email>",
+          "id": "21eb50f952e54634"
+        },
+        "csrf_token": "<redacted>",
+        "token": "<redacted>"
+      },
+      "method": "POST",
+      "path": "/auth/client/login",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "client_bearer_logout": {
+      "body": {
+        "status": "logged_out"
+      },
+      "method": "POST",
+      "path": "/auth/logout",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "client_bearer_repeat_logout": {
+      "body": {
+        "status": "logged_out"
+      },
+      "method": "POST",
+      "path": "/auth/logout",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "client_cookie_before_me": "<redacted>",
+    "client_cookie_login": "<redacted>",
+    "client_cookie_logout": "<redacted>",
+    "client_cookie_replay_after_me": "<redacted>",
+    "client_cookie_replay_after_portal_apps": "<redacted>",
+    "fresh_client_login_after_logout": {
+      "body": {
+        "client": {
+          "company": "Aisha Sudally \u2014 Onboarding",
+          "email": "<email>",
+          "id": "21eb50f952e54634"
+        },
+        "csrf_token": "<redacted>",
+        "token": "<redacted>"
+      },
+      "method": "POST",
+      "path": "/auth/client/login",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "fresh_officer_login_after_logout": {
+      "body": {
+        "csrf_token": "<redacted>",
+        "token": "<redacted>",
+        "user": {
+          "email": "<email>",
+          "id": "admin001",
+          "name": "Aisha Sudally",
+          "role": "admin"
+        }
+      },
+      "method": "POST",
+      "path": "/auth/officer/login",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "officer_bearer_login": {
+      "body": {
+        "csrf_token": "<redacted>",
+        "token": "<redacted>",
+        "user": {
+          "email": "<email>",
+          "id": "admin001",
+          "name": "Aisha Sudally",
+          "role": "admin"
+        }
+      },
+      "method": "POST",
+      "path": "/auth/officer/login",
+      "set_cookie_present": "<redacted>",
+      "status": 200
+    },
+    "version": {
+      "body": {
+        "error": "Authentication required"
+      },
+      "method": "GET",
+      "path": "/version",
+      "set_cookie_present": "<redacted>",
+      "status": 401
+    }
+  },
+  "semantics": "logout revokes only the presented active bearer and/or cookie session tokens; it does not revoke all sessions for the user",
+  "started_at": "2026-06-13T11:32:22Z"
+}
