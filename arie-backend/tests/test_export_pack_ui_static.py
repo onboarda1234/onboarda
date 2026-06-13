@@ -156,7 +156,11 @@ def test_export_pack_does_not_add_portal_surface():
 
 def test_application_review_shell_controls_still_render_near_export_button():
     html = _read(BACKOFFICE_PATH)
-    assert 'id="btn-open-officer-correction"' in html
+    topbar_start = html.index("<!-- Top bar: back button + action buttons (horizontal) -->")
+    topbar_end = html.index('<div id="detail-case-command-centre">', topbar_start)
+    topbar_html = html[topbar_start:topbar_end]
+    assert 'openOfficerCorrectionModal()' not in topbar_html
+    assert "Add correction" in html
     assert 'id="btn-export-pack"' in html
     assert 'id="internal-note"' not in html
     assert "Periodic Reviews" in html

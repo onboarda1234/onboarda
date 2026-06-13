@@ -1662,7 +1662,11 @@ def test_backoffice_html_exposes_officer_correction_controls():
     )
     with open(html_path, "r", encoding="utf-8") as handle:
         src = handle.read()
-    assert "btn-open-officer-correction" in src
+    topbar_start = src.index("<!-- Top bar: back button + action buttons (horizontal) -->")
+    topbar_end = src.index('<div id="detail-case-command-centre">', topbar_start)
+    assert "openOfficerCorrectionModal()" not in src[topbar_start:topbar_end]
+    assert "Add correction" in src
+    assert "btn-prescreen-correction-mode" in src
     assert "modal-officer-correction" in src
     assert "detail-officer-corrections" in src
     assert "detail-correction-warning" in src

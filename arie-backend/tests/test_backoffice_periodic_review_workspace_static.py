@@ -65,7 +65,8 @@ def test_simplified_baseline_box_uses_legacy_toggle_and_derived_cadence():
     assert "periodicReviewBaselineLegacyOptions" in html
     assert "legacy_file" in html
     assert "last_review_date" in html
-    assert "Cadence is derived from the current officer-visible risk level." in html
+    assert "Cadence is derived from the current officer-visible risk level." not in html
+    assert "periodic-baseline-row" in html
     assert "overview-periodic-review-baseline-cadence-" not in html
 
 
