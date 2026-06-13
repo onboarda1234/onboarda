@@ -2459,6 +2459,7 @@ from screening_state import (
     derive_screening_truth,
     build_screening_truth_summary,
     build_screening_terminality_summary,
+    sanitize_screening_readiness_summary,
     resolve_screening_queue_state,
     derive_subject_state,
     state_label as screening_state_label,
@@ -5614,6 +5615,18 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_data["metadata"]["is_stale"] = stale_view["is_stale"]
             latest_memo_data["metadata"]["stale_reason"] = stale_view["reason"]
             latest_memo_data["metadata"]["stale_trigger"] = stale_view["trigger"]
+            if isinstance(latest_memo_data["metadata"].get("screening_state_summary"), dict):
+                latest_memo_data["metadata"]["screening_state_summary"] = sanitize_screening_readiness_summary(
+                    latest_memo_data["metadata"]["screening_state_summary"]
+                )
+            agent_contract = latest_memo_data["metadata"].get("agent5_input_contract")
+            if (
+                isinstance(agent_contract, dict)
+                and isinstance(agent_contract.get("screening_terminality_summary"), dict)
+            ):
+                agent_contract["screening_terminality_summary"] = sanitize_screening_readiness_summary(
+                    agent_contract["screening_terminality_summary"]
+                )
 
             latest_memo_dict.pop("memo_data", None)
             latest_memo_dict["final_status"] = latest_memo_final_status
