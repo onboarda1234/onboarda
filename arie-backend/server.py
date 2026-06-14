@@ -13991,6 +13991,827 @@ class ReportAnalyticsHandler(BaseHandler):
             db.close()
 
 
+_DIRECTORS_UBOS_CANONICAL_VIEW = "directors_ubos_report_v1"
+_DIRECTORS_UBOS_EXPORT_FILENAME_PREFIX = "regmind_directors_ubos_report"
+_DIRECTORS_UBOS_ALLOWED_SORTS = {
+    "person_name": "person_name",
+    "role": "role",
+    "company_name": "company_name",
+    "application_ref": "application_ref",
+    "application_status": "application_status",
+    "client_status": "client_status",
+    "nationality": "nationality",
+    "country_of_residence": "country_of_residence",
+    "date_of_birth": "date_of_birth",
+    "pep_status": "pep_status",
+    "declared_pep_status": "declared_pep_status",
+    "screening_pep_status": "screening_pep_status",
+    "sanctions_status": "sanctions_status",
+    "adverse_media_status": "adverse_media_status",
+    "screening_status": "screening_status",
+    "screening_last_checked_at": "screening_last_checked_at",
+    "screening_review_disposition": "screening_review_disposition",
+    "ownership_pct": "ownership_pct",
+    "document_completeness_status": "document_completeness_status",
+    "document_verification_status": "document_verification_status",
+    "associated_risk_level": "associated_risk_level",
+    "assigned_officer": "assigned_officer",
+    "last_updated_at": "last_updated_at",
+    "created_at": "created_at",
+}
+_DIRECTORS_UBOS_CSV_FIELDS = (
+    "role",
+    "person_name",
+    "company_name",
+    "application_ref",
+    "application_status",
+    "client_status",
+    "nationality",
+    "country_of_residence",
+    "date_of_birth",
+    "dob_missing",
+    "pep_status",
+    "declared_pep_status",
+    "screening_pep_status",
+    "sanctions_status",
+    "adverse_media_status",
+    "ownership_pct",
+    "ownership_missing",
+    "screening_status",
+    "screening_last_checked_at",
+    "screening_review_disposition",
+    "document_completeness_status",
+    "document_verification_status",
+    "application_risk_level",
+    "risk_indicator",
+    "last_updated_at",
+    "created_at",
+)
+
+
+def _directors_ubos_report_cte():
+    return f"""
+        WITH party_source AS (
+            SELECT
+                d.id AS source_id,
+                d.application_id,
+                'director' AS source_role,
+                d.person_key,
+                d.first_name,
+                d.last_name,
+                d.full_name,
+                d.nationality,
+                d.date_of_birth,
+                NULL AS ownership_pct,
+                d.is_pep,
+                CAST(d.pep_declaration AS TEXT) AS pep_declaration_text,
+                d.created_at
+            FROM directors d
+            UNION ALL
+            SELECT
+                u.id AS source_id,
+                u.application_id,
+                'ubo' AS source_role,
+                u.person_key,
+                u.first_name,
+                u.last_name,
+                u.full_name,
+                u.nationality,
+                u.date_of_birth,
+                u.ownership_pct,
+                u.is_pep,
+                CAST(u.pep_declaration AS TEXT) AS pep_declaration_text,
+                u.created_at
+            FROM ubos u
+        ),
+        party_rows AS (
+            SELECT
+                ps.*,
+                COALESCE(
+                    NULLIF(TRIM(ps.person_key), ''),
+                    NULLIF(
+                        LOWER(TRIM(COALESCE(ps.full_name, ''))) || '|' ||
+                        COALESCE(ps.date_of_birth, '') || '|' ||
+                        COALESCE(ps.nationality, ''),
+                        '||'
+                    ),
+                    CAST(ps.source_id AS TEXT)
+                ) AS person_uid
+            FROM party_source ps
+        ),
+        grouped AS (
+            SELECT
+                application_id,
+                person_uid,
+                MAX(NULLIF(person_key, '')) AS person_key,
+                MAX(CASE WHEN source_role='director' THEN source_id ELSE NULL END) AS director_id,
+                MAX(CASE WHEN source_role='ubo' THEN source_id ELSE NULL END) AS ubo_id,
+                MAX(CASE WHEN source_role='director' THEN 1 ELSE 0 END) AS is_director,
+                MAX(CASE WHEN source_role='ubo' THEN 1 ELSE 0 END) AS is_ubo,
+                COALESCE(MAX(NULLIF(full_name, '')), MAX(NULLIF(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''), ' ')), '') AS person_name,
+                MAX(NULLIF(first_name, '')) AS first_name,
+                MAX(NULLIF(last_name, '')) AS last_name,
+                MAX(NULLIF(nationality, '')) AS nationality,
+                MAX(NULLIF(date_of_birth, '')) AS date_of_birth,
+                MAX(CASE WHEN source_role='ubo' THEN ownership_pct ELSE NULL END) AS ownership_pct,
+                MAX(CASE WHEN LOWER(CAST(is_pep AS TEXT)) IN ('yes','true','1','t','y') THEN 1 ELSE 0 END) AS declared_pep_bool,
+                MAX(COALESCE(pep_declaration_text, '')) AS pep_declaration_text,
+                MIN(created_at) AS created_at
+            FROM party_rows
+            GROUP BY application_id, person_uid
+        ),
+        doc_agg AS (
+            SELECT
+                g.application_id,
+                g.person_uid,
+                COUNT(d.id) AS document_count,
+                SUM(CASE WHEN d.id IS NOT NULL AND d.doc_type IN ('passport','poa','proof_of_address') THEN 1 ELSE 0 END) AS identity_document_count,
+                SUM(CASE WHEN d.id IS NOT NULL AND LOWER(COALESCE(d.verification_status, 'pending')) = 'verified' THEN 1 ELSE 0 END) AS verified_document_count,
+                SUM(CASE WHEN d.id IS NOT NULL AND LOWER(COALESCE(d.verification_status, 'pending')) = 'failed' THEN 1 ELSE 0 END) AS failed_document_count,
+                SUM(CASE WHEN d.id IS NOT NULL AND LOWER(COALESCE(d.verification_status, 'pending')) = 'flagged' THEN 1 ELSE 0 END) AS flagged_document_count,
+                SUM(CASE WHEN d.id IS NOT NULL AND LOWER(COALESCE(d.verification_status, 'pending')) IN ('pending','in_progress') THEN 1 ELSE 0 END) AS pending_document_count,
+                SUM(CASE
+                    WHEN d.id IS NOT NULL
+                     AND COALESCE(d.expiry_date, d.valid_until) IS NOT NULL
+                     AND DATE(COALESCE(d.expiry_date, d.valid_until)) < CURRENT_DATE
+                    THEN 1 ELSE 0
+                END) AS expired_document_count,
+                MAX(d.verified_at) AS document_verified_at,
+                MAX(d.reviewed_at) AS document_reviewed_at
+            FROM grouped g
+            LEFT JOIN documents d
+              ON d.application_id = g.application_id
+             AND {ACTIVE_DOCUMENT_SQL.replace("is_current", "d.is_current")}
+             AND (
+                CAST(d.person_id AS TEXT) = CAST(g.person_key AS TEXT)
+                OR CAST(d.person_id AS TEXT) = CAST(g.director_id AS TEXT)
+                OR CAST(d.person_id AS TEXT) = CAST(g.ubo_id AS TEXT)
+                OR CAST(d.person_id AS TEXT) = CAST(g.person_uid AS TEXT)
+             )
+            GROUP BY g.application_id, g.person_uid
+        ),
+        review_agg AS (
+            SELECT
+                g.application_id,
+                g.person_uid,
+                COUNT(sr.id) AS screening_review_count,
+                MAX(CASE
+                    WHEN sr.disposition='escalated' THEN 3
+                    WHEN sr.disposition='follow_up_required' THEN 2
+                    WHEN sr.disposition='cleared' THEN 1
+                    ELSE 0
+                END) AS screening_review_rank,
+                MAX(sr.disposition_code) AS screening_review_disposition_code,
+                MAX(sr.updated_at) AS screening_review_updated_at
+            FROM grouped g
+            LEFT JOIN screening_reviews sr
+              ON sr.application_id = g.application_id
+             AND (
+                (g.is_director = 1 AND sr.subject_type = 'director' AND LOWER(sr.subject_name) = LOWER(g.person_name))
+                OR
+                (g.is_ubo = 1 AND sr.subject_type = 'ubo' AND LOWER(sr.subject_name) = LOWER(g.person_name))
+             )
+            GROUP BY g.application_id, g.person_uid
+        ),
+        base_report_rows AS (
+            SELECT
+                a.id AS id,
+                g.application_id,
+                g.person_uid,
+                COALESCE(
+                    NULLIF(LOWER(TRIM(g.person_name)) || '|' || COALESCE(g.date_of_birth, '') || '|' || COALESCE(g.nationality, ''), '||'),
+                    CAST(g.application_id AS TEXT) || ':' || CAST(g.person_uid AS TEXT)
+                ) AS unique_person_key,
+                g.person_key,
+                g.director_id,
+                g.ubo_id,
+                g.is_director,
+                g.is_ubo,
+                CASE
+                    WHEN g.is_director = 1 AND g.is_ubo = 1 THEN 'Director & UBO'
+                    WHEN g.is_director = 1 THEN 'Director'
+                    WHEN g.is_ubo = 1 THEN 'UBO'
+                    ELSE 'Unknown'
+                END AS role,
+                g.person_name,
+                g.first_name,
+                g.last_name,
+                a.company_name,
+                a.ref AS application_ref,
+                a.status AS application_status,
+                c.status AS client_status,
+                g.nationality,
+                NULL AS country_of_residence,
+                g.date_of_birth,
+                CASE WHEN g.date_of_birth IS NULL OR TRIM(g.date_of_birth) = '' THEN 1 ELSE 0 END AS dob_missing,
+                CASE WHEN g.nationality IS NULL OR TRIM(g.nationality) = '' THEN 1 ELSE 0 END AS missing_nationality,
+                CASE
+                    WHEN g.ownership_pct IS NULL THEN NULL
+                    ELSE g.ownership_pct
+                END AS ownership_pct,
+                CASE WHEN g.is_ubo = 1 AND g.ownership_pct IS NULL THEN 1 ELSE 0 END AS ownership_missing,
+                CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 25 THEN 1 ELSE 0 END AS ownership_above_25,
+                CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 50 THEN 1 ELSE 0 END AS ownership_above_50,
+                CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 75 THEN 1 ELSE 0 END AS ownership_above_75,
+                CASE
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%confirmed_pep%' THEN 'confirmed_pep'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%pending_review%' THEN 'pending_review'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%false_positive%' THEN 'false_positive'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%not_pep%' THEN 'not_pep'
+                    WHEN g.declared_pep_bool = 1 OR LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%declared_yes%' THEN 'declared_yes'
+                    WHEN COALESCE(g.pep_declaration_text, '') IN ('', '{{}}', 'null') THEN 'not_verified'
+                    ELSE 'declared_no'
+                END AS pep_status,
+                CASE WHEN g.declared_pep_bool = 1 THEN 'Yes' WHEN COALESCE(g.pep_declaration_text, '') IN ('', '{{}}', 'null') THEN 'Not captured' ELSE 'No' END AS declared_pep_status,
+                'unknown' AS screening_pep_status,
+                CASE WHEN COALESCE(ra.screening_review_rank, 0) >= 2 THEN 'review' WHEN COALESCE(ra.screening_review_rank, 0) = 1 THEN 'clear' ELSE 'unknown' END AS sanctions_status,
+                CASE WHEN COALESCE(ra.screening_review_rank, 0) >= 2 THEN 'review' WHEN COALESCE(ra.screening_review_rank, 0) = 1 THEN 'clear' ELSE 'unknown' END AS adverse_media_status,
+                CASE
+                    WHEN COALESCE(ra.screening_review_rank, 0) = 3 THEN 'unresolved'
+                    WHEN COALESCE(ra.screening_review_rank, 0) = 2 THEN 'follow_up_required'
+                    WHEN COALESCE(ra.screening_review_rank, 0) = 1 THEN 'cleared'
+                    ELSE 'pending'
+                END AS screening_status,
+                ra.screening_review_updated_at AS screening_last_checked_at,
+                CASE
+                    WHEN COALESCE(ra.screening_review_rank, 0) = 3 THEN 'escalated'
+                    WHEN COALESCE(ra.screening_review_rank, 0) = 2 THEN 'follow_up_required'
+                    WHEN COALESCE(ra.screening_review_rank, 0) = 1 THEN 'cleared'
+                    ELSE NULL
+                END AS screening_review_disposition,
+                ra.screening_review_disposition_code,
+                COALESCE(ra.screening_review_count, 0) AS screening_review_count,
+                COALESCE(da.document_count, 0) AS document_count,
+                COALESCE(da.identity_document_count, 0) AS identity_document_count,
+                COALESCE(da.verified_document_count, 0) AS verified_document_count,
+                COALESCE(da.failed_document_count, 0) AS failed_document_count,
+                COALESCE(da.flagged_document_count, 0) AS flagged_document_count,
+                COALESCE(da.pending_document_count, 0) AS pending_document_count,
+                COALESCE(da.expired_document_count, 0) AS expired_document_count,
+                CASE WHEN COALESCE(da.identity_document_count, 0) < 2 THEN 1 ELSE 0 END AS missing_documents,
+                CASE WHEN COALESCE(da.expired_document_count, 0) > 0 THEN 1 ELSE 0 END AS expired_documents,
+                CASE WHEN COALESCE(da.failed_document_count, 0) > 0 THEN 1 ELSE 0 END AS failed_document_verification,
+                CASE WHEN COALESCE(da.pending_document_count, 0) > 0 THEN 1 ELSE 0 END AS pending_document_verification,
+                CASE
+                    WHEN COALESCE(da.identity_document_count, 0) >= 2 THEN 'complete'
+                    WHEN COALESCE(da.identity_document_count, 0) > 0 THEN 'partial'
+                    ELSE 'missing'
+                END AS document_completeness_status,
+                CASE
+                    WHEN COALESCE(da.failed_document_count, 0) > 0 THEN 'failed'
+                    WHEN COALESCE(da.flagged_document_count, 0) > 0 THEN 'flagged'
+                    WHEN COALESCE(da.pending_document_count, 0) > 0 THEN 'pending'
+                    WHEN COALESCE(da.identity_document_count, 0) < 2 THEN 'missing'
+                    WHEN COALESCE(da.verified_document_count, 0) >= COALESCE(da.document_count, 0) AND COALESCE(da.document_count, 0) > 0 THEN 'verified'
+                    ELSE 'unknown'
+                END AS document_verification_status,
+                COALESCE(a.final_risk_level, a.risk_level, 'UNKNOWN') AS associated_risk_level,
+                a.risk_score,
+                a.assigned_to,
+                u.full_name AS assigned_officer,
+                a.updated_at AS last_updated_at,
+                g.created_at,
+                a.prescreening_data,
+                a.is_fixture,
+                CASE WHEN EXISTS (SELECT 1 FROM periodic_reviews pr WHERE pr.application_id = g.application_id) THEN 1 ELSE 0 END AS has_periodic_review
+            FROM grouped g
+            JOIN applications a ON a.id = g.application_id
+            LEFT JOIN clients c ON c.id = a.client_id
+            LEFT JOIN users u ON u.id = a.assigned_to
+            LEFT JOIN doc_agg da ON da.application_id = g.application_id AND da.person_uid = g.person_uid
+            LEFT JOIN review_agg ra ON ra.application_id = g.application_id AND ra.person_uid = g.person_uid
+        ),
+        report_rows AS (
+            SELECT *
+            FROM base_report_rows
+        )
+    """
+
+
+def _directors_ubos_bool_arg(handler, name):
+    raw = handler.get_argument(name, None)
+    if raw is None or raw == "":
+        return None
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _directors_ubos_date_filter(handler, *names):
+    for name in names:
+        value = handler.get_argument(name, None)
+        if value:
+            parsed = _parse_audit_date(value)
+            if parsed is None:
+                raise ValueError(f"{name} must be a valid ISO-8601 date")
+            return parsed
+    return None
+
+
+def _directors_ubos_float_arg(handler, name):
+    raw = handler.get_argument(name, None)
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be numeric")
+
+
+def _directors_ubos_report_scope_from_request(handler, user):
+    from fixture_filter import (
+        fixture_app_exclude_clause,
+        fixture_request_opt_in,
+        should_show_fixtures,
+    )
+
+    filters = {
+        "view": handler.get_argument("view", None) or handler.get_argument("mode", None),
+        "role": handler.get_argument("role", None),
+        "search": handler.get_argument("search", None),
+        "nationality": handler.get_argument("nationality", None),
+        "country_of_residence": handler.get_argument("country_of_residence", None),
+        "pep_status": handler.get_argument("pep_status", None),
+        "sanctions_status": handler.get_argument("sanctions_status", None),
+        "adverse_media_status": handler.get_argument("adverse_media_status", None),
+        "screening_status": handler.get_argument("screening_status", None),
+        "screening_review_status": handler.get_argument("screening_review_status", None) or handler.get_argument("screening_review_disposition", None),
+        "ownership_min": handler.get_argument("ownership_min", None),
+        "ownership_max": handler.get_argument("ownership_max", None),
+        "application_status": handler.get_argument("application_status", None) or handler.get_argument("status", None),
+        "application_risk_level": handler.get_argument("application_risk_level", None) or handler.get_argument("risk_level", None),
+        "assigned_to": handler.get_argument("assigned_to", None),
+        "created_from": handler.get_argument("created_from", None) or handler.get_argument("created_date_from", None),
+        "created_to": handler.get_argument("created_to", None) or handler.get_argument("created_date_to", None),
+        "last_updated_from": handler.get_argument("last_updated_from", None) or handler.get_argument("updated_from", None),
+        "last_updated_to": handler.get_argument("last_updated_to", None) or handler.get_argument("updated_to", None),
+    }
+    bool_filters = {
+        "missing_dob": _directors_ubos_bool_arg(handler, "missing_dob"),
+        "missing_nationality": _directors_ubos_bool_arg(handler, "missing_nationality"),
+        "missing_ownership": _directors_ubos_bool_arg(handler, "missing_ownership"),
+        "missing_documents": _directors_ubos_bool_arg(handler, "missing_documents"),
+        "expired_documents": _directors_ubos_bool_arg(handler, "expired_documents"),
+        "failed_document_verification": _directors_ubos_bool_arg(handler, "failed_document_verification"),
+        "pending_document_verification": _directors_ubos_bool_arg(handler, "pending_document_verification"),
+    }
+    show_fixtures = should_show_fixtures(user, fixture_request_opt_in(handler))
+    conditions = []
+    params = []
+
+    if not show_fixtures:
+        fx_excl, fx_params = fixture_app_exclude_clause()
+        conditions.append(fx_excl.replace("a.", "report_rows."))
+        params.extend(fx_params)
+
+    view = str(filters.get("view") or "").strip().lower()
+    role = str(filters.get("role") or "").strip().lower()
+    if view in ("directors", "director", "directors_only"):
+        conditions.append("is_director = 1")
+    elif view in ("ubos", "ubo", "ubos_only"):
+        conditions.append("is_ubo = 1")
+    if role in ("director", "directors"):
+        conditions.append("is_director = 1")
+    elif role in ("ubo", "ubos"):
+        conditions.append("is_ubo = 1")
+    elif role in ("both", "director_ubo", "director_and_ubo", "director & ubo"):
+        conditions.append("is_director = 1 AND is_ubo = 1")
+
+    search = str(filters.get("search") or "").strip().lower()
+    if search:
+        like = f"%{search}%"
+        conditions.append("""(
+            LOWER(COALESCE(person_name, '')) LIKE ?
+            OR LOWER(COALESCE(company_name, '')) LIKE ?
+            OR LOWER(COALESCE(application_ref, '')) LIKE ?
+            OR LOWER(COALESCE(nationality, '')) LIKE ?
+            OR LOWER(COALESCE(assigned_officer, '')) LIKE ?
+        )""")
+        params.extend([like] * 5)
+
+    text_filters = (
+        ("nationality", "LOWER(COALESCE(nationality, '')) LIKE ?"),
+        ("country_of_residence", "LOWER(COALESCE(country_of_residence, '')) LIKE ?"),
+    )
+    for key, clause in text_filters:
+        value = str(filters.get(key) or "").strip().lower()
+        if value:
+            conditions.append(clause)
+            params.append(f"%{value}%")
+
+    exact_filters = (
+        ("pep_status", "LOWER(COALESCE(pep_status, '')) = LOWER(?)"),
+        ("sanctions_status", "LOWER(COALESCE(sanctions_status, '')) = LOWER(?)"),
+        ("adverse_media_status", "LOWER(COALESCE(adverse_media_status, '')) = LOWER(?)"),
+        ("screening_status", "LOWER(COALESCE(screening_status, '')) = LOWER(?)"),
+        ("screening_review_status", "LOWER(COALESCE(screening_review_disposition, '')) = LOWER(?)"),
+        ("application_status", "application_status = ?"),
+        ("assigned_to", "assigned_to = ?"),
+    )
+    for key, clause in exact_filters:
+        value = filters.get(key)
+        if value:
+            normalized_value = str(value).strip().lower()
+            if key in ("sanctions_status", "adverse_media_status") and normalized_value == "match":
+                column = "sanctions_status" if key == "sanctions_status" else "adverse_media_status"
+                conditions.append(f"LOWER(COALESCE({column}, '')) IN ('match','review')")
+            else:
+                conditions.append(clause)
+                params.append(value)
+
+    risk_level = filters.get("application_risk_level")
+    if risk_level:
+        normalized = str(risk_level).strip().upper()
+        if normalized == "UNKNOWN":
+            conditions.append("(associated_risk_level IS NULL OR associated_risk_level='' OR associated_risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))")
+        else:
+            conditions.append("associated_risk_level = ?")
+            params.append(normalized)
+
+    ownership_min = _directors_ubos_float_arg(handler, "ownership_min")
+    ownership_max = _directors_ubos_float_arg(handler, "ownership_max")
+    if ownership_min is not None:
+        conditions.append("ownership_pct >= ?")
+        params.append(ownership_min)
+    if ownership_max is not None:
+        conditions.append("ownership_pct <= ?")
+        params.append(ownership_max)
+
+    for key, value in bool_filters.items():
+        if value is None:
+            continue
+        column = {
+            "missing_dob": "dob_missing",
+            "missing_nationality": "missing_nationality",
+            "missing_ownership": "ownership_missing",
+            "missing_documents": "missing_documents",
+            "expired_documents": "expired_documents",
+            "failed_document_verification": "failed_document_verification",
+            "pending_document_verification": "pending_document_verification",
+        }[key]
+        conditions.append(f"{column} = ?")
+        params.append(1 if value else 0)
+
+    created_from = _directors_ubos_date_filter(handler, "created_from", "created_date_from")
+    created_to = _directors_ubos_date_filter(handler, "created_to", "created_date_to")
+    updated_from = _directors_ubos_date_filter(handler, "last_updated_from", "updated_from")
+    updated_to = _directors_ubos_date_filter(handler, "last_updated_to", "updated_to")
+    if created_from:
+        conditions.append("created_at >= ?")
+        params.append(created_from)
+    if created_to:
+        conditions.append("created_at <= ?")
+        params.append(created_to)
+    if updated_from:
+        conditions.append("last_updated_at >= ?")
+        params.append(updated_from)
+    if updated_to:
+        conditions.append("last_updated_at <= ?")
+        params.append(updated_to)
+
+    cleaned_filters = {
+        key: value for key, value in {**filters, **bool_filters}.items()
+        if value not in (None, "")
+    }
+    return {
+        "where": " AND ".join(conditions) if conditions else "1=1",
+        "params": params,
+        "filters": cleaned_filters,
+        "show_fixtures": show_fixtures,
+    }
+
+
+def _directors_ubos_parse_dt(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for candidate in (text, text.replace("Z", "+00:00"), text.replace(" ", "T")):
+        try:
+            dt = datetime.fromisoformat(candidate)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            continue
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text[:19] if fmt.endswith("%S") else text[:10], fmt).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+    return None
+
+
+def _directors_ubos_result_flags(results):
+    flags = {"sanctions": False, "pep": False, "adverse_media": False, "other": False}
+    for result in results or []:
+        if not isinstance(result, dict):
+            continue
+        categories = " ".join(str(v).lower() for v in (
+            result.get("match_categories") or result.get("categories") or result.get("types") or []
+        ))
+        indicator = str(result.get("indicator_type") or result.get("risk_identifier") or "").lower()
+        if result.get("is_sanctioned") or "sanction" in categories or "sanction" in indicator:
+            flags["sanctions"] = True
+        if result.get("is_pep") or "pep" in categories or "pep" in indicator:
+            flags["pep"] = True
+        if result.get("is_adverse_media") or "adverse" in categories or "media" in indicator:
+            flags["adverse_media"] = True
+        if not (flags["sanctions"] or flags["pep"] or flags["adverse_media"]):
+            flags["other"] = True
+    return flags
+
+
+def _directors_ubos_find_screening_record(report, row):
+    if not isinstance(report, dict):
+        return None, None
+    person_name = str(row.get("person_name") or "").strip().lower()
+    collections = []
+    if row.get("is_director"):
+        collections.append(("director", report.get("director_screenings") or []))
+    if row.get("is_ubo"):
+        collections.append(("ubo", report.get("ubo_screenings") or []))
+    for subject_type, items in collections:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            candidate = str(item.get("person_name") or item.get("name") or "").strip().lower()
+            if candidate and candidate == person_name:
+                return subject_type, item
+    return None, None
+
+
+def _directors_ubos_enrich_record(raw_row):
+    record = dict(raw_row)
+    prescreening = parse_json_field(record.get("prescreening_data"), {})
+    report = prescreening.get("screening_report") if isinstance(prescreening, dict) else None
+    pep_decl = parse_json_field(record.get("pep_declaration_text"), {})
+    pep_visibility = _derive_party_pep_visibility(
+        {"is_pep": "Yes" if record.get("declared_pep_status") == "Yes" else "No"},
+        pep_decl if isinstance(pep_decl, dict) else {},
+    )
+    record["pep_status"] = pep_visibility.get("pep_status") or record.get("pep_status") or "not_verified"
+    record["declared_pep_status"] = pep_visibility.get("client_declared_pep_display") or record.get("declared_pep_status") or "Not captured"
+    record["pep_status_display"] = pep_visibility.get("pep_status_display")
+    record["missing_pep_declaration"] = 1 if record.get("declared_pep_status") == "Not captured" else 0
+
+    subject_type, screening_item = _directors_ubos_find_screening_record(report or {}, record)
+    screening = (screening_item or {}).get("screening") if isinstance(screening_item, dict) else None
+    screening = screening if isinstance(screening, dict) else {}
+    results = screening.get("results") if isinstance(screening.get("results"), list) else []
+    result_flags = _directors_ubos_result_flags(results)
+    matched = bool(screening.get("matched") or results)
+    api_status = str(screening.get("api_status") or screening.get("source") or "").strip().lower()
+    screened_at = (
+        screening.get("screened_at")
+        or (screening_item or {}).get("screened_at")
+        or (report or {}).get("screened_at")
+        or (prescreening or {}).get("last_screened_at")
+        or record.get("screening_last_checked_at")
+    )
+    review_disposition = record.get("screening_review_disposition")
+    if screening:
+        if api_status in ("error", "failed", "failure", "unavailable", "blocked"):
+            record["screening_status"] = "failed"
+        elif api_status in ("pending", "queued", "in_progress", "created", "init"):
+            record["screening_status"] = "pending"
+        elif matched and review_disposition != "cleared":
+            record["screening_status"] = "unresolved"
+        elif matched and review_disposition == "cleared":
+            record["screening_status"] = "cleared"
+        else:
+            record["screening_status"] = "clear"
+        record["sanctions_status"] = "match" if result_flags["sanctions"] else ("clear" if record["screening_status"] in ("clear", "cleared") else record.get("sanctions_status") or "unknown")
+        record["adverse_media_status"] = "match" if result_flags["adverse_media"] else ("clear" if record["screening_status"] in ("clear", "cleared") else record.get("adverse_media_status") or "unknown")
+        record["screening_pep_status"] = "match" if (
+            result_flags["pep"]
+            or bool((screening_item or {}).get("provider_detected_pep"))
+            or bool((screening_item or {}).get("has_pep_hit"))
+            or bool((screening_item or {}).get("undeclared_pep"))
+        ) else "clear"
+        record["screening_last_checked_at"] = screened_at
+    else:
+        record["screening_pep_status"] = record.get("screening_pep_status") or "unknown"
+
+    checked_dt = _directors_ubos_parse_dt(record.get("screening_last_checked_at"))
+    record["stale_screening"] = 1 if checked_dt and (datetime.now(timezone.utc) - checked_dt).days > 90 else 0
+    record["unresolved_screening_hit"] = 1 if record.get("screening_status") in ("unresolved", "failed", "follow_up_required") else 0
+    record["missing_screening_status"] = 1 if record.get("screening_status") in (None, "", "pending") and not screening else 0
+
+    if record.get("associated_risk_level") not in _CANONICAL_RISK_LEVELS:
+        record["associated_risk_level"] = "UNKNOWN"
+    record["application_risk_level"] = record.get("associated_risk_level")
+    if record.get("unresolved_screening_hit"):
+        record["risk_indicator"] = "Unresolved screening hit"
+    elif record.get("pep_status") in ("declared_yes", "confirmed_pep", "pending_review") or record.get("screening_pep_status") == "match":
+        record["risk_indicator"] = "PEP exposure"
+    elif record.get("ownership_above_75"):
+        record["risk_indicator"] = "UBO ownership above 75%"
+    elif record.get("ownership_above_50"):
+        record["risk_indicator"] = "UBO ownership above 50%"
+    elif record.get("ownership_above_25"):
+        record["risk_indicator"] = "UBO ownership above 25%"
+    elif record.get("failed_document_verification"):
+        record["risk_indicator"] = "Failed document verification"
+    elif record.get("missing_documents"):
+        record["risk_indicator"] = "Missing person documents"
+    else:
+        record["risk_indicator"] = None
+
+    record["links"] = {
+        "application": {
+            "application_id": record.get("application_id"),
+            "application_ref": record.get("application_ref"),
+        }
+    }
+    if record.get("screening_review_count"):
+        record["links"]["screening_review"] = {
+            "application_ref": record.get("application_ref"),
+            "subject_type": subject_type or ("director" if record.get("is_director") else "ubo"),
+            "subject_name": record.get("person_name"),
+        }
+    if record.get("document_count"):
+        record["links"]["documents"] = {
+            "application_ref": record.get("application_ref"),
+            "person_key": record.get("person_key"),
+        }
+    if record.get("has_periodic_review"):
+        record["links"]["periodic_review"] = {"application_ref": record.get("application_ref")}
+
+    for internal_key in ("prescreening_data", "pep_declaration_text"):
+        record.pop(internal_key, None)
+    for bool_key in (
+        "dob_missing", "missing_nationality", "ownership_missing",
+        "ownership_above_25", "ownership_above_50", "ownership_above_75",
+        "missing_documents", "expired_documents", "failed_document_verification",
+        "pending_document_verification", "missing_pep_declaration",
+        "stale_screening", "unresolved_screening_hit", "missing_screening_status",
+    ):
+        record[bool_key] = bool(record.get(bool_key))
+    return record
+
+
+class DirectorsUBOsReportHandler(BaseHandler):
+    """GET /api/reports/directors-ubos — directors and UBOs operational report."""
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        try:
+            scope = _directors_ubos_report_scope_from_request(self, user)
+            limit = _bounded_int(self.get_argument("limit", 50), 50, min_value=1, max_value=500)
+            page = _bounded_int(self.get_argument("page", 1), 1, min_value=1, max_value=1000000)
+            offset = _bounded_int(self.get_argument("offset", (page - 1) * limit), (page - 1) * limit, min_value=0, max_value=100000000)
+            sort_key = str(self.get_argument("sort", "last_updated_at") or "last_updated_at").strip()
+            sort_column = _DIRECTORS_UBOS_ALLOWED_SORTS.get(sort_key, "last_updated_at")
+            sort_dir = "ASC" if str(self.get_argument("direction", "desc")).strip().lower() == "asc" else "DESC"
+            output_format = str(self.get_argument("format", "json") or "json").strip().lower()
+            if output_format not in ("json", "csv"):
+                return self.error("Unsupported report format. Use json or csv.", 400)
+        except ValueError as exc:
+            return self.error(str(exc), 400)
+
+        db = get_db()
+        try:
+            cte = _directors_ubos_report_cte()
+            where = scope["where"]
+            params = scope["params"]
+
+            total_row = db.execute(
+                f"{cte} SELECT COUNT(*) AS total FROM report_rows WHERE {where}",
+                params,
+            ).fetchone()
+            total = int((total_row or {}).get("total") or 0)
+
+            summary_row = db.execute(f"""
+                {cte}
+                SELECT
+                    COUNT(*) AS row_count,
+                    SUM(CASE WHEN is_director = 1 THEN 1 ELSE 0 END) AS total_directors,
+                    SUM(CASE WHEN is_ubo = 1 THEN 1 ELSE 0 END) AS total_ubos,
+                    COUNT(DISTINCT unique_person_key) AS total_unique_persons,
+                    SUM(CASE WHEN pep_status IN ('declared_yes','confirmed_pep','pending_review') THEN 1 ELSE 0 END) AS pep_count,
+                    SUM(CASE WHEN sanctions_status IN ('match','review') THEN 1 ELSE 0 END) AS sanctions_hit_count,
+                    SUM(CASE WHEN adverse_media_status IN ('match','review') THEN 1 ELSE 0 END) AS adverse_media_count,
+                    SUM(CASE WHEN missing_nationality = 1 THEN 1 ELSE 0 END) AS missing_nationality_count,
+                    SUM(CASE WHEN dob_missing = 1 THEN 1 ELSE 0 END) AS missing_dob_count,
+                    SUM(CASE WHEN ownership_above_25 = 1 THEN 1 ELSE 0 END) AS ownership_above_25_count,
+                    SUM(CASE WHEN ownership_above_50 = 1 THEN 1 ELSE 0 END) AS ownership_above_50_count,
+                    SUM(CASE WHEN ownership_above_75 = 1 THEN 1 ELSE 0 END) AS ownership_above_75_count,
+                    SUM(CASE WHEN screening_status = 'pending' THEN 1 ELSE 0 END) AS pending_screening_count,
+                    SUM(CASE WHEN screening_status IN ('unresolved','failed','follow_up_required') THEN 1 ELSE 0 END) AS failed_or_unresolved_screening_count,
+                    SUM(CASE WHEN missing_documents = 1 OR failed_document_verification = 1 OR pending_document_verification = 1 THEN 1 ELSE 0 END) AS missing_or_failed_document_verification_count
+                FROM report_rows
+                WHERE {where}
+            """, params).fetchone()
+            summary = dict(summary_row or {})
+            summary = {key: int(value or 0) for key, value in summary.items()}
+
+            top_nationalities = [
+                dict(row) for row in db.execute(f"""
+                    {cte}
+                    SELECT COALESCE(NULLIF(nationality, ''), 'Unknown') AS nationality, COUNT(*) AS count
+                    FROM report_rows
+                    WHERE {where}
+                    GROUP BY COALESCE(NULLIF(nationality, ''), 'Unknown')
+                    ORDER BY count DESC, nationality ASC
+                    LIMIT 5
+                """, params).fetchall()
+            ]
+            top_high_risk_nationalities = [
+                dict(row) for row in db.execute(f"""
+                    {cte}
+                    SELECT COALESCE(NULLIF(nationality, ''), 'Unknown') AS nationality, COUNT(*) AS count
+                    FROM report_rows
+                    WHERE {where}
+                      AND associated_risk_level IN ('HIGH','VERY_HIGH')
+                    GROUP BY COALESCE(NULLIF(nationality, ''), 'Unknown')
+                    ORDER BY count DESC, nationality ASC
+                    LIMIT 5
+                """, params).fetchall()
+            ]
+
+            order_sql = f"ORDER BY {sort_column} {sort_dir}, application_ref ASC, person_name ASC"
+            if output_format == "csv":
+                rows = db.execute(
+                    f"{cte} SELECT * FROM report_rows WHERE {where} {order_sql}",
+                    params,
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    f"{cte} SELECT * FROM report_rows WHERE {where} {order_sql} LIMIT ? OFFSET ?",
+                    [*params, limit, offset],
+                ).fetchall()
+        finally:
+            db.close()
+
+        records = [_directors_ubos_enrich_record(row) for row in rows]
+        generated_at = datetime.now(timezone.utc).isoformat()
+        filter_desc = ", ".join(f"{k}={v}" for k, v in scope["filters"].items()) or "none"
+        self.log_audit(
+            user,
+            "Report",
+            "Directors & UBOs",
+            f"Directors & UBOs report generated: {len(records)} records, format={output_format}, filters: {filter_desc}",
+        )
+
+        if output_format == "csv":
+            safe_date = generated_at[:10]
+            filename = f"{_DIRECTORS_UBOS_EXPORT_FILENAME_PREFIX}_{safe_date}.csv"
+            csv_rows = [
+                {field: record.get(field, "") for field in _DIRECTORS_UBOS_CSV_FIELDS}
+                for record in records
+            ]
+            self.set_header("X-Report-Record-Count", str(len(csv_rows)))
+            self.set_header("X-Report-Show-Fixtures", "true" if scope["show_fixtures"] else "false")
+            self.set_header("X-Report-Canonical-View", _DIRECTORS_UBOS_CANONICAL_VIEW)
+            self.set_header("X-Report-Field-List", ",".join(_DIRECTORS_UBOS_CSV_FIELDS))
+            self.set_header("X-Report-Filename", filename)
+            _write_csv_response(self, filename, _DIRECTORS_UBOS_CSV_FIELDS, csv_rows)
+            return
+
+        payload = {
+            "summary": {
+                **summary,
+                "top_nationalities": top_nationalities,
+                "top_high_risk_nationalities": top_high_risk_nationalities,
+            },
+            "rows": records,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "returned": len(records),
+                "total": total,
+                "has_next": (offset + len(records)) < total,
+                "has_prev": offset > 0,
+            },
+            "sort": {"field": sort_key, "direction": sort_dir.lower()},
+            "report": {
+                "scope": "directors_ubos",
+                "generated_at": generated_at,
+                "filters": scope["filters"],
+                "show_fixtures": scope["show_fixtures"],
+                "canonical_view": _DIRECTORS_UBOS_CANONICAL_VIEW,
+                "record_count": total,
+                "known_data_gaps": {
+                    "country_of_residence": "No persisted director/UBO residence-country column exists in the current schema.",
+                    "per_person_risk_contribution": "No persisted per-person risk-contribution column exists; risk_indicator is derived from available PEP, ownership, screening, and document flags.",
+                    "sanctions_and_adverse_media_filters": "Category-specific statuses are derived from stored screening report evidence where present, otherwise from screening review state.",
+                },
+            },
+        }
+        payload_json = json.dumps(payload, sort_keys=True, default=str)
+        etag = '"' + hashlib.md5(payload_json.encode("utf-8")).hexdigest() + '"'
+        if self.request.headers.get("If-None-Match") == etag:
+            self.set_status(304)
+            self.set_header("ETag", etag)
+            self.finish()
+            return
+        self.set_header("ETag", etag)
+        self.success(payload)
+
+
 # ══════════════════════════════════════════════════════════
 # AUDIT TRAIL ENDPOINTS
 # ══════════════════════════════════════════════════════════
@@ -28442,6 +29263,7 @@ def make_app():
         # Reports
         (r"/api/reports/generate", ReportHandler),
         (r"/api/reports/analytics", ReportAnalyticsHandler),
+        (r"/api/reports/directors-ubos", DirectorsUBOsReportHandler),
 
         # Audit
         (r"/api/audit/export", AuditExportHandler),

@@ -847,6 +847,49 @@ a { color:var(--brand); text-decoration:none; }
 .rpt-hbar-fill { height:100%; border-radius:5px; transition:width 0.6s ease; }
 .rpt-hbar-val { width:60px; text-align:right; font-size:12px; font-weight:700; flex-shrink:0; }
 .rpt-donut-segment { transition:stroke-dashoffset 0.6s ease; }
+.rpt-du-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }
+.rpt-du-title { font-size:18px; font-weight:800; margin:0 0 4px; }
+.rpt-du-subtitle { font-size:12px; color:var(--text3); line-height:1.45; max-width:780px; }
+.rpt-du-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
+.rpt-du-view-toggle { display:inline-flex; border:1px solid var(--border1); border-radius:8px; overflow:hidden; background:var(--surface); }
+.rpt-du-view-btn { border:0; border-right:1px solid var(--border1); background:transparent; color:var(--text2); padding:8px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+.rpt-du-view-btn:last-child { border-right:0; }
+.rpt-du-view-btn.active { background:var(--brand); color:white; }
+.rpt-du-filter-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; align-items:end; }
+.rpt-du-filter-grid label { font-size:10px; text-transform:uppercase; color:var(--text3); font-weight:700; display:block; margin-bottom:4px; }
+.rpt-du-filter-grid .form-select, .rpt-du-filter-grid .form-input { width:100%; padding:7px 9px; font-size:12px; }
+.rpt-du-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:12px; margin:16px 0; }
+.rpt-du-summary-card { background:var(--surface); border:1px solid var(--border1); border-radius:8px; padding:12px 14px; min-height:82px; }
+.rpt-du-summary-label { font-size:10px; text-transform:uppercase; color:var(--text3); font-weight:700; line-height:1.3; }
+.rpt-du-summary-value { font-size:24px; font-weight:800; margin-top:8px; line-height:1; }
+.rpt-du-summary-sub { font-size:11px; color:var(--text3); margin-top:6px; }
+.rpt-du-analytics { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px; }
+.rpt-du-mini-list { display:flex; flex-direction:column; gap:8px; }
+.rpt-du-mini-row { display:flex; align-items:center; gap:10px; font-size:12px; }
+.rpt-du-mini-label { width:150px; color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rpt-du-mini-track { flex:1; height:8px; background:var(--surface3); border-radius:4px; overflow:hidden; }
+.rpt-du-mini-fill { height:100%; background:var(--brand); border-radius:4px; }
+.rpt-du-mini-count { width:42px; text-align:right; font-weight:700; }
+.rpt-du-table-wrap { overflow:auto; max-width:100%; }
+.rpt-du-table th { white-space:nowrap; cursor:pointer; }
+.rpt-du-table td { vertical-align:top; min-width:120px; }
+.rpt-du-table td.rpt-du-person-cell { min-width:210px; }
+.rpt-du-table td.rpt-du-actions-cell { min-width:250px; }
+.rpt-du-flag-list { display:flex; flex-wrap:wrap; gap:4px; max-width:260px; }
+.rpt-du-flag { display:inline-flex; padding:2px 6px; border-radius:999px; font-size:10px; font-weight:700; background:var(--surface3); color:var(--text2); border:1px solid var(--border1); }
+.rpt-du-flag.warn { background:var(--amber-bg); color:var(--amber); border-color:#f59e0b44; }
+.rpt-du-flag.danger { background:var(--red-bg); color:var(--red); border-color:#ef444444; }
+.rpt-du-state { display:none; border:1px solid var(--border1); border-radius:8px; padding:18px; text-align:center; color:var(--text3); font-size:13px; background:var(--surface); }
+.rpt-du-state.error { color:var(--red); border-color:#ef444444; background:var(--red-bg); }
+.rpt-du-last-refreshed { font-size:11px; color:var(--text3); margin-top:6px; }
+.role-reporting { display:none !important; }
+body.role-admin .role-reporting, body.role-sco .role-reporting, body.role-co .role-reporting { display:initial !important; }
+body.role-admin .snav-item.role-reporting, body.role-sco .snav-item.role-reporting, body.role-co .snav-item.role-reporting { display:flex !important; }
+@media (max-width: 900px) {
+  .rpt-du-header, .rpt-du-analytics { display:block; }
+  .rpt-du-actions { justify-content:flex-start; margin-top:12px; }
+  .rpt-du-analytics > .card { margin-bottom:12px; }
+}
 
 /* ── Role-based visibility ── */
 .role-admin-only { display:none !important; }
@@ -1005,7 +1048,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Monitoring Alerts</div>
     <div class="snav-item" data-view="lifecycle" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
     <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
-    <div class="snav-item" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
+    <div class="snav-item role-reporting" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
     <div class="snav-item" data-view="reg-intel" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
     <div class="snav-section">AI Compliance Supervisor</div>
     <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Supervisor Dashboard</div>
@@ -2375,6 +2418,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="rpt-tab active" data-tab="overview" onclick="switchReportTab('overview')">Overview</div>
     <div class="rpt-tab" data-tab="operations" onclick="switchReportTab('operations')">Operations</div>
     <div class="rpt-tab" data-tab="compliance" onclick="switchReportTab('compliance')">Compliance &amp; Risk</div>
+    <div class="rpt-tab" data-tab="directors-ubos" onclick="switchReportTab('directors-ubos')">Directors &amp; UBOs</div>
     <div class="rpt-tab" data-tab="data" onclick="switchReportTab('data')">Detailed Data</div>
   </div>
 
@@ -2457,6 +2501,113 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <div class="card-title" style="margin-bottom:14px;">Recent Decisions</div>
         <div id="rpt-recent-decisions" style="overflow-x:auto;"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Tab: Directors & UBOs -->
+  <div class="rpt-tab-content" id="rpt-panel-directors-ubos">
+    <div class="rpt-du-header">
+      <div>
+        <h3 class="rpt-du-title">Directors &amp; UBOs</h3>
+        <div class="rpt-du-subtitle">Operational compliance reporting across directors and ultimate beneficial owners, including screening, ownership, data quality, document verification, and application risk context.</div>
+        <div class="rpt-du-last-refreshed" id="rpt-du-last-refreshed">Not refreshed yet</div>
+      </div>
+      <div class="rpt-du-actions">
+        <button class="btn btn-outline btn-sm" onclick="exportDirectorsUboCSV()">CSV Export</button>
+        <button class="btn btn-outline btn-sm" onclick="loadDirectorsUboReport({ force: true })">Refresh</button>
+        <button class="btn btn-outline btn-sm" onclick="clearDirectorsUboFilters()">Clear Filters</button>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="rpt-du-view-toggle" role="group" aria-label="Directors and UBOs report mode">
+        <button class="rpt-du-view-btn active" data-view="combined" onclick="setDirectorsUboView('combined')">Combined</button>
+        <button class="rpt-du-view-btn" data-view="directors" onclick="setDirectorsUboView('directors')">Directors Only</button>
+        <button class="rpt-du-view-btn" data-view="ubos" onclick="setDirectorsUboView('ubos')">UBOs Only</button>
+      </div>
+      <div style="min-width:260px;flex:1;max-width:460px;">
+        <input id="rpt-du-search" class="form-input" type="search" placeholder="Search person, company, application ref, officer..." oninput="queueDirectorsUboSearch()" style="width:100%;font-size:12px;padding:8px 10px;">
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div class="rpt-du-filter-grid">
+        <div><label>Role</label><select class="form-select" id="rpt-du-role" onchange="applyDirectorsUboFilters()"><option value="">All Roles</option><option value="director">Director</option><option value="ubo">UBO</option><option value="both">Director &amp; UBO</option></select></div>
+        <div><label>Nationality</label><input class="form-input" id="rpt-du-nationality" placeholder="Country" oninput="queueDirectorsUboSearch()"></div>
+        <div><label>Residence</label><input class="form-input" id="rpt-du-residence" placeholder="If available" oninput="queueDirectorsUboSearch()"></div>
+        <div><label>PEP Status</label><select class="form-select" id="rpt-du-pep-status" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="declared_yes">Declared yes</option><option value="confirmed_pep">Confirmed PEP</option><option value="pending_review">Pending review</option><option value="declared_no">Declared no</option><option value="not_verified">Not verified</option></select></div>
+        <div><label>Sanctions</label><select class="form-select" id="rpt-du-sanctions-status" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="match">Match</option><option value="review">Review</option><option value="clear">Clear</option><option value="unknown">Unknown</option></select></div>
+        <div><label>Adverse Media</label><select class="form-select" id="rpt-du-adverse-status" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="match">Match</option><option value="review">Review</option><option value="clear">Clear</option><option value="unknown">Unknown</option></select></div>
+        <div><label>Screening Status</label><select class="form-select" id="rpt-du-screening-status" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="pending">Pending</option><option value="clear">Clear</option><option value="cleared">Cleared</option><option value="unresolved">Unresolved</option><option value="failed">Failed</option><option value="follow_up_required">Follow-up required</option></select></div>
+        <div><label>Review Status</label><select class="form-select" id="rpt-du-screening-review" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="cleared">Cleared</option><option value="follow_up_required">Follow-up required</option><option value="escalated">Escalated</option></select></div>
+        <div><label>Ownership Min %</label><input class="form-input" id="rpt-du-ownership-min" type="number" min="0" max="100" step="0.01" oninput="queueDirectorsUboSearch()"></div>
+        <div><label>Ownership Max %</label><input class="form-input" id="rpt-du-ownership-max" type="number" min="0" max="100" step="0.01" oninput="queueDirectorsUboSearch()"></div>
+        <div><label>Missing DOB</label><select class="form-select" id="rpt-du-missing-dob" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Missing Nationality</label><select class="form-select" id="rpt-du-missing-nationality" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Missing Ownership</label><select class="form-select" id="rpt-du-missing-ownership" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Missing Documents</label><select class="form-select" id="rpt-du-missing-docs" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Expired Documents</label><select class="form-select" id="rpt-du-expired-docs" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Failed Verification</label><select class="form-select" id="rpt-du-failed-doc-verification" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Pending Verification</label><select class="form-select" id="rpt-du-pending-doc-verification" onchange="applyDirectorsUboFilters()"><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Application Status</label><select class="form-select" id="rpt-du-app-status" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="submitted">Submitted</option><option value="in_review">In Review</option><option value="compliance_review">Compliance Review</option><option value="edd_required">EDD Required</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="withdrawn">Withdrawn</option></select></div>
+        <div><label>Application Risk</label><select class="form-select" id="rpt-du-risk-level" onchange="applyDirectorsUboFilters()"><option value="">All</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="VERY_HIGH">Very High</option><option value="UNKNOWN">Not rated</option></select></div>
+        <div><label>Assigned Officer</label><select class="form-select" id="rpt-du-assigned" onchange="applyDirectorsUboFilters()"><option value="">All Officers</option></select></div>
+        <div><label>Created From</label><input class="form-input" id="rpt-du-created-from" type="date" onchange="applyDirectorsUboFilters()"></div>
+        <div><label>Created To</label><input class="form-input" id="rpt-du-created-to" type="date" onchange="applyDirectorsUboFilters()"></div>
+        <div><label>Updated From</label><input class="form-input" id="rpt-du-updated-from" type="date" onchange="applyDirectorsUboFilters()"></div>
+        <div><label>Updated To</label><input class="form-input" id="rpt-du-updated-to" type="date" onchange="applyDirectorsUboFilters()"></div>
+      </div>
+    </div>
+
+    <div id="rpt-du-loading" class="rpt-du-state">Loading Directors &amp; UBOs report...</div>
+    <div id="rpt-du-error" class="rpt-du-state error"></div>
+    <div id="rpt-du-summary-cards" class="rpt-du-summary-grid"></div>
+    <div class="rpt-du-analytics">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px;">Top 5 Nationalities</div>
+        <div id="rpt-du-top-nationalities" class="rpt-du-mini-list"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px;">Top 5 High-Risk Nationalities</div>
+        <div id="rpt-du-top-risk-nationalities" class="rpt-du-mini-list"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
+        <div class="card-title">Director and UBO Rows <span id="rpt-du-count" style="font-weight:400;font-size:12px;color:var(--text3);"></span></div>
+        <div style="font-size:11px;color:var(--text3);">Columns include source-system gaps as null or unknown where the current data model does not persist that field.</div>
+      </div>
+      <div id="rpt-du-empty" class="rpt-du-state">No Directors or UBOs match the current filters.</div>
+      <div class="rpt-du-table-wrap">
+        <table class="data-table rpt-du-table" id="rpt-du-table">
+          <thead>
+            <tr>
+              <th onclick="sortDirectorsUboTable('person_name')">Person</th>
+              <th onclick="sortDirectorsUboTable('role')">Role</th>
+              <th onclick="sortDirectorsUboTable('company_name')">Company / Application</th>
+              <th onclick="sortDirectorsUboTable('application_status')">App Status</th>
+              <th onclick="sortDirectorsUboTable('client_status')">Client Status</th>
+              <th onclick="sortDirectorsUboTable('nationality')">Nationality</th>
+              <th onclick="sortDirectorsUboTable('country_of_residence')">Residence</th>
+              <th onclick="sortDirectorsUboTable('date_of_birth')">DOB</th>
+              <th onclick="sortDirectorsUboTable('pep_status')">PEP</th>
+              <th onclick="sortDirectorsUboTable('sanctions_status')">Sanctions</th>
+              <th onclick="sortDirectorsUboTable('adverse_media_status')">Adverse Media</th>
+              <th onclick="sortDirectorsUboTable('screening_status')">Screening</th>
+              <th onclick="sortDirectorsUboTable('ownership_pct')">Ownership</th>
+              <th onclick="sortDirectorsUboTable('document_verification_status')">Documents</th>
+              <th onclick="sortDirectorsUboTable('associated_risk_level')">Risk</th>
+              <th onclick="sortDirectorsUboTable('last_updated_at')">Updated</th>
+              <th onclick="sortDirectorsUboTable('created_at')">Created</th>
+              <th>Flags</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="rpt-du-tbody"></tbody>
+        </table>
+      </div>
+      <div id="rpt-du-pagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:12px;color:var(--text3);"></div>
     </div>
   </div>
 
@@ -5759,6 +5910,7 @@ function showView(name, navItem) {
   var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'settings'];
   var scoOnlyViews = ['audit', 'supervisor-audit'];
   var enhancedSettingsViews = ['enhanced-requirements'];
+  var reportingViews = ['reports'];
   var role = currentUser ? currentUser.role : '';
   if (adminOnlyViews.indexOf(name) >= 0 && role !== 'admin') {
     showToast('Access restricted to administrators', 'error'); return;
@@ -5767,6 +5919,9 @@ function showView(name, navItem) {
     showToast('Access restricted to senior compliance officers', 'error'); return;
   }
   if (enhancedSettingsViews.indexOf(name) >= 0 && ['admin','sco','co'].indexOf(role) < 0) {
+    showToast('Access restricted to compliance officers', 'error'); return;
+  }
+  if (reportingViews.indexOf(name) >= 0 && !canViewDirectorsUboReport()) {
     showToast('Access restricted to compliance officers', 'error'); return;
   }
 
@@ -6150,10 +6305,32 @@ var RPT_DATA = null; // cached analytics data
 var RPT_TABLE_SORT = { field: 'date', dir: 'desc' };
 var RPT_TABLE_PAGE = 0;
 var RPT_TABLE_PAGE_SIZE = 25;
+var DIRECTORS_UBO_REPORT = {
+  rows: [],
+  summary: {},
+  pagination: { limit: 25, offset: 0, total: 0, returned: 0 },
+  view: 'combined',
+  sort: { field: 'last_updated_at', direction: 'desc' },
+  limit: 25,
+  offset: 0,
+  isLoading: false,
+  loaded: false,
+  error: '',
+  lastRefreshed: null,
+  searchTimer: null
+};
+
+function canViewDirectorsUboReport() {
+  var role = currentUser ? String(currentUser.role || '').toLowerCase() : '';
+  return ['admin', 'sco', 'co'].indexOf(role) >= 0;
+}
 
 function switchReportTab(tabName) {
   document.querySelectorAll('.rpt-tab').forEach(function(t) { t.classList.toggle('active', t.getAttribute('data-tab') === tabName); });
   document.querySelectorAll('.rpt-tab-content').forEach(function(p) { p.classList.toggle('active', p.id === 'rpt-panel-' + tabName); });
+  if (tabName === 'directors-ubos') {
+    loadDirectorsUboReport({ force: !DIRECTORS_UBO_REPORT.loaded });
+  }
 }
 
 function clearReportFilters() {
@@ -6205,8 +6382,422 @@ function getReportFilters() {
   };
 }
 
+function rptDuValue(id) {
+  var el = document.getElementById(id);
+  return el ? String(el.value || '').trim() : '';
+}
+
+function populateDirectorsUboFilterDropdowns() {
+  var reviewers = {};
+  APPLICATIONS.forEach(function(a) {
+    if (a.assigned && a.assigned !== 'Unassigned') reviewers[a.assigned] = a.assignedId || a.assigned;
+  });
+  var reviewerEl = document.getElementById('rpt-du-assigned');
+  if (reviewerEl) {
+    var curVal = reviewerEl.value;
+    reviewerEl.innerHTML = '<option value="">All Officers</option>';
+    Object.keys(reviewers).sort().forEach(function(name) {
+      reviewerEl.innerHTML += '<option value="' + escapeHtml(String(reviewers[name])) + '">' + escapeHtml(name) + '</option>';
+    });
+    reviewerEl.value = curVal;
+  }
+}
+
+function getDirectorsUboFilters() {
+  return {
+    view: DIRECTORS_UBO_REPORT.view || 'combined',
+    role: rptDuValue('rpt-du-role'),
+    search: rptDuValue('rpt-du-search'),
+    nationality: rptDuValue('rpt-du-nationality'),
+    country_of_residence: rptDuValue('rpt-du-residence'),
+    pep_status: rptDuValue('rpt-du-pep-status'),
+    sanctions_status: rptDuValue('rpt-du-sanctions-status'),
+    adverse_media_status: rptDuValue('rpt-du-adverse-status'),
+    screening_status: rptDuValue('rpt-du-screening-status'),
+    screening_review_status: rptDuValue('rpt-du-screening-review'),
+    ownership_min: rptDuValue('rpt-du-ownership-min'),
+    ownership_max: rptDuValue('rpt-du-ownership-max'),
+    missing_dob: rptDuValue('rpt-du-missing-dob'),
+    missing_nationality: rptDuValue('rpt-du-missing-nationality'),
+    missing_ownership: rptDuValue('rpt-du-missing-ownership'),
+    missing_documents: rptDuValue('rpt-du-missing-docs'),
+    expired_documents: rptDuValue('rpt-du-expired-docs'),
+    failed_document_verification: rptDuValue('rpt-du-failed-doc-verification'),
+    pending_document_verification: rptDuValue('rpt-du-pending-doc-verification'),
+    application_status: rptDuValue('rpt-du-app-status'),
+    application_risk_level: rptDuValue('rpt-du-risk-level'),
+    assigned_to: rptDuValue('rpt-du-assigned'),
+    created_from: rptDuValue('rpt-du-created-from'),
+    created_to: rptDuValue('rpt-du-created-to'),
+    last_updated_from: rptDuValue('rpt-du-updated-from'),
+    last_updated_to: rptDuValue('rpt-du-updated-to')
+  };
+}
+
+function buildDirectorsUboQuery(format) {
+  var filters = getDirectorsUboFilters();
+  var params = {
+    limit: DIRECTORS_UBO_REPORT.limit,
+    offset: DIRECTORS_UBO_REPORT.offset,
+    sort: DIRECTORS_UBO_REPORT.sort.field,
+    direction: DIRECTORS_UBO_REPORT.sort.direction,
+    format: format || 'json'
+  };
+  Object.keys(filters).forEach(function(key) {
+    if (filters[key] !== '') params[key] = filters[key];
+  });
+  return Object.keys(params).map(function(key) {
+    return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+  }).join('&');
+}
+
+function setDirectorsUboView(view) {
+  DIRECTORS_UBO_REPORT.view = view || 'combined';
+  DIRECTORS_UBO_REPORT.offset = 0;
+  loadDirectorsUboReport({ force: true });
+}
+
+function queueDirectorsUboSearch() {
+  if (DIRECTORS_UBO_REPORT.searchTimer) clearTimeout(DIRECTORS_UBO_REPORT.searchTimer);
+  DIRECTORS_UBO_REPORT.searchTimer = setTimeout(function() {
+    applyDirectorsUboFilters();
+  }, 300);
+}
+
+function applyDirectorsUboFilters() {
+  DIRECTORS_UBO_REPORT.offset = 0;
+  loadDirectorsUboReport({ force: true });
+}
+
+function setDirectorsUboPage(offset) {
+  DIRECTORS_UBO_REPORT.offset = Math.max(0, Number(offset || 0));
+  loadDirectorsUboReport({ force: true });
+}
+
+function clearDirectorsUboFilters() {
+  [
+    'rpt-du-role','rpt-du-search','rpt-du-nationality','rpt-du-residence','rpt-du-pep-status',
+    'rpt-du-sanctions-status','rpt-du-adverse-status','rpt-du-screening-status','rpt-du-screening-review',
+    'rpt-du-ownership-min','rpt-du-ownership-max','rpt-du-missing-dob','rpt-du-missing-nationality',
+    'rpt-du-missing-ownership','rpt-du-missing-docs','rpt-du-expired-docs','rpt-du-failed-doc-verification',
+    'rpt-du-pending-doc-verification','rpt-du-app-status','rpt-du-risk-level','rpt-du-assigned',
+    'rpt-du-created-from','rpt-du-created-to','rpt-du-updated-from','rpt-du-updated-to'
+  ].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  DIRECTORS_UBO_REPORT.view = 'combined';
+  DIRECTORS_UBO_REPORT.offset = 0;
+  loadDirectorsUboReport({ force: true });
+}
+
+function sortDirectorsUboTable(field) {
+  if (DIRECTORS_UBO_REPORT.sort.field === field) {
+    DIRECTORS_UBO_REPORT.sort.direction = DIRECTORS_UBO_REPORT.sort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    DIRECTORS_UBO_REPORT.sort.field = field;
+    DIRECTORS_UBO_REPORT.sort.direction = 'asc';
+  }
+  DIRECTORS_UBO_REPORT.offset = 0;
+  loadDirectorsUboReport({ force: true });
+}
+
+function loadDirectorsUboReport(options) {
+  options = options || {};
+  if (!canViewDirectorsUboReport()) {
+    DIRECTORS_UBO_REPORT.error = 'Access restricted to compliance officers';
+    renderDirectorsUboReport();
+    return Promise.resolve();
+  }
+  if (DIRECTORS_UBO_REPORT.isLoading && !options.force) return Promise.resolve();
+  populateDirectorsUboFilterDropdowns();
+  DIRECTORS_UBO_REPORT.isLoading = true;
+  DIRECTORS_UBO_REPORT.error = '';
+  renderDirectorsUboReport();
+  return boApiCall('GET', '/reports/directors-ubos?' + buildDirectorsUboQuery('json')).then(function(data) {
+    DIRECTORS_UBO_REPORT.rows = data.rows || [];
+    DIRECTORS_UBO_REPORT.summary = data.summary || {};
+    DIRECTORS_UBO_REPORT.pagination = data.pagination || DIRECTORS_UBO_REPORT.pagination;
+    DIRECTORS_UBO_REPORT.sort = data.sort || DIRECTORS_UBO_REPORT.sort;
+    DIRECTORS_UBO_REPORT.lastRefreshed = data.report && data.report.generated_at ? data.report.generated_at : new Date().toISOString();
+    DIRECTORS_UBO_REPORT.loaded = true;
+  }).catch(function(err) {
+    DIRECTORS_UBO_REPORT.error = err && err.message ? err.message : 'Could not load Directors & UBOs report';
+    DIRECTORS_UBO_REPORT.rows = [];
+  }).finally(function() {
+    DIRECTORS_UBO_REPORT.isLoading = false;
+    renderDirectorsUboReport();
+  });
+}
+
+function directorsUboCsvFilename(res) {
+  var disposition = res.headers.get('Content-Disposition') || '';
+  var filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+  return filenameMatch ? filenameMatch[1] : 'regmind_directors_ubos_report_' + new Date().toISOString().split('T')[0] + '.csv';
+}
+
+function exportDirectorsUboCSV() {
+  if (!canViewDirectorsUboReport()) {
+    showToast('Access restricted to compliance officers', 'error');
+    return;
+  }
+  var headers = {};
+  if (BO_AUTH_TOKEN) headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
+  fetch(BO_API_BASE + '/reports/directors-ubos?' + buildDirectorsUboQuery('csv'), { headers: headers, credentials: 'include' }).then(async function(res) {
+    if (res.status === 401 && BO_AUTH_TOKEN) {
+      showToast('Your session has expired. Please sign in again.', 'warning');
+      BO_AUTH_TOKEN = '';
+      showLoginScreen();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) {
+      var msg = 'Export failed';
+      try {
+        var err = await res.json();
+        msg = err.error || msg;
+      } catch(e) {}
+      throw new Error(msg);
+    }
+    var recordCount = res.headers.get('X-Report-Record-Count') || '';
+    if (recordCount === '0') {
+      showToast('No Directors & UBOs data to export', 'warning');
+      return;
+    }
+    var blob = await res.blob();
+    var blobUrl = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = directorsUboCsvFilename(res);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+    showToast('Directors & UBOs report exported: ' + (recordCount || 'filtered') + ' records', 'success');
+  }).catch(function(err) {
+    showToast('Export failed: ' + (err.message || err), 'error');
+  });
+}
+
+function formatDirectorsUboDate(value) {
+  if (!value) return '-';
+  var text = String(value);
+  return text.replace('T', ' ').slice(0, 19);
+}
+
+function directorsUboLabel(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  return String(value).replace(/_/g, ' ');
+}
+
+function directorsUboJsArg(value) {
+  return escapeHtml(String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' '));
+}
+
+function directorsUboStatusBadge(value, type) {
+  var raw = String(value || 'unknown');
+  var key = raw.toLowerCase().replace(/\s+/g, '_');
+  var cls = 'draft';
+  if (['clear', 'cleared', 'verified', 'complete', 'approved', 'no', 'declared_no'].indexOf(key) >= 0) cls = 'approved';
+  if (['pending', 'pending_review', 'not_verified', 'partial', 'unknown', 'follow_up_required'].indexOf(key) >= 0) cls = 'pending';
+  if (['match', 'review', 'unresolved', 'failed', 'flagged', 'expired', 'declared_yes', 'confirmed_pep', 'escalated'].indexOf(key) >= 0) cls = 'rejected';
+  if (type === 'risk') return riskBadge(raw);
+  return '<span class="badge ' + cls + '">' + escapeHtml(directorsUboLabel(raw)) + '</span>';
+}
+
+function renderDirectorsUboSummaryCards(summary) {
+  summary = summary || {};
+  var cards = [
+    ['Total directors', summary.total_directors],
+    ['Total UBOs', summary.total_ubos],
+    ['Unique persons', summary.total_unique_persons],
+    ['PEP count', summary.pep_count],
+    ['Sanctions hits', summary.sanctions_hit_count],
+    ['Adverse media', summary.adverse_media_count],
+    ['Missing nationality', summary.missing_nationality_count],
+    ['Missing DOB', summary.missing_dob_count],
+    ['UBOs > 25%', summary.ownership_above_25_count],
+    ['UBOs > 50%', summary.ownership_above_50_count],
+    ['UBOs > 75%', summary.ownership_above_75_count],
+    ['Pending screening', summary.pending_screening_count],
+    ['Failed/unresolved screening', summary.failed_or_unresolved_screening_count],
+    ['Missing/failed docs', summary.missing_or_failed_document_verification_count]
+  ];
+  var el = document.getElementById('rpt-du-summary-cards');
+  if (!el) return;
+  el.innerHTML = cards.map(function(card) {
+    return '<div class="rpt-du-summary-card">' +
+      '<div class="rpt-du-summary-label">' + escapeHtml(card[0]) + '</div>' +
+      '<div class="rpt-du-summary-value">' + escapeHtml(String(Number(card[1] || 0))) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderDirectorsUboMiniList(id, rows) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text3);">No data for current filters.</div>';
+    return;
+  }
+  var max = Math.max.apply(null, rows.map(function(r) { return Number(r.count || 0); })) || 1;
+  el.innerHTML = rows.map(function(r) {
+    var count = Number(r.count || 0);
+    return '<div class="rpt-du-mini-row">' +
+      '<div class="rpt-du-mini-label" title="' + escapeHtml(r.nationality || 'Unknown') + '">' + escapeHtml(r.nationality || 'Unknown') + '</div>' +
+      '<div class="rpt-du-mini-track"><div class="rpt-du-mini-fill" style="width:' + Math.max(4, Math.round((count / max) * 100)) + '%;"></div></div>' +
+      '<div class="rpt-du-mini-count">' + escapeHtml(String(count)) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderDirectorsUboFlags(row) {
+  var flags = [];
+  function add(cond, label, tone) {
+    if (cond) flags.push('<span class="rpt-du-flag ' + (tone || 'warn') + '">' + escapeHtml(label) + '</span>');
+  }
+  add(row.dob_missing, 'Missing DOB');
+  add(row.missing_nationality, 'Missing nationality');
+  add(row.ownership_missing, 'Missing ownership');
+  add(row.missing_pep_declaration, 'Missing PEP declaration');
+  add(row.missing_screening_status, 'Missing screening');
+  add(row.stale_screening, 'Stale screening');
+  add(row.unresolved_screening_hit, 'Unresolved screening', 'danger');
+  add(row.missing_documents, 'Missing documents', 'danger');
+  add(row.expired_documents, 'Expired documents');
+  add(row.failed_document_verification, 'Failed verification', 'danger');
+  add(row.pending_document_verification, 'Pending verification');
+  if (row.ownership_above_75) add(true, 'Ownership >75%', 'danger');
+  else if (row.ownership_above_50) add(true, 'Ownership >50%');
+  else if (row.ownership_above_25) add(true, 'Ownership >25%');
+  return flags.length ? '<div class="rpt-du-flag-list">' + flags.join('') + '</div>' : '-';
+}
+
+function renderDirectorsUboActions(row) {
+  var ref = row.application_ref || (row.links && row.links.application && row.links.application.application_ref);
+  var buttons = [];
+  if (ref) {
+    buttons.push('<button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + directorsUboJsArg(ref) + '\')">Open application</button>');
+  }
+  if (ref && row.links && row.links.screening_review) {
+    buttons.push('<button class="btn btn-outline btn-sm" onclick="openDirectorsUboScreening(\'' + directorsUboJsArg(ref) + '\')">Open screening</button>');
+  }
+  if (ref && row.links && row.links.documents) {
+    buttons.push('<button class="btn btn-outline btn-sm" onclick="openDirectorsUboDocuments(\'' + directorsUboJsArg(ref) + '\')">Open documents</button>');
+  }
+  if (ref && row.links && row.links.periodic_review) {
+    buttons.push('<button class="btn btn-outline btn-sm" onclick="openDirectorsUboLifecycle(\'' + directorsUboJsArg(ref) + '\')">Open review</button>');
+  }
+  return buttons.length ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + buttons.join('') + '</div>' : '-';
+}
+
+function renderDirectorsUboTable(rows) {
+  var tbody = document.getElementById('rpt-du-tbody');
+  if (!tbody) return;
+  rows = Array.isArray(rows) ? rows : [];
+  tbody.innerHTML = rows.map(function(row) {
+    var ownership = row.ownership_pct == null || row.ownership_pct === '' ? '-' : (Number(row.ownership_pct).toFixed(2).replace(/\.00$/, '') + '%');
+    var screeningMeta = [
+      row.screening_last_checked_at ? 'Checked ' + formatDirectorsUboDate(row.screening_last_checked_at) : '',
+      row.screening_review_disposition ? 'Review ' + directorsUboLabel(row.screening_review_disposition) : ''
+    ].filter(Boolean).join('<br>');
+    var pepMeta = [
+      'Declared: ' + directorsUboLabel(row.declared_pep_status),
+      'Screening: ' + directorsUboLabel(row.screening_pep_status)
+    ].join('<br>');
+    return '<tr>' +
+      '<td class="rpt-du-person-cell"><strong>' + escapeHtml(row.person_name || 'Unknown person') + '</strong><div style="font-size:11px;color:var(--text3);margin-top:3px;">' + escapeHtml(row.risk_indicator || '') + '</div></td>' +
+      '<td>' + directorsUboStatusBadge(row.role) + '</td>' +
+      '<td><strong>' + escapeHtml(row.company_name || '-') + '</strong><div style="font-size:11px;color:var(--brand);margin-top:3px;">' + escapeHtml(row.application_ref || '-') + '</div></td>' +
+      '<td>' + statusBadge(row.application_status || 'unknown') + '</td>' +
+      '<td>' + escapeHtml(row.client_status || '-') + '</td>' +
+      '<td>' + escapeHtml(row.nationality || '-') + '</td>' +
+      '<td>' + escapeHtml(row.country_of_residence || '-') + '</td>' +
+      '<td>' + escapeHtml(row.date_of_birth || '-') + '</td>' +
+      '<td>' + directorsUboStatusBadge(row.pep_status) + '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + pepMeta + '</div></td>' +
+      '<td>' + directorsUboStatusBadge(row.sanctions_status) + '</td>' +
+      '<td>' + directorsUboStatusBadge(row.adverse_media_status) + '</td>' +
+      '<td>' + directorsUboStatusBadge(row.screening_status) + '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + screeningMeta + '</div></td>' +
+      '<td>' + escapeHtml(ownership) + '</td>' +
+      '<td>' + directorsUboStatusBadge(row.document_completeness_status) + '<div style="margin-top:4px;">' + directorsUboStatusBadge(row.document_verification_status) + '</div></td>' +
+      '<td>' + directorsUboStatusBadge(row.associated_risk_level || row.application_risk_level, 'risk') + '</td>' +
+      '<td>' + escapeHtml(formatDirectorsUboDate(row.last_updated_at)) + '</td>' +
+      '<td>' + escapeHtml(formatDirectorsUboDate(row.created_at)) + '</td>' +
+      '<td>' + renderDirectorsUboFlags(row) + '</td>' +
+      '<td class="rpt-du-actions-cell">' + renderDirectorsUboActions(row) + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function renderDirectorsUboPagination() {
+  var el = document.getElementById('rpt-du-pagination');
+  if (!el) return;
+  var p = DIRECTORS_UBO_REPORT.pagination || {};
+  var total = Number(p.total || 0);
+  var limit = Number(p.limit || DIRECTORS_UBO_REPORT.limit || 25);
+  var offset = Number(p.offset || 0);
+  var currentPage = Math.floor(offset / limit) + 1;
+  var totalPages = Math.max(1, Math.ceil(total / limit));
+  el.innerHTML = '<span>Showing ' + (total ? offset + 1 : 0) + '-' + Math.min(offset + Number(p.returned || DIRECTORS_UBO_REPORT.rows.length || 0), total) + ' of ' + total + '</span>' +
+    '<div style="display:flex;gap:6px;align-items:center;">' +
+      '<button class="btn btn-outline btn-sm" ' + (offset === 0 ? 'disabled' : '') + ' onclick="setDirectorsUboPage(0)">«</button>' +
+      '<button class="btn btn-outline btn-sm" ' + (offset === 0 ? 'disabled' : '') + ' onclick="setDirectorsUboPage(' + Math.max(0, offset - limit) + ')">‹</button>' +
+      '<span style="padding:5px 10px;font-weight:600;">' + currentPage + ' / ' + totalPages + '</span>' +
+      '<button class="btn btn-outline btn-sm" ' + (offset + limit >= total ? 'disabled' : '') + ' onclick="setDirectorsUboPage(' + (offset + limit) + ')">›</button>' +
+      '<button class="btn btn-outline btn-sm" ' + (offset + limit >= total ? 'disabled' : '') + ' onclick="setDirectorsUboPage(' + ((totalPages - 1) * limit) + ')">»</button>' +
+    '</div>';
+}
+
+function renderDirectorsUboReport() {
+  document.querySelectorAll('.rpt-du-view-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-view') === DIRECTORS_UBO_REPORT.view);
+  });
+  var loadingEl = document.getElementById('rpt-du-loading');
+  var errorEl = document.getElementById('rpt-du-error');
+  var emptyEl = document.getElementById('rpt-du-empty');
+  var tableEl = document.getElementById('rpt-du-table');
+  if (loadingEl) loadingEl.style.display = DIRECTORS_UBO_REPORT.isLoading ? 'block' : 'none';
+  if (errorEl) {
+    errorEl.style.display = DIRECTORS_UBO_REPORT.error ? 'block' : 'none';
+    errorEl.textContent = DIRECTORS_UBO_REPORT.error || '';
+  }
+  var rows = DIRECTORS_UBO_REPORT.rows || [];
+  if (emptyEl) emptyEl.style.display = (!DIRECTORS_UBO_REPORT.isLoading && !DIRECTORS_UBO_REPORT.error && DIRECTORS_UBO_REPORT.loaded && !rows.length) ? 'block' : 'none';
+  if (tableEl) tableEl.style.display = rows.length ? 'table' : 'none';
+  var refreshedEl = document.getElementById('rpt-du-last-refreshed');
+  if (refreshedEl) refreshedEl.textContent = DIRECTORS_UBO_REPORT.lastRefreshed ? ('Last refreshed ' + formatDirectorsUboDate(DIRECTORS_UBO_REPORT.lastRefreshed)) : 'Not refreshed yet';
+  var countEl = document.getElementById('rpt-du-count');
+  if (countEl) {
+    var p = DIRECTORS_UBO_REPORT.pagination || {};
+    countEl.textContent = '(' + Number(p.total || rows.length || 0) + ' records)';
+  }
+  renderDirectorsUboSummaryCards(DIRECTORS_UBO_REPORT.summary || {});
+  renderDirectorsUboMiniList('rpt-du-top-nationalities', (DIRECTORS_UBO_REPORT.summary || {}).top_nationalities || []);
+  renderDirectorsUboMiniList('rpt-du-top-risk-nationalities', (DIRECTORS_UBO_REPORT.summary || {}).top_high_risk_nationalities || []);
+  renderDirectorsUboTable(rows);
+  renderDirectorsUboPagination();
+}
+
+function openDirectorsUboScreening(ref) {
+  showView('screening');
+  var input = document.getElementById('screening-filter-application-ref');
+  if (input) input.value = ref || '';
+  if (typeof applyScreeningQueueFilters === 'function') applyScreeningQueueFilters();
+}
+
+function openDirectorsUboDocuments(ref) {
+  if (!ref) return;
+  openAppDetail(ref, { initialTab: 'kyc-docs' });
+}
+
+function openDirectorsUboLifecycle(ref) {
+  if (!ref) return;
+  openAppDetail(ref, { initialTab: 'lifecycle' });
+}
+
 function renderReportsPage() {
   populateReportFilterDropdowns();
+  populateDirectorsUboFilterDropdowns();
   var filters = getReportFilters();
   var qs = Object.keys(filters).filter(function(k) { return filters[k]; }).map(function(k) { return k + '=' + encodeURIComponent(filters[k]); }).join('&');
 
@@ -6229,6 +6820,9 @@ function renderReportsPage() {
     renderReportCompliance(RPT_DATA);
     renderReportDataTable(RPT_DATA);
   });
+  if (document.querySelector('.rpt-tab[data-tab="directors-ubos"].active')) {
+    loadDirectorsUboReport({ force: true });
+  }
 }
 
 function buildReportDataFromApplications(filters) {
