@@ -655,3 +655,103 @@ def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_d
     assert evidence["subject_scope"] == "person"
     assert evidence["match_categories"] == ["PEP"]
     assert evidence["risk_type_labels"] == ["PEP class 1"]
+
+
+def test_screening_review_context_carries_ca_provider_refs_and_evidence_quality(db, temp_db):
+    from server import _screening_review_subject_context
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_ca_review_refs",
+            "ARF-CA-REVIEW-REFS",
+            "client_ca_review_refs",
+            "Review Refs Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "provider": "complyadvantage",
+                    "screened_at": "2026-06-02T09:30:00Z",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "provider": "complyadvantage",
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "screened_at": "2026-06-02T09:30:00Z",
+                        "matched": True,
+                        "results": [{
+                            "name": "Review Refs Ltd",
+                            "provider": "complyadvantage",
+                            "match_category": "Adverse Media",
+                            "match_categories": ["Adverse Media"],
+                            "provider_case_identifier": "case-review-refs",
+                            "provider_alert_identifier": "alert-review-refs",
+                            "provider_risk_identifier": "risk-review-refs",
+                            "provider_profile_identifier": "profile-review-refs",
+                            "provider_customer_identifier": "customer-review-refs",
+                            "provider_workflow_identifier": "workflow-review-refs",
+                            "media_title": "Review refs article",
+                            "media_url": "https://mesh.example.test/review-refs",
+                            "summary": "Review refs evidence snippet",
+                            "match_confidence": "0.91",
+                            "is_adverse_media": True,
+                        }],
+                        "sanctions": {
+                            "matched": False,
+                            "results": [],
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                        },
+                        "adverse_media": {
+                            "matched": True,
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "results": [{
+                                "name": "Review Refs Ltd",
+                                "provider": "complyadvantage",
+                                "match_category": "Adverse Media",
+                                "provider_case_identifier": "case-review-refs",
+                                "provider_alert_identifier": "alert-review-refs",
+                                "provider_risk_identifier": "risk-review-refs",
+                                "provider_profile_identifier": "profile-review-refs",
+                                "media_title": "Review refs article",
+                                "media_url": "https://mesh.example.test/review-refs",
+                                "summary": "Review refs evidence snippet",
+                                "match_confidence": "0.91",
+                                "is_adverse_media": True,
+                            }],
+                        },
+                    },
+                    "director_screenings": [],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": ["Company adverse media match"],
+                    "total_hits": 1,
+                }
+            }),
+        ),
+    )
+    db.commit()
+    app = dict(db.execute("SELECT * FROM applications WHERE id = ?", ("app_ca_review_refs",)).fetchone())
+
+    context = _screening_review_subject_context(db, app, "entity", "Review Refs Ltd")
+
+    assert context["provider"] == "complyadvantage"
+    assert context["evidence_quality"] == "complete"
+    refs = context["provider_references"]
+    assert refs["provider_display_name"] == "ComplyAdvantage Mesh"
+    assert refs["case_ids"] == ["case-review-refs"]
+    assert refs["alert_ids"] == ["alert-review-refs"]
+    assert refs["risk_ids"] == ["risk-review-refs"]
+    assert refs["profile_ids"] == ["profile-review-refs"]
+    assert refs["customer_ids"] == ["customer-review-refs"]
+    assert refs["workflow_ids"] == ["workflow-review-refs"]
+    assert context["screening_evidence"]["items"][0]["source_title"] == "Review refs article"

@@ -82,12 +82,13 @@ def _objects(data, prefix=""):
             for raw in legacy_alerts
         }
         deep_risks = {raw["identifier"]: raw["risk_detail"] for raw in legacy_alerts}
-    for risk_items in alerts_risks.values():
+    for alert_identifier, risk_items in alerts_risks.items():
         for raw in risk_items:
             profile = CAProfile.model_validate(raw["profile"])
             risk = _risk(deep_risks[raw["identifier"]])
             alerts.append(CAAlertResponse(
                 identifier=raw["identifier"],
+                alert_identifier=alert_identifier,
                 profile=profile,
                 risk_details=CAPaginatedCollection[CARiskDetail](values=[risk]),
             ))
@@ -176,6 +177,33 @@ def test_normalize_pep_via_fixture():
     assert result["provider_profile_identifier"]
     assert "PEP" in result["match_categories"]
     assert result["risk_type_keys"]
+
+
+def test_normalize_promotes_mesh_provider_references_to_subject_evidence():
+    report = _single("pep_canonical.json")
+
+    provider_refs = report["provider_specific"]["complyadvantage"]["provider_references"]
+    assert provider_refs["case_ids"] == ["case-test"]
+    assert provider_refs["customer_ids"] == ["cust-test"]
+    assert provider_refs["workflow_ids"] == ["wf-pep"]
+    assert provider_refs["alert_ids"] == ["alert-pep"]
+    assert provider_refs["risk_ids"] == ["risk-pep"]
+    assert provider_refs["profile_ids"] == ["prof-pep"]
+
+    director = report["director_screenings"][0]
+    subject_refs = director["provider_references"]
+    assert subject_refs["case_ids"] == ["case-test"]
+    assert subject_refs["alert_ids"] == ["alert-pep"]
+    assert subject_refs["risk_ids"] == ["risk-pep"]
+    assert subject_refs["profile_ids"] == ["prof-pep"]
+
+    result_refs = director["screening"]["results"][0]["provider_references"]
+    assert result_refs["case_id"] == "case-test"
+    assert result_refs["customer_id"] == "cust-test"
+    assert result_refs["workflow_id"] == "wf-pep"
+    assert result_refs["alert_id"] == "alert-pep"
+    assert result_refs["risk_id"] == "risk-pep"
+    assert result_refs["profile_id"] == "prof-pep"
 
 
 def test_normalize_undeclared_provider_pep_is_explicit():

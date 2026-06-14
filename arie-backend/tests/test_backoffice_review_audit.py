@@ -419,7 +419,7 @@ class TestApplicationAuditLogEndpoint:
         ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "DETAIL_AUDIT_FILTERS" in html
-        for category in ["All", "Risk", "Screening", "Documents", "Memo", "EDD", "Governance", "Decision", "System"]:
+        for category in ["All", "CA/Mesh", "Risk", "Screening", "Documents", "Memo", "EDD", "Governance", "Decision", "System"]:
             assert f"'{category}'" in html
         assert "function setAuditTrailFilter" in html
         assert "boApiCall('GET', '/applications/' + app.id + '/audit-log?limit=100')" in html

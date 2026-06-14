@@ -319,7 +319,7 @@ def _fetch_alerts_and_deep_risks(client, workflow_raw, alert_ids=None):
     for alert_id in (alert_ids or _extract_alert_ids(workflow_raw)):
         for risk in _fetch_risks_paginated_for_alert(client, alert_id):
             risk_id = _extract_risk_id(risk)
-            alerts.append(CAAlertResponse.model_validate(_normalise_risk_as_alert(risk_id, risk)))
+            alerts.append(CAAlertResponse.model_validate(_normalise_risk_as_alert(risk_id, risk, alert_id=alert_id)))
             deep_risks[risk_id] = _fetch_deep_risk(client, risk_id)
     return alerts, deep_risks
 
@@ -349,8 +349,10 @@ def _workflow_complete(workflow):
     raise CAUnexpectedResponse("ComplyAdvantage workflow status unexpected")
 
 
-def _normalise_risk_as_alert(risk_id, raw):
+def _normalise_risk_as_alert(risk_id, raw, *, alert_id=None):
     data = {"identifier": risk_id}
+    if alert_id:
+        data["alert_identifier"] = alert_id
     if raw.get("profile") is not None:
         data["profile"] = CAProfile.model_validate(raw["profile"]).model_dump(mode="json")
     data.setdefault("risk_details", {"values": []})

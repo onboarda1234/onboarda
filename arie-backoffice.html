@@ -20432,7 +20432,7 @@ function switchDetailTab(tab) {
 // ═══════════════════════════════════════════════════════════
 // ACTIVITY LOG — Real audit trail from backend
 // ═══════════════════════════════════════════════════════════
-var DETAIL_AUDIT_FILTERS = ['All', 'Risk', 'Screening', 'Documents', 'Memo', 'EDD', 'Governance', 'Decision', 'System'];
+var DETAIL_AUDIT_FILTERS = ['All', 'CA/Mesh', 'Risk', 'Screening', 'Documents', 'Memo', 'EDD', 'Governance', 'Decision', 'System'];
 var detailAuditFilter = 'All';
 var detailAuditEntries = [];
 
@@ -20518,6 +20518,7 @@ function classifyAuditEvent(entry, detail, beforeState, afterState) {
     safeStringifyAuditValue(beforeState),
     safeStringifyAuditValue(afterState)
   ].join(' ').toLowerCase();
+  if (/(ca_mesh_screening|ca_screening|complyadvantage mesh|"provider"\s*:\s*"complyadvantage"|ca_hit_|ca_result_received|ca_provider_failure)/.test(combined)) return 'CA/Mesh';
   if (/(risk recomputed|risk correction|risk score|risk level|recompute|risk_recomputed)/.test(combined)) return 'Risk';
   if (/(screening review|screening\.review_disposition|false positive|false_positive|escalat|follow-up|follow up)/.test(combined)) return 'Screening';
   if (/(edd routing|edd_routing|edd case|enhanced due diligence|formal investigation)/.test(combined)) return 'EDD';
@@ -20589,8 +20590,24 @@ function buildAuditSummary(entry, detail, beforeState, afterState, category) {
 
   if (action === 'Screening Review' || actionLower.indexOf('screening review') >= 0) {
     var subject = auditValueFromAliases(detail, ['subject_name', 'subject', 'name']);
+    var providerRefs = detail && detail.provider_references;
+    var refSummary = providerRefs && typeof providerRefs === 'object'
+      ? ['case_ids', 'alert_ids', 'risk_ids', 'profile_ids'].map(function(key) {
+          var values = providerRefs[key];
+          if (!Array.isArray(values)) values = values ? [values] : [];
+          return values.length ? key.replace(/_/g, ' ') + ': ' + values.slice(0, 2).join(', ') : '';
+        }).filter(Boolean).join('; ')
+      : '';
     return 'Screening review completed for ' + (subject || 'the selected subject') +
-      '; disposition: ' + screeningAuditDispositionLabel(detail || {}) + '.';
+      '; disposition: ' + screeningAuditDispositionLabel(detail || {}) + (refSummary ? '; Mesh refs: ' + refSummary : '') + '.';
+  }
+
+  if (category === 'CA/Mesh') {
+    var eventType = auditValueFromAliases(detail, ['ca_event_type', 'event_type']);
+    var evidenceQuality = auditValueFromAliases(detail, ['evidence_quality']);
+    if (typeof evidenceQuality === 'object' && evidenceQuality && evidenceQuality.overall) evidenceQuality = evidenceQuality.overall;
+    var readableEvent = eventType ? String(eventType).replace(/_/g, ' ') : 'ComplyAdvantage Mesh screening event';
+    return readableEvent + (evidenceQuality ? '; evidence quality: ' + String(evidenceQuality).replace(/_/g, ' ') : '') + '.';
   }
 
   if (category === 'Memo') {
