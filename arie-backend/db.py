@@ -820,6 +820,10 @@ def _get_postgres_schema() -> str:
         processing_result TEXT,
         failure_reason TEXT,
         trace_id TEXT,
+        payload_json TEXT,
+        alert_identifiers_json TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMP,
         processed_at TIMESTAMP
     );
 
@@ -5454,9 +5458,21 @@ def _run_migrations(db: DBConnection):
                 processing_result TEXT,
                 failure_reason TEXT,
                 trace_id TEXT,
+                payload_json TEXT,
+                alert_identifiers_json TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TIMESTAMP,
                 processed_at TIMESTAMP
             )
         """)
+        for column, ddl in (
+            ("payload_json", "ALTER TABLE complyadvantage_webhook_deliveries ADD COLUMN payload_json TEXT"),
+            ("alert_identifiers_json", "ALTER TABLE complyadvantage_webhook_deliveries ADD COLUMN alert_identifiers_json TEXT"),
+            ("retry_count", "ALTER TABLE complyadvantage_webhook_deliveries ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"),
+            ("next_retry_at", "ALTER TABLE complyadvantage_webhook_deliveries ADD COLUMN next_retry_at TIMESTAMP"),
+        ):
+            if not _safe_column_exists(db, "complyadvantage_webhook_deliveries", column):
+                db.execute(ddl)
         db.execute("CREATE INDEX IF NOT EXISTS idx_ca_webhook_deliveries_status ON complyadvantage_webhook_deliveries(processing_status)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_ca_webhook_deliveries_case ON complyadvantage_webhook_deliveries(case_identifier)")
         db.execute("""

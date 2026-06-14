@@ -18143,6 +18143,11 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         "review_history_summary": _screening_review_summary(row),
     }
     row["provider_evidence"] = legacy_provider_evidence
+    row["evidence_quality"] = evidence_quality
+    row["evidence_quality_label"] = summary["evidence_quality_label"]
+    row["missing_reason"] = missing_reason
+    row["missing_reason_label"] = summary["missing_reason_label"]
+    row["next_action"] = next_action
     row["evidence_summary"] = summary
     row["screening_evidence"] = {
         **summary,
@@ -18650,6 +18655,12 @@ def _apply_screening_queue_canonical_state(row):
         row["screening_state"] = "not_configured" if raw_state == "not_configured" or raw_key == "screening_not_configured" else "failed"
         row["screening_result"] = "failed"
         row["screening_truth_state"] = row["screening_state"]
+        row["screening_truth_reason"] = resolved.get("screening_queue_reason")
+        row["terminal"] = False
+    elif status_key == "stale":
+        row["screening_state"] = "stale"
+        row["screening_result"] = "stale"
+        row["screening_truth_state"] = "stale"
         row["screening_truth_reason"] = resolved.get("screening_queue_reason")
         row["terminal"] = False
     elif status_key == "clear":
@@ -19254,9 +19265,11 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
             metrics["applications_requiring_review"] += 1
 
     rows = [
-        _enrich_screening_queue_evidence(
-            _apply_screening_queue_canonical_state(row),
-            monitoring_evidence_by_app.get(row.get("application_id"), []),
+        _apply_screening_queue_canonical_state(
+            _enrich_screening_queue_evidence(
+                _apply_screening_queue_canonical_state(row),
+                monitoring_evidence_by_app.get(row.get("application_id"), []),
+            )
         )
         for row in rows
     ]

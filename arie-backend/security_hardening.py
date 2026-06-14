@@ -607,6 +607,29 @@ class ApprovalGateValidator:
                     screening_truth.get("terminal"),
                     reason,
                 )
+                if screening_truth.get("canonical_state") == "stale":
+                    screening_valid_until_str = prescreening_data.get("screening_valid_until")
+                    if screening_valid_until_str:
+                        try:
+                            valid_until = _parse_approval_timestamp(screening_valid_until_str)
+                            now = datetime.now(timezone.utc)
+                            if now > valid_until:
+                                try:
+                                    validity_days = int(
+                                        prescreening_data.get("screening_validity_days")
+                                        or get_screening_validity_days()
+                                    )
+                                except (TypeError, ValueError):
+                                    validity_days = get_screening_validity_days()
+                                age_days = (now - valid_until).days
+                                return (
+                                    False,
+                                    f"Screening results expired {age_days} day(s) ago "
+                                    f"(validity period: {validity_days} days). "
+                                    "A re-screen is required before approval can proceed."
+                                )
+                        except (ValueError, TypeError):
+                            pass
                 return (
                     False,
                     "Screening truth gate failed: "

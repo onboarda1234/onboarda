@@ -35,10 +35,15 @@ class FakeTokenClient:
         self.clear_cache = MagicMock()
 
 
-def make_client(responses, token_client=None):
+def make_client(responses, token_client=None, sleep_fn=None):
     from screening_complyadvantage.client import ComplyAdvantageClient
 
-    client = ComplyAdvantageClient(FakeConfig(), token_client=token_client or FakeTokenClient())
+    client = ComplyAdvantageClient(
+        FakeConfig(),
+        token_client=token_client or FakeTokenClient(),
+        retry_backoff_seconds=0,
+        sleep_fn=sleep_fn,
+    )
     client.session = MagicMock()
     client.session.request.side_effect = responses
     return client
@@ -110,7 +115,10 @@ def test_second_401_raises_without_further_retry():
 def test_exception_mapping(response, expected):
     import screening_complyadvantage.exceptions as exc
 
-    client = make_client([response])
+    responses = [response]
+    if response.status_code in {429, 500, 502, 503, 504}:
+        responses.append(response)
+    client = make_client(responses)
 
     with pytest.raises(getattr(exc, expected)):
         client.get("/cases")
@@ -126,6 +134,29 @@ def test_timeout_and_network_mapping():
     network_client = make_client([requests.exceptions.ConnectionError("dns")])
     with pytest.raises(CAUnexpectedResponse):
         network_client.get("/cases")
+
+
+def test_get_retries_once_on_transient_5xx():
+    sleep = MagicMock()
+    client = make_client(
+        [FakeResponse(status_code=503), FakeResponse(status_code=200, payload={"ok": True})],
+        sleep_fn=sleep,
+    )
+
+    assert client.get("/cases/case-1") == {"ok": True}
+    assert client.session.request.call_count == 2
+    assert sleep.call_count == 1
+
+
+def test_post_does_not_retry_transient_5xx_to_avoid_duplicate_workflows():
+    from screening_complyadvantage.exceptions import CAServerError
+
+    client = make_client([FakeResponse(status_code=503), FakeResponse(status_code=200, payload={"ok": True})])
+
+    with pytest.raises(CAServerError):
+        client.post("/v2/workflows/create-and-screen", json_body={"customer": {}})
+
+    assert client.session.request.call_count == 1
 
 
 def test_logs_do_not_leak_credentials_and_include_username_fingerprint(caplog):

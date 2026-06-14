@@ -23,11 +23,13 @@ logger = logging.getLogger(__name__)
 class ComplyAdvantageClient:
     """Small authenticated wrapper around ComplyAdvantage HTTP calls."""
 
-    def __init__(self, config, token_client=None, timeout=DEFAULT_TIMEOUT):
+    def __init__(self, config, token_client=None, timeout=DEFAULT_TIMEOUT, retry_backoff_seconds=0.25, sleep_fn=None):
         self.config = config
         self.session = requests.Session()
         self.token_client = token_client or ComplyAdvantageTokenClient(config)
         self.timeout = timeout
+        self.retry_backoff_seconds = retry_backoff_seconds
+        self.sleep_fn = sleep_fn or time.sleep
 
     def get(self, path, params=None, *, timeout=None):
         return self.request("GET", path, params=params, timeout=timeout)
@@ -38,7 +40,7 @@ class ComplyAdvantageClient:
     def request(self, method, path, *, params=None, json_body=None, timeout=None):
         method = method.upper()
         token = self.token_client.get_token()
-        response = self._send(
+        response = self._send_with_retries(
             method,
             path,
             token,
@@ -52,7 +54,7 @@ class ComplyAdvantageClient:
 
         self.token_client.clear_cache()
         token = self.token_client.force_refresh()
-        retry_response = self._send(
+        retry_response = self._send_with_retries(
             method,
             path,
             token,
@@ -64,6 +66,42 @@ class ComplyAdvantageClient:
         if retry_response.status_code == 401:
             raise CAAuthenticationFailed("ComplyAdvantage authentication failed after refresh")
         return self._map_response(retry_response, path)
+
+    def _send_with_retries(self, method, path, token, *, params, json_body, timeout, attempt):
+        response = self._send(
+            method,
+            path,
+            token,
+            params=params,
+            json_body=json_body,
+            timeout=timeout,
+            attempt=attempt,
+        )
+        # GET fetches are idempotent and safe to retry once on transient
+        # provider/rate-limit errors. POST create-and-screen is not retried here
+        # to avoid duplicate provider workflows.
+        if method != "GET" or response.status_code not in (429, 500, 502, 503, 504):
+            return response
+        self.sleep_fn(self.retry_backoff_seconds)
+        emit_metric(
+            "ca_api_retry",
+            metric_name="CaApiRetries",
+            component="client",
+            outcome="retry",
+            method=method,
+            path_template=path_template(self._log_path(path)),
+            status_code=response.status_code,
+            attempt=attempt + 1,
+        )
+        return self._send(
+            method,
+            path,
+            token,
+            params=params,
+            json_body=json_body,
+            timeout=timeout,
+            attempt=attempt + 1,
+        )
 
     def _send(self, method, path, token, *, params, json_body, timeout, attempt):
         url = self._url(path)

@@ -344,6 +344,33 @@ def test_validate_approval_allows_explicit_positive_states(db):
     assert message == ""
 
 
+def test_validate_approval_blocks_stale_screening_truth(db):
+    from security_hardening import ApprovalGateValidator
+
+    now = datetime.now(timezone.utc)
+    app = _insert_application_and_memo(
+        db,
+        prescreening_data={
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": (now - timedelta(days=120)).strftime("%Y-%m-%dT%H:%M:%S"),
+                "sanctions": {"api_status": "live", "matched": False},
+                "company_registry": {"api_status": "live"},
+                "ip_geolocation": {"api_status": "live"},
+                "kyc": {"api_status": "live"},
+            },
+            "screening_valid_until": (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screening_validity_days": 90,
+        },
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "expired" in message.lower()
+    assert "re-screen" in message.lower()
+
+
 def test_mandatory_enhanced_requirements_block_until_accepted(db):
     from security_hardening import ApprovalGateValidator
 

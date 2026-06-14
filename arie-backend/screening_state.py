@@ -69,6 +69,7 @@ COMPLETED_CLEAR = "completed_clear"
 COMPLETED_MATCH = "completed_match"
 NOT_CONFIGURED = "not_configured"
 FAILED = "failed"
+STALE = "stale"
 
 # Provider-mode / defensibility states used by API, memo, UI, and approval
 # gates. These are deliberately separate from the legacy subject terminality
@@ -87,6 +88,7 @@ SCREENING_TRUTH_STATES = (
     NOT_CONFIGURED,
     PENDING,
     FAILED,
+    STALE,
     COMPLETED_CLEAR,
     COMPLETED_MATCH,
 )
@@ -97,6 +99,10 @@ UNSAFE_PROVIDER_STATES = frozenset({
     NOT_CONFIGURED,
     PENDING,
     FAILED,
+    STALE,
+    PARTIAL_RESULT,
+    PENDING_PROVIDER,
+    NOT_STARTED,
 })
 
 FALSE_POSITIVE_CLEARANCE_DISPOSITIONS = frozenset({
@@ -119,6 +125,7 @@ ALL_STATES = (
     COMPLETED_MATCH,
     NOT_CONFIGURED,
     FAILED,
+    STALE,
 )
 
 TERMINAL_STATES = frozenset({COMPLETED_CLEAR, COMPLETED_MATCH})
@@ -267,6 +274,53 @@ def _parse_review_timestamp(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_is_past(value) -> bool:
+    parsed = _parse_review_timestamp(value)
+    if parsed is None:
+        return False
+    return parsed < datetime.now(timezone.utc)
+
+
+def _screening_provider_token(screening: dict) -> str:
+    return _normalise_token(
+        screening.get("provider")
+        or screening.get("source")
+        or screening.get("screening_provider")
+    )
+
+
+def _provider_references_present(screening: dict) -> bool:
+    refs = screening.get("provider_references")
+    if isinstance(refs, dict):
+        for key in (
+            "case_id", "case_ids", "customer_id", "customer_ids",
+            "workflow_id", "workflow_ids", "alert_id", "alert_ids",
+            "risk_id", "risk_ids", "profile_id", "profile_ids",
+        ):
+            value = refs.get(key)
+            if value not in (None, "", [], {}):
+                return True
+    for key in (
+        "provider_case_identifier", "case_identifier",
+        "provider_customer_identifier", "customer_identifier",
+        "provider_workflow_identifier", "workflow_identifier",
+        "provider_alert_identifier", "alert_identifier",
+        "provider_risk_identifier", "risk_identifier", "risk_id",
+        "provider_profile_identifier", "profile_identifier",
+    ):
+        if screening.get(key) not in (None, "", [], {}):
+            return True
+    return False
+
+
+def _evidence_quality_token(screening: dict) -> str:
+    return _normalise_token(
+        screening.get("evidence_quality")
+        or screening.get("evidence_status")
+        or ((screening.get("screening_evidence") or {}).get("evidence_quality") if isinstance(screening.get("screening_evidence"), dict) else None)
+    )
 
 
 def _review_sort_key(review: dict):
@@ -505,6 +559,8 @@ def _normalise_state(value) -> Optional[str]:
         "unavailable": FAILED,
         "error": FAILED,
         "disabled": NOT_CONFIGURED,
+        "expired": STALE,
+        "requires_refresh": STALE,
     }
     text = aliases.get(text, text)
     return text if text in ALL_STATES else None
@@ -643,11 +699,43 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
     """
     screening = screening if isinstance(screening, dict) else {}
     mode = provider_mode_from_record(screening)
+    provider_token = _screening_provider_token(screening)
+    evidence_quality = _evidence_quality_token(screening)
+    evidence_missing_reason = _normalise_token(
+        screening.get("missing_reason")
+        or screening.get("evidence_missing_reason")
+        or screening.get("evidence_failure_reason")
+    )
+    ca_provider_refs_missing = bool(
+        provider_token == "complyadvantage"
+        and evidence_quality in {"complete", "available", "fetched"}
+        and not _provider_references_present(screening)
+    )
     results = screening.get("results") if isinstance(screening.get("results"), list) else []
     has_match = bool(screening.get("matched") or results)
     has_material_hit = _results_have_material_hit(results) or bool(screening.get("matched") and results)
 
-    if mode == LIVE_PROVIDER:
+    if _timestamp_is_past(screening.get("screening_valid_until")):
+        canonical_state = STALE
+        terminal = False
+        provider_availability = "stale"
+        screening_result = "unknown"
+    elif evidence_quality in {"stale", "expired"}:
+        canonical_state = STALE
+        terminal = False
+        provider_availability = "stale"
+        screening_result = "unknown"
+    elif evidence_quality in {"provider_error", "failed", "error"}:
+        canonical_state = FAILED
+        terminal = False
+        provider_availability = "failed"
+        screening_result = "unknown"
+    elif evidence_quality in {"partial", "unavailable"} or ca_provider_refs_missing:
+        canonical_state = PARTIAL_RESULT
+        terminal = False
+        provider_availability = "partial"
+        screening_result = "match" if has_match else "unknown"
+    elif mode == LIVE_PROVIDER:
         canonical_state = COMPLETED_MATCH if has_match else COMPLETED_CLEAR
         terminal = True
         provider_availability = "available"
@@ -700,8 +788,14 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
         NOT_CONFIGURED: "provider_not_configured",
         PENDING: "provider_pending_not_terminal",
         FAILED: "provider_failed",
+        STALE: "screening_stale_requires_refresh",
+        PARTIAL_RESULT: "provider_evidence_incomplete",
     }
     reason = reason_map.get(canonical_state, "provider_not_terminal")
+    if ca_provider_refs_missing:
+        reason = "provider_references_missing"
+    elif evidence_missing_reason:
+        reason = evidence_missing_reason
 
     return {
         "name": name,
@@ -724,6 +818,9 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
         "api_status": screening.get("api_status"),
         "source": screening.get("source"),
         "provider": screening.get("provider"),
+        "evidence_quality": evidence_quality or None,
+        "evidence_missing_reason": evidence_missing_reason or ("provider_references_missing" if ca_provider_refs_missing else None),
+        "provider_references_present": _provider_references_present(screening),
         "freshness": {
             "screened_at": screening.get("screened_at"),
             "screening_valid_until": screening.get("screening_valid_until"),
@@ -971,6 +1068,14 @@ def build_screening_truth_summary(
         "screening_valid_until": prescreening.get("screening_valid_until"),
         "screening_validity_days": prescreening.get("screening_validity_days"),
     }
+    stale = _timestamp_is_past(freshness.get("screening_valid_until"))
+    if stale:
+        canonical_state = STALE
+        terminal = False
+        has_failed = False
+        provider_mode = STALE
+        provider_availability = "stale"
+        screening_result = "unknown"
 
     screening_terminal = terminal
     screening_provider_clear = bool(
@@ -993,6 +1098,11 @@ def build_screening_truth_summary(
         blocking_reasons
         or ([] if screening_gate_ready else ["screening:not_terminal"])
     )
+    if stale:
+        approval_blocking = True
+        screening_gate_ready = False
+        approval_blocked_reasons = ["screening:stale_requires_refresh"]
+        blocking_reasons = approval_blocked_reasons
 
     return {
         "canonical_state": canonical_state,
@@ -1016,6 +1126,7 @@ def build_screening_truth_summary(
         "has_sandbox": has_sandbox,
         "has_simulated": has_simulated,
         "has_pending": has_pending,
+        "has_stale": stale or any(item.get("canonical_state") == STALE for item in evidence),
         "has_completed_match": canonical_state == COMPLETED_MATCH or has_match,
         "has_formally_cleared_match": has_formally_cleared_match,
         "has_uncleared_completed_match": has_uncleared_completed_match,
@@ -1132,6 +1243,7 @@ def build_screening_terminality_summary(
         "has_non_terminal": bool(has_non_terminal),
         "has_failed": bool(has_failed),
         "has_not_configured": bool(has_not_configured),
+        "has_stale": bool(truth_summary.get("has_stale")),
         "has_terminal_match": bool(material_hit),
         "company_screening_configured": bool(report.get("company_screening")),
         "company_state": company_state,
@@ -1197,11 +1309,13 @@ def sanitize_screening_readiness_summary(summary: dict) -> dict:
 
     has_uncleared_completed_match = _truthy_flag(sanitized.get("has_uncleared_completed_match"))
     completed_match_blocking = _truthy_flag(sanitized.get("completed_match_blocking"))
+    has_stale = _truthy_flag(sanitized.get("has_stale")) or canonical_state == STALE
     explicit_approval_blocking = _truthy_flag(sanitized.get("approval_blocking"))
     approval_blocking = bool(
         explicit_approval_blocking
         or has_uncleared_completed_match
         or completed_match_blocking
+        or has_stale
         or blocking_reasons
     )
 
@@ -1211,7 +1325,7 @@ def sanitize_screening_readiness_summary(summary: dict) -> dict:
 
     if approval_blocking:
         if not blocking_reasons:
-            blocking_reasons = ["screening_blocker_requires_review"]
+            blocking_reasons = ["screening:stale_requires_refresh"] if has_stale else ["screening_blocker_requires_review"]
         sanitized["defensible_clear"] = False
         sanitized["screening_gate_ready"] = False
         sanitized["approval_gate_ready"] = False
@@ -1253,6 +1367,7 @@ QUEUE_STATUS_ESCALATED = "escalated"
 QUEUE_STATUS_FOLLOW_UP_REQUIRED = "follow_up_required"
 QUEUE_STATUS_FAILED = "failed"
 QUEUE_STATUS_CLEARED_BY_OFFICER = "cleared_by_officer"
+QUEUE_STATUS_STALE = "stale"
 
 QUEUE_STATUS_LABELS = {
     QUEUE_STATUS_NOT_STARTED: "Not Started",
@@ -1263,6 +1378,7 @@ QUEUE_STATUS_LABELS = {
     QUEUE_STATUS_FOLLOW_UP_REQUIRED: "Follow-up Required",
     QUEUE_STATUS_FAILED: "Failed",
     QUEUE_STATUS_CLEARED_BY_OFFICER: "Cleared by Officer",
+    QUEUE_STATUS_STALE: "Stale / Requires Refresh",
 }
 
 QUEUE_BUSINESS_STATUS_LABELS = {
@@ -1272,6 +1388,7 @@ QUEUE_BUSINESS_STATUS_LABELS = {
     QUEUE_STATUS_REVIEW_REQUIRED: "Review Required",
     QUEUE_STATUS_ESCALATED: "Escalated",
     QUEUE_STATUS_FAILED: "Failed / Provider Error",
+    QUEUE_STATUS_STALE: "Stale / Requires Refresh",
 }
 
 QUEUE_STATUS_TO_BUSINESS_STATUS = {
@@ -1283,6 +1400,7 @@ QUEUE_STATUS_TO_BUSINESS_STATUS = {
     QUEUE_STATUS_FOLLOW_UP_REQUIRED: QUEUE_STATUS_REVIEW_REQUIRED,
     QUEUE_STATUS_FAILED: QUEUE_STATUS_FAILED,
     QUEUE_STATUS_CLEARED_BY_OFFICER: QUEUE_STATUS_CLEAR,
+    QUEUE_STATUS_STALE: QUEUE_STATUS_STALE,
 }
 
 QUEUE_NON_TERMINAL_STATUS_KEYS = frozenset({
@@ -1296,6 +1414,8 @@ QUEUE_NON_TERMINAL_STATUS_KEYS = frozenset({
     "screening_sandbox",
     "screening_simulated",
     "screening_unavailable",
+    "screening_stale",
+    "stale",
 })
 
 QUEUE_ESCALATED_DISPOSITIONS = frozenset({
@@ -1396,6 +1516,53 @@ def _queue_provider_failed(row: dict) -> bool:
     )
 
 
+def _queue_provider_stale(row: dict) -> bool:
+    status_key = _queue_status_token(row, "status_key")
+    availability = _queue_status_token(row, "provider_availability")
+    truth_state = _queue_status_token(row, "screening_truth_state")
+    mode = _queue_status_token(row, "provider_mode")
+    evidence_quality = _queue_status_token(row, "evidence_quality")
+    evidence_summary = row.get("evidence_summary") if isinstance(row.get("evidence_summary"), dict) else {}
+    screening_evidence = row.get("screening_evidence") if isinstance(row.get("screening_evidence"), dict) else {}
+    return bool(
+        status_key in {"screening_stale", "stale"}
+        or availability == "stale"
+        or truth_state == STALE
+        or mode == STALE
+        or evidence_quality == "stale"
+        or _queue_status_token(evidence_summary, "evidence_quality") == "stale"
+        or _queue_status_token(screening_evidence, "evidence_quality") == "stale"
+    )
+
+
+def _queue_evidence_incomplete(row: dict) -> bool:
+    evidence_quality = _queue_status_token(row, "evidence_quality")
+    evidence_summary = row.get("evidence_summary") if isinstance(row.get("evidence_summary"), dict) else {}
+    screening_evidence = row.get("screening_evidence") if isinstance(row.get("screening_evidence"), dict) else {}
+    qualities = {
+        evidence_quality,
+        _queue_status_token(evidence_summary, "evidence_quality"),
+        _queue_status_token(screening_evidence, "evidence_quality"),
+    }
+    if qualities & {"provider_error"}:
+        return True
+    if _queue_officer_cleared(row) and _queue_review_evidence_present(row):
+        return False
+    if _queue_provider_non_terminal(row) and not (_queue_provider_failed(row) or _queue_provider_stale(row)):
+        return False
+    reasons = {
+        _queue_status_token(row, "missing_reason"),
+        _queue_status_token(evidence_summary, "missing_reason"),
+        _queue_status_token(screening_evidence, "missing_reason"),
+        _queue_status_token(row, "evidence_failure_reason"),
+        _queue_status_token(evidence_summary, "evidence_failure_reason"),
+        _queue_status_token(screening_evidence, "evidence_failure_reason"),
+    }
+    if "clear_no_hit_source_detail_not_applicable" in reasons:
+        return False
+    return bool(qualities & {"partial", "unavailable"})
+
+
 def _queue_provider_not_configured(row: dict) -> bool:
     states = {
         _normalise_state(row.get("screening_state")),
@@ -1420,11 +1587,11 @@ def _queue_provider_non_terminal(row: dict) -> bool:
     mode = _queue_status_token(row, "provider_mode")
     if status_key in QUEUE_NON_TERMINAL_STATUS_KEYS:
         return True
-    if availability in {"pending", "sandbox", "simulated", "not_configured", "failed", "unavailable"}:
+    if availability in {"pending", "sandbox", "simulated", "not_configured", "failed", "unavailable", "stale"}:
         return True
-    if truth_state in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+    if truth_state in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, STALE, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
         return True
-    if mode in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+    if mode in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, STALE, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
         return True
 
     states = {
@@ -1432,7 +1599,7 @@ def _queue_provider_non_terminal(row: dict) -> bool:
         _normalise_state(row.get("normalized_screening_state")),
         _normalise_state(row.get("normalized_status")),
     }
-    if any(state in {PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED} for state in states):
+    if any(state in {PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, STALE} for state in states):
         return True
 
     explicit_terminal = _queue_bool(row.get("terminal"))
@@ -1458,11 +1625,11 @@ def _queue_provider_terminal(row: dict) -> bool:
     mode = _queue_status_token(row, "provider_mode")
     if status_key in QUEUE_NON_TERMINAL_STATUS_KEYS:
         return False
-    if availability in {"pending", "sandbox", "simulated", "not_configured", "failed", "unavailable"}:
+    if availability in {"pending", "sandbox", "simulated", "not_configured", "failed", "unavailable", "stale"}:
         return False
-    if truth_state in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+    if truth_state in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, STALE, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
         return False
-    if mode in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
+    if mode in {PENDING, PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, STALE, SANDBOX_PROVIDER, SIMULATED_FALLBACK}:
         return False
 
     states = {
@@ -1470,7 +1637,7 @@ def _queue_provider_terminal(row: dict) -> bool:
         _normalise_state(row.get("normalized_screening_state")),
         _normalise_state(row.get("normalized_status")),
     }
-    if any(state in {PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED} for state in states):
+    if any(state in {PENDING_PROVIDER, PARTIAL_RESULT, NOT_STARTED, NOT_CONFIGURED, FAILED, STALE} for state in states):
         return False
 
     explicit_terminal = _queue_bool(row.get("terminal"))
@@ -1496,6 +1663,58 @@ def _queue_hit_count(row: dict):
     return None
 
 
+def _queue_provider_evidence_items(row: dict) -> list:
+    items = []
+    for value in (
+        row.get("provider_evidence"),
+        row.get("evidence_items"),
+    ):
+        if isinstance(value, list):
+            items.extend(item for item in value if isinstance(item, dict))
+    for container_key in ("screening_evidence", "evidence_summary"):
+        container = row.get(container_key)
+        if isinstance(container, dict) and isinstance(container.get("items"), list):
+            items.extend(item for item in container.get("items") if isinstance(item, dict))
+    return items
+
+
+def _queue_provider_evidence_has_adverse_media(row: dict) -> bool:
+    adverse_flag_keys = (
+        "is_adverse_media",
+        "adverse_media",
+        "adverse_media_hit",
+        "has_adverse_media_hit",
+    )
+    adverse_text_keys = (
+        "evidence_type",
+        "match_category",
+        "risk_indicator",
+        "alert_type",
+        "category",
+        "type",
+        "source_type",
+    )
+    for item in _queue_provider_evidence_items(row):
+        if any(_truthy_flag(item.get(key)) for key in adverse_flag_keys):
+            return True
+        for key in adverse_text_keys:
+            text = str(item.get(key) or "").strip().lower()
+            if "adverse" in text or text == "media" or "adverse_media" in text:
+                return True
+    return False
+
+
+def _queue_raw_claims_no_adverse_media(row: dict) -> bool:
+    for key in ("adverse_media_status", "adverse_media_screening_status"):
+        token = _queue_status_token(row, key)
+        if token in {"clear", "cleared", "no_match", "no_hit", "no_hits", "none"}:
+            return True
+    for key in ("adverse_media_match", "has_adverse_media_hit", "adverse_media_hit"):
+        if _queue_bool(row.get(key)) is False:
+            return True
+    return False
+
+
 def _queue_hits_exist(row: dict) -> bool:
     total = _queue_hit_count(row)
     if total is not None and total > 0:
@@ -1511,8 +1730,7 @@ def _queue_hits_exist(row: dict) -> bool:
     for key in ("watchlist_status", "pep_screening_status"):
         if _queue_status_token(row, key) in {"match", "hit", "possible_match", "review"}:
             return True
-    evidence = row.get("provider_evidence")
-    return bool(isinstance(evidence, list) and evidence)
+    return bool(_queue_provider_evidence_items(row))
 
 
 def _queue_officer_cleared(row: dict) -> bool:
@@ -1568,6 +1786,12 @@ def _queue_state_integrity_flags(row: dict, *, hits_exist: bool, non_terminal: b
         add("terminal_false_with_final_status")
     if raw_claims_clear and (_queue_provider_failed(row) or _queue_provider_not_configured(row)):
         add("provider_error_claimed_clear")
+    if raw_claims_clear and _queue_provider_stale(row):
+        add("stale_screening_claimed_clear")
+    if raw_claims_clear and _queue_evidence_incomplete(row):
+        add("incomplete_evidence_claimed_clear")
+    if _queue_raw_claims_no_adverse_media(row) and _queue_provider_evidence_has_adverse_media(row):
+        add("adverse_media_evidence_claimed_clear")
     if raw_claims_clear and _queue_status_token(row, "status_key") in {"awaiting_screening", "not_started"}:
         add("not_started_claimed_clear")
     if officer_cleared and non_terminal:
@@ -1592,6 +1816,8 @@ def _queue_state_integrity_flags(row: dict, *, hits_exist: bool, non_terminal: b
 
 
 def _queue_provider_status(row: dict, *, hits_exist: bool, non_terminal: bool, terminal: bool) -> str:
+    if _queue_provider_stale(row):
+        return "stale"
     if _queue_provider_not_configured(row):
         return "not_configured"
     if _queue_provider_failed(row):
@@ -1653,8 +1879,12 @@ def _queue_blocking_flags(status_key: str, *, hits_exist: bool, non_terminal: bo
 
     for flag in state_integrity_flags or []:
         add(flag)
+    if status_key == QUEUE_STATUS_STALE:
+        add("screening_stale_requires_refresh")
     if status_key == QUEUE_STATUS_FAILED:
         add("provider_failed_or_incomplete")
+    if _queue_evidence_incomplete(row):
+        add("provider_evidence_incomplete")
     if status_key in {QUEUE_STATUS_NOT_STARTED, QUEUE_STATUS_IN_PROGRESS} or non_terminal:
         add("screening_not_terminal")
     if status_key == QUEUE_STATUS_REVIEW_REQUIRED:
@@ -1684,6 +1914,9 @@ def _queue_raw_status_metadata(row: dict) -> dict:
         "canonical_disposition",
         "review_actionable",
         "review_resolved",
+        "evidence_quality",
+        "missing_reason",
+        "next_action",
     )
     return {key: row.get(key) for key in keys if key in row}
 
@@ -1780,10 +2013,26 @@ def resolve_screening_queue_state(row: Optional[dict]) -> dict:
             defensible_clear=False,
             row=row,
         )
+    if _queue_provider_stale(row):
+        return _queue_resolution(
+            QUEUE_STATUS_STALE,
+            reason="Provider screening is stale and must be refreshed before reliance.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
     if _queue_provider_failed(row) or _queue_provider_not_configured(row):
         return _queue_resolution(
             QUEUE_STATUS_FAILED,
             reason="Provider screening failed or returned incomplete data.",
+            requires_review=True,
+            defensible_clear=False,
+            row=row,
+        )
+    if _queue_evidence_incomplete(row) and not _queue_officer_cleared(row):
+        return _queue_resolution(
+            QUEUE_STATUS_REVIEW_REQUIRED,
+            reason="Provider evidence is incomplete and requires review before reliance.",
             requires_review=True,
             defensible_clear=False,
             row=row,

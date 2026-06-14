@@ -1,0 +1,46 @@
+{
+  "initial_diagnosis_origin_main_sha": "787ce4a26abfbaceaa043011df4e3f961fa4f418",
+  "rebased_validation_origin_main_sha": "0d6b7353c7d40c5d23845de472c4bbbe2417ea45",
+  "branch": "codex/pr-ca3-ca-state-integrity-webhook-reconciliation-e2e",
+  "local_results": [
+    {
+      "name": "py_compile_touched_python",
+      "status": "passed"
+    },
+    {
+      "name": "git_diff_check",
+      "status": "passed"
+    },
+    {
+      "name": "pr_ca3_focused_affected_set",
+      "status": "passed",
+      "tests": 199,
+      "duration": "2.51s"
+    },
+    {
+      "name": "closed_control_regression_subset",
+      "status": "passed",
+      "tests": 205,
+      "duration": "7.75s"
+    },
+    {
+      "name": "full_backend_suite_local",
+      "status": "blocked",
+      "reason": "WeasyPrint/Pango CFFI segmentation fault during pytest collection",
+      "exit_code": 139
+    }
+  ],
+  "staging_validation": {
+    "status": "pending",
+    "requires_merge": true,
+    "requires_version_match": true,
+    "requires_api_runtime_smoke": true,
+    "requires_browser_smoke_if_ui_affected": true
+  },
+  "issue_statuses": {
+    "CA-002": "PARTIALLY_FIXED_PENDING_MERGE_STAGING_VALIDATION",
+    "CA-007": "PARTIALLY_FIXED_PENDING_MERGE_STAGING_VALIDATION",
+    "CA-009": "PARTIALLY_FIXED_PENDING_MERGE_STAGING_VALIDATION",
+    "CA-010": "PARTIALLY_FIXED_PENDING_MERGE_STAGING_VALIDATION"
+  }
+}

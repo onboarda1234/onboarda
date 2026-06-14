@@ -445,6 +445,76 @@ class TestScreeningTerminalitySummary:
         assert summary["has_uncleared_completed_match"] is True
         assert summary["approval_blocked_reasons"]
 
+    def test_stale_screening_validity_blocks_approval_ready(self):
+        from screening_state import build_screening_truth_summary
+
+        report = {
+            "screened_at": "2026-01-01T10:00:00Z",
+            "company_screening": {
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+            },
+        }
+
+        summary = build_screening_truth_summary(
+            report,
+            {
+                "company_name": "Stale Clear Ltd",
+                "screening_valid_until": "2020-01-01T00:00:00Z",
+            },
+        )
+
+        assert summary["canonical_state"] == "stale"
+        assert summary["terminal"] is False
+        assert summary["approval_blocking"] is True
+        assert summary["approval_ready"] is False
+        assert summary["approval_blocked_reasons"] == ["screening:stale_requires_refresh"]
+
+    def test_partial_provider_evidence_cannot_be_treated_as_complete_clear(self):
+        from screening_state import derive_screening_truth
+
+        truth = derive_screening_truth(
+            {
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "evidence_quality": "partial",
+                "missing_reason": "missing_provider_identifiers",
+            },
+            required=True,
+        )
+
+        assert truth["canonical_state"] == "partial_result"
+        assert truth["terminal"] is False
+        assert truth["defensible_clear"] is False
+        assert truth["approval_blocking"] is True
+        assert truth["reason"] == "missing_provider_identifiers"
+
+    def test_complete_ca_evidence_without_provider_refs_is_quarantined(self):
+        from screening_state import derive_screening_truth
+
+        truth = derive_screening_truth(
+            {
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "evidence_quality": "complete",
+            },
+            required=True,
+        )
+
+        assert truth["canonical_state"] == "partial_result"
+        assert truth["terminal"] is False
+        assert truth["approval_blocking"] is True
+        assert truth["evidence_missing_reason"] == "provider_references_missing"
+
     @pytest.mark.parametrize(
         "disposition,code",
         [
