@@ -1,0 +1,38 @@
+{
+  "any_non_terminal_subject": true,
+  "degraded_sources": [
+    "intermediary_missing_required_subject_data"
+  ],
+  "intermediary_screenings": [
+    {
+      "adverse_media_coverage": "none",
+      "declared_pep": "No",
+      "entity_name": "Unnamed intermediary",
+      "evidence_gap": true,
+      "has_adverse_media_hit": null,
+      "has_pep_hit": false,
+      "has_sanctions_hit": false,
+      "is_rca": null,
+      "nationality": "",
+      "pep_classes": null,
+      "person_name": "Unnamed intermediary",
+      "person_type": "intermediary",
+      "provider_detected_pep": false,
+      "requires_review": true,
+      "screening": {
+        "api_status": "failed",
+        "evidence_gap": true,
+        "matched": false,
+        "person_key": "int-redacted-1",
+        "provider": "complyadvantage",
+        "reason": "missing_required_intermediary_subject_name",
+        "results": [],
+        "source": "complyadvantage",
+        "subject_type": "intermediary"
+      },
+      "screening_state": "failed",
+      "subject_type": "intermediary",
+      "undeclared_pep": false
+    }
+  ]
+}

@@ -785,7 +785,7 @@ class TestPhaseSixComplyAdvantageStatusUI:
 
     def test_api_status_panel_lists_complyadvantage_with_correct_responsibility(self):
         html = self._read_backoffice()
-        assert "{ key: 'complyadvantage', label: 'ComplyAdvantage KYB / Media / Monitoring'" in html
+        assert "{ key: 'complyadvantage', label: 'ComplyAdvantage Mesh AML / Media / Monitoring'" in html
         assert "{ key: 'sumsub', label: 'Sumsub IDV/KYC'" in html
 
     def test_api_status_panel_understands_ca_readiness_states(self):

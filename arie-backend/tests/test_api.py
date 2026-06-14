@@ -248,7 +248,12 @@ class TestAuthenticatedAccess:
         assert "sumsub_aml_entitlement_proven" not in serialized
         assert "aml_screening_enabled" not in body["sumsub"]
         assert "complyadvantage" in body
-        assert body["provider_truth"]["active_aml_screening_provider"] in {"ComplyAdvantage", "Not active"}
+        assert body["provider_truth"]["active_aml_screening_provider"] in {"ComplyAdvantage Mesh", "Not active"}
+        assert body["provider_truth"]["identity_verification_provider"] == "Sumsub IDV/KYC"
+        assert body["provider_truth"]["identity_verification_provider_key"] == "sumsub"
+        assert body["provider_truth"]["registry_kyb_provider"] == "OpenCorporates registry/enrichment"
+        assert body["provider_truth"]["screening_abstraction_required_for_ca"] is True
+        assert body["provider_truth"]["simulation_fallback_enabled"] is False
         assert body["sumsub"]["description"] == "Individual identity verification and KYC (document + selfie + liveness)"
 
     def test_admin_health_does_not_expose_unused_provider(self, api_server):

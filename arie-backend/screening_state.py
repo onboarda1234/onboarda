@@ -158,6 +158,8 @@ def _normalise_subject_type(value) -> str:
     token = _normalise_token(value)
     if token == "company":
         return "entity"
+    if token in ("intermediary_company", "intermediary shareholder", "intermediary_shareholder"):
+        return "intermediary"
     return token
 
 
@@ -857,6 +859,14 @@ def _collect_required_screening_records(report: dict, prescreening: Optional[dic
                 person.get("person_name") or person.get("name") or "",
             )
             records.append((f"ubo_screening_{idx}", _screening_record_with_review(person.get("screening"), review), True))
+    for idx, person in enumerate(report.get("intermediary_screenings") or []):
+        if isinstance(person, dict) and isinstance(person.get("screening"), dict):
+            review = _review_for_subject(
+                review_index,
+                "intermediary",
+                person.get("entity_name") or person.get("person_name") or person.get("name") or "",
+            )
+            records.append((f"intermediary_screening_{idx}", _screening_record_with_review(person.get("screening"), review), True))
     for idx, applicant in enumerate(report.get("kyc_applicants") or []):
         if isinstance(applicant, dict):
             review = _review_for_subject(
@@ -1034,7 +1044,11 @@ def build_screening_terminality_summary(
     prescreening = prescreening if isinstance(prescreening, dict) else {}
     truth_summary = build_screening_truth_summary(report, prescreening, screening_reviews)
 
-    person_entries = list(report.get("director_screenings") or []) + list(report.get("ubo_screenings") or [])
+    person_entries = (
+        list(report.get("director_screenings") or [])
+        + list(report.get("ubo_screenings") or [])
+        + list(report.get("intermediary_screenings") or [])
+    )
     person_states = [_state_from_entry(entry) for entry in person_entries if isinstance(entry, dict)]
     company_state = _state_from_company(report)
     states = list(person_states)

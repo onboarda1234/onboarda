@@ -75,7 +75,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             ),
         )
 
-    def run_full_screening(self, application_data, directors, ubos, client_ip=None):
+    def run_full_screening(self, application_data, directors, ubos, intermediaries=None, client_ip=None):
         company_name = _first(application_data, "company_name", "name", "legal_name")
         application_id = _application_id(application_data, company_name)
         client_id = str(_first(application_data, "client_id") or "unknown")
@@ -104,6 +104,8 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
                 report = dict(report)
                 report["_ca_role_associations"] = group
             reports.append(report)
+        for intermediary in intermediaries or []:
+            reports.append(self._screen_intermediary(intermediary, application_id, client_id))
         return _combine_reports(reports)
 
     def _screen_party(self, party, kind, application_id, client_id):
@@ -123,6 +125,31 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
                 application_id,
                 kind,
                 party=party,
+                subject_name=name,
+            ),
+        )
+
+    def _screen_intermediary(self, intermediary, application_id, client_id):
+        name = _first(intermediary, "entity_name", "company_name", "legal_name", "full_name", "name")
+        if not name:
+            return _intermediary_gap_report(application_id, client_id, intermediary)
+        subject = dict(intermediary or {})
+        subject.setdefault("company_name", name)
+        subject.setdefault("application_id", f"{application_id}:intermediary:{_first(intermediary, 'person_key', 'id') or name}")
+        return self._screen_subject(
+            strict_customer=build_customer_company(subject, strict=True),
+            relaxed_customer=build_customer_company(subject, strict=False),
+            context=ScreeningApplicationContext(
+                application_id=application_id,
+                client_id=client_id,
+                screening_subject_kind="intermediary",
+                screening_subject_name=name,
+                screening_subject_person_key=_first(intermediary, "person_key", "id"),
+            ),
+            external_identifier=_subject_external_identifier(
+                application_id,
+                "intermediary",
+                party=intermediary,
                 subject_name=name,
             ),
         )
@@ -174,6 +201,7 @@ def _combine_reports(reports):
     company_report = next((r for r in reports if r.get("company_screening_coverage") == "full"), None)
     directors = []
     ubos = []
+    intermediaries = []
     flags = []
     degraded = []
     provider_subjects = []
@@ -190,6 +218,7 @@ def _combine_reports(reports):
         else:
             directors.extend(report.get("director_screenings", []))
             ubos.extend(report.get("ubo_screenings", []))
+            intermediaries.extend(report.get("intermediary_screenings", []))
         flags.extend(report.get("overall_flags", []))
         degraded.extend(report.get("degraded_sources", []))
         provider_subjects.append(report.get("provider_specific", {}).get("complyadvantage", {}))
@@ -197,13 +226,21 @@ def _combine_reports(reports):
     has_company_hit = (company_report or {}).get("has_company_screening_hit")
     company_coverage = (company_report or {}).get("company_screening_coverage", "none")
     company_adverse = (company_screening.get("adverse_media") or {})
-    adverse_hit = any(p.get("has_adverse_media_hit") for p in directors + ubos) or bool(company_adverse.get("matched"))
+    screening_subjects = directors + ubos + intermediaries
+    adverse_hit = any(p.get("has_adverse_media_hit") for p in screening_subjects) or bool(company_adverse.get("matched"))
+    any_non_terminal_subject = any(
+        (p.get("screening_state") not in ("completed_clear", "completed_match"))
+        for p in screening_subjects
+        if isinstance(p, dict)
+    )
     return create_normalized_screening_report(
         provider="complyadvantage",
         normalized_version="2.0",
-        any_pep_hits=any(p.get("has_pep_hit") for p in directors + ubos),
-        any_sanctions_hits=any(p.get("has_sanctions_hit") for p in directors + ubos) or bool((company_screening.get("sanctions") or {}).get("matched")),
+        any_pep_hits=any(p.get("has_pep_hit") for p in screening_subjects),
+        any_sanctions_hits=any(p.get("has_sanctions_hit") for p in screening_subjects) or bool((company_screening.get("sanctions") or {}).get("matched")),
         total_persons_screened=len(directors) + len(ubos),
+        total_intermediaries_screened=len(intermediaries),
+        total_subjects_screened=len(directors) + len(ubos) + len(intermediaries) + (1 if company_screening else 0),
         adverse_media_coverage="full" if adverse_hit else "none",
         has_adverse_media_hit=True if adverse_hit else None,
         company_screening_coverage=company_coverage,
@@ -211,10 +248,11 @@ def _combine_reports(reports):
         company_screening=company_screening,
         director_screenings=directors,
         ubo_screenings=ubos,
+        intermediary_screenings=intermediaries,
         overall_flags=flags,
         total_hits=sum(r.get("total_hits", 0) for r in reports),
         degraded_sources=sorted(set(degraded)),
-        any_non_terminal_subject=False,
+        any_non_terminal_subject=any_non_terminal_subject,
         company_screening_state="completed_match" if has_company_hit else "completed_clear",
         provider_specific={"complyadvantage": {"subjects": provider_subjects}},
         source_screening_report_hash=_reports_hash(reports),
@@ -242,6 +280,78 @@ def _clone_person_screening_for_role(base, kind, party):
         screening["person_key"] = _first(party, "person_key", "id")
         screening["shared_subject_key"] = _person_dedupe_key(party)
     return cloned
+
+
+def _intermediary_gap_report(application_id, client_id, intermediary):
+    subject_name = _first(intermediary or {}, "entity_name", "company_name", "legal_name", "full_name", "name") or "Unnamed intermediary"
+    subject_key = _first(intermediary or {}, "person_key", "id")
+    screening = {
+        "provider": "complyadvantage",
+        "source": "complyadvantage",
+        "api_status": "failed",
+        "matched": False,
+        "results": [],
+        "evidence_gap": True,
+        "reason": "missing_required_intermediary_subject_name",
+        "subject_type": "intermediary",
+        "person_key": subject_key,
+    }
+    entry = {
+        "person_name": subject_name,
+        "entity_name": subject_name,
+        "person_type": "intermediary",
+        "subject_type": "intermediary",
+        "nationality": "",
+        "declared_pep": "No",
+        "provider_detected_pep": False,
+        "undeclared_pep": False,
+        "has_pep_hit": False,
+        "has_sanctions_hit": False,
+        "has_adverse_media_hit": None,
+        "adverse_media_coverage": "none",
+        "screening": screening,
+        "screening_state": "failed",
+        "requires_review": True,
+        "is_rca": None,
+        "pep_classes": None,
+        "evidence_gap": True,
+    }
+    return create_normalized_screening_report(
+        provider="complyadvantage",
+        normalized_version="2.0",
+        screened_at="",
+        any_pep_hits=False,
+        any_sanctions_hits=False,
+        total_persons_screened=0,
+        total_intermediaries_screened=0,
+        total_subjects_screened=0,
+        adverse_media_coverage="none",
+        has_adverse_media_hit=None,
+        company_screening_coverage="none",
+        has_company_screening_hit=None,
+        company_screening={},
+        director_screenings=[],
+        ubo_screenings=[],
+        intermediary_screenings=[entry],
+        overall_flags=[],
+        total_hits=0,
+        degraded_sources=["intermediary_missing_required_subject_data"],
+        any_non_terminal_subject=True,
+        company_screening_state="completed_clear",
+        provider_specific={
+            "complyadvantage": {
+                "screening_subject": {
+                    "kind": "intermediary",
+                    "scope": "entity",
+                    "person_key": subject_key,
+                },
+                "application_id": application_id,
+                "client_id": client_id,
+            }
+        },
+        source_screening_report_hash=_reports_hash([{"source_screening_report_hash": f"intermediary-gap:{application_id}:{subject_key or subject_name}"}]),
+        provenance=None,
+    )
 
 
 def _dedupe_person_roles(directors, ubos):

@@ -35,14 +35,15 @@
 | **Database** | AWS RDS PostgreSQL 15 (`db.t3.micro`), encrypted, private subnet |
 | **Connection pool** | `psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=5)` |
 | **Document storage** | AWS S3 (`regmind-documents-staging`), encrypted, versioned. Cross-deploy persistence confirmed. |
-| **Secrets** | AWS Secrets Manager (`regmind/staging`). Contains: `JWT_SECRET`, `PII_ENCRYPTION_KEY`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, `SUMSUB_APP_TOKEN`, `SUMSUB_SECRET_KEY` |
+| **Secrets** | AWS Secrets Manager (`regmind/staging`). Contains: `JWT_SECRET`, `PII_ENCRYPTION_KEY`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, Sumsub IDV/KYC secrets, and ComplyAdvantage Mesh screening secrets |
 | **Load balancer** | AWS ALB with HTTPS (ACM certificate), ports 80 + 443 |
 | **DNS** | `staging.regmind.co` → ALB CNAME via GoDaddy |
 | **Logs** | AWS CloudWatch (`/ecs/regmind-staging`) |
 | **Health endpoints** | `GET /api/liveness` (public ALB/ECS liveness), `GET /api/health` (safe public health), `GET /api/readiness` (authenticated deep readiness) |
 | **AI engine** | Claude API via `anthropic` SDK. Fail-closed in staging/production. |
 | **KYC / IDV** | Sumsub API for individual identity verification. Level name requires admin verification. |
-| **Screening / monitoring** | ComplyAdvantage for sanctions, PEP/RCA, adverse-media, customer/company screening, and ongoing monitoring. |
+| **AML screening / monitoring** | ComplyAdvantage Mesh for sanctions, PEP/RCA, adverse-media, customer/company screening, and ongoing monitoring when `SCREENING_PROVIDER=complyadvantage` and `ENABLE_SCREENING_ABSTRACTION=true`. |
+| **Registry / KYB enrichment** | OpenCorporates registry/enrichment when configured; simulated otherwise and not a defensible AML screening source. |
 | **PII encryption** | Fernet AES-128-CBC. Key pinned in Secrets Manager. |
 | **Rate limiting** | In-memory (per-container). Resets on restart. |
 | **Token revocation** | DB-backed revocation list with in-memory cache. Password resets revoke user sessions. |
@@ -78,6 +79,9 @@ All secrets must exist in `regmind/staging` in AWS Secrets Manager:
 - `PII_ENCRYPTION_KEY` — must be stable across deploys (never change without migration plan)
 - `DATABASE_URL` — PostgreSQL connection string
 - `ANTHROPIC_API_KEY` — valid Anthropic key
+- `SUMSUB_APP_TOKEN`, `SUMSUB_SECRET_KEY`, `SUMSUB_WEBHOOK_SECRET` — Sumsub IDV/KYC integration
+- `SCREENING_PROVIDER=complyadvantage` and `ENABLE_SCREENING_ABSTRACTION=true` — CA Mesh AML screening cutover flags
+- `COMPLYADVANTAGE_API_BASE_URL`, `COMPLYADVANTAGE_AUTH_URL`, `COMPLYADVANTAGE_REALM`, `COMPLYADVANTAGE_USERNAME`, `COMPLYADVANTAGE_PASSWORD`, `COMPLYADVANTAGE_SCREENING_CONFIG_ID` — ComplyAdvantage Mesh screening integration
 - `SUMSUB_APP_TOKEN` + `SUMSUB_SECRET_KEY` — active Sumsub credentials
 - `ADMIN_CLIENT_RESET_CONFIRMATION` — required for admin client-password reset endpoint
 - `ADMIN_OFFICER_RESET_CONFIRMATION` — required for admin officer-password reset endpoint
@@ -233,7 +237,7 @@ Run these after every Phase hardening deployment before declaring the environmen
 4. **Evidence pack:** includes application notes, documents, RMI, memos, decision records, EDD cases, EDD findings/status/policy, and build metadata.
 5. **UNKNOWN risk:** dashboard and reports include an explicit `UNKNOWN`/`NOT RATED` bucket; missing risk scores render as null/em dash, never `0` or default `50`.
 6. **EDD lifecycle:** findings and SLA are required before senior review; closure requires SCO/admin and a different actor; `EDD Closure (dual-control)` audit rows target the ARF.
-7. **Screening truthfulness:** `/api/screening/status` lists ComplyAdvantage screening, identity-verification provider scope, OpenCorporates enrichment, and IP geolocation without advertising deprecated or unused providers.
+7. **Screening truthfulness:** `/api/screening/status` lists ComplyAdvantage Mesh AML screening, Sumsub IDV/KYC scope, OpenCorporates registry/enrichment status, fallback/simulation state, and IP geolocation without advertising deprecated or unused providers.
 8. **Diagnostics exposure:** unauthenticated `/metrics` and `/api/readiness` return `401`; `/api/liveness` is public and hardened; random 404 paths return `Server: RegMind` plus hardened headers.
 9. **Admin resets:** client/officer password-reset endpoints require confirmation token, enforce password policy, write audit rows, and revoke existing JWT sessions.
 10. **Operational queues:** `/api/edd/cases` hides fixture/smoke rows by default; only admin/SCO with `include_fixtures=1` or `show_fixtures=true` can include them.

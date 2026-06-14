@@ -101,8 +101,8 @@ def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):
             self.calls = []
             self.instances.append(self)
 
-        def run_full_screening(self, application_data, directors, ubos, client_ip=None):
-            self.calls.append((application_data, directors, ubos, client_ip))
+        def run_full_screening(self, application_data, directors, ubos, intermediaries=None, client_ip=None):
+            self.calls.append((application_data, directors, ubos, intermediaries, client_ip))
             return {"provider": "complyadvantage", "normalized_version": "2.0"}
 
     register_provider(COMPLYADVANTAGE_PROVIDER_NAME, FakeCAProvider)
@@ -111,6 +111,7 @@ def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):
         {"application_id": "app-2"},
         [],
         [{"full_name": "Owner"}],
+        [{"entity_name": "HoldCo Ltd"}],
         client_ip="203.0.113.11",
         db=db,
     )
@@ -118,7 +119,7 @@ def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):
     assert result["provider"] == "complyadvantage"
     assert FakeCAProvider.instances[0].db is db
     assert FakeCAProvider.instances[0].calls == [
-        ({"application_id": "app-2"}, [], [{"full_name": "Owner"}], "203.0.113.11")
+        ({"application_id": "app-2"}, [], [{"full_name": "Owner"}], [{"entity_name": "HoldCo Ltd"}], "203.0.113.11")
     ]
 
 

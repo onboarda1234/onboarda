@@ -36,7 +36,7 @@ VALID_NORMALIZATION_STATUSES = ("success", "failed")
 
 NORMALIZED_PERSON_SCREENING_SCHEMA = {
     "person_name": str,
-    "person_type": str,         # "director" | "ubo"
+    "person_type": str,         # "director" | "ubo" | "intermediary"
     "nationality": str,
     "declared_pep": str,        # "Yes" | "No"
     "has_pep_hit": (bool, type(None)),
@@ -73,6 +73,7 @@ NORMALIZED_SCREENING_REPORT_SCHEMA = {
     "company_screening": dict,
     "director_screenings": list,
     "ubo_screenings": list,
+    "intermediary_screenings": list,
     "overall_flags": list,
     "total_hits": int,
     "degraded_sources": list,
@@ -132,6 +133,7 @@ def create_normalized_screening_report(**kwargs) -> dict:
         "company_screening": kwargs.get("company_screening", {}),
         "director_screenings": kwargs.get("director_screenings", []),
         "ubo_screenings": kwargs.get("ubo_screenings", []),
+        "intermediary_screenings": kwargs.get("intermediary_screenings", []),
         "overall_flags": kwargs.get("overall_flags", []),
         "total_hits": kwargs.get("total_hits", 0),
         "degraded_sources": kwargs.get("degraded_sources", []),
@@ -207,7 +209,7 @@ def validate_normalized_report(report: dict) -> list:
                 )
 
     # Validate person screenings
-    for list_field in ("director_screenings", "ubo_screenings"):
+    for list_field in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
         if list_field in report and isinstance(report[list_field], list):
             for i, person in enumerate(report[list_field]):
                 if not isinstance(person, dict):

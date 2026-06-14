@@ -1847,7 +1847,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <label style="font-size:11px;font-weight:700;color:var(--text2);">Result Source Filter
         <select class="form-select" id="screening-filter-provider" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
           <option value="">All</option>
-          <option value="complyadvantage">ComplyAdvantage screening source</option>
+          <option value="complyadvantage">ComplyAdvantage Mesh screening source</option>
           <option value="sumsub">Sumsub IDV/KYC source</option>
           <option value="opencorporates">OpenCorporates registry source</option>
           <option value="other">Other available values</option>
@@ -3121,8 +3121,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="doc-item">
       <div class="doc-icon" style="background:var(--blue-bg);">🌐</div>
       <div class="doc-info">
-        <div class="doc-name">ComplyAdvantage AML / PEP / Sanctions Reference</div>
-        <div class="doc-meta">Reference for ComplyAdvantage screening capabilities. Runtime active-provider status is shown in the Screening Queue provider status panel.</div>
+        <div class="doc-name">ComplyAdvantage Mesh AML / PEP / Sanctions Reference</div>
+        <div class="doc-meta">Reference for ComplyAdvantage Mesh screening capabilities. Runtime active-provider status is shown in the Screening Queue provider status panel.</div>
       </div>
       <a href="https://complyadvantage.com" target="_blank" class="btn btn-outline btn-sm">Open ↗</a>
     </div>
@@ -10908,6 +10908,7 @@ function deriveScreeningTruthSummary(report) {
   if (company.sanctions) records.push(company.sanctions);
   (report.director_screenings || []).forEach(function(item) { if (item && item.screening) records.push(item.screening); });
   (report.ubo_screenings || []).forEach(function(item) { if (item && item.screening) records.push(item.screening); });
+  (report.intermediary_screenings || []).forEach(function(item) { if (item && item.screening) records.push(item.screening); });
   (report.kyc_applicants || []).forEach(function(item) { if (item) records.push(item); });
   var evidence = records.map(deriveScreeningTruth);
   var terminal = evidence.length > 0 && evidence.every(function(item) { return item.terminal; });
@@ -11058,8 +11059,10 @@ function getPersonScreeningResult(app, personName) {
   var report = screeningSummary.report;
   if (!report) return null;
 
-  var allScreenings = (report.director_screenings || []).concat(report.ubo_screenings || []);
-  var match = allScreenings.find(function(s) { return s.name === personName || s.person_name === personName; });
+  var allScreenings = (report.director_screenings || [])
+    .concat(report.ubo_screenings || [])
+    .concat(report.intermediary_screenings || []);
+  var match = allScreenings.find(function(s) { return s.name === personName || s.person_name === personName || s.entity_name === personName; });
   if (!match) return null;
 
   var screening = match.screening || {};
@@ -11254,7 +11257,7 @@ function renderScreeningProviderStatusPanel() {
   }
   var caActive = !!ca.active;
   var rows = [
-    ['Active AML Screening Provider', providerTruthValue(status, 'active_aml_screening_provider', caActive ? 'ComplyAdvantage' : 'Not active')],
+    ['Active AML Screening Provider', providerTruthValue(status, 'active_aml_screening_provider', caActive ? 'ComplyAdvantage Mesh' : 'Not active')],
     ['Identity Verification Provider', providerTruthValue(status, 'identity_verification_provider', 'Sumsub IDV/KYC')],
     ['IDV Status (Sumsub)', sumsub.status || (sumsub.configured ? 'live' : 'not configured')],
     ['Screening Abstraction', truth.screening_abstraction_enabled ? 'Enabled' : 'Disabled'],
@@ -11266,7 +11269,7 @@ function renderScreeningProviderStatusPanel() {
     '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">Provider Status</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Read-only backend runtime status. Filters below only filter displayed results.</div></div>' +
-      '<span class="badge ' + (caActive ? 'success' : 'pending') + '">' + escapeHtml(caActive ? 'CA Active' : 'AML provider not active') + '</span>' +
+      '<span class="badge ' + (caActive ? 'success' : 'pending') + '">' + escapeHtml(caActive ? 'CA Mesh Active' : 'AML provider not active') + '</span>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;">' +
       rows.map(function(row) {
@@ -11276,7 +11279,7 @@ function renderScreeningProviderStatusPanel() {
         '</div>';
       }).join('') +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Identity verification provider scope: ' + escapeHtml(idvScope) + '. AML / PEP / sanctions provider: ComplyAdvantage when backend active=true.</div>';
+    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Identity verification provider scope: ' + escapeHtml(idvScope) + '. AML / PEP / sanctions provider: ComplyAdvantage Mesh only when backend active=true.</div>';
 }
 
 async function loadScreeningProviderStatus(options) {
@@ -11919,7 +11922,7 @@ function formatProviderName(value) {
   var raw = String(value || '').trim();
   var key = raw.toLowerCase().replace(/[\s_-]+/g, '');
   if (!raw) return '';
-  if (key === 'ca' || key === 'complyadvantage') return 'ComplyAdvantage';
+  if (key === 'ca' || key === 'complyadvantage' || key === 'complyadvantagemesh' || key === 'mesh') return 'ComplyAdvantage Mesh';
   if (key === 'sumsub') return 'Sumsub';
   if (key === 'opencorporates') return 'OpenCorporates';
   return raw.charAt(0).toUpperCase() + raw.slice(1);
@@ -12022,7 +12025,7 @@ function evidencePrimaryLabel(hit, context) {
     var candidate = String(candidates[i] || '').trim();
     if (candidate && !isUuidLike(candidate)) return candidate;
   }
-  return (formatProviderName(hit.provider || hit.source || context.provider) || 'ComplyAdvantage') + ' Evidence';
+  return (formatProviderName(hit.provider || hit.source || context.provider) || 'Unknown Provider') + ' Evidence';
 }
 
 function isPepEvidenceRelevant(hit, categories, riskLabels) {
@@ -12320,7 +12323,7 @@ function registerScreeningEvidence(hit, context, index) {
     _application_ref: (context || {}).application_ref || '',
     _subject_type: (context || {}).subject_type || hit.subject_scope || '',
     _subject_name: (context || {}).subject_name || '',
-    _provider: formatProviderName((hit || {}).provider || (hit || {}).source || (context || {}).provider) || 'ComplyAdvantage',
+    _provider: formatProviderName((hit || {}).provider || (hit || {}).source || (context || {}).provider) || 'Unknown Provider',
     _screened_at: (context || {}).screened_at || hit.screened_at || '',
     _declared_pep: (context || {}).declared_pep,
     _provider_detected_pep: (context || {}).provider_detected_pep,
@@ -12383,7 +12386,7 @@ function mergeUniqueList(target, values) {
 function providerEvidenceGroupKey(hit, context) {
   hit = hit || {};
   var categories = evidencePrimaryCategoryLabel(hit).toLowerCase();
-  var provider = formatProviderName(hit.provider || hit.source || (context || {}).provider || 'complyadvantage').toLowerCase();
+  var provider = formatProviderName(hit.provider || hit.source || (context || {}).provider || 'unknown').toLowerCase();
   var profileIdentifier = hit.provider_profile_identifier || hit.profile_identifier || '';
   var sourceIdentifier = hit.provider_match_identifier || hit.match_identifier || hit.provider_alert_identifier || hit.alert_identifier || hit.provider_case_identifier || hit.case_identifier || '';
   var label = evidencePrimaryLabel(hit, context).toLowerCase();
@@ -12567,7 +12570,7 @@ function openScreeningEvidenceDrawer(key) {
   var categories = evidenceCategories(hit);
   var riskLabels = Array.isArray(hit.risk_type_labels) ? hit.risk_type_labels : [];
   var riskKeys = Array.isArray(hit.risk_type_keys) ? hit.risk_type_keys : [];
-  var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'ComplyAdvantage';
+  var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'Unknown Provider';
   var matchedName = evidencePrimaryLabel(hit, hit);
   var mediaUrl = evidenceSourceUrl(hit);
   var mediaTitle = evidenceSourceTitle(hit);
@@ -12668,7 +12671,7 @@ function providerResultHighlights(results, context) {
     var groupLabel = evidencePrimaryCategoryLabel(hit);
     var groupCount = hit._group_count || ((hit._group_records || []).length) || 1;
     var sensitivity = evidenceSensitivityLabel(hit);
-    var providerName = formatProviderName(hit.provider || hit.source || context.provider) || 'ComplyAdvantage';
+    var providerName = formatProviderName(hit.provider || hit.source || context.provider) || 'Unknown Provider';
     var discovered = hit.discovered_at ? String(hit.discovered_at).replace('T', ' ').slice(0, 19) : '';
     var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
     var groupSummary = hit.summary || evidenceReviewRationale(providerName, categories, hit, evidencePrimaryLabel(hit, context));
@@ -12899,7 +12902,7 @@ function companyMonitoringMediaFacts(app) {
     results: mediaAlerts.map(function(alert) {
       var ref = parseMonitoringSourceReference(alert.source_reference_json || alert.source_reference);
       return {
-        name: alert.summary || 'ComplyAdvantage media alert',
+        name: alert.summary || 'ComplyAdvantage Mesh media alert',
         match_category: 'adverse media',
         match_categories: ['adverse media'],
         risk_type_labels: ['Adverse media'],
@@ -13194,9 +13197,11 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   var screeningSummary = getApplicationScreeningSummary(app);
   var screeningRecord = null;
   if (screeningSummary.report) {
-    var combined = (screeningSummary.report.director_screenings || []).concat(screeningSummary.report.ubo_screenings || []);
+    var combined = (screeningSummary.report.director_screenings || [])
+      .concat(screeningSummary.report.ubo_screenings || [])
+      .concat(screeningSummary.report.intermediary_screenings || []);
     screeningRecord = combined.find(function(item) {
-      return (item.person_name || item.name) === person.name;
+      return (item.entity_name || item.person_name || item.name) === person.name;
     }) || null;
   }
   var screening = (screeningRecord || {}).screening || null;
@@ -13262,7 +13267,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   var body = '';
   body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Role</div><div style="font-size:13px;font-weight:600;text-transform:capitalize;">' + escapeHtml(person.subject_type) + '</div></div>';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Nationality / Ownership</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(person.subject_type === 'ubo' ? String(person.pct || 0) + '%' : (person.nat || 'Not recorded')) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Jurisdiction / Ownership</div><div style="font-size:13px;font-weight:600;">' + escapeHtml((person.subject_type === 'ubo' || person.subject_type === 'intermediary') ? String(person.pct || 0) + '%' + (person.nat ? ' · ' + person.nat : '') : (person.nat || 'Not recorded')) + '</div></div>';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(facts.total_hits || 0)) + '</div></div>';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Last Screened</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(((facts.screened_at || screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19)) + '</div></div>';
   body += '</div>';
@@ -13384,14 +13389,17 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
   var people = [];
   (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, dob:d.dob, pct:null, pep:d.pep, first_name:d.first_name, last_name:d.last_name, aliases:d.aliases }); });
   (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:u.nat, dob:u.dob, pct:u.pct, pep:u.pep, first_name:u.first_name, last_name:u.last_name, aliases:u.aliases }); });
+  (app.intermediaries || []).forEach(function(i) { people.push({ subject_type:'intermediary', name:i.name || 'Unnamed intermediary', nat:i.jurisdiction || '', dob:'', pct:i.pct, pep:'No' }); });
 
   people.forEach(function(person) {
     var reviewRow = getMergedScreeningReviewRow(app, queueMap[person.subject_type + '|' + person.name], reviewMap[person.subject_type + '|' + person.name], person.subject_type, person.name);
     var screeningRecord = null;
     if (screeningSummary.report) {
-      var combined = (screeningSummary.report.director_screenings || []).concat(screeningSummary.report.ubo_screenings || []);
+      var combined = (screeningSummary.report.director_screenings || [])
+        .concat(screeningSummary.report.ubo_screenings || [])
+        .concat(screeningSummary.report.intermediary_screenings || []);
       screeningRecord = combined.find(function(item) {
-        return (item.person_name || item.name) === person.name;
+        return (item.entity_name || item.person_name || item.name) === person.name;
       }) || null;
     }
     var screening = (screeningRecord || {}).screening || null;
@@ -18811,7 +18819,7 @@ function monitoringProviderLabel(alert, ref) {
   var provider = (alert && (alert.provider || alert.detected_by)) || (ref && ref.provider) || '';
   provider = String(provider || '').trim();
   if (!provider) return 'Not available';
-  if (provider.toLowerCase() === 'complyadvantage') return 'ComplyAdvantage';
+  if (provider.toLowerCase() === 'complyadvantage') return 'ComplyAdvantage Mesh';
   return provider.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
 }
 
@@ -18864,7 +18872,7 @@ function monitoringAlertProviderEvidenceRows(raw) {
     var sourceUrl = item.source_url || item.provider_case_url || '';
     var sourceValue = sourceUrl
       ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">Open source</a>'
-      : escapeHtml(item.source_url_unavailable_reason || 'Source article link not available from ComplyAdvantage payload.');
+      : escapeHtml(item.source_url_unavailable_reason || 'Source article link not available from ComplyAdvantage Mesh payload.');
     var category = item.match_category || item.evidence_type || '';
     var risk = item.risk_indicator || '';
     var categoryRisk = [category, risk].filter(Boolean).join(' / ');
@@ -18982,7 +18990,7 @@ function monitoringAlertEvidenceHtml(alert) {
     var sourceUrl = monitoringAlertSourceUrl(ref);
     var sourceLinkAvailability = sourceUrl
       ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">Open source</a>'
-      : 'Source article link not available from ComplyAdvantage payload.';
+      : 'Source article link not available from ComplyAdvantage Mesh payload.';
     var availableRows = monitoringInfoGrid([
       ['Matched subject name', monitoringTextValue(monitoringAlertSubjectName(raw, ref), 'Not available')],
       ['Relationship to client', monitoringTextValue(monitoringAlertRelationship(raw, ref), 'Unknown')],
@@ -28004,7 +28012,7 @@ async function checkAPIStatus() {
 
 	    var apis = [
       { key: 'sumsub', label: 'Sumsub IDV/KYC', icon: '🔍' },
-      { key: 'complyadvantage', label: 'ComplyAdvantage KYB / Media / Monitoring', icon: '🧭' },
+      { key: 'complyadvantage', label: 'ComplyAdvantage Mesh AML / Media / Monitoring', icon: '🧭' },
       { key: 'opencorporates', label: 'Open Corporates (Registry)', icon: '🏢' },
       { key: 'ip_geolocation', label: 'IP Geolocation', icon: '🌍' },
       { key: 'anthropic', label: 'Claude-backed Verification', icon: '🤖' }

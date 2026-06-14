@@ -31,7 +31,7 @@ class SumsubScreeningAdapter(ScreeningProvider):
 
     provider_name = "sumsub"
 
-    def run_full_screening(self, application_data, directors, ubos, client_ip=None):
+    def run_full_screening(self, application_data, directors, ubos, intermediaries=None, client_ip=None):
         """
         Run full screening via existing screening.run_full_screening().
         Returns normalized result.

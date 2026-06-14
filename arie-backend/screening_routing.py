@@ -27,6 +27,7 @@ def run_screening_for_active_provider(
     application_data,
     directors,
     ubos,
+    intermediaries=None,
     *,
     client_ip=None,
     db=None,
@@ -62,7 +63,13 @@ def run_screening_for_active_provider(
 
     provider = _build_provider(provider_name, db=db)
     logger.info("screening_routing active_provider=%s", provider_name)
-    return provider.run_full_screening(application_data, directors, ubos, client_ip=client_ip)
+    return provider.run_full_screening(
+        application_data,
+        directors,
+        ubos,
+        intermediaries or [],
+        client_ip=client_ip,
+    )
 
 
 def _build_provider(provider_name: str, *, db=None):

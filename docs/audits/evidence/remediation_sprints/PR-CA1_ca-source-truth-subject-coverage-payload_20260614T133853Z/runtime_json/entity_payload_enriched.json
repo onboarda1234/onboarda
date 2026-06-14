@@ -1,0 +1,22 @@
+{
+  "company": {
+    "addresses": [
+      {
+        "full_address": "Redacted Street, Port Louis",
+        "location_type": "registered_address"
+      }
+    ],
+    "custom_fields": {
+      "application_reference": "APP-REDACTED-1",
+      "source_system": "regmind"
+    },
+    "entity_type": "private_company",
+    "incorporation_date": "2020-02-03",
+    "industry": "financial services",
+    "jurisdiction": "MU",
+    "legal_name": "Redacted Holdings Ltd",
+    "registration_number": "BRN-REDACTED"
+  },
+  "external_identifier": "app-redacted-1",
+  "reference": "app-redacted-1"
+}

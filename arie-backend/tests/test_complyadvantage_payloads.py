@@ -121,7 +121,14 @@ def test_build_customer_company_strict_vs_relaxed():
         "brn": "C123",
         "country": "MU",
         "sector": "Payments",
-        "registered_address": "1 Company Road",
+        "registered_address": {
+            "full_address": "1 Company Road, Port Louis",
+            "country": "Mauritius",
+            "postcode": "12345",
+        },
+        "entity_type": "Private Company",
+        "incorporation_date": "2020-05-04T00:00:00Z",
+        "application_ref": "ARF-1",
     }
 
     app["application_id"] = "app-1"
@@ -135,8 +142,18 @@ def test_build_customer_company_strict_vs_relaxed():
     assert "external_identifier" not in strict
     assert "customer_reference" not in strict
     assert strict["legal_name"] == "Acme Ltd"
+    assert strict["registration_number"] == "C123"
+    assert strict["jurisdiction"] == "MU"
+    assert strict["industry"] == "Payments"
+    assert strict["entity_type"] == "Private Company"
+    assert strict["incorporation_date"] == "2020-05-04"
+    assert strict["addresses"][0]["full_address"] == "1 Company Road, Port Louis"
+    assert strict["addresses"][0]["country_code"] == "MU"
+    assert strict["custom_fields"] == {
+        "source_system": "regmind",
+        "application_reference": "ARF-1",
+    }
     assert relaxed == {"legal_name": "Acme Ltd"}
-    assert strict == {"legal_name": "Acme Ltd"}
     assert relaxed_customer["reference"] == "app-1"
 
 
@@ -186,3 +203,26 @@ def test_build_customer_company_validates_with_legal_name_only():
 
     assert validated.company.legal_name == "Acme Legal"
     assert validated.company.name is None
+
+
+def test_build_customer_company_safely_omits_unavailable_fields_and_fake_address():
+    customer = build_customer_company(
+        {
+            "legal_name": "Sparse Co",
+            "application_id": "app-2",
+            "country": "Mauritius",
+        },
+        strict=True,
+    )
+
+    company = customer["company"]
+    validated = CACustomerInput.model_validate(customer)
+
+    assert validated.company.legal_name == "Sparse Co"
+    assert company["legal_name"] == "Sparse Co"
+    assert company["jurisdiction"] == "MU"
+    assert "registration_number" not in company
+    assert "incorporation_date" not in company
+    assert "entity_type" not in company
+    assert "industry" not in company
+    assert "addresses" not in company

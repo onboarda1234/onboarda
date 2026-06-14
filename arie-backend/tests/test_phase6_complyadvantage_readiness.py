@@ -38,8 +38,10 @@ def test_complyadvantage_status_is_not_live_when_unconfigured(monkeypatch):
     assert status["configured"] is False
     assert status["active"] is False
     assert status["status"] == "not_configured"
-    assert status["implementation_status"] == "in_progress"
-    assert "KYB" in status["role"]
+    assert status["implementation_status"] == "not_configured"
+    assert "AML sanctions" in status["role"]
+    assert status["provider_display_name"] == "ComplyAdvantage Mesh"
+    assert status["simulation_fallback_enabled"] is False
 
 
 def test_complyadvantage_status_ready_but_blocked_until_abstraction_enabled(monkeypatch):

@@ -14,7 +14,8 @@ Onboarda is an AI-powered compliance onboarding platform for regulated financial
 - **Backend**: Python 3 / Tornado web framework
 - **Database**: PostgreSQL (SQLite for local dev)
 - **AI**: Anthropic Claude API (risk-based Sonnet/Opus routing for memo generation)
-- **KYC Provider**: Sumsub (identity verification, AML/PEP screening)
+- **KYC / IDV Provider**: Sumsub (individual identity verification)
+- **AML Screening Provider**: ComplyAdvantage Mesh when `SCREENING_PROVIDER=complyadvantage` and `ENABLE_SCREENING_ABSTRACTION=true`
 - **Hosting**: AWS ECS Fargate af-south-1 (staging + planned production) · Render.com (demo only)
 - **CI/CD**: GitHub Actions (`.github/workflows/ci.yml`)
 - **Frontend**: Single-file HTML (no build step)
@@ -177,10 +178,10 @@ These clarifications prevent marketing claims from diverging from code behaviour
 
 | Feature | Status | Details |
 |---------|--------|---------|
-| **ComplyAdvantage sanctions/PEP/RCA screening** | ✅ ACTIVE | Screening and monitoring surfaces are labelled for ComplyAdvantage-owned responsibilities |
+| **ComplyAdvantage Mesh sanctions/PEP/RCA screening** | ✅ ACTIVE WHEN CONFIGURED | Active AML source when `SCREENING_PROVIDER=complyadvantage`, `ENABLE_SCREENING_ABSTRACTION=true`, and CA credentials are present. |
 | **Adverse media parsing** | ✅ ACTIVE | Parses adverse-media signals from screening provider results and prescreening data |
 | **Adverse media (external provider)** | ⚠️ NOT IMPLEMENTED | No external adverse-media API call; no `ADVERSE_MEDIA_API_KEY`. Back office correctly notes: "Distinct adverse-media results are not persisted in the current screening report." |
-| **ComplyAdvantage provider** | ⚠️ SCAFFOLDED — OFF by default | Adapter and registry exist (`screening_complyadvantage/`). `ENABLE_SCREENING_ABSTRACTION` is `False` in all environments. `run_full_screening()` is hardcoded to Sumsub and does not invoke provider abstraction. Do not claim ComplyAdvantage as a live provider unless `ENABLE_SCREENING_ABSTRACTION=true` is confirmed working end-to-end. |
+| **Provider source of truth** | ✅ RUNTIME CONFIGURED | `/api/screening/status` is the operator source of truth. It separates ComplyAdvantage Mesh AML screening, Sumsub IDV/KYC, and OpenCorporates registry/enrichment status. Unknown provider evidence must remain unknown and must not default to CA. |
 | **Periodic review (state machine)** | ✅ ACTIVE | `periodic_review_engine.py` enforces review states, audit trails, and lifecycle linkage |
 | **Periodic review (automatic scheduler)** | ✅ ACTIVE (staging/production) | Tornado `PeriodicCallback` runs the due-review sweep (`monitoring_automation.run_due_monitoring_reviews`); enabled by default only when `ENVIRONMENT` is staging/production or `MONITORING_AUTOMATION_ENABLED=true`. No manual "Schedule Due Reviews" button exists in the back office; the `/api/monitoring/reviews/schedule` backfill endpoint is API-only. |
 
