@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from verification_state import (
@@ -169,6 +170,33 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-serializable copy of gate payload values.
+
+    PostgreSQL drivers return TIMESTAMP columns as ``datetime`` objects. The
+    gate is returned directly by several Tornado handlers, so normalize here
+    once instead of relying on every caller to remember ``default=str``.
+    """
+    if isinstance(value, datetime):
+        iso_value = (
+            value.astimezone(timezone.utc).isoformat()
+            if value.tzinfo
+            else value.isoformat()
+        )
+        return iso_value.replace("+00:00", "Z")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(nested) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(nested) for nested in value]
+    if isinstance(value, set):
+        return sorted(_json_safe(nested) for nested in value)
+    return value
 
 
 def _normalize_document_type(value: Any) -> str:
@@ -613,7 +641,7 @@ def evaluate_document_reliance_gate(
             satisfied += 1
 
     passed = not blockers
-    return {
+    gate = {
         "policy_version": POLICY_VERSION,
         "stage": stage,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -638,6 +666,7 @@ def evaluate_document_reliance_gate(
         "stale_days": stale_days,
         "require_agent_execution": require_agent_execution,
     }
+    return _json_safe(gate)
 
 
 def format_document_reliance_blockers(gate: Mapping[str, Any], *, limit: int = 6) -> str:
