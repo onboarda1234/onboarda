@@ -8,6 +8,9 @@ import json
 import tempfile
 import sqlite3
 import pytest
+import re
+import uuid
+from datetime import datetime, timezone
 
 # Add parent directory to path so we can import server modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -175,6 +178,79 @@ def db(temp_db):
     conn.row_factory = sqlite3.Row
     yield conn
     conn.close()
+
+
+def insert_verified_required_documents(db, app_or_id):
+    """Insert verified Agent 1 evidence for every current KYC document slot.
+
+    Approval and memo tests that are not about document readiness should call
+    this helper so their fixtures satisfy the same canonical policy production
+    code enforces. Existing current documents are left untouched.
+    """
+    from document_reliance_gate import build_required_document_expectations
+
+    if isinstance(app_or_id, dict):
+        app = app_or_id
+        app_id = app.get("id")
+    else:
+        app_id = app_or_id
+        row = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+        app = dict(row) if row else {"id": app_id}
+    if not app_id:
+        return []
+
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    inserted = []
+    for expectation in build_required_document_expectations(db, app):
+        slot_key = expectation["slot_key"]
+        existing = db.execute(
+            """
+            SELECT id
+              FROM documents
+             WHERE application_id=?
+               AND slot_key=?
+               AND COALESCE(is_current, 1)=1
+             LIMIT 1
+            """,
+            (app_id, slot_key),
+        ).fetchone()
+        if existing:
+            continue
+
+        doc_type = expectation["doc_type"]
+        safe_slot = re.sub(r"[^a-zA-Z0-9_-]+", "-", slot_key).strip("-")[:80]
+        doc_id = f"fixture-doc-{uuid.uuid4().hex[:10]}-{safe_slot}"
+        db.execute(
+            """
+            INSERT INTO documents
+            (id, application_id, person_id, doc_type, doc_name, file_path, slot_key,
+             verification_status, verification_results, verified_at, review_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, 'pending')
+            """,
+            (
+                doc_id,
+                app_id,
+                expectation.get("person_id"),
+                doc_type,
+                f"{doc_type}.pdf",
+                f"/tmp/{app_id}/{safe_slot or doc_type}.pdf",
+                slot_key,
+                json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": verified_at}),
+                verified_at,
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+            VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+            """,
+            (app_id, doc_id, json.dumps([{"result": "pass"}])),
+        )
+        inserted.append(doc_id)
+
+    db.commit()
+    return inserted
 
 
 @pytest.fixture

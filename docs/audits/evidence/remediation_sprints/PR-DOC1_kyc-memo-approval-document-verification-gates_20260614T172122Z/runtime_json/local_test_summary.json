@@ -1,0 +1,21 @@
+{
+  "origin_main_sha": "6b6ea16881ae7f93a0eeb4256bb4f205692be757",
+  "branch": "codex/pr-doc1-kyc-memo-approval-document-verification-gates",
+  "targeted_doc_tests": {
+    "result": "passed",
+    "summary": "86 passed, 7 warnings in 10.54s"
+  },
+  "closed_remediation_subset": {
+    "result": "passed",
+    "summary": "168 passed in 8.72s"
+  },
+  "full_backend_suite": {
+    "result": "passed",
+    "summary": "5346 passed, 25 skipped, 76 warnings in 199.59s"
+  },
+  "browser_smoke": {
+    "result": "passed"
+  },
+  "doc_001_status": "PARTIALLY FIXED"
+}
+

@@ -18,6 +18,7 @@ def _insert_application_and_memo(
     pre_approval_decision=None,
     memo_data=None,
     approval_reason=None,
+    documents_ready=True,
 ):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-approval-gate-{suffix}"
@@ -93,6 +94,45 @@ def _insert_application_and_memo(
             ),
         ),
     )
+    if documents_ready:
+        verified_at = now.strftime("%Y-%m-%dT%H:%M:%S")
+        for doc_type in (
+            "cert_inc",
+            "memarts",
+            "reg_sh",
+            "reg_dir",
+            "fin_stmt",
+            "poa",
+            "board_res",
+            "structure_chart",
+        ):
+            doc_id = f"doc-approval-gate-{suffix}-{doc_type}"
+            db.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, slot_key,
+                 verification_status, verification_results, verified_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'verified', ?, ?)
+                """,
+                (
+                    doc_id,
+                    app_id,
+                    doc_type,
+                    f"{doc_type}.pdf",
+                    f"/tmp/{doc_type}.pdf",
+                    f"entity:{doc_type}",
+                    json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": verified_at}),
+                    verified_at,
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO agent_executions
+                (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+                VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+                """,
+                (app_id, doc_id, json.dumps([{"result": "pass"}])),
+            )
     db.commit()
     app = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
     return dict(app)

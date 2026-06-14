@@ -71,14 +71,53 @@ def _create_app_with_flagged_doc(db, *, doc_type="memarts", verification_status=
             "pass", "CONSISTENT", "Fixture approval reason",
         ),
     )
-    db.execute(
-        """
-        INSERT INTO documents
-        (id, application_id, doc_type, doc_name, file_path, verification_status, review_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (doc_id, app_id, doc_type, f"{doc_type}.pdf", f"/tmp/{doc_type}.pdf", verification_status, "pending"),
-    )
+    required_doc_types = [
+        "cert_inc",
+        "memarts",
+        "reg_sh",
+        "reg_dir",
+        "fin_stmt",
+        "poa",
+        "board_res",
+        "structure_chart",
+    ]
+    verified_at = _now.strftime("%Y-%m-%dT%H:%M:%S")
+    for required_type in required_doc_types:
+        current_doc_id = doc_id if required_type == doc_type else f"doc-flagdoc-{suffix}-{required_type}"
+        current_status = verification_status if required_type == doc_type else "verified"
+        db.execute(
+            """
+            INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path, slot_key, verification_status,
+             verification_results, verified_at, review_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                current_doc_id,
+                app_id,
+                required_type,
+                f"{required_type}.pdf",
+                f"/tmp/{required_type}.pdf",
+                f"entity:{required_type}",
+                current_status,
+                json.dumps({
+                    "overall": current_status,
+                    "checks": [{"result": "pass"}] if current_status == "verified" else [{"result": "warn"}],
+                    "verified_at": verified_at if current_status == "verified" else None,
+                }),
+                verified_at if current_status == "verified" else None,
+                "pending",
+            ),
+        )
+        if current_status == "verified":
+            db.execute(
+                """
+                INSERT INTO agent_executions
+                (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+                VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+                """,
+                (app_id, current_doc_id, json.dumps([{"result": "pass"}])),
+            )
     db.commit()
     app = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
     return dict(app), doc_id
@@ -93,8 +132,9 @@ def test_flagged_doc_blocks_approval_unreviewed(db):
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
 
     assert can_approve is False
-    assert "Flagged documents" in msg
-    assert "memarts" in msg
+    assert "Document evidence gate failed" in msg
+    assert "flagged" in msg.lower()
+    assert "Memorandum of Association" in msg
 
 
 # ---------- Test 2: Admin can accept flagged doc → gate passes ----------
@@ -106,7 +146,7 @@ def test_admin_accepts_flagged_doc_gate_passes(db):
 
     db.execute(
         "UPDATE documents SET review_status='accepted', review_comment='Verified manually — original is legible', "
-        "reviewed_by='admin001', reviewer_role='admin' WHERE id=?",
+        "reviewed_by='admin001', reviewer_role='admin', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()
@@ -115,7 +155,7 @@ def test_admin_accepts_flagged_doc_gate_passes(db):
     assert can_approve is True, f"Expected approval to pass but got: {msg}"
 
 
-def test_staging_workflow_only_synthetic_acceptance_passes_flagged_doc_gate_without_verifying(db, monkeypatch):
+def test_staging_workflow_only_synthetic_acceptance_does_not_pass_document_reliance_gate(db, monkeypatch):
     import security_hardening
     from security_hardening import ApprovalGateValidator
 
@@ -137,7 +177,8 @@ def test_staging_workflow_only_synthetic_acceptance_passes_flagged_doc_gate_with
     db.commit()
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"Expected staging workflow-only acceptance to pass flagged doc gate: {msg}"
+    assert can_approve is False
+    assert "Document evidence gate failed" in msg
     stored = db.execute(
         "SELECT verification_status FROM documents WHERE id=?",
         (doc_id,),
@@ -168,7 +209,7 @@ def test_workflow_only_synthetic_acceptance_does_not_pass_flagged_doc_gate_in_pr
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is False
-    assert "Flagged documents" in msg
+    assert "Document evidence gate failed" in msg
 
 
 # ---------- Test 3: SCO can accept flagged doc → gate passes ----------
@@ -180,7 +221,7 @@ def test_sco_accepts_flagged_doc_gate_passes(db):
 
     db.execute(
         "UPDATE documents SET review_status='accepted', review_comment='Confirmed authentic via registrar', "
-        "reviewed_by='sco001', reviewer_role='sco' WHERE id=?",
+        "reviewed_by='sco001', reviewer_role='sco', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()
@@ -199,14 +240,14 @@ def test_co_cannot_override_flagged_doc(db):
     # Simulate a CO trying to accept (reviewer_role = 'co')
     db.execute(
         "UPDATE documents SET review_status='accepted', review_comment='Looks fine to me', "
-        "reviewed_by='co001', reviewer_role='co' WHERE id=?",
+        "reviewed_by='co001', reviewer_role='co', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is False
-    assert "Flagged documents" in msg
+    assert "Document evidence gate failed" in msg
 
 
 def test_analyst_cannot_override_flagged_doc(db):
@@ -216,14 +257,14 @@ def test_analyst_cannot_override_flagged_doc(db):
 
     db.execute(
         "UPDATE documents SET review_status='accepted', review_comment='Checked', "
-        "reviewed_by='analyst001', reviewer_role='analyst' WHERE id=?",
+        "reviewed_by='analyst001', reviewer_role='analyst', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is False
-    assert "Flagged documents" in msg
+    assert "Document evidence gate failed" in msg
 
 
 # ---------- Test 5: Missing reason rejects ----------
@@ -236,14 +277,14 @@ def test_missing_reason_blocks_gate(db):
     # Senior role but empty comment
     db.execute(
         "UPDATE documents SET review_status='accepted', review_comment='', "
-        "reviewed_by='admin001', reviewer_role='admin' WHERE id=?",
+        "reviewed_by='admin001', reviewer_role='admin', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is False
-    assert "Flagged documents" in msg
+    assert "Document evidence gate failed" in msg
 
 
 def test_null_reason_blocks_gate(db):
@@ -253,14 +294,14 @@ def test_null_reason_blocks_gate(db):
 
     db.execute(
         "UPDATE documents SET review_status='accepted', review_comment=NULL, "
-        "reviewed_by='sco001', reviewer_role='sco' WHERE id=?",
+        "reviewed_by='sco001', reviewer_role='sco', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is False
-    assert "Flagged documents" in msg
+    assert "Document evidence gate failed" in msg
 
 
 # ---------- Test 6: Rejected flagged doc still blocks ----------
@@ -279,7 +320,7 @@ def test_rejected_flagged_doc_blocks(db):
 
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is False
-    assert "Flagged documents" in msg
+    assert "Document evidence gate failed" in msg
 
 
 # ---------- Test 7: Non-flagged docs behave normally ----------
@@ -294,12 +335,13 @@ def test_nonflagged_doc_passes_normally(db):
     assert can_approve is True, f"Expected approval to pass but got: {msg}"
 
 
-def test_pending_doc_passes_normally(db):
+def test_pending_doc_blocks_reliance(db):
     from security_hardening import ApprovalGateValidator
 
     app, doc_id = _create_app_with_flagged_doc(db, verification_status="pending")
     can_approve, msg = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"Expected approval to pass but got: {msg}"
+    assert can_approve is False
+    assert "pending" in msg.lower()
 
 
 # ---------- Test 8: Audit trail records senior override with reason ----------
@@ -376,13 +418,13 @@ def test_decision_gate_reachable_after_override(db):
     # Step 1: gate blocked
     can1, msg1 = ApprovalGateValidator.validate_approval(app, db)
     assert can1 is False
-    assert "Flagged documents" in msg1
+    assert "Document evidence gate failed" in msg1
 
     # Step 2: admin override
     db.execute(
         "UPDATE documents SET review_status='accepted', "
         "review_comment='Manually verified against original registrar copy — acceptable', "
-        "reviewed_by='admin001', reviewer_role='admin' WHERE id=?",
+        "reviewed_by='admin001', reviewer_role='admin', reviewed_at='2026-06-01T12:00:00' WHERE id=?",
         (doc_id,),
     )
     db.commit()

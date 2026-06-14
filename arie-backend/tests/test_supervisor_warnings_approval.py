@@ -81,6 +81,8 @@ def _insert_resolved_enhanced_requirement(db, app_id):
 
 def _insert_app(db, *, app_id=None, ref=None):
     """Insert a minimal application and return its id."""
+    from tests.conftest import insert_verified_required_documents
+
     suffix = uuid.uuid4().hex[:8]
     app_id = app_id or f"app-swarn-{suffix}"
     ref = ref or f"ARF-SWARN-{suffix}"
@@ -111,6 +113,7 @@ def _insert_app(db, *, app_id=None, ref=None):
         ),
     )
     _insert_resolved_enhanced_requirement(db, app_id)
+    insert_verified_required_documents(db, app_id)
     db.commit()
     return app_id
 

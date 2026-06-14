@@ -359,11 +359,40 @@ def test_remove_targets_only_current_document_and_keeps_superseded_history(docum
 
 
 def test_evidence_pack_and_compliance_memo_use_only_current_documents(document_versioning_server, monkeypatch):
+    from tests.conftest import insert_verified_required_documents
+    from db import get_db
+
     app_id = "docver_app_memo"
     client_id = "docver_client_memo"
     _seed_application(app_id, client_id)
     doc_a = _upload_document(document_versioning_server, app_id, client_id, "a.pdf")
     doc_b = _upload_document(document_versioning_server, app_id, client_id, "b.pdf")
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    conn = get_db()
+    conn.execute(
+        """
+        UPDATE documents
+           SET verification_status='verified',
+               verification_results=?,
+               verified_at=?
+         WHERE id=?
+        """,
+        (
+            json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": verified_at}),
+            verified_at,
+            doc_b["id"],
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO agent_executions
+        (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+        VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+        """,
+        (app_id, doc_b["id"], json.dumps([{"result": "pass"}])),
+    )
+    insert_verified_required_documents(conn, app_id)
+    conn.close()
 
     evidence_pack = requests.get(
         f"{document_versioning_server}/api/applications/{app_id}/evidence-pack",
@@ -371,7 +400,9 @@ def test_evidence_pack_and_compliance_memo_use_only_current_documents(document_v
         timeout=5,
     )
     assert evidence_pack.status_code == 200, evidence_pack.text
-    assert [d["id"] for d in evidence_pack.json()["documents"]] == [doc_b["id"]]
+    evidence_document_ids = [d["id"] for d in evidence_pack.json()["documents"]]
+    assert doc_b["id"] in evidence_document_ids
+    assert doc_a["id"] not in evidence_document_ids
 
     import server as server_module
 
@@ -398,7 +429,7 @@ def test_evidence_pack_and_compliance_memo_use_only_current_documents(document_v
         timeout=5,
     )
     assert memo.status_code == 200, memo.text
-    assert captured["document_ids"] == [doc_b["id"]]
+    assert doc_b["id"] in captured["document_ids"]
     assert doc_a["id"] not in captured["document_ids"]
 
 
@@ -551,6 +582,7 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
     db_path = str(tmp_path / "approval_gate.db")
     _sync_db_path(db_path)
 
+    from tests.conftest import insert_verified_required_documents
     from db import get_db, init_db
     from security_hardening import ApprovalGateValidator
 
@@ -653,10 +685,32 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
     )
     conn.execute(
         """INSERT INTO documents
-           (id, application_id, doc_type, doc_name, file_path, slot_key, is_current, version, verification_status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        ("new_verified", app_id, "cert_inc", "new.pdf", "/tmp/new.pdf", "entity:cert_inc", True, 2, "verified"),
+           (id, application_id, doc_type, doc_name, file_path, slot_key, is_current, version,
+            verification_status, verification_results, verified_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "new_verified",
+            app_id,
+            "cert_inc",
+            "new.pdf",
+            "/tmp/new.pdf",
+            "entity:cert_inc",
+            True,
+            2,
+            "verified",
+            json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": now.isoformat()}),
+            now.isoformat(),
+        ),
     )
+    conn.execute(
+        """
+        INSERT INTO agent_executions
+        (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+        VALUES (?, 'new_verified', 'verify_document', 1, 'verified', ?, 0)
+        """,
+        (app_id, json.dumps([{"result": "pass"}])),
+    )
+    insert_verified_required_documents(conn, app_id)
     conn.commit()
 
     app = dict(conn.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())

@@ -24,6 +24,7 @@ import ast
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
 import requests as http_requests
@@ -221,6 +222,7 @@ def _load_draft_meaningful_helpers():
 def _insert_verified_base_docs(db, app_id, tmp_path):
     from server import _document_slot_key
 
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     for doc_type in (
         "cert_inc",
         "memarts",
@@ -237,8 +239,8 @@ def _insert_verified_base_docs(db, app_id, tmp_path):
             """
             INSERT INTO documents (
                 id, application_id, doc_type, doc_name, file_path, slot_key,
-                is_current, verification_status, verification_results
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_current, verification_status, verification_results, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 f"doc_{app_id}_{doc_type}",
@@ -249,8 +251,17 @@ def _insert_verified_base_docs(db, app_id, tmp_path):
                 _document_slot_key(doc_type),
                 True,
                 "verified",
-                json.dumps({"overall": "verified", "checks": [{"result": "pass"}]}),
+                json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": verified_at}),
+                verified_at,
             ),
+        )
+        db.execute(
+            """
+            INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+            VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+            """,
+            (app_id, f"doc_{app_id}_{doc_type}", json.dumps([{"result": "pass"}])),
         )
 
 

@@ -4,6 +4,7 @@ import socket
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
 import requests as http_requests
@@ -210,15 +211,22 @@ def _insert_uploaded_document(db, app_id, *, doc_id=None, doc_type="cert_inc",
     with open(file_path, "wb") as handle:
         handle.write(b"%PDF-1.4\n%EOF\n")
     slot_key = _document_slot_key(doc_type, person_id, person_type=person_type)
+    final_doc_id = doc_id or f"doc_{app_id}_{doc_type}_{suffix}"
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    results_payload = {
+        "overall": verification_status,
+        "checks": [{"result": "pass"}] if verification_status == "verified" else [],
+        "verified_at": verified_at if verification_status == "verified" else None,
+    }
     db.execute(
         """
         INSERT INTO documents
         (id, application_id, person_id, doc_type, doc_name, file_path, slot_key,
-         is_current, verification_status, verification_results)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         is_current, verification_status, verification_results, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            doc_id or f"doc_{app_id}_{doc_type}_{suffix}",
+            final_doc_id,
             app_id,
             person_id,
             doc_type,
@@ -227,9 +235,19 @@ def _insert_uploaded_document(db, app_id, *, doc_id=None, doc_type="cert_inc",
             slot_key,
             True,
             verification_status,
-            json.dumps({"overall": verification_status}),
+            json.dumps(results_payload),
+            verified_at if verification_status == "verified" else None,
         ),
     )
+    if verification_status == "verified":
+        db.execute(
+            """
+            INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+            VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+            """,
+            (app_id, final_doc_id, json.dumps([{"result": "pass"}])),
+        )
 
 
 def _ensure_verified_document(db, app_id, *, doc_type, person_id=None, person_type=None):
@@ -242,8 +260,16 @@ def _ensure_verified_document(db, app_id, *, doc_type, person_id=None, person_ty
     ).fetchone()
     if existing:
         db.execute(
-            "UPDATE documents SET verification_status=?, verification_results=? WHERE id=?",
-            ("verified", json.dumps({"overall": "verified", "checks": [{"result": "pass"}]}), existing["id"]),
+            "UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
+            ("verified", json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}), existing["id"]),
+        )
+        db.execute(
+            """
+            INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+            VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+            """,
+            (app_id, existing["id"], json.dumps([{"result": "pass"}])),
         )
         return
     _insert_uploaded_document(
@@ -542,7 +568,7 @@ def test_kyc_submit_blocks_unverified_required_documents(api_server):
     assert json.loads(audit["detail"])["reason_code"] == "required_documents_not_verified"
 
 
-@pytest.mark.parametrize("verification_status", ["pending", "in_progress", "flagged", "failed"])
+@pytest.mark.parametrize("verification_status", ["pending", "in_progress", "flagged", "failed", "skipped"])
 def test_kyc_submit_refuses_each_non_verified_required_document_state(api_server, verification_status):
     from db import get_db
 
@@ -568,7 +594,7 @@ def test_kyc_submit_refuses_each_non_verified_required_document_state(api_server
     assert "not verified: 1" in resp.json()["error"].lower()
 
 
-def test_staging_workflow_test_acceptance_allows_synthetic_required_doc_without_verifying(api_server, monkeypatch):
+def test_staging_workflow_test_acceptance_remains_blocked_for_kyc_reliance(api_server, monkeypatch):
     from auth import create_token
     from db import get_db
     import server as server_module
@@ -623,10 +649,11 @@ def test_staging_workflow_test_acceptance_allows_synthetic_required_doc_without_
         headers={"Authorization": f"Bearer {_portal_client_token()}"},
         timeout=3,
     )
-    assert submit_resp.status_code == 200, submit_resp.text
+    assert submit_resp.status_code == 400, submit_resp.text
     submit_body = submit_resp.json()
-    assert submit_body["status"] == "kyc_submitted"
-    assert submit_body["required_documents_workflow_test_accepted"] == 1
+    assert submit_body["kyc_verification_blocked"] is True
+    assert submit_body["document_evidence_gate"]["passed"] is False
+    assert submit_body["document_evidence_gate"]["blocker_count"] >= 1
 
     conn = get_db()
     stored = conn.execute(
@@ -648,7 +675,105 @@ def test_staging_workflow_test_acceptance_allows_synthetic_required_doc_without_
     assert audit is not None
     audit_detail = json.loads(audit["detail"])
     assert audit_detail["workflow_only"] is True
-    assert audit_detail["can_count_as_pilot_approval_proof"] is False
+
+
+def test_memo_generation_blocks_pending_required_document(api_server):
+    from db import get_db
+
+    app_id = "memo_doc_gate_pending"
+    ref = "ARF-MEMO-DOC-GATE-PENDING"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="compliance_review")
+    _ensure_verified_required_documents(conn, app_id)
+    conn.execute(
+        """
+        UPDATE documents
+        SET verification_status='pending',
+            verification_results='{}',
+            verified_at=NULL
+        WHERE application_id=? AND doc_type='cert_inc'
+        """,
+        (app_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/{ref}/memo",
+        headers={"Authorization": f"Bearer {_officer_token()}"},
+        timeout=3,
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["memo_reliance_status"] == "blocked"
+    assert body["document_evidence_gate"]["passed"] is False
+    assert any(
+        blocker["code"] == "document_pending_verification"
+        for blocker in body["document_evidence_gate"]["blockers"]
+    )
+
+
+def test_memo_approval_blocks_pending_required_document(api_server):
+    from db import get_db
+
+    app_id = "memo_approval_doc_gate_pending"
+    ref = "ARF-MEMO-APPROVAL-DOC-GATE-PENDING"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="compliance_review")
+    _ensure_verified_required_documents(conn, app_id)
+    conn.execute(
+        """
+        UPDATE documents
+        SET verification_status='pending',
+            verification_results='{}',
+            verified_at=NULL
+        WHERE application_id=? AND doc_type='cert_inc'
+        """,
+        (app_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO compliance_memos
+        (application_id, memo_data, generated_by, ai_recommendation, review_status,
+         quality_score, validation_status, supervisor_status)
+        VALUES (?, ?, 'system', 'APPROVE_WITH_CONDITIONS', 'draft', 9.0, 'pass', 'CONSISTENT')
+        """,
+        (
+            app_id,
+            json.dumps({
+                "ai_source": "deterministic",
+                "metadata": {"ai_source": "deterministic"},
+                "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
+            }),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/{ref}/memo/approve",
+        headers={"Authorization": f"Bearer {_officer_token()}"},
+        json={
+            "approval_reason": "All memo findings reviewed for test.",
+            "officer_signoff": {
+                "acknowledged": True,
+                "scope": "memo",
+                "source_context": "ai_advisory",
+            },
+        },
+        timeout=3,
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["memo_reliance_status"] == "blocked"
+    assert any(
+        blocker["code"] == "document_pending_verification"
+        for blocker in body["document_evidence_gate"]["blockers"]
+    )
 
 
 def test_workflow_test_acceptance_is_staging_only(api_server, monkeypatch):

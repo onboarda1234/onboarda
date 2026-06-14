@@ -314,6 +314,7 @@ def _make_screening_report_for_gate5(*, director_status="live"):
 def _insert_gate5_app(db, screening_report):
     """Insert an application + memo that passes gates 1-4."""
     import uuid, json as _json
+    from tests.conftest import insert_verified_required_documents
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-cc-fix-{suffix}"
     db.execute(
@@ -341,6 +342,7 @@ def _insert_gate5_app(db, screening_report):
             }),
         ),
     )
+    insert_verified_required_documents(db, app_id)
     db.execute(
         """
         INSERT INTO compliance_memos

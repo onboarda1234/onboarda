@@ -99,6 +99,8 @@ def _insert_app_and_memo(db, *,
                           supervisor_status="CONSISTENT",
                           review_status="approved"):
     """Insert application + memo with configurable screening data."""
+    from tests.conftest import insert_verified_required_documents
+
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-fresh-{suffix}"
     ref = f"ARF-FRESH-{suffix}"
@@ -135,6 +137,7 @@ def _insert_app_and_memo(db, *,
           supervisor_status,
           "Fixture approval reason" if review_status == "approved" else None,
           memo_created))
+    insert_verified_required_documents(db, app_id)
     db.commit()
 
     row = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()

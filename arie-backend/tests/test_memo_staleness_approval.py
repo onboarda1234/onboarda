@@ -47,6 +47,8 @@ def _insert_app(db, risk_level="HIGH", status="compliance_review",
                 app_updated_at=None, inputs_updated_at=None,
                 submitted_at=None):
     """Insert an application with configurable timestamps."""
+    from tests.conftest import insert_verified_required_documents
+
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-stale-{suffix}"
     app_ref = f"ARF-STALE-{suffix}"
@@ -67,6 +69,7 @@ def _insert_app(db, risk_level="HIGH", status="compliance_review",
          risk_level, 80, prescreening,
          sub_at, updated, inputs_upd)
     )
+    insert_verified_required_documents(db, app_id)
     db.commit()
     return app_id, app_ref
 

@@ -483,7 +483,7 @@ def _get_postgres_schema() -> str:
         expiry_source TEXT,
         expiry_confidence REAL,
         expiry_extracted_at TIMESTAMP,
-        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed')),
+        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed','skipped')),
         verification_results JSONB DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
         review_comment TEXT,
@@ -1593,7 +1593,7 @@ def _get_sqlite_schema() -> str:
         expiry_source TEXT,
         expiry_confidence REAL,
         expiry_extracted_at TEXT,
-        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed')),
+        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed','skipped')),
         verification_results TEXT DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
         review_comment TEXT,
@@ -4626,13 +4626,15 @@ def _run_migrations(db: DBConnection):
                     THEN 'flagged'
                 WHEN LOWER(COALESCE(verification_status, '')) IN ('failed','fail','error')
                     THEN 'failed'
+                WHEN LOWER(COALESCE(verification_status, '')) IN ('skipped','skip','disabled')
+                    THEN 'skipped'
                 WHEN LOWER(COALESCE(verification_status, '')) = 'in_progress'
                     THEN 'in_progress'
                 ELSE 'pending'
             END
             WHERE verification_status IS NULL
                OR LOWER(COALESCE(verification_status, '')) NOT IN (
-                    'pending','in_progress','verified','flagged','failed'
+                    'pending','in_progress','verified','flagged','failed','skipped'
                )
             """
         )
@@ -4649,10 +4651,10 @@ def _run_migrations(db: DBConnection):
                     constraint_def = constraint_row.get("pg_get_constraintdef")
                 else:
                     constraint_def = constraint_row[0]
-            if not constraint_def or "'in_progress'" not in constraint_def:
+            if not constraint_def or "'in_progress'" not in constraint_def or "'skipped'" not in constraint_def:
                 db.execute("ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_verification_status_check")
                 db.execute("""ALTER TABLE documents ADD CONSTRAINT documents_verification_status_check
-                    CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed'))""")
+                    CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed','skipped'))""")
         db.commit()
         logger.info("Migration v2.12a: documents verification_status state model ready")
     except Exception as e:

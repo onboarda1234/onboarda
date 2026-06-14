@@ -93,6 +93,44 @@ def _insert_gate_ready_app(db):
             now,
         ),
     )
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    for doc_type in (
+        "cert_inc",
+        "memarts",
+        "reg_sh",
+        "reg_dir",
+        "fin_stmt",
+        "poa",
+        "board_res",
+        "structure_chart",
+    ):
+        doc_id = f"doc_memo_stale_{suffix}_{doc_type}"
+        db.execute(
+            """
+            INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path, slot_key,
+             verification_status, verification_results, verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'verified', ?, ?)
+            """,
+            (
+                doc_id,
+                app_id,
+                doc_type,
+                f"{doc_type}.pdf",
+                f"/tmp/{doc_type}.pdf",
+                f"entity:{doc_type}",
+                json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": verified_at}),
+                verified_at,
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+            VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+            """,
+            (app_id, doc_id, json.dumps([{"result": "pass"}])),
+        )
     db.commit()
     return app_id, ref
 
