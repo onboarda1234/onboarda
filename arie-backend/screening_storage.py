@@ -116,6 +116,17 @@ def compute_report_hash(report: dict) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:32]
 
 
+def _load_prescreening_data(value) -> dict:
+    """Return prescreening_data from SQLite JSON text or PostgreSQL JSONB dict."""
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        return json.loads(value or "{}")
+    return {}
+
+
 def persist_normalized_report(
     db,
     client_id: str,
@@ -246,7 +257,7 @@ def webhook_renormalize_from_committed_legacy(application_id) -> None:
         if not row:
             return None
 
-        prescreening = json.loads(row["prescreening_data"] or "{}")
+        prescreening = _load_prescreening_data(row["prescreening_data"])
         legacy_report = prescreening.get("screening_report")
         if not legacy_report:
             return None
