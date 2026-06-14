@@ -21,6 +21,7 @@ RegMind needed CA/Mesh screening state to be reliable, reconcile-able, fail-clos
 - Rebased validation `origin/main` SHA: `0d6b7353c7d40c5d23845de472c4bbbe2417ea45`
 - Branch name: `codex/pr-ca3-ca-state-integrity-webhook-reconciliation-e2e`
 - Branch commit SHA: recorded in PR metadata/final response after final amend
+- Corrective branch name: `codex/pr-ca3-corrective-input-staleness`
 - Does the issue still exist on current `origin/main`? Yes. See `diagnosis.md`.
 - Evidence: local code inspection and test diagnosis from latest `origin/main`.
 
@@ -64,6 +65,18 @@ See `root_cause.md`.
 - CA GET requests retry once on safe transient `429/5xx` responses; create/screen POST requests are not blindly retried.
 - Runtime E2E fixtures cover no-hit, hit, adverse media, provider failure, stale, rescreen, duplicate webhook, reconciliation, and approval gate paths.
 
+## Post-merge staging finding and corrective branch
+
+PR #491 was merged and deployed to staging at SHA `9b210f3884f9cd3bf0c28d82457e8f2b1dac69ca`. Authenticated `/api/version` returned matching `git_sha` and `image_tag`.
+
+Staging API/runtime smoke then found a residual CA-002 contradiction:
+
+- Existing CA-backed application detail records could show `screening_truth_summary.canonical_state=completed_clear`, `approval_ready=true`, and `defensible_clear=true`.
+- The same records had backend approval gate blockers showing `Screening is stale`.
+- Root cause: canonical screening truth did not ingest application-level screening-relevant input timestamps; the approval gate did. Material profile/input changes after CA `screened_at` therefore made the gate stale while the detail truth stayed clear.
+
+Corrective branch `codex/pr-ca3-corrective-input-staleness` fixes the drift by passing application input timestamps into the truth builder and marking CA screening stale when `screening_input_updated_at` is later than provider `screened_at`.
+
 ## Tests added/updated
 
 - Added `arie-backend/tests/test_complyadvantage_runtime_e2e.py`.
@@ -95,7 +108,19 @@ PYTHONPATH=arie-backend /opt/homebrew/bin/python3.11 -m pytest \
 Result:
 
 ```text
-199 passed in 2.51s
+201 passed in 2.25s
+```
+
+Corrective focused set:
+
+```text
+86 passed in 1.73s
+```
+
+Corrective closed-control regression subset:
+
+```text
+205 passed in 7.57s
 ```
 
 ## Full suite results
@@ -116,8 +141,8 @@ See `full_suite_results.md`.
 
 ## Browser test results, if applicable
 
-- Browser: pending after staging deploy.
-- URL: pending.
+- Browser: not rerun after corrective branch because corrective changes are backend API/truth model only.
+- URL: pending after corrective merge/deploy if officer-visible detail/gate smoke is required.
 - Role: pending.
 - Steps: pending.
 - Result: pending.
@@ -125,10 +150,12 @@ See `full_suite_results.md`.
 
 ## Staging deploy evidence
 
-- Merged main SHA: pending.
-- Deployment mechanism: pending.
-- ECS/task/image evidence, if applicable: pending.
-- Deployed at: pending.
+- Merged PR #491 main SHA: `9b210f3884f9cd3bf0c28d82457e8f2b1dac69ca`
+- Deployment mechanism: GitHub Actions `Deploy to Staging`
+- Run: `https://github.com/onboarda1234/onboarda/actions/runs/27507930395`
+- ECS/task/image evidence: deploy job passed backend and verification-worker rolling updates.
+- Deployed at: `2026-06-14T18:49:36Z`
+- Corrective branch deployment: pending.
 
 ## /api/version evidence
 
@@ -142,23 +169,25 @@ Result:
 
 ```json
 {
-  "git_sha": "pending",
-  "image_tag": "pending"
+  "git_sha": "9b210f3884f9cd3bf0c28d82457e8f2b1dac69ca",
+  "image_tag": "9b210f3884f9cd3bf0c28d82457e8f2b1dac69ca"
 }
 ```
 
 Verdict:
 
-- [ ] `git_sha` equals merged main SHA
-- [ ] `image_tag` equals merged main SHA
+- [x] `git_sha` equals merged PR #491 main SHA
+- [x] `image_tag` equals merged PR #491 main SHA
+- [ ] Corrective branch merged SHA deployed and version-matched
 
 ## API smoke test evidence
 
-- Endpoint(s): pending.
-- Role/token type: pending.
-- Expected: pending.
-- Actual: pending.
-- Raw evidence path: pending.
+- Endpoint(s): `/api/version`, `/api/screening/status`, `/api/screening/queue?show_fixtures=true&limit=100`, `/api/applications?show_fixtures=true&limit=100`, sampled `/api/applications/{id}`.
+- Role/token type: approved staging QA officer login (`sco`), bearer token redacted.
+- Expected: version matches, CA provider status remains correct, and CA screening truth/detail/gate have no impossible clear/stale/blocking contradictions.
+- Actual on merged PR #491: version/provider status passed; queue was empty; sampled CA-backed details failed due completed-clear screening truth with stale screening gate blockers.
+- Raw evidence path: `runtime_json/staging_pr_ca3_*_redacted.json`.
+- Corrective branch re-smoke: pending.
 
 ## Browser smoke test evidence, if applicable
 
@@ -176,12 +205,13 @@ Verdict:
 ## Remaining risks
 
 - Full-suite evidence depends on GitHub CI due local WeasyPrint/Pango CFFI segfault.
-- Staging validation is still required before issue closure.
-- Browser smoke remains pending if officer-visible queue/status semantics are treated as UI-affecting.
+- Corrective branch must be merged and redeployed before issue closure.
+- Staging validation must be rerun against corrective merged SHA before issue closure.
+- Browser smoke remains pending if officer-visible detail/gate semantics are treated as UI-affecting.
 
 ## Items not closed by this PR
 
-- `CA-002`, `CA-007`, `CA-009`, and `CA-010` remain `PARTIALLY FIXED` until PR merge, staging deployment, `/api/version` match, staging smoke, and closure evidence are complete.
+- `CA-002`, `CA-007`, `CA-009`, and `CA-010` remain `PARTIALLY FIXED` until the corrective branch is merged, deployed, `/api/version` matches the corrective merged SHA, staging API/runtime smoke passes, browser smoke passes if required, and closure evidence is complete.
 - No PR-CA4, PR-7, DOC, CR, or unrelated remediation item is closed by this PR.
 
 ## Final closure verdict
@@ -192,4 +222,4 @@ Choose one:
 
 Rationale:
 
-Code and local targeted/regression tests are complete, but staging deployment, `/api/version`, API/runtime smoke, browser smoke if required, and final closure evidence are still pending.
+Code and local targeted/regression tests are complete, and PR #491 deployed with matching `/api/version`, but staging API/runtime smoke found a residual CA state contradiction. Corrective branch `codex/pr-ca3-corrective-input-staleness` is locally green but must still be merged, deployed, and re-smoked before closure.

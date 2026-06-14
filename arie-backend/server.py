@@ -3583,9 +3583,16 @@ class ApplicationsHandler(BaseHandler):
                 ]
             prescreening_for_truth = safe_json_loads(app.get("prescreening_data"))
             screening_report_for_truth = prescreening_for_truth.get("screening_report") if isinstance(prescreening_for_truth, dict) else None
+            prescreening_truth_context = dict(prescreening_for_truth) if isinstance(prescreening_for_truth, dict) else {}
+            prescreening_truth_context["screening_input_updated_at"] = (
+                app.get("screening_input_updated_at")
+                or app.get("risk_inputs_updated_at")
+                or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
+                or app.get("submitted_at")
+            )
             app["screening_truth_summary"] = build_screening_truth_summary(
                 screening_report_for_truth if isinstance(screening_report_for_truth, dict) else {},
-                prescreening_for_truth if isinstance(prescreening_for_truth, dict) else {},
+                prescreening_truth_context,
                 screening_reviews_by_app.get(app["id"], []),
             )
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
@@ -5640,7 +5647,15 @@ class ApplicationDetailHandler(BaseHandler):
             ]
         result["screening_truth_summary"] = build_screening_truth_summary(
             screening_report if isinstance(screening_report, dict) else {},
-            result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {},
+            {
+                **(result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {}),
+                "screening_input_updated_at": (
+                    result.get("screening_input_updated_at")
+                    or result.get("risk_inputs_updated_at")
+                    or (result.get("inputs_updated_at") if result.get("submitted_at") else None)
+                    or result.get("submitted_at")
+                ),
+            },
             screening_reviews,
         )
         if user["type"] != "client":

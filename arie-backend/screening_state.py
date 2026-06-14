@@ -56,7 +56,7 @@ records and never mutates them.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -281,6 +281,14 @@ def _timestamp_is_past(value) -> bool:
     if parsed is None:
         return False
     return parsed < datetime.now(timezone.utc)
+
+
+def _timestamp_after_with_tolerance(later, earlier, *, tolerance_seconds: int = 5) -> bool:
+    later_dt = _parse_review_timestamp(later)
+    earlier_dt = _parse_review_timestamp(earlier)
+    if later_dt is None or earlier_dt is None:
+        return False
+    return later_dt > earlier_dt + timedelta(seconds=tolerance_seconds)
 
 
 def _screening_provider_token(screening: dict) -> str:
@@ -1067,8 +1075,24 @@ def build_screening_truth_summary(
         "screened_at": report.get("screened_at") or prescreening.get("last_screened_at"),
         "screening_valid_until": prescreening.get("screening_valid_until"),
         "screening_validity_days": prescreening.get("screening_validity_days"),
+        "screening_input_updated_at": (
+            prescreening.get("screening_input_updated_at")
+            or prescreening.get("risk_inputs_updated_at")
+            or prescreening.get("inputs_updated_at")
+            or prescreening.get("submitted_at")
+        ),
     }
-    stale = _timestamp_is_past(freshness.get("screening_valid_until"))
+    stale_from_expiry = _timestamp_is_past(freshness.get("screening_valid_until"))
+    stale_from_input_change = _timestamp_after_with_tolerance(
+        freshness.get("screening_input_updated_at"),
+        freshness.get("screened_at"),
+    )
+    stale = stale_from_expiry or stale_from_input_change
+    stale_reason = (
+        "screening:input_updated_after_screening"
+        if stale_from_input_change
+        else "screening:stale_requires_refresh"
+    )
     if stale:
         canonical_state = STALE
         terminal = False
@@ -1101,7 +1125,7 @@ def build_screening_truth_summary(
     if stale:
         approval_blocking = True
         screening_gate_ready = False
-        approval_blocked_reasons = ["screening:stale_requires_refresh"]
+        approval_blocked_reasons = [stale_reason]
         blocking_reasons = approval_blocked_reasons
 
     return {

@@ -221,6 +221,27 @@ def test_runtime_e2e_truth_paths_no_hit_hit_adverse_failure_stale_and_rescreen()
     assert rescreened_summary["freshness"]["screening_valid_until"] != stale["screening_valid_until"]
 
 
+def test_runtime_e2e_material_input_change_marks_ca_truth_stale():
+    from screening_state import build_screening_truth_summary
+
+    prescreening = _prescreening(_company_screening())
+    prescreening["screening_report"]["screened_at"] = "2026-06-14T10:00:00Z"
+    prescreening["last_screened_at"] = "2026-06-14T10:00:00Z"
+    prescreening["screening_valid_until"] = "2026-09-12T10:00:00Z"
+    prescreening["screening_input_updated_at"] = "2026-06-14T10:15:00Z"
+
+    summary = build_screening_truth_summary(
+        prescreening["screening_report"],
+        prescreening,
+    )
+
+    assert summary["canonical_state"] == "stale"
+    assert summary["approval_blocking"] is True
+    assert summary["approval_ready"] is False
+    assert summary["approval_blocked_reasons"] == ["screening:input_updated_after_screening"]
+    assert summary["freshness"]["screening_input_updated_at"] == "2026-06-14T10:15:00Z"
+
+
 @pytest.mark.parametrize(
     "company_screening,valid_until,expected_can_approve,expected_message",
     [
@@ -260,6 +281,27 @@ def test_runtime_e2e_approval_gate_blocks_unresolved_failure_stale_and_allows_cl
 
     assert can_approve is expected_can_approve
     assert expected_message in message
+
+
+def test_runtime_e2e_approval_gate_blocks_material_input_change_after_ca_screening(db):
+    from security_hardening import ApprovalGateValidator
+
+    prescreening = _prescreening(_company_screening())
+    prescreening["screening_report"]["screened_at"] = "2026-06-14T10:00:00Z"
+    prescreening["last_screened_at"] = "2026-06-14T10:00:00Z"
+    prescreening["screening_valid_until"] = "2026-09-12T10:00:00Z"
+    app = _insert_application_and_memo(db, prescreening)
+    db.execute(
+        "UPDATE applications SET inputs_updated_at = ?, submitted_at = ? WHERE id = ?",
+        ("2026-06-14T10:15:00Z", "2026-06-14T09:00:00Z", app["id"]),
+    )
+    db.commit()
+    app = dict(db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone())
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "screening-relevant inputs was modified after screening" in message
 
 
 def test_runtime_e2e_queue_quarantines_no_adverse_media_claim_with_adverse_evidence():

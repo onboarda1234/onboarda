@@ -1,0 +1,38 @@
+{
+  "complyadvantage": {
+    "abstraction_enabled": true,
+    "active": true,
+    "configured": true,
+    "fallback_mode": "disabled",
+    "provider_display_name": "ComplyAdvantage Mesh",
+    "requested_provider": "complyadvantage",
+    "simulation_fallback_enabled": false,
+    "status": "live"
+  },
+  "environment": "staging",
+  "provider_truth": {
+    "active_aml_screening_provider": "ComplyAdvantage Mesh",
+    "active_aml_screening_provider_key": "complyadvantage",
+    "aml_provider_scope": "aml_sanctions_pep_rca_adverse_media_monitoring",
+    "identity_verification_provider": "Sumsub IDV/KYC",
+    "identity_verification_provider_key": "sumsub",
+    "last_provider_status_check": "2026-06-14T18:47:59Z",
+    "provider_labels_safe": true,
+    "registry_kyb_provider": "OpenCorporates registry/enrichment",
+    "registry_kyb_status": "simulated",
+    "requested_screening_provider": "complyadvantage",
+    "requested_screening_provider_label": "ComplyAdvantage Mesh",
+    "screening_abstraction_enabled": true,
+    "screening_abstraction_required_for_ca": true,
+    "simulation_fallback_enabled": false,
+    "simulation_fallback_mode": "disabled",
+    "sumsub_provider_scope": "individual_kyc_identity_verification"
+  },
+  "sumsub": {
+    "configured": true,
+    "description": "Individual identity verification and KYC (document + selfie + liveness)",
+    "provider_scope": "individual_kyc_identity_verification",
+    "role": "Identity Verification Provider",
+    "status": "live"
+  }
+}

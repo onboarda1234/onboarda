@@ -1,0 +1,207 @@
+{
+  "applications_status": 200,
+  "ca_like_count": 31,
+  "sample": [
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "prdoc1_kyc_20260614183429",
+      "ref": "ARF-DOC1-KYC-14183429",
+      "status": "kyc_documents"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "13cabbdf214542ea",
+      "ref": "ARF-2026-900289",
+      "status": "edd_required"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": false,
+      "has_screening_text": true,
+      "id": "8afb2968725346a4",
+      "ref": "ARF-2026-900288",
+      "status": "approved"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": false,
+      "has_screening_text": true,
+      "id": "5e2e26e0d4af497d",
+      "ref": "ARF-2026-900287",
+      "status": "approved"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": false,
+      "has_screening_text": true,
+      "id": "121584b0c0384cef",
+      "ref": "ARF-2026-900286",
+      "status": "draft"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": false,
+      "has_screening_text": true,
+      "id": "af7ce0ad34454562",
+      "ref": "ARF-2026-900285",
+      "status": "draft"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": false,
+      "has_screening_text": true,
+      "id": "bac7a73adac34832",
+      "ref": "ARF-2026-900284",
+      "status": "draft"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "f22b49f389a64dbb",
+      "ref": "ARF-2026-900283",
+      "status": "kyc_documents"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "19d64d2c99414b76",
+      "ref": "ARF-2026-900282",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "9283b58f9e2044d8",
+      "ref": "ARF-2026-900281",
+      "status": "rmi_sent"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "1fac2f4dbd834edd",
+      "ref": "ARF-2026-900280",
+      "status": "kyc_documents"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "949ff978f99b4ac6",
+      "ref": "ARF-2026-900279",
+      "status": "kyc_documents"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "02ac3dc0e8084893",
+      "ref": "ARF-2026-900278",
+      "status": "edd_required"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "6155373c30b74cc1",
+      "ref": "ARF-2026-900277",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "a8a1c9737fb1442a",
+      "ref": "ARF-2026-900276",
+      "status": "edd_required"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "64fa2d15bb8a4320",
+      "ref": "ARF-2026-900275",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "30ca519d0a864018",
+      "ref": "ARF-2026-900274",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": false,
+      "has_screening_text": true,
+      "id": "922cf88fd7294e83",
+      "ref": "ARF-2026-900273",
+      "status": "draft"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "f25ec5086b734b10",
+      "ref": "ARF-2026-900272",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "8ca69d15df3b4b14",
+      "ref": "ARF-2026-900271",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "7751f96191804f36",
+      "ref": "ARF-2026-900270",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "68a829dfa60646b4",
+      "ref": "ARF-2026-900269",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "066a134c7a184136",
+      "ref": "ARF-2026-900268",
+      "status": "kyc_documents"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "cf373715955b4e3c",
+      "ref": "ARF-2026-900267",
+      "status": "pricing_review"
+    },
+    {
+      "detail_status": 200,
+      "has_ca_text": true,
+      "has_screening_text": true,
+      "id": "0dc13dca445d450b",
+      "ref": "ARF-2026-900266",
+      "status": "pricing_review"
+    }
+  ],
+  "sample_count": 40
+}
