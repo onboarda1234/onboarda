@@ -265,6 +265,39 @@ def test_gate_blocks_missing_results_verified_at_agent_execution_and_unsupported
     assert any(blocker["code"] == "unsupported_document_type" for blocker in gate["blockers"])
 
 
+def test_gate_payload_is_json_serializable_with_postgres_datetime_rows(db):
+    from document_reliance_gate import evaluate_document_reliance_gate
+
+    app = _insert_app(db)
+    _insert_required_documents(db, app["id"])
+    docs = [
+        dict(row)
+        for row in db.execute(
+            "SELECT * FROM documents WHERE application_id=?",
+            (app["id"],),
+        ).fetchall()
+    ]
+    pg_timestamp = datetime.now(timezone.utc)
+    for doc in docs:
+        if doc.get("doc_type") == "cert_inc":
+            doc["verified_at"] = pg_timestamp
+            doc["verification_results"] = {
+                "overall": "verified",
+                "checks": [{"result": "pass"}],
+                "verified_at": pg_timestamp,
+            }
+
+    gate = evaluate_document_reliance_gate(db, app, stage="postgres_datetime_unit", documents=docs)
+
+    json.dumps(gate)
+    cert_snapshot = next(
+        item for item in gate["documents"]
+        if item.get("required_document_type") == "cert_inc"
+    )
+    assert isinstance(cert_snapshot["verified_at"], str)
+    assert isinstance(cert_snapshot["verification_results"]["verified_at"], str)
+
+
 def test_approval_gate_blocks_document_evidence_and_passes_when_fixed(db):
     from security_hardening import ApprovalGateValidator
 
