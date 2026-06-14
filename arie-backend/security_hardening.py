@@ -1483,6 +1483,7 @@ def _collect_screening_provider_evidence(screening_report: Dict) -> list:
       - company_watchlist (Sumsub company sanctions) or company_screening (CA)
       - director_screening_N (Sumsub or CA person AML/PEP)
       - ubo_screening_N (Sumsub or CA person AML/PEP)
+      - intermediary_screening_N (CA intermediary/entity AML/PEP/sanctions)
       - kyc_applicant_N (Sumsub identity verification)
 
     Enrichment (optional, non-blocking):
@@ -1524,6 +1525,9 @@ def _collect_screening_provider_evidence(screening_report: Dict) -> list:
 
     for idx, person in enumerate(screening_report.get("ubo_screenings") or []):
         add(f"ubo_screening_{idx}", (person or {}).get("screening"))
+
+    for idx, person in enumerate(screening_report.get("intermediary_screenings") or []):
+        add(f"intermediary_screening_{idx}", (person or {}).get("screening"))
 
     add("ip_geolocation", screening_report.get("ip_geolocation"))
 

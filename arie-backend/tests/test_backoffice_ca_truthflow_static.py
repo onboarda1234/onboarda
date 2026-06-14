@@ -215,14 +215,29 @@ def test_backoffice_screening_evidence_drawer_uses_review_friendly_fallbacks():
     title_region = _function_region(html, "evidencePrimaryLabel", "isPepEvidenceRelevant")
 
     assert "function formatProviderName" in html
-    assert "|| 'ComplyAdvantage'" in register_region
-    assert "var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'ComplyAdvantage'" in drawer_region
+    assert "|| 'Unknown Provider'" in register_region
+    assert "var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'Unknown Provider'" in drawer_region
+    assert "|| 'ComplyAdvantage'" not in register_region
+    assert "|| 'ComplyAdvantage'" not in drawer_region
     assert "Provider', provider" in drawer_region
     assert "Not recorded" not in drawer_region
     assert "function isUuidLike" in html
     assert "evidencePrimaryLabel(hit, hit)" in drawer_region
     assert "!isUuidLike(candidate)" in title_region
     assert "Screening Evidence — ' + matchedName" in drawer_region
+
+
+def test_backoffice_screening_review_includes_intermediary_subjects():
+    html = BACKOFFICE_HTML.read_text()
+
+    summary_region = _function_region(html, "deriveScreeningTruthSummary", "screeningTruthBlockedReasons")
+    person_region = _function_region(html, "buildPersonScreeningReviewCard", "buildScreeningTriageSubjects")
+    triage_region = _function_region(html, "buildScreeningTriageSubjects", "renderScreeningReviewPanel")
+
+    assert "report.intermediary_screenings" in summary_region
+    assert ".concat(screeningSummary.report.intermediary_screenings || [])" in person_region
+    assert "(app.intermediaries || []).forEach" in triage_region
+    assert "subject_type:'intermediary'" in triage_region
 
 
 def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections():

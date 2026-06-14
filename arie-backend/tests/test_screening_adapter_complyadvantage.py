@@ -69,6 +69,7 @@ def _report(kind="director", name="Jane Doe"):
         "company_screening": {},
         "director_screenings": [person] if kind == "director" else [],
         "ubo_screenings": [person] if kind == "ubo" else [],
+        "intermediary_screenings": [person] if kind == "intermediary" else [],
         "overall_flags": [],
         "total_hits": 1,
         "degraded_sources": [],
@@ -148,8 +149,10 @@ def test_screen_company_delegates_to_entity_context():
 
     call = orchestrator.calls[0]
     assert call["application_context"].screening_subject_kind == "entity"
-    assert call["strict_customer"]["company"]["legal_name"] == "Acme Ltd"
-    assert call["strict_customer"]["company"] == {"legal_name": "Acme Ltd"}
+    strict_company = call["strict_customer"]["company"]
+    assert strict_company["legal_name"] == "Acme Ltd"
+    assert strict_company["jurisdiction"] == "MU"
+    assert strict_company["custom_fields"] == {"source_system": "regmind"}
     assert call["screening_configuration_identifier"] == "cfg-123"
 
 
@@ -217,3 +220,54 @@ def test_run_full_screening_dedupes_same_natural_person_across_roles():
     assert result["ubo_screenings"][0]["person_name"] == "Same Person"
     assert result["director_screenings"][0]["screening"]["shared_subject_key"] == result["ubo_screenings"][0]["screening"]["shared_subject_key"]
     assert result["total_hits"] == 1
+
+
+def test_run_full_screening_includes_intermediaries_with_entity_payload():
+    orchestrator = FakeOrchestrator()
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, config=FakeConfig())
+
+    result = adapter.run_full_screening(
+        {
+            "application_id": "app-1",
+            "client_id": "client-1",
+            "company_name": "Acme Ltd",
+            "country": "Mauritius",
+        },
+        [],
+        [],
+        [{"person_key": "i-1", "entity_name": "HoldCo Ltd", "jurisdiction": "Mauritius", "registration_number": "H123"}],
+    )
+
+    assert len(orchestrator.calls) == 2
+    intermediary_call = orchestrator.calls[1]
+    assert intermediary_call["application_context"].screening_subject_kind == "intermediary"
+    assert intermediary_call["application_context"].screening_subject_name == "HoldCo Ltd"
+    assert ":intermediary:key-i-1:strict" in intermediary_call["strict_external_identifier"]
+    assert intermediary_call["strict_customer"]["company"]["legal_name"] == "HoldCo Ltd"
+    assert intermediary_call["strict_customer"]["company"]["registration_number"] == "H123"
+    assert intermediary_call["strict_customer"]["company"]["jurisdiction"] == "MU"
+    assert result["intermediary_screenings"][0]["person_type"] == "intermediary"
+    assert result["intermediary_screenings"][0]["person_name"] == "HoldCo Ltd"
+    assert result["intermediary_screenings"][0]["requires_review"] is True
+    assert result["any_pep_hits"] is True
+    assert result["total_intermediaries_screened"] == 1
+
+
+def test_run_full_screening_records_missing_intermediary_subject_gap():
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=FakeOrchestrator(), config=FakeConfig())
+
+    result = adapter.run_full_screening(
+        {"application_id": "app-1", "client_id": "client-1", "company_name": "Acme Ltd"},
+        [],
+        [],
+        [{"person_key": "i-blank", "jurisdiction": "Mauritius"}],
+    )
+
+    gap = result["intermediary_screenings"][0]
+    assert gap["person_type"] == "intermediary"
+    assert gap["screening_state"] == "failed"
+    assert gap["requires_review"] is True
+    assert gap["screening"]["api_status"] == "failed"
+    assert gap["screening"]["evidence_gap"] is True
+    assert "intermediary_missing_required_subject_data" in result["degraded_sources"]
+    assert result["any_non_terminal_subject"] is True

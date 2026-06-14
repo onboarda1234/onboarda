@@ -75,7 +75,7 @@ class ScreeningProvider:
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement screen_company()")
 
-    def run_full_screening(self, application_data, directors, ubos, client_ip=None):
+    def run_full_screening(self, application_data, directors, ubos, intermediaries=None, client_ip=None):
         """
         Run full screening pipeline (all agents in parallel).
 
@@ -83,6 +83,7 @@ class ScreeningProvider:
             application_data: Application data dict.
             directors: List of director dicts.
             ubos: List of UBO dicts.
+            intermediaries: List of intermediary dicts (optional).
             client_ip: Client IP address (optional).
 
         Returns:

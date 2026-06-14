@@ -19,7 +19,7 @@ The platform ships as two branded surfaces:
 | Database | PostgreSQL (production) · SQLite (local dev) |
 | AI | [Anthropic Claude](https://www.anthropic.com/) (risk-based Sonnet/Opus routing for memo generation) |
 | KYC Provider | [Sumsub](https://sumsub.com/) (individual identity verification) |
-| Screening Provider | ComplyAdvantage (sanctions, PEP/RCA, adverse media, customer/company screening, ongoing monitoring) |
+| Screening Provider | ComplyAdvantage Mesh (AML sanctions, PEP/RCA, adverse media, customer/company screening, ongoing monitoring) |
 | Document Storage | AWS S3 |
 | PDF Generation | [WeasyPrint](https://weasyprint.org/) |
 | Frontend | Vanilla JS — single-file HTML (no build step) |
@@ -88,8 +88,8 @@ Applicant submits via Portal
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
-│  2. Screening                 │  ComplyAdvantage sanctions/PEP/RCA,
-│     (external APIs)           │  sanctions & registry lookups
+│  2. Screening                 │  ComplyAdvantage Mesh sanctions/PEP/RCA
+│     (external APIs)           │  and adverse-media screening; registry lookups
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
@@ -118,14 +118,14 @@ Applicant submits via Portal
 **Monitoring Agents (6–10):**
 
 6. **Periodic Review Preparation** — Officer-triggered review scheduling, state machine, and data collection (automatic scheduler not yet implemented)
-7. **Adverse Media & PEP Monitoring** — PEP screening and adverse-media signal parsing from ComplyAdvantage results (external adverse-media API call not yet implemented)
+7. **Adverse Media & PEP Monitoring** — PEP screening and adverse-media signal parsing from ComplyAdvantage Mesh screening and monitoring results
 8. **Behaviour & Risk Drift** — Transaction pattern analysis and risk drift detection
 9. **Regulatory Impact** — Regulatory change assessment for existing clients
 10. **Ongoing Compliance Review** — Continuous compliance posture evaluation
 
-> **Note**: Monitoring agents 6–10 are scaffolded with full state machines, endpoints, and audit trails. Automatic scheduling (agent 6) and real-time external adverse-media calls (agent 7) are not yet implemented.
+> **Note**: Monitoring agents 6–10 are scaffolded with full state machines, endpoints, and audit trails. Automatic scheduling (agent 6) remains the environment-gated due-review sweep, not a manually operated scheduler.
 > Individual identity verification uses Sumsub.
-> Screening and monitoring use ComplyAdvantage.
+> AML sanctions, PEP/RCA, adverse-media screening, and monitoring use ComplyAdvantage Mesh only when `SCREENING_PROVIDER=complyadvantage` and `ENABLE_SCREENING_ABSTRACTION=true`; otherwise the safe legacy provider route remains in force.
 
 ---
 

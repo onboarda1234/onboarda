@@ -157,10 +157,55 @@ def build_customer_person(person, *, strict=True):
 
 def build_customer_company(application_data, *, strict=True):
     """Build a CA customer.company dict from internal application data."""
-    legal_name = _first(application_data, "company_name", "legal_name", "name") or "Unknown Company"
+    legal_name = _first(application_data, "company_name", "legal_name", "entity_name", "name") or "Unknown Company"
     company = _drop_empty({
         "legal_name": legal_name,
     })
+    if strict:
+        jurisdiction = _first(
+            application_data,
+            "jurisdiction",
+            "country_of_incorporation",
+            "incorporation_country",
+            "registered_country",
+            "country",
+        )
+        registration_number = _first(
+            application_data,
+            "company_registration_number",
+            "registration_number",
+            "company_number",
+            "brn",
+            "business_registration_number",
+            "incorporation_number",
+        )
+        company.update(_drop_empty({
+            "registration_number": registration_number,
+            "jurisdiction": to_ca_country_code(jurisdiction) or jurisdiction,
+            "incorporation_date": _to_iso_date(_first(
+                application_data,
+                "incorporation_date",
+                "date_of_incorporation",
+                "company_incorporation_date",
+            )),
+            "entity_type": _first(application_data, "entity_type", "company_type", "legal_form"),
+            "industry": _first(application_data, "industry", "sector", "business_activity", "business_sector"),
+            "website": _first(application_data, "website", "website_url", "entity_website"),
+        }))
+        address_source = (
+            _first(application_data, "registered_address", "registered_office_address", "address")
+            or (application_data if _has_address_detail(application_data) else None)
+        )
+        address = to_ca_address(address_source, location_type="registered_address")
+        if address:
+            company["addresses"] = [address]
+        reference = _first(application_data, "application_ref", "ref", "application_id", "id")
+        custom_fields = _drop_empty({
+            "source_system": "regmind",
+            "application_reference": reference,
+        })
+        if custom_fields:
+            company["custom_fields"] = custom_fields
     return _customer_envelope(company, "company", _first(application_data, "application_id", "id", "ref"))
 
 
@@ -213,6 +258,42 @@ def _first(data, *keys):
 
 def _drop_empty(value):
     return {k: v for k, v in value.items() if v not in (None, "", [], {})}
+
+
+def _has_address_detail(data):
+    if not isinstance(data, dict):
+        return False
+    address_keys = set(_FULL_ADDRESS_KEYS) | {
+        "address_line1",
+        "address_line_1",
+        "line1",
+        "street",
+        "city",
+        "town",
+        "town_name",
+        "postal_code",
+        "postcode",
+        "zip",
+    }
+    return any(data.get(key) not in (None, "") for key in address_keys)
+
+
+def _to_iso_date(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
+        except (TypeError, ValueError):
+            return text
+    return None
 
 
 def _split_name(full_name):

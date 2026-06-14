@@ -21,7 +21,7 @@ class DummyProvider(ScreeningProvider):
     def screen_company(self, company_name, jurisdiction=None):
         return {"company_name": company_name, "found": False}
 
-    def run_full_screening(self, application_data, directors, ubos, client_ip=None):
+    def run_full_screening(self, application_data, directors, ubos, intermediaries=None, client_ip=None):
         return {"total_hits": 0}
 
     def is_configured(self) -> bool:

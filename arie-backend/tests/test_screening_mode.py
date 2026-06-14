@@ -97,6 +97,105 @@ def test_complyadvantage_company_screening_is_required_evidence():
     assert "company_registry" not in by_name
 
 
+def test_complyadvantage_intermediary_screening_is_required_evidence():
+    from security_hardening import _collect_screening_provider_evidence
+
+    report = {
+        "provider": "complyadvantage",
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+        },
+        "director_screenings": [],
+        "ubo_screenings": [],
+        "intermediary_screenings": [
+            {
+                "entity_name": "HoldCo Ltd",
+                "person_type": "intermediary",
+                "screening": {
+                    "provider": "complyadvantage",
+                    "source": "complyadvantage",
+                    "api_status": "failed",
+                    "evidence_gap": True,
+                },
+            }
+        ],
+    }
+
+    evidence = _collect_screening_provider_evidence(report)
+    by_name = {item["name"]: item for item in evidence}
+
+    assert by_name["intermediary_screening_0"]["is_required"] is True
+    assert by_name["intermediary_screening_0"]["api_status"] == "failed"
+
+
+def test_determine_screening_mode_failed_when_intermediary_gap_present():
+    from security_hardening import determine_screening_mode
+
+    report = {
+        "provider": "complyadvantage",
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+        },
+        "director_screenings": [],
+        "ubo_screenings": [],
+        "intermediary_screenings": [
+            {
+                "entity_name": "Unnamed intermediary",
+                "screening": {
+                    "provider": "complyadvantage",
+                    "source": "complyadvantage",
+                    "api_status": "failed",
+                    "evidence_gap": True,
+                },
+            }
+        ],
+    }
+
+    assert determine_screening_mode(report) == "unknown"
+
+
+def test_screening_truth_blocks_approval_for_intermediary_gap():
+    from screening_state import build_screening_truth_summary
+
+    report = {
+        "provider": "complyadvantage",
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": False,
+            "results": [],
+        },
+        "director_screenings": [],
+        "ubo_screenings": [],
+        "intermediary_screenings": [
+            {
+                "entity_name": "Unnamed intermediary",
+                "person_type": "intermediary",
+                "screening_state": "failed",
+                "screening": {
+                    "provider": "complyadvantage",
+                    "source": "complyadvantage",
+                    "api_status": "failed",
+                    "evidence_gap": True,
+                    "matched": False,
+                    "results": [],
+                },
+            }
+        ],
+    }
+
+    summary = build_screening_truth_summary(report, {})
+
+    assert summary["approval_blocking"] is True
+    assert summary["screening_gate_ready"] is False
+    assert "intermediary_screening_0:provider_failed" in summary["blocking_reasons"]
+
+
 def test_store_screening_mode_updates_application_column(db, temp_db):
     from security_hardening import store_screening_mode
 

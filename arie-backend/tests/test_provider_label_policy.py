@@ -113,7 +113,7 @@ def test_screening_queue_filter_is_result_source_not_runtime_provider_selector()
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
     assert "Result Source Filter" in html
     assert "Provider/source" not in html
-    assert "ComplyAdvantage screening source" in html
+    assert "ComplyAdvantage Mesh screening source" in html
     assert "Sumsub IDV/KYC source" in html
     assert "OpenCorporates registry source" in html
 
@@ -122,9 +122,19 @@ def test_provider_status_panel_uses_backend_runtime_truth():
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
     assert "screening-provider-status-panel" in html
     assert "Active AML Screening Provider" in html
+    assert "ComplyAdvantage Mesh only when backend active=true" in html
+    assert "CA Mesh Active" in html
     assert "Identity Verification Provider" in html
     assert "IDV Status (Sumsub)" in html
     assert "AML Entitlement (Sumsub)" not in html
     assert "Screening Abstraction" in html
     assert "loadScreeningProviderStatus" in html
     assert "Configured screening provider" not in html
+
+
+def test_unknown_provider_does_not_render_as_complyadvantage_mesh():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text()
+
+    assert "Unknown Provider" in html
+    assert "|| 'ComplyAdvantage'" not in html
+    assert "|| 'ComplyAdvantage Mesh'" not in html

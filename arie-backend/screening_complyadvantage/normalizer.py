@@ -69,7 +69,7 @@ class ScreeningApplicationContext(BaseModel):
 
     application_id: str
     client_id: str
-    screening_subject_kind: Literal["director", "ubo", "subject", "entity"]
+    screening_subject_kind: Literal["director", "ubo", "intermediary", "subject", "entity"]
     screening_subject_name: str
     screening_subject_person_key: Optional[str] = None
     declared_pep: Optional[bool] = None
@@ -77,7 +77,7 @@ class ScreeningApplicationContext(BaseModel):
 
 def subject_scope_for_context(context: ScreeningApplicationContext) -> Optional[Literal["entity", "person"]]:
     """Return the monitoring-alert subject scope when the context is deterministic."""
-    if context.screening_subject_kind == "entity":
+    if context.screening_subject_kind in ("entity", "intermediary"):
         return "entity"
     if context.screening_subject_kind in ("director", "ubo"):
         return "person"
@@ -430,6 +430,7 @@ def _build_report(matches, context, provider_specific, provenance):
         provider_specific.setdefault("subject_scope", subject_scope)
     director_screenings = []
     ubo_screenings = []
+    intermediary_screenings = []
     company_screening = {
         "company_screening_coverage": "none",
         "has_company_screening_hit": None,
@@ -440,6 +441,16 @@ def _build_report(matches, context, provider_specific, provenance):
             company_screening = derive_company_screening_from_matches(matches, screened_at=screened_at)
         else:
             company_screening = _empty_company_screening(screened_at=screened_at)
+    elif context.screening_subject_kind == "intermediary":
+        if matches:
+            intermediary_company = derive_company_screening_from_matches(matches, screened_at=screened_at)
+        else:
+            intermediary_company = _empty_company_screening(screened_at=screened_at)
+        intermediary_screenings.append(_intermediary_screening_from_company(
+            context,
+            intermediary_company,
+            screened_at=screened_at,
+        ))
     else:
         person_type = "ubo" if context.screening_subject_kind == "ubo" else "director"
         if matches:
@@ -463,6 +474,7 @@ def _build_report(matches, context, provider_specific, provenance):
         "company_screening": company_screening.get("company_screening", {}),
         "director_screenings": director_screenings,
         "ubo_screenings": ubo_screenings,
+        "intermediary_screenings": intermediary_screenings,
         "overall_flags": _overall_flags(matches),
         "total_hits": len(matches),
         "degraded_sources": [],
@@ -474,6 +486,38 @@ def _build_report(matches, context, provider_specific, provenance):
     if provenance is not None:
         report["provenance"] = provenance
     return report
+
+
+def _intermediary_screening_from_company(context, company_screening, screened_at: str | None = None):
+    record = dict((company_screening or {}).get("company_screening") or {})
+    record.setdefault("provider", "complyadvantage")
+    record.setdefault("source", "complyadvantage")
+    record.setdefault("api_status", "live")
+    record.setdefault("screened_at", screened_at)
+    adverse = record.get("adverse_media") if isinstance(record.get("adverse_media"), dict) else {}
+    sanctions = record.get("sanctions") if isinstance(record.get("sanctions"), dict) else {}
+    has_adverse = bool(adverse.get("matched")) if adverse else None
+    has_sanctions = bool(sanctions.get("matched") or (company_screening or {}).get("has_company_screening_hit"))
+    matched = bool(record.get("matched") or record.get("results") or has_sanctions or has_adverse)
+    return {
+        "person_name": context.screening_subject_name,
+        "entity_name": context.screening_subject_name,
+        "person_type": "intermediary",
+        "subject_type": "intermediary",
+        "nationality": "",
+        "declared_pep": "No",
+        "provider_detected_pep": False,
+        "undeclared_pep": False,
+        "has_pep_hit": False,
+        "has_sanctions_hit": has_sanctions,
+        "has_adverse_media_hit": has_adverse,
+        "adverse_media_coverage": "full" if has_adverse else "none",
+        "screening": record,
+        "screening_state": "completed_match" if matched else "completed_clear",
+        "requires_review": matched,
+        "is_rca": None,
+        "pep_classes": None,
+    }
 
 
 def _empty_person_screening(context, person_type, screened_at: str | None = None):

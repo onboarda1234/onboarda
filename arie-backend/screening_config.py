@@ -1,7 +1,7 @@
 """
 Screening Abstraction Configuration — Feature Flags & Provider Settings
 =======================================================================
-Controls for the ComplyAdvantage migration scaffolding.
+Controls for screening-provider routing and runtime status reporting.
 
 SAFETY: Abstraction defaults OFF in every environment.
 SAFETY: Provider defaults to "sumsub" (existing provider).
@@ -12,6 +12,19 @@ import os
 import logging
 
 logger = logging.getLogger("arie.screening_config")
+
+
+COMPLYADVANTAGE_MESH_PROVIDER = "complyadvantage"
+SUMSUB_PROVIDER = "sumsub"
+OPENCORPORATES_PROVIDER = "opencorporates"
+
+PROVIDER_DISPLAY_NAMES = {
+    COMPLYADVANTAGE_MESH_PROVIDER: "ComplyAdvantage Mesh",
+    "ca": "ComplyAdvantage Mesh",
+    "mesh": "ComplyAdvantage Mesh",
+    SUMSUB_PROVIDER: "Sumsub",
+    OPENCORPORATES_PROVIDER: "OpenCorporates",
+}
 
 
 # ── Feature Flag Defaults ──
@@ -87,8 +100,10 @@ def get_shadow_provider_name() -> str | None:
 
 
 # ── Source of Truth Rules ──
-# In Sprint 1–2, all operational dimensions use the legacy source.
-# Normalized storage is non-authoritative scaffolding only.
+# These dimensions are runtime-routed. Under the safe default they remain on
+# the legacy Sumsub path. When SCREENING_PROVIDER=complyadvantage and
+# ENABLE_SCREENING_ABSTRACTION=true, ComplyAdvantage Mesh becomes the AML
+# screening source of truth for these dimensions.
 
 SOURCE_OF_TRUTH_RULES = {
     "screening_report": "legacy",
@@ -102,13 +117,26 @@ SOURCE_OF_TRUTH_RULES = {
 }
 
 
+def get_provider_display_name(provider_name: str | None, *, unknown_label: str = "Unknown") -> str:
+    """Return the business-readable provider name without fabricating CA provenance."""
+    raw = str(provider_name or "").strip()
+    if not raw:
+        return unknown_label
+    key = raw.lower().replace("_", "").replace("-", "").replace(" ", "")
+    return PROVIDER_DISPLAY_NAMES.get(key, raw)
+
+
+def is_complyadvantage_active() -> bool:
+    """Return True only when CA Mesh is both selected and allowed to route."""
+    return get_active_provider_name() == COMPLYADVANTAGE_MESH_PROVIDER and is_abstraction_enabled()
+
+
 def get_source_of_truth(dimension: str) -> str:
     """
     Get the authoritative data source for a given operational dimension.
 
-    In Sprint 1–2, always returns "legacy".
-    This will be updated in Sprint 3 when normalized storage becomes authoritative
-    for specific dimensions.
+    Returns "complyadvantage" only when the runtime provider cutover is active.
+    Otherwise returns "legacy" for the Sumsub/legacy screening path.
 
     Args:
         dimension: Operational dimension (e.g., "screening_report", "risk_scoring")
@@ -124,4 +152,6 @@ def get_source_of_truth(dimension: str) -> str:
             f"Unknown source-of-truth dimension: '{dimension}'. "
             f"Valid dimensions: {list(SOURCE_OF_TRUTH_RULES.keys())}"
         )
+    if is_complyadvantage_active():
+        return COMPLYADVANTAGE_MESH_PROVIDER
     return SOURCE_OF_TRUTH_RULES[dimension]

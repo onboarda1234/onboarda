@@ -2414,11 +2414,12 @@ from screening import (
 from screening_routing import run_screening_for_active_provider
 
 
-def run_full_screening(application_data, directors, ubos, client_ip=None, db=None):
+def run_full_screening(application_data, directors, ubos, intermediaries=None, client_ip=None, db=None):
     return run_screening_for_active_provider(
         application_data,
         directors,
         ubos,
+        intermediaries,
         client_ip=client_ip,
         db=db,
         legacy_runner=_legacy_run_full_screening,
@@ -2446,7 +2447,7 @@ def _persist_normalized_screening_report_if_enabled(db, client_id, application_i
             application_id,
             report,
             _src_hash,
-            provider=report.get("provider", "sumsub"),
+            provider=report.get("provider") or "unknown",
             normalized_version=str(report.get("normalized_version") or "1.0"),
         )
         return
@@ -2683,13 +2684,13 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
 
 # ── Health Check ──
 def _complyadvantage_runtime_status():
-    """Return truthful ComplyAdvantage readiness without activating it.
+    """Return truthful ComplyAdvantage Mesh readiness without activating it.
 
-    Sumsub remains authoritative for IDV/KYC.  ComplyAdvantage only reports
+    Sumsub remains authoritative for IDV/KYC.  ComplyAdvantage Mesh only reports
     live when both the provider selection and abstraction gate are active and
     the CA credential boundary validates.
     """
-    from screening_config import get_active_provider_name, is_abstraction_enabled
+    from screening_config import get_active_provider_name, get_provider_display_name, is_abstraction_enabled
 
     requested_provider = get_active_provider_name()
     abstraction_enabled = is_abstraction_enabled()
@@ -2725,16 +2726,21 @@ def _complyadvantage_runtime_status():
         blockers.append("ENABLE_SCREENING_ABSTRACTION is false")
     if not configured and config_error:
         blockers.append(config_error)
+    fallback_mode = "disabled" if active else ("provider_ready_but_inactive" if configured else status)
 
     return {
         "configured": configured,
         "status": status,
         "active": active,
         "requested_provider": requested_provider,
+        "requested_provider_label": get_provider_display_name(requested_provider),
+        "provider_display_name": "ComplyAdvantage Mesh",
         "abstraction_enabled": abstraction_enabled,
-        "implementation_status": "in_progress",
-        "role": "KYB screening, adverse media, and ongoing monitoring",
-        "description": "ComplyAdvantage KYB, adverse-media, and ongoing-monitoring integration",
+        "implementation_status": "active" if active else ("ready_not_active" if configured else status),
+        "fallback_mode": fallback_mode,
+        "simulation_fallback_enabled": False,
+        "role": "AML sanctions, PEP/RCA, adverse-media screening, and ongoing monitoring",
+        "description": "ComplyAdvantage Mesh AML, sanctions, PEP/RCA, adverse-media, and monitoring integration",
         "blockers": blockers,
     }
 
@@ -7155,7 +7161,7 @@ class SubmitApplicationHandler(BaseHandler):
         client_ip = self.get_client_ip()
         try:
             screening_report = run_full_screening(
-                scoring_input, directors, ubos, client_ip=client_ip, db=db
+                scoring_input, directors, ubos, intermediaries, client_ip=client_ip, db=db
             )
         except ScreeningProviderError as spe:
             logger.error(
@@ -16215,8 +16221,8 @@ _SCREENING_WORKFLOW_TERMINAL_STATUSES = {
 
 _SCREENING_REVIEW_RATIONALE_MIN_CHARS = 12
 
-_SCREENING_SUBJECT_TYPES = {"entity", "director", "ubo", "applicant", "client"}
-_SCREENING_SUBJECT_ALIASES = {"company": "entity"}
+_SCREENING_SUBJECT_TYPES = {"entity", "director", "ubo", "intermediary", "applicant", "client"}
+_SCREENING_SUBJECT_ALIASES = {"company": "entity", "intermediary_company": "intermediary"}
 
 
 def _screening_review_rationale_error(disposition, rationale):
@@ -17691,7 +17697,7 @@ def _screening_evidence_subject_matches(row, candidate, *, require_candidate=Fal
 
 
 def _screening_evidence_link_strategy(row, candidate, row_ids, row_categories):
-    provider = _screening_evidence_norm(_first_non_empty(candidate.get("provider"), "complyadvantage"))
+    provider = _screening_evidence_norm(candidate.get("provider"))
     row_provider_blob = _screening_evidence_norm(
         " ".join(
             _screening_evidence_text(part)
@@ -17975,6 +17981,46 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
         }
 
+    if subject_type == "intermediary":
+        _, _, intermediaries = get_application_parties(db, app["id"])
+        person = next((p for p in intermediaries or [] if (p.get("entity_name") or p.get("full_name") or "") == subject_name), {})
+        item = next(
+            (
+                i for i in (report.get("intermediary_screenings") or [])
+                if (i.get("entity_name") or i.get("person_name") or i.get("name")) == subject_name
+            ),
+            {},
+        )
+        screening = (item or {}).get("screening") or {}
+        facts = _screening_hit_facts(screening)
+        person_state = derive_screening_state(screening)
+        subject = derive_subject_state(screening, declared_pep=False)
+        context = []
+        if person.get("jurisdiction"):
+            context.append("Jurisdiction: " + str(person.get("jurisdiction")))
+        if person.get("ownership_pct") not in (None, ""):
+            context.append("Ownership: " + str(person.get("ownership_pct")) + "%")
+        if screening.get("evidence_gap"):
+            context.append("Evidence gap")
+        if facts.get("adverse_media_hits", 0) > 0:
+            context.append("Adverse media")
+        return {
+            "subject_found": bool(person or item),
+            "watchlist_status": _screening_legacy_status(
+                person_state,
+                subject["has_provider_sanctions_hit"] or facts.get("sanctions_hits", 0) > 0,
+            ),
+            "pep_declared_status": "not_applicable",
+            "pep_screening_status": "not_applicable",
+            "screening_state": person_state,
+            "total_hits": facts["total_hits"],
+            "entity_context": context,
+            "provider": screening.get("provider"),
+            "source": screening.get("source"),
+            "api_status": screening.get("api_status"),
+            "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
+        }
+
     return {
         "watchlist_status": None,
         "pep_declared_status": None,
@@ -18001,9 +18047,9 @@ def _screening_sensitive_flags(app, row, subject_type, disposition, context_erro
         if flag not in flags:
             flags.append(flag)
 
-    if subject_type in ("director", "ubo"):
+    if subject_type in ("director", "ubo", "intermediary"):
         add("director_or_ubo")
-    elif subject_type not in ("entity", "director", "ubo"):
+    elif subject_type not in ("entity", "director", "ubo", "intermediary"):
         add("legacy_subject_type")
 
     if context_error:
@@ -18330,6 +18376,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         party_bundle = parties_by_app.get(app["id"], ([], [], []))
         directors = party_bundle[0] if len(party_bundle) > 0 else []
         ubos = party_bundle[1] if len(party_bundle) > 1 else []
+        intermediaries = party_bundle[2] if len(party_bundle) > 2 else []
         review_map = {}
         for review in reviews_by_app.get(app["id"], []):
             review_map[(review.get("subject_type"), review.get("subject_name"))] = review
@@ -18349,9 +18396,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
             metrics["applications_awaiting_screening"] += 1
 
         person_screenings = {}
+        intermediary_screenings = {}
         if report:
             for item in (report.get("director_screenings") or []) + (report.get("ubo_screenings") or []):
                 person_screenings[item.get("person_name")] = item
+            for item in report.get("intermediary_screenings") or []:
+                intermediary_screenings[item.get("entity_name") or item.get("person_name") or item.get("name")] = item
 
         company_screening = (report or {}).get("company_screening") or {}
         company_sanctions = company_screening.get("sanctions") or {}
@@ -18712,6 +18762,117 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
                 "review_required": requires_review and (not person_review or review_actionable),
                 **person_review_fields,
+            })
+
+        for intermediary in intermediaries:
+            intermediary_name = intermediary.get("entity_name") or intermediary.get("full_name") or "Unnamed intermediary"
+            item = intermediary_screenings.get(intermediary_name)
+            screening = (item or {}).get("screening") or {}
+            facts = _screening_hit_facts(screening)
+            intermediary_state = derive_screening_state(screening)
+            intermediary_truth = derive_screening_truth(
+                screening,
+                name="intermediary_screening",
+                required=True,
+            )
+            intermediary_provider_mode = intermediary_truth.get("provider_mode")
+            intermediary_review = review_map.get(("intermediary", intermediary_name))
+            intermediary_review_fields = _screening_review_payload_fields(intermediary_review)
+            intermediary_review_status = _screening_review_completed_status(intermediary_review_fields)
+
+            if not report:
+                status_key = "awaiting_screening"
+                status_label = "Awaiting Screening"
+                watchlist_status = "pending"
+            elif not item:
+                status_key = "incomplete_record"
+                status_label = "Incomplete Screening Record"
+                intermediary_state = _SCR_NOT_STARTED
+                watchlist_status = "pending"
+            else:
+                watchlist_status = _screening_legacy_status(intermediary_state, facts.get("sanctions_hits", 0) > 0)
+                if intermediary_review_status:
+                    status_key, status_label = intermediary_review_status
+                elif intermediary_state == _SCR_COMPLETED_MATCH or facts["total_hits"] > 0:
+                    status_key = "review_required"
+                    status_label = "Review Required"
+                elif intermediary_provider_mode == "simulated_fallback":
+                    status_key = "screening_simulated"
+                    status_label = "Simulated Screening — Not Live"
+                elif intermediary_provider_mode == "sandbox_provider":
+                    status_key = "screening_sandbox"
+                    status_label = "Sandbox Screening — Not Production Live"
+                elif intermediary_state == _SCR_NOT_CONFIGURED:
+                    status_key = "screening_not_configured"
+                    status_label = "Screening Not Configured"
+                elif intermediary_state == _SCR_FAILED:
+                    status_key = "screening_unavailable"
+                    status_label = "Screening Unavailable"
+                elif intermediary_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                    status_key = "screening_pending"
+                    status_label = "Screening Pending Provider"
+                else:
+                    status_key = "screened_no_match"
+                    status_label = "No Match"
+
+            requires_review = status_key in (
+                "review_required", "incomplete_record", "screening_pending",
+                "screening_not_configured", "screening_unavailable",
+                "screening_simulated", "screening_sandbox", "awaiting_screening",
+            )
+            review_actionable = intermediary_review_fields["review_actionable"]
+            if requires_review and (not intermediary_review or review_actionable):
+                application_requires_review = True
+
+            entity_context = []
+            if intermediary.get("jurisdiction"):
+                entity_context.append("Jurisdiction: " + str(intermediary.get("jurisdiction")))
+            if intermediary.get("ownership_pct") not in (None, ""):
+                entity_context.append("Ownership: " + str(intermediary.get("ownership_pct")) + "%")
+            if screening.get("source"):
+                entity_context.append("Source: " + screening.get("source"))
+            if screening.get("api_status"):
+                entity_context.append("API: " + screening.get("api_status"))
+            if screening.get("evidence_gap"):
+                entity_context.append("Evidence gap")
+            if facts.get("adverse_media_hits", 0) > 0:
+                entity_context.append("Adverse media")
+
+            intermediary_screening_mode = _screening_queue_row_mode(
+                screening_mode,
+                intermediary_state,
+                status_key,
+                entity_context,
+                screening,
+            )
+            rows.append({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "subject_name": intermediary_name,
+                "subject_type": "intermediary",
+                "watchlist_status": watchlist_status,
+                "pep_declared_status": "not_applicable",
+                "pep_screening_status": "not_applicable",
+                "screening_state": intermediary_state,
+                "screening_truth_state": intermediary_truth.get("canonical_state"),
+                "provider_mode": intermediary_truth.get("provider_mode"),
+                "provider_availability": intermediary_truth.get("provider_availability"),
+                "screening_result": intermediary_truth.get("screening_result"),
+                "terminal": intermediary_truth.get("terminal"),
+                "defensible_clear": intermediary_truth.get("defensible_clear"),
+                "screening_truth_reason": intermediary_truth.get("reason"),
+                "entity_context": entity_context,
+                "status_key": status_key,
+                "status_label": status_label,
+                "screening_mode": intermediary_screening_mode,
+                "screened_at": screening.get("screened_at") or screened_at,
+                "screened_by": screened_by,
+                "flag_count": len(overall_flags),
+                "total_hits": facts["total_hits"],
+                "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
+                "review_required": requires_review and (not intermediary_review or review_actionable),
+                **intermediary_review_fields,
             })
 
         if company_requires_review and (not company_review or company_review_fields.get("review_actionable")):
@@ -19231,25 +19392,31 @@ class ScreeningHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         real_id = app["id"]
-        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        directors, ubos, intermediaries = get_application_parties(db, real_id)
+        prescreening = safe_json_loads(app["prescreening_data"])
 
         app_data = {
+            "application_id": real_id,
+            "application_ref": app["ref"],
+            "client_id": app["client_id"],
             "company_name": app["company_name"],
             "country": app["country"],
             "sector": app["sector"],
             "entity_type": app["entity_type"],
+            "brn": app["brn"] if "brn" in app.keys() else prescreening.get("brn"),
+            "registered_address": prescreening.get("registered_address") or prescreening.get("registered_office_address"),
+            "incorporation_date": prescreening.get("incorporation_date"),
+            "business_activity": prescreening.get("business_activity"),
         }
 
         report = run_full_screening(
-            app_data, directors, ubos, client_ip=self.get_client_ip(), db=db
+            app_data, directors, ubos, intermediaries, client_ip=self.get_client_ip(), db=db
         )
         screening_mode = determine_screening_mode(report)
         report["screening_mode"] = screening_mode
         store_screening_mode(db, real_id, screening_mode)
 
         # Store screening report
-        prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
         screening_freshness = populate_screening_freshness_metadata(
             prescreening,
@@ -19380,22 +19547,33 @@ class APIStatusHandler(BaseHandler):
             return
 
         ca_status = _complyadvantage_runtime_status()
-        active_aml_provider = "ComplyAdvantage" if ca_status.get("active") else "Not active"
-        simulation_mode = "not_configured" if active_aml_provider == "Not active" else "disabled"
+        active_aml_provider = ca_status.get("provider_display_name") if ca_status.get("active") else "Not active"
+        simulation_mode = ca_status.get("fallback_mode") or ("disabled" if ca_status.get("active") else ca_status.get("status") or "unknown")
+        opencorporates_status = "live" if OPENCORPORATES_API_KEY else "simulated"
         self.success({
             "provider_truth": {
                 "active_aml_screening_provider": active_aml_provider,
+                "active_aml_screening_provider_key": "complyadvantage" if ca_status.get("active") else None,
                 "identity_verification_provider": "Sumsub IDV/KYC",
+                "identity_verification_provider_key": "sumsub",
+                "registry_kyb_provider": "OpenCorporates registry/enrichment",
+                "registry_kyb_status": opencorporates_status,
+                "requested_screening_provider": ca_status.get("requested_provider"),
+                "requested_screening_provider_label": ca_status.get("requested_provider_label"),
                 "screening_abstraction_enabled": bool(ca_status.get("abstraction_enabled")),
+                "screening_abstraction_required_for_ca": True,
                 "simulation_fallback_mode": simulation_mode,
+                "simulation_fallback_enabled": bool(ca_status.get("simulation_fallback_enabled")),
                 "last_provider_status_check": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "sumsub_provider_scope": "individual_kyc_identity_verification",
+                "aml_provider_scope": "aml_sanctions_pep_rca_adverse_media_monitoring",
                 "provider_labels_safe": True,
             },
             "opencorporates": {
                 "configured": bool(OPENCORPORATES_API_KEY),
-                "status": "live" if OPENCORPORATES_API_KEY else "simulated",
-                "description": "Company registry verification"
+                "status": opencorporates_status,
+                "role": "Registry/KYB enrichment provider",
+                "description": "Company registry verification and enrichment"
             },
             "ip_geolocation": {
                 "configured": True,  # ipapi.co works without key (free tier)

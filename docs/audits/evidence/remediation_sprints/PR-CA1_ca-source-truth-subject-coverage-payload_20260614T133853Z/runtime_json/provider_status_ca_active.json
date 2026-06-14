@@ -1,0 +1,23 @@
+{
+  "display_name_complyadvantage": "ComplyAdvantage Mesh",
+  "display_name_sumsub": "Sumsub",
+  "display_name_unknown": "missing-provider",
+  "is_complyadvantage_active": true,
+  "runtime_status": {
+    "active": true,
+    "configured": true,
+    "fallback_mode": "disabled",
+    "implementation_status": "active",
+    "provider_display_name": "ComplyAdvantage Mesh",
+    "requested_provider": "complyadvantage",
+    "requested_provider_label": "ComplyAdvantage Mesh",
+    "role": "AML sanctions, PEP/RCA, adverse-media screening, and ongoing monitoring",
+    "simulation_fallback_enabled": false,
+    "status": "live"
+  },
+  "source_of_truth": {
+    "approval_gates": "complyadvantage",
+    "backoffice_display": "complyadvantage",
+    "screening_report": "complyadvantage"
+  }
+}

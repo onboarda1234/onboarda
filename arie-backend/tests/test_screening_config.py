@@ -8,7 +8,9 @@ import pytest
 from screening_config import (
     is_abstraction_enabled,
     get_active_provider_name,
+    get_provider_display_name,
     get_shadow_provider_name,
+    is_complyadvantage_active,
     SOURCE_OF_TRUTH_RULES,
     get_source_of_truth,
 )
@@ -111,26 +113,52 @@ class TestShadowProviderName:
 
 
 class TestSourceOfTruth:
-    """All dimensions must return 'legacy' in Sprint 1–2."""
+    """Source of truth must follow the active provider instead of stale docs."""
 
     def test_all_dimensions_are_legacy(self):
         for dim, source in SOURCE_OF_TRUTH_RULES.items():
             assert source == "legacy", f"{dim} source is not 'legacy'"
 
-    def test_get_source_of_truth_screening_report(self):
+    def test_get_source_of_truth_screening_report_defaults_legacy(self, monkeypatch):
+        monkeypatch.delenv("SCREENING_PROVIDER", raising=False)
+        monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
         assert get_source_of_truth("screening_report") == "legacy"
 
-    def test_get_source_of_truth_risk_scoring(self):
+    def test_get_source_of_truth_risk_scoring_defaults_legacy(self, monkeypatch):
+        monkeypatch.delenv("SCREENING_PROVIDER", raising=False)
+        monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
         assert get_source_of_truth("risk_scoring") == "legacy"
 
-    def test_get_source_of_truth_memo_generation(self):
+    def test_get_source_of_truth_memo_generation_defaults_legacy(self, monkeypatch):
+        monkeypatch.delenv("SCREENING_PROVIDER", raising=False)
+        monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
         assert get_source_of_truth("memo_generation") == "legacy"
 
-    def test_get_source_of_truth_approval_gates(self):
+    def test_get_source_of_truth_approval_gates_defaults_legacy(self, monkeypatch):
+        monkeypatch.delenv("SCREENING_PROVIDER", raising=False)
+        monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
         assert get_source_of_truth("approval_gates") == "legacy"
 
-    def test_get_source_of_truth_backoffice_display(self):
+    def test_get_source_of_truth_backoffice_display_defaults_legacy(self, monkeypatch):
+        monkeypatch.delenv("SCREENING_PROVIDER", raising=False)
+        monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
         assert get_source_of_truth("backoffice_display") == "legacy"
+
+    def test_get_source_of_truth_is_ca_when_ca_cutover_active(self, monkeypatch):
+        monkeypatch.setenv("SCREENING_PROVIDER", "complyadvantage")
+        monkeypatch.setenv("ENABLE_SCREENING_ABSTRACTION", "true")
+
+        assert is_complyadvantage_active() is True
+        assert get_source_of_truth("screening_report") == "complyadvantage"
+        assert get_source_of_truth("approval_gates") == "complyadvantage"
+        assert get_source_of_truth("backoffice_display") == "complyadvantage"
+
+    def test_ca_provider_display_name_is_mesh_and_unknown_stays_unknown(self):
+        assert get_provider_display_name("complyadvantage") == "ComplyAdvantage Mesh"
+        assert get_provider_display_name("ca") == "ComplyAdvantage Mesh"
+        assert get_provider_display_name("") == "Unknown"
+        assert get_provider_display_name(None) == "Unknown"
+        assert get_provider_display_name("mystery_provider") == "mystery_provider"
 
     def test_unknown_dimension_raises(self):
         with pytest.raises(ValueError, match="Unknown source-of-truth dimension"):

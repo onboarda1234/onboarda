@@ -199,7 +199,7 @@ def test_monitoring_alert_detail_renders_compact_provider_evidence_without_fake_
     assert "Provider alert ID" in evidence
     assert "Category / risk indicator" in evidence
     assert "Source link" in evidence
-    assert "Source article link not available from ComplyAdvantage payload." in evidence
+    assert "Source article link not available from ComplyAdvantage Mesh payload." in evidence
     assert "target=\"_blank\"" in evidence
     assert "Evidence fetched" not in evidence
     assert "Matched subject" not in evidence
