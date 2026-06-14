@@ -29,6 +29,7 @@ logger = logging.getLogger("arie")
 
 
 _VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+MEMO_OUTPUT_PROFILE_VERSION = "pr5b_decision_paper_v2"
 
 
 def _memo_prescreening_data(raw_value):
@@ -909,7 +910,7 @@ def _apply_decision_paper_cleanup(memo, context):
 
     memo["appendix_sections"] = original_sections
     metadata["memo_output_profile"] = {
-        "profile_version": "pr5b_decision_paper_v1",
+        "profile_version": MEMO_OUTPUT_PROFILE_VERSION,
         "default_view": "concise_decision_paper",
         "original_sections_preserved_as": "appendix_sections",
         "original_sections_word_count": original_word_count,

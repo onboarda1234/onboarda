@@ -405,7 +405,17 @@ def test_memo_fingerprint_is_stable_and_changes_on_source_input_change():
 
     assert first == second
     assert first != changed
-    assert first.startswith("memo-input-v1:")
+    assert first.startswith("memo-input-v2:")
+
+
+def test_memo_fingerprint_changes_when_output_profile_version_changes(monkeypatch):
+    import server
+
+    first = server._memo_generation_fingerprint(_app(), _directors(), _ubos(), _documents())
+    monkeypatch.setattr(server, "MEMO_OUTPUT_PROFILE_VERSION", "future_profile_version")
+    changed = server._memo_generation_fingerprint(_app(), _directors(), _ubos(), _documents())
+
+    assert first != changed
 
 
 def test_memo_fingerprint_changes_when_screening_review_changes():
@@ -508,49 +518,105 @@ def test_memo_application_loader_acquires_sqlite_write_lock_before_read():
 
 
 def test_idempotent_memo_payload_marks_reused_existing_row():
-    from server import _memo_payload_if_fingerprint_unchanged
+    from server import MEMO_OUTPUT_PROFILE_VERSION, _memo_payload_if_fingerprint_unchanged
 
     row = {
         "id": 42,
         "version": 3,
-        "memo_data": json.dumps({"metadata": {"memo_integrity_version": "phase3_v1"}}),
+        "memo_data": json.dumps({
+            "metadata": {
+                "memo_integrity_version": "phase3_v1",
+                "memo_output_profile": {"profile_version": MEMO_OUTPUT_PROFILE_VERSION},
+            }
+        }),
         "review_status": "draft",
         "validation_status": "pass_with_fixes",
         "blocked": 0,
         "block_reason": None,
         "quality_score": 7.5,
         "memo_version": "v3",
-        "raw_output_hash": "memo-input-v1:abc",
+        "raw_output_hash": "memo-input-v2:abc",
         "created_at": "2026-05-01T10:00:00",
     }
 
-    payload = _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:abc")
+    payload = _memo_payload_if_fingerprint_unchanged(row, "memo-input-v2:abc")
 
     assert payload["metadata"]["idempotency"]["reused_existing_memo"] is True
     assert payload["metadata"]["idempotency"]["memo_id"] == 42
     assert payload["metadata"]["quality_score"] == 7.5
     assert payload["memo_version"] == "v3"
-    assert _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:other") is None
+    assert _memo_payload_if_fingerprint_unchanged(row, "memo-input-v2:other") is None
+
+
+def test_idempotent_memo_payload_rejects_old_output_profile_even_when_input_hash_matches():
+    from server import _memo_payload_if_fingerprint_unchanged
+
+    row = {
+        "id": 44,
+        "version": 2,
+        "memo_data": json.dumps({
+            "metadata": {
+                "memo_integrity_version": "phase3_v1",
+                "memo_output_profile": {"profile_version": "pr5b_decision_paper_v1"},
+            }
+        }),
+        "review_status": "draft",
+        "validation_status": "pass_with_fixes",
+        "blocked": 0,
+        "block_reason": None,
+        "quality_score": 7.0,
+        "memo_version": "v2",
+        "raw_output_hash": "memo-input-v2:stale-output",
+        "created_at": "2026-05-01T10:00:00",
+    }
+
+    assert _memo_payload_if_fingerprint_unchanged(row, "memo-input-v2:stale-output") is None
+
+
+def test_idempotent_memo_payload_rejects_missing_output_profile_even_when_input_hash_matches():
+    from server import _memo_payload_if_fingerprint_unchanged
+
+    row = {
+        "id": 45,
+        "version": 2,
+        "memo_data": json.dumps({"metadata": {"memo_integrity_version": "phase3_v1"}}),
+        "review_status": "draft",
+        "validation_status": "pass_with_fixes",
+        "blocked": 0,
+        "block_reason": None,
+        "quality_score": 7.0,
+        "memo_version": "v2",
+        "raw_output_hash": "memo-input-v2:no-profile",
+        "created_at": "2026-05-01T10:00:00",
+    }
+
+    assert _memo_payload_if_fingerprint_unchanged(row, "memo-input-v2:no-profile") is None
 
 
 def test_idempotent_memo_payload_audit_keeps_blocked_state_visible():
-    from server import _memo_payload_if_fingerprint_unchanged
+    from server import MEMO_OUTPUT_PROFILE_VERSION, _memo_payload_if_fingerprint_unchanged
 
     row = {
         "id": 43,
         "version": 1,
-        "memo_data": json.dumps({"metadata": {"blocked": True, "block_reason": "EDD required"}}),
+        "memo_data": json.dumps({
+            "metadata": {
+                "blocked": True,
+                "block_reason": "EDD required",
+                "memo_output_profile": {"profile_version": MEMO_OUTPUT_PROFILE_VERSION},
+            }
+        }),
         "review_status": "draft",
         "validation_status": "fail",
         "blocked": 1,
         "block_reason": "EDD required",
         "quality_score": 3.5,
         "memo_version": "v1",
-        "raw_output_hash": "memo-input-v1:block",
+        "raw_output_hash": "memo-input-v2:block",
         "created_at": "2026-05-01T10:00:00",
     }
 
-    payload = _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:block")
+    payload = _memo_payload_if_fingerprint_unchanged(row, "memo-input-v2:block")
 
     assert payload["metadata"]["idempotency"]["reused_existing_memo"] is True
     assert payload["metadata"]["blocked"] is True

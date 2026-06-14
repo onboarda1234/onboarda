@@ -45,3 +45,54 @@ Result:
 
 Corrective staging API/PDF smoke is pending until the corrective PR is merged,
 deployed, and `/api/version` matches the corrective merge SHA.
+
+## Corrective PR #483 Staging API / PDF Smoke
+
+PR #483 was merged and deployed. Staging `/api/version` matched merged main SHA
+`7cf095eeeb619b95fbe08764da529f00c7225b94`.
+
+Result: fail.
+
+What passed:
+
+- `/api/version` matched deployed SHA.
+- `POST /api/applications/ARF-PR4-AUTO-7f861903/memo` returned `200`.
+- PDF download returned `200` with `%PDF` content.
+- Closed-remediation API regression subset passed.
+
+What failed:
+
+- The memo endpoint reused memo `357` generated under
+  `memo_build_git_sha=4e2262dc14db86a6e3caacb617182fbe8579ae5c`.
+- Reused memo text still contained `HIGH risk with score 25/100`.
+- Smoke summary reported `contains_high_low_score_mismatch=true`.
+
+Evidence:
+
+- `runtime_json/staging_pr5b_corrective_version.json`
+- `runtime_json/staging_pr5b_corrective_generated_memo_summary_redacted.json`
+- `runtime_json/staging_pr5b_corrective_api_pdf_smoke_result.json`
+- `runtime_json/staging_pr5b_corrective_closed_regression_smoke_redacted.json`
+- `staging_pr5b_corrective_generated_memo.pdf`
+
+Disposition:
+
+- PR-5B remains incomplete.
+- A second corrective patch was required to invalidate idempotent reuse for
+  memos generated under older output profiles.
+
+## Second Corrective Branch API / PDF Smoke
+
+Branch: `codex/pr5b-memo-output-cache-invalidation`
+
+Local deterministic validation before PR:
+
+- Current-profile memo reuse remains allowed.
+- Old-profile memo reuse is rejected even when source-input hash matches.
+- Missing-profile memo reuse is rejected even when source-input hash matches.
+- Memo generation fingerprint changes when output profile version changes.
+- PR-5B concise memo output still renders LOW canonical risk as LOW and keeps
+  blocker/validation semantics intact.
+
+Staging API/PDF smoke must be re-run after the second corrective PR is merged,
+deployed, and `/api/version` matches the new merged main SHA.

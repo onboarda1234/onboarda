@@ -1,0 +1,8 @@
+{
+  "all_pass": false,
+  "memo_status": 200,
+  "pdf_status": 200,
+  "regression_all_pass": true,
+  "summary_path": "runtime_json/staging_pr5b_corrective_generated_memo_summary_redacted.json",
+  "version_ok": true
+}

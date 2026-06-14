@@ -1,0 +1,23 @@
+{
+  "attempted": true,
+  "computed_pdf_sha256": "bebbd0e297b735880417300a07296728e1244ffea7da2875c9e6d6af02694ea5",
+  "content_type": "application/pdf",
+  "headers": {
+    "Content-Disposition": "attachment; filename=\"compliance_memo_ARF-PR4-AUTO-7f861903.pdf\"",
+    "Content-Type": "application/pdf",
+    "X-Build-Git-Sha": "7cf095eeeb619b95fbe08764da529f00c7225b94",
+    "X-Build-Git-Sha-Short": "7cf095e",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-Memo-Build-Git-Sha": "4e2262dc14db86a6e3caacb617182fbe8579ae5c",
+    "X-Memo-Build-Git-Sha-Short": "4e2262d",
+    "X-Memo-Id": "357",
+    "X-Memo-Version": "v1",
+    "X-Pdf-Sha256": "bebbd0e297b735880417300a07296728e1244ffea7da2875c9e6d6af02694ea5",
+    "X-Xss-Protection": "1; mode=block"
+  },
+  "pdf_bytes": 36029,
+  "pdf_magic": "%PDF",
+  "pdf_path": "docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/staging_pr5b_corrective_generated_memo.pdf",
+  "status": 200
+}

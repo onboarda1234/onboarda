@@ -153,7 +153,7 @@ def test_simple_blocked_memo_is_concise_and_preserves_appendix_evidence():
     memo = _build_memo()
     profile = memo["metadata"]["memo_output_profile"]
 
-    assert profile["profile_version"] == "pr5b_decision_paper_v1"
+    assert profile["profile_version"] == "pr5b_decision_paper_v2"
     assert profile["default_sections_word_count"] < profile["original_sections_word_count"]
     assert profile["default_sections_word_count"] <= 1100
     assert "appendix_sections" in memo

@@ -1,0 +1,37 @@
+{
+  "memo_summary": {
+    "app_ref_tail": "7f861903",
+    "approval_readiness": "NOT READY",
+    "contains_approve_with_conditions": false,
+    "contains_high_low_score_mismatch": true,
+    "default_word_count_estimate": 761,
+    "display_risk_rating": "LOW",
+    "display_risk_score": 25.0,
+    "expected_sha": "7cf095eeeb619b95fbe08764da529f00c7225b94",
+    "has_content_hash_field": false,
+    "has_generated_timestamp": true,
+    "memo_build_git_sha": "4e2262dc14db86a6e3caacb617182fbe8579ae5c",
+    "memo_id": 357,
+    "pending_screening_in_mitigants_count": 4,
+    "primary_blockers": [
+      "Screening is not terminal / not approval-ready",
+      "screening:not_terminal",
+      "1 document(s) outstanding: passport"
+    ],
+    "recommendation": "ESCALATE_TO_EDD",
+    "required_next_action": "Complete live terminal screening and regenerate/revalidate this memo",
+    "reused_existing_memo": true,
+    "risk_mismatch_terms": [
+      "HIGH risk with score 2x/100",
+      "HIGH risk with score 25/100"
+    ],
+    "screening_pending_count": 25,
+    "status": 200,
+    "supervisor_status": "CONSISTENT_WITH_WARNINGS",
+    "text_sample": "Decision Summary\nPR4 Monitoring Automation Smoke 7f861903 Ltd (ARF-PR4-AUTO-7f861903) is assessed as HIGH risk with score 25/100. Recommendation: ESCALATE TO EDD. Screening position: Sanctions screening status: PENDING \u2014 required screening has not yet returned a terminal provider result. Not recommended for approval while screening remains unresolved. Approval readiness: NOT READY. Primary blockers: Screening is not terminal / not approval-ready; screening:not_terminal; 1 document(s) outstanding: passport. Required next action: Complete live terminal screening and regenerate/revalidate this memo. Model confidence: 60%.\nCase Facts\nEntity: PR4 Monitoring Automation Smoke 7f861903 Ltd. BRN: not provided. Jurisdiction: Mauritius. Entity type: SME. Sector: Technology. Business activity: Information not provided. Source of funds: Information not provided. Expected volume: Information not provided.\nOwnership & Control\nSimple\nEffective control cannot be fully determined from current ownership data.\nThe entity has 0 director(s) and 0 UBO(s). Ownership risk rating: HIGH based on no UBO information provided \u2014 critical data gap; effective control cannot be clearly determined. Structure complexity: Simple. Ownership/control data gaps remain and prevent full assurance.\nKey Risk Position\nComposite position: HIGH; recorded score: 25. Key risk-increasing factors: Documentation gap: 1 outstanding item(s); Screening dependency remains unresolved; Ownership risk: HIGH - no UBO information provided \u2014 critical data gap; effective control cannot be clearly determined; Limited trading history redu",
+    "validation_status": "pass_with_fixes",
+    "version_git_sha": "7cf095eeeb619b95fbe08764da529f00c7225b94",
+    "version_image_tag": "7cf095eeeb619b95fbe08764da529f00c7225b94",
+    "version_ok": true
+  }
+}
