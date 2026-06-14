@@ -23911,6 +23911,24 @@ class ApplicationDecisionHandler(BaseHandler):
             can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
             if not can_approve:
                 reason = f"Approval blocked: {gate_error}"
+                if "Document evidence gate failed" in str(gate_error):
+                    document_gate = evaluate_document_reliance_gate(
+                        db,
+                        app,
+                        stage="application_approval",
+                    )
+                    reason = document_reliance_error_message(document_gate, action="application approval")
+                    self.log_governance_attempt(
+                        user, "application.decision", attempt_target, "rejected", 400,
+                        reason, attempt_summary, db=db)
+                    db.close()
+                    self.set_status(400)
+                    self.write({
+                        "error": reason,
+                        "document_evidence_gate": document_gate,
+                        "document_blockers": document_gate.get("blockers", []),
+                    })
+                    return
                 _audit_enhanced_requirement_approval_block_if_applicable(
                     db, app, user, gate_error
                 )
