@@ -371,6 +371,509 @@ def _quality_cap(code, max_score, severity, reason, fix):
     }
 
 
+def _memo_collapse_text(value, max_len=None):
+    text = " ".join(str(value or "").split()).strip()
+    if max_len and len(text) > max_len:
+        return text[: max_len - 3].rstrip() + "..."
+    return text
+
+
+def _memo_unique_text(items, max_items=None):
+    seen = set()
+    result = []
+    for item in items or []:
+        text = _memo_collapse_text(item)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+        if max_items and len(result) >= max_items:
+            break
+    return result
+
+
+def _memo_word_count(value):
+    if isinstance(value, str):
+        return len(value.split())
+    if isinstance(value, dict):
+        return sum(_memo_word_count(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(_memo_word_count(v) for v in value)
+    return 0
+
+
+def _memo_format_items(items):
+    values = _memo_unique_text(items)
+    return "; ".join(values) if values else "None recorded"
+
+
+def _memo_clean_officer_note(value, max_len=240):
+    text = _memo_collapse_text(value, max_len=max_len)
+    if not text:
+        return "no rationale recorded"
+    lower = text.lower()
+    rough_terms = ("lorem", "asdf", "dummy", "test note", "test text", "blah")
+    if any(term in lower for term in rough_terms):
+        return "Officer rationale recorded; raw note retained in audit evidence."
+    return text
+
+
+def _memo_quality_cap_label(cap):
+    if not isinstance(cap, dict):
+        return ""
+    code = str(cap.get("code") or "").strip()
+    labels = {
+        "screening_not_terminal": "Screening is not terminal / not approval-ready",
+        "adverse_media_not_terminal": "Adverse media review is not terminal",
+        "no_documents_uploaded": "No supporting documents have been uploaded",
+        "documents_pending_verification": "Document verification remains incomplete",
+        "critical_profile_data_missing": "Critical profile data remains incomplete",
+    }
+    return labels.get(code) or cap.get("reason") or ""
+
+
+def _apply_decision_paper_cleanup(memo, context):
+    """
+    Rewrite the default memo into a concise decision-paper view while preserving
+    the pre-cleanup sections as appendix evidence for audit/export consumers.
+    """
+    if not isinstance(memo, dict):
+        return memo
+    sections = memo.setdefault("sections", {})
+    metadata = memo.setdefault("metadata", {})
+    if not isinstance(sections, dict):
+        return memo
+
+    original_sections = deepcopy(sections)
+    original_word_count = _memo_word_count(original_sections)
+
+    app = context.get("app") or {}
+    company = app.get("company_name") or memo.get("company_name") or "Unknown entity"
+    app_ref = app.get("ref") or memo.get("application_ref") or "N/A"
+    brn = app.get("brn") or "not provided"
+    country = context.get("country") or app.get("country") or "Information not provided"
+    sector = context.get("sector") or app.get("sector") or "Information not provided"
+    entity_type = context.get("entity_type") or app.get("entity_type") or "Information not provided"
+    business_activity = context.get("business_activity") or "Information not provided"
+    sof = context.get("sof") or "Information not provided"
+    exp_vol = context.get("exp_vol") or "Information not provided"
+    risk_display = context.get("risk_display") or {}
+    aggregated_risk = context.get("aggregated_risk") or metadata.get("aggregated_risk") or metadata.get("risk_rating") or "NOT_RATED"
+    risk_score = risk_display.get("score")
+    if risk_score is None:
+        risk_score = metadata.get("display_risk_score", metadata.get("risk_score", "not recorded"))
+    model_confidence = context.get("model_confidence")
+    if model_confidence is None:
+        confidence = metadata.get("confidence_level")
+        model_confidence = int(round(float(confidence or 0) * 100)) if confidence else "not recorded"
+
+    screening_summary = metadata.get("screening_state_summary") or {}
+    screening_blocks = bool(context.get("screening_truth_blocks_approval"))
+    screening_terminal = bool(context.get("screening_terminal"))
+    screening_defensible_clear = bool(context.get("screening_is_defensible_clear"))
+    screening_formally_cleared_match = bool(context.get("screening_formally_cleared_match"))
+    screening_completion = context.get("screening_completion_phrase") or "Screening status not recorded"
+    screening_state = screening_summary.get("canonical_state") or "unknown"
+    screening_mode = screening_summary.get("provider_mode") or "unknown"
+    screening_blocker_reasons = (
+        screening_summary.get("approval_blocked_reasons")
+        or screening_summary.get("blocking_reasons")
+        or []
+    )
+
+    documents = context.get("documents") or []
+    verified_docs = context.get("verified_docs") or []
+    pending_docs = context.get("pending_docs") or []
+    has_documents = bool(context.get("has_documents"))
+    doc_confidence = context.get("doc_confidence", 0)
+    documentation_complete = bool(context.get("documentation_complete"))
+    pending_doc_labels = [
+        d.get("doc_type", "document") if isinstance(d, dict) else "document"
+        for d in pending_docs
+    ]
+    all_peps = context.get("all_peps") or []
+    directors = context.get("directors") or []
+    ubos = context.get("ubos") or []
+    director_names = _memo_unique_text(
+        [d.get("full_name") for d in directors if isinstance(d, dict)],
+        max_items=4,
+    )
+    ubo_names = _memo_unique_text(
+        [u.get("full_name") for u in ubos if isinstance(u, dict)],
+        max_items=4,
+    )
+    control_name = context.get("control_name") or "not determined"
+    control_pct = context.get("control_pct") or "N/A"
+    primary_ubo = context.get("primary_ubo")
+    own_rating = context.get("own_rating") or "NOT_RATED"
+    own_rating_justification = context.get("own_rating_justification") or "not recorded"
+    struct_complexity = context.get("struct_complexity") or "Unknown"
+    mon_tier = context.get("mon_tier") or "Standard"
+    adverse_media_context = context.get("adverse_media_context") or {}
+    enhanced_review_summary = context.get("enhanced_review_summary") or {}
+    quality_caps = metadata.get("quality_caps") or []
+
+    recommendation = str(metadata.get("approval_recommendation") or "REVIEW").strip().upper()
+    approval_like = {"APPROVE", "APPROVE_WITH_CONDITIONS"}
+    approval_blockers = []
+    if screening_blocks:
+        approval_blockers.append("Screening is not terminal / not approval-ready")
+        approval_blockers.extend(screening_blocker_reasons)
+    if not has_documents:
+        approval_blockers.append("No supporting documents have been uploaded")
+    elif pending_docs:
+        approval_blockers.append(
+            str(len(pending_docs)) + " document(s) outstanding: " + ", ".join(pending_doc_labels[:5])
+        )
+    mandatory_edd = enhanced_review_summary.get("blocking_outstanding_count") or enhanced_review_summary.get("mandatory_outstanding_count")
+    if mandatory_edd:
+        approval_blockers.append(str(mandatory_edd) + " enhanced review requirement(s) remain outstanding")
+    for cap in quality_caps:
+        if isinstance(cap, dict) and cap.get("severity") in ("warning", "critical"):
+            approval_blockers.append(_memo_quality_cap_label(cap))
+    approval_blockers = _memo_unique_text(approval_blockers, max_items=6)
+
+    if screening_blocks and recommendation in approval_like:
+        metadata.setdefault("approval_recommendation_original", recommendation)
+        recommendation = "REVIEW"
+        metadata["approval_recommendation"] = "REVIEW"
+        metadata["decision_label"] = "SCREENING RESOLUTION REQUIRED"
+
+    label = str(metadata.get("decision_label") or recommendation.replace("_", " ")).strip().upper()
+    if screening_blocks and recommendation == "REVIEW":
+        label = "SCREENING RESOLUTION REQUIRED"
+    elif recommendation == "ESCALATE_TO_EDD":
+        label = "ESCALATE TO EDD"
+    elif approval_blockers and recommendation in approval_like:
+        metadata.setdefault("approval_recommendation_original", recommendation)
+        recommendation = "REVIEW"
+        metadata["approval_recommendation"] = "REVIEW"
+        label = "ACTION REQUIRED"
+    authoritative_recommendation = recommendation + (" - " + label if label and label != recommendation.replace("_", " ") else "")
+
+    approval_ready = (
+        recommendation in approval_like
+        and not approval_blockers
+        and not screening_blocks
+    )
+    readiness = "READY" if approval_ready else "NOT READY"
+    next_action = "Submit approval with recorded approval reason" if approval_ready else (
+        "Complete live terminal screening and regenerate/revalidate this memo"
+        if screening_blocks else
+        "Resolve listed blocking items and regenerate/revalidate this memo"
+    )
+
+    screening_status = (
+        "Complete - defensible clear"
+        if screening_defensible_clear else
+        "Complete - officer-cleared match"
+        if screening_formally_cleared_match else
+        "Terminal provider result with unresolved review"
+        if screening_terminal else
+        "Not terminal / approval blocked"
+    )
+    provider_reliance = (
+        "No unresolved screening escalation remains"
+        if screening_defensible_clear or screening_formally_cleared_match else
+        "No clean/no-match reliance is available until screening reaches a terminal, defensible state"
+    )
+    if screening_defensible_clear:
+        screening_marker = "Low-risk profile supported by clean sanctions screening."
+    elif screening_formally_cleared_match:
+        screening_marker = "Screening match(es) formally cleared; no unresolved screening escalation remains; not a no-match result."
+    elif screening_terminal:
+        screening_marker = "Screening returned match(es) requiring officer review and escalation."
+    else:
+        screening_marker = screening_completion + ". Not recommended for approval while screening remains unresolved."
+
+    if not risk_display.get("available"):
+        risk_statement = "No canonical risk rating or score is recorded; memo is not yet risk-rated"
+    else:
+        risk_statement = (
+            f"{aggregated_risk} risk"
+            + (f" with score {risk_score}/100" if risk_score not in (None, "not recorded") else "")
+        )
+    if recommendation == "ESCALATE_TO_EDD":
+        recommendation_phrase = "Recommendation: ESCALATE TO EDD"
+    elif recommendation == "REJECT":
+        recommendation_phrase = "Recommendation: REJECT"
+    else:
+        recommendation_phrase = "Recommendation: " + authoritative_recommendation
+
+    risk_increasing = [
+        f"Documentation gap: {len(pending_docs)} outstanding item(s)" if pending_docs else None,
+        "No supporting documents uploaded" if not has_documents else None,
+        "Screening dependency remains unresolved" if screening_blocks else None,
+        f"PEP exposure: {len(all_peps)} declared/detected party(ies)" if all_peps else None,
+        f"Ownership risk: {own_rating} - {own_rating_justification}" if own_rating in ("MEDIUM", "HIGH", "VERY_HIGH") else None,
+        "Limited trading history reduces forward-looking confidence",
+    ]
+    risk_decreasing = [
+        "No declared/detected PEP exposure among directors or UBOs" if not all_peps else None,
+        f"Low jurisdictional risk - {country} maintains adequate AML/CFT frameworks" if context.get("jur_rating") == "LOW" else None,
+        f"Low sector risk - {sector} does not exhibit elevated ML/TF typology indicators" if context.get("biz_rating") == "LOW" else None,
+        (
+            "Screening complete with defensible clear result"
+            if screening_defensible_clear else
+            "Screening match(es) formally cleared with officer evidence"
+            if screening_formally_cleared_match else
+            None
+        ),
+        f"Beneficial ownership traced to natural person level - {control_name} ({control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None,
+        f"Full documentation verified at {doc_confidence}% confidence" if documentation_complete and doc_confidence >= 80 else None,
+    ]
+    risk_increasing = _memo_unique_text([x for x in risk_increasing if x], max_items=5)
+    risk_decreasing = _memo_unique_text([x for x in risk_decreasing if x], max_items=5)
+
+    red_flags = _memo_unique_text([
+        "Screening is not approval-ready; " + provider_reliance if screening_blocks else None,
+        f"Documentation gap: {len(pending_docs)} of {len(documents)} document(s) remain outstanding" if pending_docs else None,
+        "No uploaded documents are available for corporate or identity verification" if not has_documents else None,
+        "Limited trading history; no historical transaction data is available for benchmark testing",
+        f"PEP exposure requires enhanced scrutiny for {len(all_peps)} associated party(ies)" if all_peps else None,
+    ], max_items=5)
+    if not red_flags:
+        red_flags = ["Residual onboarding risk remains subject to standard monitoring."]
+    mitigants = _memo_unique_text([
+        f"{len(verified_docs)} of {len(documents)} document(s) verified at {doc_confidence}% confidence" if verified_docs else None,
+        f"Beneficial ownership traced to {control_name} ({control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None,
+        "Screening complete with defensible clear result" if screening_defensible_clear else None,
+        "Screening match(es) formally cleared by officer evidence" if screening_formally_cleared_match else None,
+        "Transaction monitoring will be applied after onboarding decision",
+    ], max_items=5)
+
+    sections["executive_summary"] = {
+        "title": "Decision Summary",
+        "content": (
+            f"{company} ({app_ref}) is assessed as {risk_statement}. "
+            + recommendation_phrase + ". "
+            + "Screening position: " + screening_marker + " "
+            + f"Approval readiness: {readiness}. "
+            + "Primary blockers: " + _memo_format_items(approval_blockers) + ". "
+            + f"Required next action: {next_action}. "
+            + f"Model confidence: {model_confidence}%."
+        ),
+        "decision_summary": {
+            "recommendation": recommendation,
+            "recommendation_label": label,
+            "approval_readiness": readiness,
+            "primary_blockers": approval_blockers,
+            "required_next_action": next_action,
+        },
+    }
+    sections["client_overview"] = {
+        "title": "Case Facts",
+        "content": (
+            f"Entity: {company}. BRN: {brn}. Jurisdiction: {country}. "
+            f"Entity type: {entity_type}. Sector: {sector}. Business activity: {business_activity}. "
+            f"Source of funds: {sof}. Expected volume: {exp_vol}."
+        ),
+    }
+    sections["ownership_and_control"] = {
+        "title": "Ownership & Control",
+        "structure_complexity": struct_complexity,
+        "control_statement": (
+            f"{control_name} exercises effective control at {control_pct}%."
+            if primary_ubo and control_pct not in ("N/A", None, "", "0")
+            else "Effective control cannot be fully determined from current ownership data."
+        ),
+        "content": (
+            f"The entity has {len(directors)} director(s) and {len(ubos)} UBO(s). "
+            + ("Directors: " + ", ".join(director_names) + ". " if director_names else "")
+            + ("UBOs: " + ", ".join(ubo_names) + ". " if ubo_names else "")
+            + f"Ownership risk rating: {own_rating} based on {own_rating_justification}. "
+            f"Structure complexity: {struct_complexity}. "
+            + (
+                f"Control owner: {control_name} ({control_pct}%)."
+                if primary_ubo and control_pct not in ("N/A", None, "", "0")
+                else "Ownership/control data gaps remain and prevent full assurance."
+            )
+        ),
+    }
+    sections["risk_assessment"] = {
+        "title": "Key Risk Position",
+        "content": (
+            f"Composite position: {aggregated_risk}; recorded score: {risk_score}. "
+            "Key risk-increasing factors: " + _memo_format_items(risk_increasing) + ". "
+            "Key risk-reducing factors: " + _memo_format_items(risk_decreasing) + "."
+        ),
+        "sub_sections": {
+            "jurisdiction_risk": {
+                "rating": context.get("jur_rating") or "MEDIUM",
+                "content": f"{country}: rating based on jurisdiction and operating-country evidence.",
+            },
+            "business_risk": {
+                "rating": context.get("biz_rating") or "MEDIUM",
+                "content": f"{sector}: rating based on sector typology and stated business activity.",
+            },
+            "transaction_risk": {
+                "rating": context.get("tx_rating") or "MEDIUM",
+                "content": f"Transaction risk rating based on expected volume: {exp_vol}.",
+            },
+            "ownership_risk": {
+                "rating": own_rating,
+                "content": f"Ownership risk rating based on {own_rating_justification}.",
+            },
+            "financial_crime_risk": {
+                "rating": context.get("fc_rating") or "MEDIUM",
+                "content": (
+                    "Deterministic financial-crime rating: "
+                    + str(context.get("fc_rating") or "MEDIUM")
+                    + ". "
+                    + str(adverse_media_context.get("phrase") or "")
+                    + " Screening state: "
+                    + screening_status
+                    + "."
+                ),
+            },
+        },
+    }
+    sections["screening_results"] = {
+        "title": "Screening & Verification Status",
+        "content": (
+            f"Screening status: {screening_status}. Canonical state: {screening_state}; provider mode: {screening_mode}. "
+            + (
+                "Approval is blocked by screening until live terminal screening is completed, defensible clearance exists, and this memo is regenerated/revalidated. "
+                if screening_blocks else
+                "Screening does not currently block approval readiness. "
+            )
+            + f"{provider_reliance}. "
+            + (
+                "This is not a no-match result. "
+                if screening_formally_cleared_match else
+                ""
+            )
+            + (
+                "no clean adverse-media conclusion is recorded. "
+                if not adverse_media_context.get("terminal") else
+                ""
+            )
+            + f"Adverse media: {adverse_media_context.get('checklist') or 'not recorded'}."
+        ),
+        "screening_terminal": screening_terminal,
+        "defensible_clear": bool(screening_defensible_clear or screening_formally_cleared_match),
+        "approval_gate_ready": bool(screening_summary.get("approval_gate_ready")),
+        "approval_blocking": screening_blocks,
+        "approval_blocked_reasons": approval_blockers,
+    }
+    sections["document_verification"] = {
+        "title": "Document Verification",
+        "content": (
+            f"{len(documents)} document(s) submitted; {len(verified_docs)} verified; {len(pending_docs)} outstanding. "
+            + (
+                "Professional judgement: no documents have been uploaded; entity verification cannot be relied upon. "
+                if not has_documents else
+                "Professional judgement: outstanding documents prevent complete assurance and must be resolved. "
+                if pending_docs else
+                "Professional judgement: document set is complete and internally consistent. "
+            )
+            + f"Overall documentation adequacy: {doc_confidence}%. "
+            + (
+                "Pending items: " + ", ".join(pending_doc_labels[:6]) + "."
+                if pending_doc_labels else
+                "No pending document conditions."
+            )
+        ),
+    }
+    sections["ai_explainability"] = {
+        "title": "AI / Rule Explainability",
+        "content": (
+            "Rule/model source: Onboarda Composite Risk Engine with deterministic memo controls. "
+            + (
+                "Overall risk score: Not yet scored. "
+                if not risk_display.get("available") else
+                "Overall risk score: " + str(risk_score) + "/100. "
+            )
+            + f"Confidence: {model_confidence}%. "
+            + "Default memo shows only the material factors and limitations; detailed rule evidence is retained in the appendix. "
+            + "Limitations: screening or document gaps must be resolved before approval reliance where listed as blockers."
+        ),
+        "risk_increasing_factors": risk_increasing,
+        "risk_decreasing_factors": risk_decreasing,
+        "factor_enforcement_applied": True,
+    }
+    sections["red_flags_and_mitigants"] = {
+        "title": "Blocking Items / Conditions",
+        "red_flags": red_flags,
+        "mitigants": mitigants,
+        "approval_blockers": approval_blockers,
+        "conditions": _memo_unique_text(metadata.get("conditions") or [], max_items=6),
+    }
+    sections["compliance_decision"] = {
+        "title": "Officer Recommendation",
+        "decision": recommendation,
+        "decision_label": label,
+        "content": (
+            f"Recommendation: {authoritative_recommendation}. "
+            + (
+                "Enhanced Due Diligence before any approval is required. "
+                if recommendation == "ESCALATE_TO_EDD" else
+                "This application is not recommended for approval at this stage. "
+                if not approval_ready else
+                ""
+            )
+            + (
+                "Conditional approval is not available while approval-blocking items remain. "
+                if not approval_ready else
+                "Approval may proceed only with the required approval reason and retained audit evidence. "
+            )
+            + "Decision rationale: " + (
+                "screening resolution is the controlling next step."
+                if screening_blocks else
+                "listed blocker resolution is required before a final approval recommendation."
+                if approval_blockers else
+                "all current memo blockers are clear."
+            )
+        ),
+    }
+    sections["ongoing_monitoring"] = {
+        "title": "Required Next Action",
+        "content": (
+            f"Next action: {next_action}. Monitoring tier after onboarding decision: {mon_tier}. "
+            "Monitoring dependencies: ownership changes, adverse-media alerts, PEP status changes, transaction drift, and document non-compliance."
+        ),
+    }
+    sections["audit_and_governance"] = {
+        "title": "Audit & Governance",
+        "content": (
+            "Source attribution, rule-engine evidence, validation result, supervisor result, quality caps, and generation timestamp are retained. "
+            f"Generated: {context.get('now_ts') or memo.get('memo_generated') or 'not recorded'}. "
+            "Full pre-cleanup evidence sections are retained in appendix_sections for audit/export review."
+        ),
+    }
+
+    memo["appendix_sections"] = original_sections
+    metadata["memo_output_profile"] = {
+        "profile_version": "pr5b_decision_paper_v1",
+        "default_view": "concise_decision_paper",
+        "original_sections_preserved_as": "appendix_sections",
+        "original_sections_word_count": original_word_count,
+        "default_sections_word_count": _memo_word_count(sections),
+        "authoritative_recommendation": recommendation,
+        "recommendation_label": label,
+        "approval_readiness": readiness,
+        "primary_blockers": approval_blockers,
+        "required_next_action": next_action,
+        "screening_pending_is_blocker_not_mitigant": bool(screening_blocks),
+    }
+    metadata["approval_recommendation"] = recommendation
+    metadata["decision_label"] = label
+    metadata["approval_readiness"] = readiness
+    metadata["primary_blockers"] = approval_blockers
+    metadata["required_next_action"] = next_action
+    checklist = list(metadata.get("review_checklist") or [])
+    if checklist:
+        checklist[-1] = (
+            "Compliance decision aligned to " + authoritative_recommendation
+            + "; next action: " + next_action
+        )
+        metadata["review_checklist"] = checklist
+    return memo
+
+
 def _enhanced_review_empty_summary():
     return {
         "triggered": False,
@@ -1390,7 +1893,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         subject = f"{review.get('subject_type', 'subject')}:{review.get('subject_name', 'Unknown')}"
         disposition_text = str(review.get("disposition") or "").replace("_", " ")
         code = review.get("disposition_code") or "no code recorded"
-        rationale = review.get("rationale") or review.get("notes") or "no rationale recorded"
+        rationale = _memo_clean_officer_note(review.get("rationale") or review.get("notes"))
         reviewer = review.get("reviewer_name") or review.get("reviewer_id") or "unknown reviewer"
         line = f"{subject} — {disposition_text} ({code}) by {reviewer}: {rationale}"
         if review.get("requires_four_eyes"):
@@ -1398,7 +1901,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             if second_reviewer:
                 line += f" Second review completed by {second_reviewer}"
                 if review.get("second_rationale"):
-                    line += f": {review.get('second_rationale')}"
+                    line += f": {_memo_clean_officer_note(review.get('second_rationale'))}"
             else:
                 line += " Second review required but not yet completed"
         screening_review_lines.append(line[:1000])
@@ -2583,6 +3086,54 @@ def build_compliance_memo(app, directors, ubos, documents):
             + ", mandatory_escalation=" + str(_is_mandatory_escalation)
             + "). Recommendation must be REVIEW or another non-approval value."
         )
+
+    memo = _apply_decision_paper_cleanup(memo, {
+        "app": app,
+        "country": country,
+        "sector": sector,
+        "entity_type": entity_type,
+        "business_activity": business_activity,
+        "sof": sof,
+        "exp_vol": exp_vol,
+        "risk_display": risk_display,
+        "aggregated_risk": aggregated_risk,
+        "model_confidence": model_confidence,
+        "screening_truth_blocks_approval": screening_truth_blocks_approval,
+        "screening_terminal": screening_terminal,
+        "screening_is_defensible_clear": screening_is_defensible_clear,
+        "screening_formally_cleared_match": screening_formally_cleared_match,
+        "screening_completion_phrase": _screening_completion_phrase,
+        "documents": documents,
+        "verified_docs": verified_docs,
+        "pending_docs": pending_docs,
+        "directors": directors,
+        "ubos": ubos,
+        "has_documents": has_documents,
+        "doc_confidence": doc_confidence,
+        "documentation_complete": documentation_complete,
+        "all_peps": all_peps,
+        "control_name": control_name,
+        "control_pct": control_pct,
+        "primary_ubo": primary_ubo,
+        "own_rating": own_rating,
+        "own_rating_justification": own_rating_justification,
+        "struct_complexity": struct_complexity,
+        "mon_tier": mon_tier,
+        "adverse_media_context": adverse_media_context,
+        "enhanced_review_summary": enhanced_review_summary,
+        "jur_rating": jur_rating,
+        "biz_rating": biz_rating,
+        "tx_rating": tx_rating,
+        "fc_rating": fc_rating,
+        "now_ts": now_ts,
+    })
+
+    # Re-run the supervisor after the officer-facing memo is condensed so the
+    # displayed supervisor summary is based on the same decision-paper text.
+    supervisor_result = run_memo_supervisor(memo)
+    memo["supervisor"] = supervisor_result
+    memo["metadata"]["supervisor_status"] = supervisor_result["verdict"]
+    memo["metadata"]["supervisor_confidence"] = supervisor_result["supervisor_confidence"]
 
     # Run validation engine — now with rule engine awareness
     validation_result = validate_compliance_memo(memo)

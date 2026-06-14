@@ -1,0 +1,41 @@
+{
+  "ai_content_word_count": 185,
+  "case_shape": "LOW risk, pending/non-terminal screening, one verified document, one pending document",
+  "compliance_decision": "APPROVE_WITH_CONDITIONS",
+  "compliance_decision_label": null,
+  "decision_label": "SCREENING RESOLUTION REQUIRED",
+  "estimated_pages_at_500_words": 3.5,
+  "metadata_original_recommendation": "APPROVE_WITH_CONDITIONS",
+  "metadata_recommendation": "REVIEW",
+  "pending_screening_in_risk_decreasing": [
+    "Sanctions screening status: PENDING \u2014 required screening has not yet returned a terminal provider result; no reliance on absence of provider matches"
+  ],
+  "phrase_counts": {
+    "ai_decision_pathway_mentions": 3,
+    "approve_with_conditions": 1,
+    "provider_not_terminal_phrase": 8,
+    "risk_decreasing_factors": 4,
+    "screening_resolution_required": 1,
+    "screening_status_phrase": 7
+  },
+  "screening_approval_blocking": true,
+  "screening_approval_ready": false,
+  "section_count": 12,
+  "section_keys": [
+    "executive_summary",
+    "client_overview",
+    "ownership_and_control",
+    "risk_assessment",
+    "screening_results",
+    "document_verification",
+    "enhanced_review_edd",
+    "ai_explainability",
+    "red_flags_and_mitigants",
+    "compliance_decision",
+    "ongoing_monitoring",
+    "audit_and_governance"
+  ],
+  "supervisor_verdict": "CONSISTENT_WITH_WARNINGS",
+  "validation_status": "pass_with_fixes",
+  "word_count": 1757
+}

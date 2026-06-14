@@ -1,0 +1,24 @@
+{
+  "ai_explainability_word_count": 48,
+  "appendix_sections_present": true,
+  "case_shape": "LOW risk, pending/non-terminal screening, one verified document, one pending document",
+  "compliance_decision_section": "REVIEW",
+  "contains_raw_test_note": false,
+  "decision_label": "SCREENING RESOLUTION REQUIRED",
+  "default_sections_word_count": 807,
+  "estimated_pages_at_500_words": 1.61,
+  "metadata_recommendation": "REVIEW",
+  "original_sections_word_count": 1754,
+  "pending_screening_in_risk_decreasing": [],
+  "phrase_counts": {
+    "ai_decision_pathway_mentions": 0,
+    "approve_with_conditions": 0,
+    "provider_not_terminal_phrase": 1,
+    "screening_resolution_required": 2,
+    "screening_status_phrase": 1
+  },
+  "quality_score": 6.4,
+  "section_count": 12,
+  "supervisor_status": "CONSISTENT_WITH_WARNINGS",
+  "validation_status": "pass_with_fixes"
+}
