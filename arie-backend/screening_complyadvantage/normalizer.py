@@ -102,6 +102,7 @@ class MergedMatch(BaseModel):
     profile: Optional[CAProfile] = None
     profile_identifier: str = ""
     risk_id: Optional[str] = None
+    alert_id: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -151,6 +152,7 @@ def normalize_single_pass(
             profile=_risk_profile(risk),
             profile_identifier=_risk_profile_identifier(risk, key),
             risk_id=key,
+            alert_id=getattr(risk, "_ca_alert_identifier", None),
         )
         for key, risk in attached.items()
     ]
@@ -195,6 +197,7 @@ def merge_two_pass_results(
             profile=_risk_profile(risk),
             profile_identifier=profile_id,
             risk_id=risk_id,
+            alert_id=getattr(risk, "_ca_alert_identifier", None),
         ))
     provenance = {
         "strict_workflow_id": None,
@@ -377,12 +380,16 @@ def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> di
     indicators = [_indicator_payload(indicator) for indicator in _all_indicators(match.risk)]
     risk_types = _risk_type_payloads(match.risk)
     categories = _match_categories(rollups, indicators)
+    provider_references = _match_provider_references(match)
     return {
         "name": _profile_name(match.profile) or match.profile_identifier,
         "profile_identifier": match.profile_identifier,
         "provider_profile_identifier": match.profile_identifier,
+        "alert_identifier": match.alert_id,
+        "provider_alert_identifier": match.alert_id,
         "risk_id": match.risk_id,
         "provider_risk_identifier": match.risk_id,
+        "provider_references": provider_references,
         "match_category": categories[0] if categories else "other",
         "match_categories": categories,
         "risk_types": risk_types,
@@ -461,6 +468,20 @@ def _build_report(matches, context, provider_specific, provenance):
             ubo_screenings.append(person)
         else:
             director_screenings.append(person)
+    provider_references = _provider_reference_summary(
+        provider_specific,
+        matches,
+        context=context,
+        screened_at=screened_at,
+    )
+    provider_specific["provider_references"] = provider_references
+    _attach_provider_references_to_subjects(
+        company_screening,
+        director_screenings,
+        ubo_screenings,
+        intermediary_screenings,
+        provider_references,
+    )
     rollups = apply_top_level_rollups(director_screenings, ubo_screenings, company_screening)
     report = {
         "provider": "complyadvantage",
@@ -565,12 +586,144 @@ def _attach_alert_profiles(deep_risks, alerts):
     for alert in alerts:
         profile = alert.profile
         risk_values = list(alert.risk_details.values)
-        risk = by_id.get(alert.identifier) or (risk_values[0] if risk_values else None)
+        risk_key = alert.identifier
+        alert_identifier = getattr(alert, "alert_identifier", None) or alert.identifier
+        risk = by_id.get(risk_key) or (risk_values[0] if risk_values else None)
         if risk is None:
             risk = CARiskDetail()
         _set_extra(risk, "_ca_profile", profile)
-        by_id[alert.identifier] = risk
+        _set_extra(risk, "_ca_alert_identifier", alert_identifier)
+        by_id[risk_key] = risk
     return by_id
+
+
+def _match_provider_references(match: MergedMatch) -> dict[str, Any]:
+    refs = {
+        "provider": "complyadvantage",
+        "provider_display_name": "ComplyAdvantage Mesh",
+        "alert_id": match.alert_id,
+        "alert_identifier": match.alert_id,
+        "risk_id": match.risk_id,
+        "risk_identifier": match.risk_id,
+        "profile_id": match.profile_identifier,
+        "profile_identifier": match.profile_identifier,
+    }
+    return {key: value for key, value in refs.items() if value not in (None, "", [], {})}
+
+
+def _provider_reference_summary(provider_specific, matches, *, context, screened_at):
+    customer_response = provider_specific.get("customer_response") if isinstance(provider_specific, dict) else {}
+    customer_response = customer_response if isinstance(customer_response, dict) else {}
+    workflows = provider_specific.get("workflows") if isinstance(provider_specific, dict) else {}
+    workflows = workflows if isinstance(workflows, dict) else {}
+    case_ids = []
+    cases = ((customer_response.get("cases") or {}).get("values") or [])
+    if isinstance(cases, list):
+        for case in cases:
+            if isinstance(case, dict):
+                _append_unique(case_ids, case.get("identifier") or case.get("id"))
+    resnapshot = provider_specific.get("resnapshot") if isinstance(provider_specific, dict) else {}
+    if isinstance(resnapshot, dict):
+        _append_unique(case_ids, resnapshot.get("source_case_identifier"))
+    customer_ids = []
+    _append_unique(customer_ids, customer_response.get("identifier") or customer_response.get("customer_identifier"))
+    workflow_ids = []
+    alert_ids = []
+    for workflow in workflows.values():
+        if not isinstance(workflow, dict):
+            continue
+        _append_unique(workflow_ids, workflow.get("workflow_instance_identifier"))
+        for alert in workflow.get("alerts") or []:
+            if isinstance(alert, dict):
+                _append_unique(alert_ids, alert.get("identifier") or alert.get("id"))
+            else:
+                _append_unique(alert_ids, alert)
+        step_details = workflow.get("step_details") if isinstance(workflow.get("step_details"), dict) else {}
+        for step in step_details.values():
+            if not isinstance(step, dict):
+                continue
+            output = step.get("output") if isinstance(step.get("output"), dict) else {}
+            _append_unique(customer_ids, output.get("customer_identifier"))
+            _append_unique(case_ids, output.get("case_identifier"))
+    for match in matches or []:
+        _append_unique(alert_ids, getattr(match, "alert_id", None))
+    risk_ids = []
+    profile_ids = []
+    for match in matches or []:
+        _append_unique(risk_ids, getattr(match, "risk_id", None))
+        _append_unique(profile_ids, getattr(match, "profile_identifier", None))
+    refs = {
+        "provider": "complyadvantage",
+        "provider_display_name": "ComplyAdvantage Mesh",
+        "case_ids": case_ids,
+        "customer_ids": customer_ids,
+        "workflow_ids": workflow_ids,
+        "alert_ids": alert_ids,
+        "risk_ids": risk_ids,
+        "profile_ids": profile_ids,
+        "subject_type": context.screening_subject_kind,
+        "subject_key": context.screening_subject_person_key,
+        "subject_name": context.screening_subject_name,
+        "provider_timestamp": screened_at,
+        "screened_at": screened_at,
+    }
+    return {key: value for key, value in refs.items() if value not in (None, "", [], {})}
+
+
+def _attach_provider_references_to_subjects(
+    company_screening,
+    director_screenings,
+    ubo_screenings,
+    intermediary_screenings,
+    provider_references,
+):
+    company = (company_screening or {}).get("company_screening")
+    if isinstance(company, dict):
+        company_screening.setdefault("provider_references", provider_references)
+        _attach_provider_references_to_screening(company, provider_references)
+        for nested_key in ("sanctions", "adverse_media"):
+            nested = company.get(nested_key)
+            if isinstance(nested, dict):
+                _attach_provider_references_to_screening(nested, provider_references)
+    for person in list(director_screenings or []) + list(ubo_screenings or []) + list(intermediary_screenings or []):
+        screening = person.get("screening") if isinstance(person, dict) else None
+        if isinstance(person, dict):
+            person.setdefault("provider_references", provider_references)
+        if isinstance(screening, dict):
+            _attach_provider_references_to_screening(screening, provider_references)
+
+
+def _attach_provider_references_to_screening(screening, provider_references):
+    screening.setdefault("provider_references", provider_references)
+    screening.setdefault("provider_customer_identifiers", provider_references.get("customer_ids") or [])
+    screening.setdefault("provider_case_identifiers", provider_references.get("case_ids") or [])
+    screening.setdefault("provider_workflow_identifiers", provider_references.get("workflow_ids") or [])
+    for result in screening.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        result_refs = dict(provider_references)
+        result_refs.update(result.get("provider_references") or {})
+        if provider_references.get("customer_ids"):
+            result_refs.setdefault("customer_id", provider_references["customer_ids"][0])
+            result_refs.setdefault("customer_identifier", provider_references["customer_ids"][0])
+            result.setdefault("provider_customer_identifier", provider_references["customer_ids"][0])
+        if provider_references.get("case_ids"):
+            result_refs.setdefault("case_id", provider_references["case_ids"][0])
+            result_refs.setdefault("case_identifier", provider_references["case_ids"][0])
+            result.setdefault("provider_case_identifier", provider_references["case_ids"][0])
+        if provider_references.get("workflow_ids"):
+            result_refs.setdefault("workflow_id", provider_references["workflow_ids"][0])
+            result_refs.setdefault("workflow_identifier", provider_references["workflow_ids"][0])
+            result.setdefault("provider_workflow_identifier", provider_references["workflow_ids"][0])
+        result["provider_references"] = result_refs
+
+
+def _append_unique(values, value):
+    if value in (None, "", [], {}):
+        return
+    text = str(value)
+    if text not in values:
+        values.append(text)
 
 
 def _risk_map_by_profile(deep):
@@ -713,7 +866,9 @@ def _build_provider_specific_block(
 def _provider_match(match, include_surfaced_by_pass):
     data = {
         "profile_identifier": match.profile_identifier,
+        "alert_identifier": match.alert_id,
         "risk_id": match.risk_id,
+        "provider_references": _match_provider_references(match),
         "profile": _dump(match.profile),
         "risk_detail": _dump(match.risk),
         "rollups": compute_match_rollups(match),

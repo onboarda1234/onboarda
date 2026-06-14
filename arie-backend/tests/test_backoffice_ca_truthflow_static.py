@@ -146,6 +146,18 @@ def test_backoffice_screening_queue_sidebar_alias_and_audit_formatters_exist():
     assert "screeningQueueSignalBadge(row.pep_screening_status || 'not_applicable', row)" in render_screening_region
 
 
+def test_backoffice_audit_trail_has_filtered_ca_mesh_timeline():
+    html = BACKOFFICE_HTML.read_text()
+
+    activity_region = _function_region(html, "safeParseAuditDetail", "loadNotes")
+    assert "'CA/Mesh'" in activity_region
+    assert "ca_mesh_screening" in activity_region
+    assert "ca_screening" in activity_region
+    assert "provider_references" in activity_region
+    assert "Mesh refs:" in activity_region
+    assert "evidence quality:" in activity_region
+
+
 def test_backoffice_pr_b_queue_and_detail_paths_stay_narrow():
     html = BACKOFFICE_HTML.read_text()
 

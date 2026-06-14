@@ -122,6 +122,7 @@ from memo_governance import (
     latest_compliance_memo_row_for_identifier,
     memo_selection_metadata,
 )
+from provider_errors import sanitize_provider_error
 
 # ── Sprint 2: Extracted modules ──────────────────────────
 from auth import (
@@ -14966,13 +14967,26 @@ class ApplicationAuditLogHandler(BaseHandler):
         offset = max(0, int(self.get_argument("offset", "0")))
         targets = _application_audit_targets(db, app)
         placeholders = ",".join(["?"] * len(targets))
+        category = self.get_argument("category", "").strip().lower()
+        category_clause = ""
+        category_params = []
+        if category in ("ca_mesh", "complyadvantage", "ca"):
+            category_clause = """
+                AND (
+                    LOWER(COALESCE(action, '')) LIKE '%ca_screening%'
+                    OR LOWER(COALESCE(action, '')) LIKE '%complyadvantage%'
+                    OR LOWER(COALESCE(detail, '')) LIKE '%ca_mesh_screening%'
+                    OR LOWER(COALESCE(detail, '')) LIKE '%complyadvantage mesh%'
+                    OR LOWER(COALESCE(detail, '')) LIKE '%\"provider\": \"complyadvantage\"%'
+                )
+            """
         rows = db.execute(
-            f"SELECT * FROM audit_log WHERE target IN ({placeholders}) ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (*targets, limit, offset)
+            f"SELECT * FROM audit_log WHERE target IN ({placeholders}) {category_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (*targets, *category_params, limit, offset)
         ).fetchall()
         total = db.execute(
-            f"SELECT COUNT(*) as c FROM audit_log WHERE target IN ({placeholders})",
-            tuple(targets)
+            f"SELECT COUNT(*) as c FROM audit_log WHERE target IN ({placeholders}) {category_clause}",
+            tuple(targets + category_params)
         ).fetchone()["c"]
         db.close()
         self.success({"entries": [dict(r) for r in rows], "total": total})
@@ -17025,6 +17039,7 @@ def _screening_provider_evidence(results):
     for result in results or []:
         if not isinstance(result, dict):
             continue
+        provider_refs = result.get("provider_references") if isinstance(result.get("provider_references"), dict) else {}
         source_ref = _decode_monitoring_source_reference(result.get("source_reference"))
         source_ref.update(result.get("source_reference_json") or {})
         media_detail = _screening_media_detail_from_payload(result) or _screening_media_detail_from_indicators(result.get("indicators"))
@@ -17045,24 +17060,49 @@ def _screening_provider_evidence(results):
             "provider_case_identifier": _first_non_empty(
                 result.get("provider_case_identifier"),
                 result.get("case_identifier"),
+                provider_refs.get("case_id"),
+                (provider_refs.get("case_ids") or [None])[0] if isinstance(provider_refs.get("case_ids"), list) else None,
                 source_ref.get("case_identifier"),
             ),
             "provider_alert_identifier": _first_non_empty(
                 result.get("provider_alert_identifier"),
                 result.get("alert_identifier"),
+                provider_refs.get("alert_id"),
+                (provider_refs.get("alert_ids") or [None])[0] if isinstance(provider_refs.get("alert_ids"), list) else None,
                 source_ref.get("alert_identifier"),
             ),
             "provider_risk_identifier": _first_non_empty(
                 result.get("provider_risk_identifier"),
                 result.get("risk_id"),
                 result.get("risk_identifier"),
+                provider_refs.get("risk_id"),
+                (provider_refs.get("risk_ids") or [None])[0] if isinstance(provider_refs.get("risk_ids"), list) else None,
                 source_ref.get("risk_identifier"),
             ),
             "provider_profile_identifier": _first_non_empty(
                 result.get("provider_profile_identifier"),
                 result.get("profile_identifier"),
+                provider_refs.get("profile_id"),
+                (provider_refs.get("profile_ids") or [None])[0] if isinstance(provider_refs.get("profile_ids"), list) else None,
                 source_ref.get("profile_identifier"),
             ),
+            "provider_customer_identifier": _first_non_empty(
+                result.get("provider_customer_identifier"),
+                provider_refs.get("customer_id"),
+                (provider_refs.get("customer_ids") or [None])[0] if isinstance(provider_refs.get("customer_ids"), list) else None,
+            ),
+            "provider_workflow_identifier": _first_non_empty(
+                result.get("provider_workflow_identifier"),
+                provider_refs.get("workflow_id"),
+                (provider_refs.get("workflow_ids") or [None])[0] if isinstance(provider_refs.get("workflow_ids"), list) else None,
+            ),
+            "provider_timestamp": _first_non_empty(
+                result.get("provider_timestamp"),
+                provider_refs.get("provider_timestamp"),
+                result.get("screened_at"),
+            ),
+            "screened_at": result.get("screened_at"),
+            "provider_references": provider_refs,
             "matched_name": result.get("name"),
             "match_category": result.get("match_category"),
             "match_categories": result.get("match_categories") or [],
@@ -17212,33 +17252,50 @@ def _screening_evidence_linking_method(link_strategy, item=None):
 
 
 def _screening_evidence_provider_ids(item):
+    provider_refs = item.get("provider_references") if isinstance(item, dict) else {}
+    provider_refs = provider_refs if isinstance(provider_refs, dict) else {}
+
+    def ref_value(single_key, plural_key):
+        value = provider_refs.get(single_key)
+        if value not in (None, "", [], {}):
+            return value
+        values = provider_refs.get(plural_key)
+        if isinstance(values, list) and values:
+            return values[0]
+        return None
+
     return {
         "case": _screening_evidence_text(_first_non_empty(
             item.get("provider_case_id"),
             item.get("provider_case_identifier"),
             item.get("case_identifier"),
+            ref_value("case_id", "case_ids"),
         )),
         "alert": _screening_evidence_text(_first_non_empty(
             item.get("provider_alert_id"),
             item.get("provider_alert_identifier"),
             item.get("alert_identifier"),
+            ref_value("alert_id", "alert_ids"),
         )),
         "risk": _screening_evidence_text(_first_non_empty(
             item.get("provider_risk_id"),
             item.get("provider_risk_identifier"),
             item.get("risk_identifier"),
             item.get("risk_id"),
+            ref_value("risk_id", "risk_ids"),
         )),
         "match": _screening_evidence_text(_first_non_empty(
             item.get("provider_match_id"),
             item.get("provider_match_identifier"),
             item.get("match_identifier"),
             item.get("match_id"),
+            ref_value("match_id", "match_ids"),
         )),
         "profile": _screening_evidence_text(_first_non_empty(
             item.get("provider_profile_id"),
             item.get("provider_profile_identifier"),
             item.get("profile_identifier"),
+            ref_value("profile_id", "profile_ids"),
         )),
     }
 
@@ -17275,12 +17332,50 @@ def _screening_evidence_status_label(status):
         "partial": "Partial",
         "unavailable": "Unavailable",
         "failed": "Failed",
+        "provider_error": "Provider Error",
+        "stale": "Stale",
     }.get(status, "Unavailable")
+
+
+def _screening_evidence_canonical_quality(status):
+    status = _screening_evidence_norm(status)
+    if status in ("complete", "available", "fetched"):
+        return "complete"
+    if status == "partial":
+        return "partial"
+    if status in ("stale", "expired"):
+        return "stale"
+    if status in ("failed", "provider error", "provider_error", "error"):
+        return "provider_error"
+    return "unavailable"
+
+
+def _screening_evidence_next_action(reason_code, quality):
+    quality = _screening_evidence_canonical_quality(quality)
+    if quality == "complete":
+        return ""
+    if quality == "stale":
+        return "Re-run ComplyAdvantage Mesh screening before relying on this evidence."
+    if quality == "provider_error":
+        return "Retry provider screening or escalate the provider failure before approval."
+    if reason_code == "missing_provider_case_identifier":
+        return "Fetch or record the Mesh case reference before closing the review."
+    if reason_code == "missing_provider_identifiers":
+        return "Fetch provider detail or record Mesh case/alert/risk/profile references before closing the review."
+    if reason_code == "provider_did_not_return_source_link":
+        return "Review the available provider evidence and record disposition rationale; source URL was not returned."
+    if reason_code == "screening_not_complete_no_evidence":
+        return "Wait for provider completion or re-run screening."
+    if reason_code == "clear_no_hit_source_detail_not_applicable":
+        return ""
+    return "Record the evidence gap and review supporting provider details before relying on this result."
 
 
 def _screening_evidence_required_message(status):
     if status == "failed":
         return "Detailed provider evidence could not be fetched or linked for this screening result."
+    if status == "provider_error":
+        return "Detailed provider evidence is unavailable because the provider call failed."
     if status == "unavailable":
         return "Detailed provider evidence is unavailable for this screening result."
     if status == "partial":
@@ -17424,6 +17519,26 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
         "provider_match_id": ids["match"],
         "match_id": ids["match"],
         "provider_profile_id": ids["profile"],
+        "provider_customer_id": _screening_evidence_text(_first_non_empty(
+            evidence.get("provider_customer_id"),
+            evidence.get("provider_customer_identifier"),
+            evidence.get("customer_identifier"),
+            (evidence.get("provider_references") or {}).get("customer_id") if isinstance(evidence.get("provider_references"), dict) else None,
+            ((evidence.get("provider_references") or {}).get("customer_ids") or [None])[0] if isinstance((evidence.get("provider_references") or {}).get("customer_ids"), list) else None,
+        )),
+        "provider_workflow_id": _screening_evidence_text(_first_non_empty(
+            evidence.get("provider_workflow_id"),
+            evidence.get("provider_workflow_identifier"),
+            evidence.get("workflow_identifier"),
+            (evidence.get("provider_references") or {}).get("workflow_id") if isinstance(evidence.get("provider_references"), dict) else None,
+            ((evidence.get("provider_references") or {}).get("workflow_ids") or [None])[0] if isinstance((evidence.get("provider_references") or {}).get("workflow_ids"), list) else None,
+        )),
+        "provider_timestamp": _screening_evidence_text(_first_non_empty(
+            evidence.get("provider_timestamp"),
+            (evidence.get("provider_references") or {}).get("provider_timestamp") if isinstance(evidence.get("provider_references"), dict) else None,
+            evidence.get("screened_at"),
+            evidence.get("discovered_at"),
+        )),
         "category": category,
         "severity": _screening_evidence_text(_first_non_empty(evidence.get("severity"), evidence.get("risk_indicator"))),
         "total_hits": row.get("total_hits"),
@@ -17443,6 +17558,15 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
         "link_strategy": link_strategy or source,
     }
     item["evidence_status"] = _screening_evidence_item_status(item)
+    item["evidence_quality"] = _screening_evidence_canonical_quality(item["evidence_status"])
+    if item["evidence_quality"] != "complete":
+        if not any(_screening_evidence_provider_ids(item).values()):
+            item["missing_reason"] = "missing_provider_identifiers"
+        elif not item.get("source_url") and item.get("category") == "Adverse Media":
+            item["missing_reason"] = "provider_did_not_return_source_link"
+        else:
+            item["missing_reason"] = "provider_payload_lacks_detail"
+        item["next_action"] = _screening_evidence_next_action(item.get("missing_reason"), item["evidence_quality"])
     item["evidence_quality_label"] = _screening_evidence_status_label(item["evidence_status"])
     item["linking_method"] = _screening_evidence_linking_method(item["link_strategy"], item)
     return item
@@ -17456,6 +17580,9 @@ def _screening_evidence_provider_shape(item):
         "provider_alert_identifier": item.get("provider_alert_id"),
         "provider_risk_identifier": item.get("provider_risk_id"),
         "provider_profile_identifier": item.get("provider_profile_id"),
+        "provider_customer_identifier": item.get("provider_customer_id"),
+        "provider_workflow_identifier": item.get("provider_workflow_id"),
+        "provider_timestamp": item.get("provider_timestamp"),
         "match_identifier": item.get("provider_match_id"),
         "matched_name": item.get("subject_name"),
         "name": item.get("subject_name"),
@@ -17473,6 +17600,9 @@ def _screening_evidence_provider_shape(item):
         "publication_date": item.get("publication_date"),
         "match_confidence": item.get("match_score"),
         "evidence_status": item.get("evidence_status"),
+        "evidence_quality": item.get("evidence_quality"),
+        "missing_reason": item.get("missing_reason"),
+        "next_action": item.get("next_action"),
         "fetched_at": item.get("evidence_fetched_at"),
         "discovered_at": item.get("evidence_fetched_at"),
     }
@@ -17524,6 +17654,31 @@ def _screening_evidence_dedup(items):
     return deduped
 
 
+def _screening_evidence_reference_summary(items, row=None):
+    items = [item for item in items or [] if isinstance(item, dict)]
+    row = row or {}
+    refs = {
+        "provider": "complyadvantage" if any(_screening_evidence_norm(item.get("provider")) == "complyadvantage" for item in items) else _screening_evidence_row_provider(row),
+        "provider_display_name": "ComplyAdvantage Mesh",
+        "case_ids": sorted({item.get("provider_case_id") for item in items if item.get("provider_case_id")}),
+        "alert_ids": sorted({item.get("provider_alert_id") for item in items if item.get("provider_alert_id")}),
+        "risk_ids": sorted({item.get("provider_risk_id") for item in items if item.get("provider_risk_id")}),
+        "match_ids": sorted({item.get("provider_match_id") or item.get("match_id") for item in items if item.get("provider_match_id") or item.get("match_id")}),
+        "profile_ids": sorted({item.get("provider_profile_id") for item in items if item.get("provider_profile_id")}),
+        "customer_ids": sorted({item.get("provider_customer_id") for item in items if item.get("provider_customer_id")}),
+        "workflow_ids": sorted({item.get("provider_workflow_id") for item in items if item.get("provider_workflow_id")}),
+        "subject_type": row.get("subject_type"),
+        "subject_name": row.get("subject_name"),
+        "subject_key": row.get("subject_key") or row.get("person_key"),
+        "provider_timestamp": _first_non_empty(
+            *(item.get("provider_timestamp") for item in items),
+            row.get("screened_at"),
+        ),
+        "screened_at": row.get("screened_at"),
+    }
+    return {key: value for key, value in refs.items() if value not in (None, "", [], {})}
+
+
 def _screening_review_summary(row):
     if not row or not row.get("review_disposition"):
         return ""
@@ -17534,6 +17689,43 @@ def _screening_review_summary(row):
         _screening_evidence_text(row.get("reviewed_at")),
     ]
     return " · ".join(part for part in parts if part)
+
+
+def _attach_screening_review_evidence_context(db, app, context):
+    context = dict(context or {})
+    row = {
+        "application_id": app.get("id"),
+        "application_ref": app.get("ref"),
+        "company_name": app.get("company_name"),
+        "subject_name": context.get("subject_name"),
+        "subject_type": context.get("subject_type"),
+        "subject_key": context.get("subject_key"),
+        "status_key": context.get("status_key"),
+        "status_label": context.get("status_label"),
+        "screening_state": context.get("screening_state"),
+        "screened_at": context.get("screened_at"),
+        "total_hits": context.get("total_hits"),
+        "provider": context.get("provider"),
+        "source": context.get("source"),
+        "provider_evidence": context.get("provider_evidence") or [],
+        "entity_context": context.get("entity_context") or [],
+    }
+    try:
+        monitoring_evidence = _load_monitoring_evidence_batch(db, [app.get("id")]).get(app.get("id"), [])
+    except Exception:
+        monitoring_evidence = []
+    enriched = _enrich_screening_queue_evidence(row, monitoring_evidence)
+    evidence = enriched.get("screening_evidence") or {}
+    summary = enriched.get("evidence_summary") or evidence or {}
+    context["provider_evidence"] = enriched.get("provider_evidence") or context.get("provider_evidence") or []
+    context["screening_evidence"] = evidence
+    context["evidence_summary"] = summary
+    context["provider_references"] = summary.get("provider_references") or evidence.get("provider_references") or {}
+    context["evidence_quality"] = summary.get("evidence_quality") or _screening_evidence_canonical_quality(summary.get("evidence_status"))
+    context["missing_reason"] = summary.get("missing_reason") or ""
+    context["missing_reason_label"] = summary.get("missing_reason_label") or ""
+    context["next_action"] = summary.get("next_action") or ""
+    return context
 
 
 def _load_monitoring_evidence_batch(db, application_ids):
@@ -17777,13 +17969,18 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         linked_count=len(linked_provider_evidence),
         monitoring_evidence_count=len(monitoring_evidence or []),
     )
+    evidence_quality = _screening_evidence_canonical_quality(evidence_status)
     reason_label = _screening_evidence_reason_label(reason_code)
+    missing_reason = "" if evidence_quality == "complete" else reason_code
+    next_action = _screening_evidence_next_action(reason_code, evidence_quality)
     source_url_count = sum(1 for item in evidence_items if item.get("source_url"))
     unavailable_source_count = sum(1 for item in evidence_items if not item.get("source_url"))
     categories = sorted({item.get("category") for item in evidence_items if item.get("category")})
     providers = sorted({item.get("provider") for item in evidence_items if item.get("provider")})
+    provider_references = _screening_evidence_reference_summary(evidence_items, row)
     summary = {
         "evidence_status": evidence_status,
+        "evidence_quality": evidence_quality,
         "evidence_quality_label": _screening_evidence_status_label(evidence_status),
         "evidence_count": len(evidence_items),
         "source_url_count": source_url_count,
@@ -17792,6 +17989,9 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         "partial_evidence_message": _screening_evidence_required_message(evidence_status),
         "evidence_quality_reason": reason_label,
         "evidence_failure_reason": reason_code,
+        "missing_reason": missing_reason,
+        "missing_reason_label": reason_label if missing_reason else "",
+        "next_action": next_action,
         "linking_method": sorted({
             item.get("linking_method")
             for item in evidence_items
@@ -17802,6 +18002,10 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         "provider_case_ids": sorted({item.get("provider_case_id") for item in evidence_items if item.get("provider_case_id")}),
         "provider_alert_ids": sorted({item.get("provider_alert_id") for item in evidence_items if item.get("provider_alert_id")}),
         "provider_risk_ids": sorted({item.get("provider_risk_id") for item in evidence_items if item.get("provider_risk_id")}),
+        "provider_profile_ids": sorted({item.get("provider_profile_id") for item in evidence_items if item.get("provider_profile_id")}),
+        "provider_customer_ids": sorted({item.get("provider_customer_id") for item in evidence_items if item.get("provider_customer_id")}),
+        "provider_workflow_ids": sorted({item.get("provider_workflow_id") for item in evidence_items if item.get("provider_workflow_id")}),
+        "provider_references": provider_references,
         "officer_disposition": row.get("review_disposition"),
         "review_history_summary": _screening_review_summary(row),
     }
@@ -17919,8 +18123,14 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             context.append("IP risk: " + str(company_ip.get("risk_level")))
         if facts["adverse_media_hit"] or company_adverse.get("matched") or monitoring_media["matched"]:
             context.append("Company adverse media match")
-        return {
+        company_results = []
+        for record in (company_screening, company_sanctions, company_adverse):
+            company_results.extend((record or {}).get("results") or [])
+        company_results.extend(monitoring_media.get("results") or [])
+        return _attach_screening_review_evidence_context(db, app, {
             "subject_found": subject_matches_application,
+            "subject_type": "entity",
+            "subject_name": subject_name,
             "watchlist_status": _screening_legacy_status(
                 company_state,
                 company_subject["has_provider_sanctions_hit"] or has_company_match,
@@ -17928,17 +18138,21 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "pep_declared_status": "not_applicable",
             "pep_screening_status": "not_applicable",
             "screening_state": company_state,
+            "status_key": "review_required" if has_company_match else "screened_no_match",
+            "status_label": "Review Required" if has_company_match else "No Match",
+            "screened_at": facts.get("screened_at") or report.get("screened_at"),
             "total_hits": max(int(facts["total_hits"] or 0), int(monitoring_media["total_hits"] or 0)) or (report or {}).get("total_hits", 0),
             "entity_context": context,
             "provider": company_sanctions.get("provider") or company_screening.get("provider"),
             "source": company_sanctions.get("source") or company_screening.get("source"),
             "api_status": company_sanctions.get("api_status") or company_screening.get("api_status"),
+            "provider_evidence": _screening_provider_evidence(_dedup_screening_results(company_results)),
             "adverse_media_hit": bool(
                 facts["adverse_media_hit"]
                 or monitoring_media["matched"]
                 or _screening_structured_adverse_media_hit(report)
             ),
-        }
+        })
 
     if subject_type in ("director", "ubo"):
         table = "directors" if subject_type == "director" else "ubos"
@@ -17964,8 +18178,11 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             context.append("Undeclared PEP")
         if facts.get("adverse_media_hits", 0) > 0:
             context.append("Adverse media")
-        return {
+        return _attach_screening_review_evidence_context(db, app, {
             "subject_found": subject_found,
+            "subject_type": subject_type,
+            "subject_name": subject_name,
+            "subject_key": (person or {}).get("person_key") or (person or {}).get("id"),
             "watchlist_status": _screening_legacy_status(
                 person_state,
                 subject["has_provider_sanctions_hit"],
@@ -17973,13 +18190,17 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "pep_declared_status": "declared" if declared_pep else "not_declared",
             "pep_screening_status": _screening_legacy_status(person_state, has_pep_hit),
             "screening_state": person_state,
+            "status_key": "review_required" if facts["total_hits"] or has_pep_hit or subject["has_provider_sanctions_hit"] else "screened_no_match",
+            "status_label": "Review Required" if facts["total_hits"] or has_pep_hit or subject["has_provider_sanctions_hit"] else "No Match",
+            "screened_at": screening.get("screened_at") or report.get("screened_at"),
             "total_hits": facts["total_hits"],
             "entity_context": context,
             "provider": screening.get("provider"),
             "source": screening.get("source"),
             "api_status": screening.get("api_status"),
+            "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
             "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
-        }
+        })
 
     if subject_type == "intermediary":
         _, _, intermediaries = get_application_parties(db, app["id"])
@@ -18004,8 +18225,11 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             context.append("Evidence gap")
         if facts.get("adverse_media_hits", 0) > 0:
             context.append("Adverse media")
-        return {
+        return _attach_screening_review_evidence_context(db, app, {
             "subject_found": bool(person or item),
+            "subject_type": "intermediary",
+            "subject_name": subject_name,
+            "subject_key": (person or {}).get("person_key") or (person or {}).get("id"),
             "watchlist_status": _screening_legacy_status(
                 person_state,
                 subject["has_provider_sanctions_hit"] or facts.get("sanctions_hits", 0) > 0,
@@ -18013,13 +18237,17 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "pep_declared_status": "not_applicable",
             "pep_screening_status": "not_applicable",
             "screening_state": person_state,
+            "status_key": "review_required" if facts["total_hits"] or screening.get("evidence_gap") else "screened_no_match",
+            "status_label": "Review Required" if facts["total_hits"] or screening.get("evidence_gap") else "No Match",
+            "screened_at": screening.get("screened_at") or report.get("screened_at"),
             "total_hits": facts["total_hits"],
             "entity_context": context,
             "provider": screening.get("provider"),
             "source": screening.get("source"),
             "api_status": screening.get("api_status"),
+            "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
             "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
-        }
+        })
 
     return {
         "watchlist_status": None,
@@ -18088,6 +18316,18 @@ def _screening_sensitive_flags(app, row, subject_type, disposition, context_erro
         add("high_risk_jurisdiction")
 
     return flags
+
+
+def _ca_screening_review_event_type(canonical_disposition):
+    if canonical_disposition == "false_positive_cleared":
+        return "ca_hit_cleared_false_positive"
+    if canonical_disposition == "confirmed_match":
+        return "ca_hit_confirmed_true_match"
+    if canonical_disposition == "escalated_to_edd":
+        return "ca_hit_escalated"
+    if canonical_disposition == "needs_more_information":
+        return "ca_follow_up_requested"
+    return "ca_hit_reviewed"
 
 
 def upsert_screening_review(
@@ -19284,7 +19524,11 @@ class ScreeningReviewHandler(BaseHandler):
             """,
             (app["id"], subject_type, subject_name),
         ).fetchone())
+        ca_event_type = _ca_screening_review_event_type(canonical_disposition)
         audit_detail = json.dumps({
+            "event_type": ca_event_type,
+            "ca_event_type": ca_event_type,
+            "provider_event_category": "ca_mesh_screening",
             "subject_type": subject_type,
             "subject_name": subject_name,
             "application_id": app["id"],
@@ -19298,9 +19542,15 @@ class ScreeningReviewHandler(BaseHandler):
             "evidence_file_uploaded": bool(evidence_document),
             "evidence_document": evidence_document,
             "provider": (row_context or {}).get("provider"),
+            "provider_display_name": "ComplyAdvantage Mesh" if (row_context or {}).get("provider") == "complyadvantage" else (row_context or {}).get("provider"),
+            "provider_references": (row_context or {}).get("provider_references") or {},
             "source": (row_context or {}).get("source"),
             "api_status": (row_context or {}).get("api_status"),
             "screening_state": (row_context or {}).get("screening_state"),
+            "evidence_quality": (row_context or {}).get("evidence_quality"),
+            "missing_reason": (row_context or {}).get("missing_reason"),
+            "missing_reason_label": (row_context or {}).get("missing_reason_label"),
+            "next_action": (row_context or {}).get("next_action"),
             "source_surface": source_surface or "screening_queue",
             "actor": user.get("sub"),
             "actor_role": user.get("role"),
@@ -19314,8 +19564,28 @@ class ScreeningReviewHandler(BaseHandler):
         self.log_audit(
             user, "Screening Review", app["ref"],
             audit_detail, db=db, commit=False,
-            before_state=dict(existing_review) if existing_review else None,
-            after_state=review)
+            before_state={
+                "review": dict(existing_review) if existing_review else None,
+                "screening_context": {
+                    "provider": (row_context or {}).get("provider"),
+                    "provider_references": (row_context or {}).get("provider_references") or {},
+                    "evidence_quality": (row_context or {}).get("evidence_quality"),
+                    "screening_state": (row_context or {}).get("screening_state"),
+                    "disposition": (existing_review or {}).get("disposition") if existing_review else None,
+                },
+            },
+            after_state={
+                "review": review,
+                "screening_context": {
+                    "provider": (row_context or {}).get("provider"),
+                    "provider_references": (row_context or {}).get("provider_references") or {},
+                    "evidence_quality": (row_context or {}).get("evidence_quality"),
+                    "screening_state": (row_context or {}).get("screening_state"),
+                    "disposition": disposition,
+                    "canonical_disposition": canonical_disposition,
+                    "ca_event_type": ca_event_type,
+                },
+            })
         review["audit_confirmed"] = True
         if evidence_reference:
             review["review_evidence_reference"] = evidence_reference
@@ -19352,6 +19622,129 @@ class ScreeningReviewHandler(BaseHandler):
         if workflow_normalization.get("changed"):
             response["workflow_normalization"] = workflow_normalization
         self.success(response, status=status_code)
+
+
+def _ca_screening_refs_from_report(report):
+    refs = {
+        "case_ids": set(),
+        "customer_ids": set(),
+        "workflow_ids": set(),
+        "alert_ids": set(),
+        "risk_ids": set(),
+        "profile_ids": set(),
+    }
+
+    def add_many(key, values):
+        if values in (None, "", [], {}):
+            return
+        if not isinstance(values, (list, tuple, set)):
+            values = [values]
+        for value in values:
+            if value not in (None, "", [], {}):
+                refs[key].add(str(value))
+
+    def visit(value):
+        if isinstance(value, dict):
+            provider_refs = value.get("provider_references")
+            if isinstance(provider_refs, dict):
+                add_many("case_ids", provider_refs.get("case_ids") or provider_refs.get("case_id"))
+                add_many("customer_ids", provider_refs.get("customer_ids") or provider_refs.get("customer_id"))
+                add_many("workflow_ids", provider_refs.get("workflow_ids") or provider_refs.get("workflow_id"))
+                add_many("alert_ids", provider_refs.get("alert_ids") or provider_refs.get("alert_id"))
+                add_many("risk_ids", provider_refs.get("risk_ids") or provider_refs.get("risk_id"))
+                add_many("profile_ids", provider_refs.get("profile_ids") or provider_refs.get("profile_id"))
+            add_many("case_ids", value.get("provider_case_identifier") or value.get("case_identifier"))
+            add_many("customer_ids", value.get("provider_customer_identifier") or value.get("customer_identifier"))
+            add_many("workflow_ids", value.get("provider_workflow_identifier") or value.get("workflow_identifier"))
+            add_many("alert_ids", value.get("provider_alert_identifier") or value.get("alert_identifier"))
+            add_many("risk_ids", value.get("provider_risk_identifier") or value.get("risk_id") or value.get("risk_identifier"))
+            add_many("profile_ids", value.get("provider_profile_identifier") or value.get("profile_identifier"))
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(report)
+    return {key: sorted(values) for key, values in refs.items() if values}
+
+
+def _ca_report_evidence_quality_summary(report):
+    qualities = []
+    rows = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            quality = value.get("evidence_quality")
+            if quality:
+                qualities.append(_screening_evidence_canonical_quality(quality))
+            if value.get("evidence_gap"):
+                qualities.append("unavailable")
+                rows.append({
+                    "subject_type": value.get("subject_type"),
+                    "reason": value.get("reason") or "evidence_gap",
+                })
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(report)
+    if not qualities:
+        return {"overall": "complete" if not (report or {}).get("degraded_sources") else "partial", "gaps": rows}
+    if "provider_error" in qualities:
+        overall = "provider_error"
+    elif "unavailable" in qualities:
+        overall = "unavailable"
+    elif "partial" in qualities:
+        overall = "partial"
+    elif "stale" in qualities:
+        overall = "stale"
+    else:
+        overall = "complete"
+    return {"overall": overall, "gaps": rows}
+
+
+def _ca_screening_audit_detail(event_type, app, *, report=None, error=None):
+    report = report if isinstance(report, dict) else {}
+    refs = _ca_screening_refs_from_report(report) if report else {}
+    detail = {
+        "event_type": event_type,
+        "ca_event_type": event_type,
+        "provider_event_category": "ca_mesh_screening",
+        "provider": "complyadvantage",
+        "provider_display_name": "ComplyAdvantage Mesh",
+        "application_id": app.get("id"),
+        "application_ref": app.get("ref"),
+        "subject_count": {
+            "directors": len(report.get("director_screenings") or []),
+            "ubos": len(report.get("ubo_screenings") or []),
+            "intermediaries": len(report.get("intermediary_screenings") or []),
+            "entity": 1 if report.get("company_screening") else 0,
+        } if report else {},
+        "total_hits": report.get("total_hits"),
+        "provider_references": refs,
+        "evidence_quality": _ca_report_evidence_quality_summary(report),
+        "screened_at": report.get("screened_at"),
+    }
+    if error:
+        detail["error_type"] = error.__class__.__name__
+        detail["error"] = sanitize_provider_error(error, max_len=160)
+    try:
+        from screening_complyadvantage.evidence_policy import redact_provider_payload
+        detail = redact_provider_payload(detail)
+    except Exception:
+        pass
+    return json.dumps(detail, default=str, sort_keys=True)
+
+
+def _ca_screening_audit_enabled():
+    try:
+        from screening_config import get_active_provider_name
+        return get_active_provider_name() == "complyadvantage"
+    except Exception:
+        return False
 
 
 class ScreeningHandler(BaseHandler):
@@ -19409,9 +19802,37 @@ class ScreeningHandler(BaseHandler):
             "business_activity": prescreening.get("business_activity"),
         }
 
-        report = run_full_screening(
-            app_data, directors, ubos, intermediaries, client_ip=self.get_client_ip(), db=db
-        )
+        ca_audit_enabled = _ca_screening_audit_enabled()
+        if ca_audit_enabled:
+            self.log_audit(
+                user,
+                "ca_screening.requested",
+                app["ref"],
+                _ca_screening_audit_detail("ca_screening_requested", dict(app)),
+                db=db,
+                commit=False,
+                before_state={"screening_report": prescreening.get("screening_report")},
+                after_state={"requested": True, "provider": "complyadvantage"},
+            )
+        try:
+            report = run_full_screening(
+                app_data, directors, ubos, intermediaries, client_ip=self.get_client_ip(), db=db
+            )
+        except Exception as exc:
+            if ca_audit_enabled:
+                self.log_audit(
+                    user,
+                    "ca_screening.provider_failure",
+                    app["ref"],
+                    _ca_screening_audit_detail("ca_provider_failure", dict(app), error=exc),
+                    db=db,
+                    commit=False,
+                    before_state={"screening_report": prescreening.get("screening_report")},
+                    after_state={"provider_failure": True, "provider": "complyadvantage", "error_type": exc.__class__.__name__},
+                )
+                db.commit()
+            db.close()
+            raise
         screening_mode = determine_screening_mode(report)
         report["screening_mode"] = screening_mode
         store_screening_mode(db, real_id, screening_mode)
@@ -19475,6 +19896,38 @@ class ScreeningHandler(BaseHandler):
             db=db,
             commit=False,
         )
+        if ca_audit_enabled and report.get("provider") == "complyadvantage":
+            ca_refs = _ca_screening_refs_from_report(report)
+            self.log_audit(
+                user,
+                "ca_screening.result_received",
+                app["ref"],
+                _ca_screening_audit_detail("ca_result_received", dict(app), report=report),
+                db=db,
+                commit=False,
+                before_state={"screening_report": safe_json_loads(app.get("prescreening_data")).get("screening_report")},
+                after_state={
+                    "provider": "complyadvantage",
+                    "total_hits": report.get("total_hits"),
+                    "provider_references": ca_refs,
+                    "evidence_quality": _ca_report_evidence_quality_summary(report),
+                },
+            )
+            if _ca_report_evidence_quality_summary(report).get("overall") != "complete":
+                self.log_audit(
+                    user,
+                    "ca_screening.evidence_incomplete",
+                    app["ref"],
+                    _ca_screening_audit_detail("ca_evidence_partial_or_unavailable", dict(app), report=report),
+                    db=db,
+                    commit=False,
+                    before_state={"provider": "complyadvantage"},
+                    after_state={
+                        "provider": "complyadvantage",
+                        "provider_references": ca_refs,
+                        "evidence_quality": _ca_report_evidence_quality_summary(report),
+                    },
+                )
         db.commit()
         db.close()
 

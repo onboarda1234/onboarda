@@ -696,8 +696,16 @@ def test_screening_queue_links_ca_evidence_by_exact_identifiers(db, temp_db):
     assert row["status_label"] == "Review Required"
     assert "raw_status" in row
     assert row["screening_evidence"]["evidence_status"] == "available"
+    assert row["screening_evidence"]["evidence_quality"] == "complete"
     assert row["screening_evidence"]["evidence_quality_label"] == "Complete"
     assert row["screening_evidence"]["technical_details"]["linked_ca_1b_evidence_count"] == 1
+    refs = row["screening_evidence"]["provider_references"]
+    assert refs["provider"] == "complyadvantage"
+    assert refs["provider_display_name"] == "ComplyAdvantage Mesh"
+    assert refs["case_ids"] == ["case-sq2"]
+    assert refs["alert_ids"] == ["alert-sq2"]
+    assert refs["risk_ids"] == ["risk-sq2"]
+    assert refs["profile_ids"] == ["profile-sq2"]
     evidence = row["screening_evidence"]["items"][0]
     assert evidence["source_title"] == "Provider article title"
     assert evidence["source_name"] == "Provider News"
@@ -713,6 +721,56 @@ def test_screening_queue_links_ca_evidence_by_exact_identifiers(db, temp_db):
     assert diagnostics["provider"] == "complyadvantage"
     assert diagnostics["identifier_presence"]["case"] is True
     assert diagnostics["field_presence"]["source_title"] is True
+
+
+def test_screening_queue_preserves_nested_provider_references():
+    from server import _enrich_screening_queue_evidence
+
+    row = _enrich_screening_queue_evidence(
+        {
+            "application_id": "app_nested_refs",
+            "application_ref": "ARF-NESTED-REFS",
+            "company_name": "Nested Ref Ltd",
+            "subject_name": "Nested Ref Ltd",
+            "subject_type": "entity",
+            "status_key": "review_required",
+            "status_label": "Review Required",
+            "total_hits": 1,
+            "provider_evidence": [
+                {
+                    "provider": "complyadvantage",
+                    "match_category": "Adverse Media",
+                    "source_name": "Mesh Source",
+                    "media_title": "Mesh article",
+                    "media_url": "https://mesh.example.test/article",
+                    "match_confidence": "0.88",
+                    "provider_references": {
+                        "case_ids": ["case-nested"],
+                        "customer_ids": ["customer-nested"],
+                        "workflow_ids": ["workflow-nested"],
+                        "alert_ids": ["alert-nested"],
+                        "risk_ids": ["risk-nested"],
+                        "profile_ids": ["profile-nested"],
+                        "provider_timestamp": "2026-06-01T10:00:00Z",
+                    },
+                }
+            ],
+        },
+        [],
+    )
+
+    evidence = row["screening_evidence"]["items"][0]
+    assert row["screening_evidence"]["evidence_quality"] == "complete"
+    assert evidence["provider_case_id"] == "case-nested"
+    assert evidence["provider_alert_id"] == "alert-nested"
+    assert evidence["provider_risk_id"] == "risk-nested"
+    assert evidence["provider_profile_id"] == "profile-nested"
+    assert evidence["provider_customer_id"] == "customer-nested"
+    assert evidence["provider_workflow_id"] == "workflow-nested"
+    assert evidence["provider_timestamp"] == "2026-06-01T10:00:00Z"
+    refs = row["screening_evidence"]["provider_references"]
+    assert refs["customer_ids"] == ["customer-nested"]
+    assert refs["workflow_ids"] == ["workflow-nested"]
 
 
 def test_screening_queue_does_not_attach_mismatched_ca_subject(db, temp_db):
