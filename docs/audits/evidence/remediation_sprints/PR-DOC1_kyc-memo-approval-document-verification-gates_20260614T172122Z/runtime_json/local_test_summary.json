@@ -1,0 +1,22 @@
+{
+  "initial_diagnosis_origin_main_sha": "6b6ea16881ae7f93a0eeb4256bb4f205692be757",
+  "rebased_origin_main_sha": "787ce4a26abfbaceaa043011df4e3f961fa4f418",
+  "branch": "codex/pr-doc1-kyc-memo-approval-document-verification-gates",
+  "rebased_implementation_commit_sha": "0324d39b33b98ed3f50117c9292e10a9da6b39c3",
+  "targeted_doc_tests": {
+    "result": "passed",
+    "summary": "86 passed, 7 warnings in 10.84s"
+  },
+  "closed_remediation_subset": {
+    "result": "passed",
+    "summary": "168 passed in 10.73s"
+  },
+  "full_backend_suite": {
+    "result": "passed",
+    "summary": "5346 passed, 25 skipped, 76 warnings in 222.85s"
+  },
+  "browser_smoke": {
+    "result": "passed"
+  },
+  "doc_001_status": "PARTIALLY FIXED"
+}

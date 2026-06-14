@@ -4044,6 +4044,7 @@ class TestGovernanceAttemptAudit:
     ):
         """EDD/enhanced memo evidence with native datetimes must not 500 during memo persistence."""
         from auth import create_token
+        from tests.conftest import insert_verified_required_documents
         from db import get_db
         import server
 
@@ -4110,6 +4111,7 @@ class TestGovernanceAttemptAudit:
                 """,
                 (app_id, "Priya", "Raman", "Priya Raman", "Mauritius", "Yes"),
             )
+        insert_verified_required_documents(conn, app_id)
         conn.commit()
         conn.close()
 
@@ -5652,6 +5654,7 @@ class TestGovernanceAttemptAudit:
     def test_first_approval_202_attempt_is_audited(self, api_server):
         """Dual-approval first approval must leave a 202 Governance Attempt row."""
         from auth import create_token
+        from tests.conftest import insert_verified_required_documents
         from db import get_db
 
         app_id = "app_phase1b_dual_approval"
@@ -5672,6 +5675,7 @@ class TestGovernanceAttemptAudit:
         ))
         self._insert_approved_memo(conn, app_id)
         self._insert_enhanced_requirement(conn, app_id, status="accepted")
+        insert_verified_required_documents(conn, app_id)
         conn.commit()
         conn.close()
 
@@ -5883,6 +5887,7 @@ class TestMonitoringEnrollmentActuation:
         })
 
     def _insert_approvable_application(self, risk_level="LOW"):
+        from tests.conftest import insert_verified_required_documents
         from db import get_db
 
         suffix = uuid.uuid4().hex[:8]
@@ -5949,6 +5954,7 @@ class TestMonitoringEnrollmentActuation:
                 "Fixture approval reason",
             ),
         )
+        insert_verified_required_documents(conn, app_id)
         conn.commit()
         conn.close()
         return app_id, app_ref

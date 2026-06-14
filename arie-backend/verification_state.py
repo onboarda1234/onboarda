@@ -11,6 +11,7 @@ STATE_IN_PROGRESS = "in_progress"
 STATE_VERIFIED = "verified"
 STATE_FLAGGED = "flagged"
 STATE_FAILED = "failed"
+STATE_SKIPPED = "skipped"
 
 VERIFICATION_STATES = (
     STATE_PENDING,
@@ -18,6 +19,7 @@ VERIFICATION_STATES = (
     STATE_VERIFIED,
     STATE_FLAGGED,
     STATE_FAILED,
+    STATE_SKIPPED,
 )
 
 _ALIASES = {
@@ -36,6 +38,9 @@ _ALIASES = {
     "manual_review": STATE_FLAGGED,
     "fail": STATE_FAILED,
     "error": STATE_FAILED,
+    "disabled": STATE_SKIPPED,
+    "skip": STATE_SKIPPED,
+    "skipped": STATE_SKIPPED,
 }
 
 _STATE_META = {
@@ -66,6 +71,12 @@ _STATE_META = {
     STATE_FAILED: {
         "label": "Verification failed",
         "tone": "error",
+        "success": False,
+        "terminal": True,
+    },
+    STATE_SKIPPED: {
+        "label": "Verification skipped - manual review required",
+        "tone": "warning",
         "success": False,
         "terminal": True,
     },

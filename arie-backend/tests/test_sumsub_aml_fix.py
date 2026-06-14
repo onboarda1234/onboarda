@@ -409,6 +409,8 @@ def _make_screening_report(*, company_sanctions_status="live",
 
 def _insert_app_for_gate5(db, screening_report):
     """Insert an application + memo that passes gates 1-4."""
+    from tests.conftest import insert_verified_required_documents
+
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-aml-fix-{suffix}"
     db.execute(
@@ -436,6 +438,7 @@ def _insert_app_for_gate5(db, screening_report):
             }),
         ),
     )
+    insert_verified_required_documents(db, app_id)
     db.execute(
         """
         INSERT INTO compliance_memos

@@ -45,6 +45,11 @@ from screening_state import (
 )
 from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
 from memo_governance import latest_compliance_memo_row
+from document_reliance_gate import (
+    document_reliance_blockers_for_approval,
+    evaluate_document_reliance_gate,
+    format_document_reliance_blockers,
+)
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -839,42 +844,7 @@ class ApprovalGateValidator:
                     "Resolve configuration/data issues and retry approval."
                 )
 
-            # 5. Check all documents are not flagged (from DB, not app dict)
-            # Senior-officer override (EX-06): a flagged document passes the
-            # gate when review_status='accepted' AND reviewer_role is admin/sco
-            # AND review_comment is non-empty (documented reason). Staging has
-            # an additional workflow-only synthetic evidence acceptance path
-            # that preserves verification_status='flagged' and never counts as
-            # pilot approval proof.
-            flagged_docs = db.execute(
-                "SELECT id, doc_type, verification_status, review_status, review_comment, reviewer_role, "
-                "evidence_class, workflow_test_accepted, workflow_test_acceptance_reason, "
-                "workflow_test_accepted_by, workflow_test_accepted_at, workflow_test_acceptance_environment "
-                "FROM documents "
-                "WHERE application_id = ? AND verification_status = 'flagged' "
-                "AND COALESCE(is_current, TRUE) = TRUE",
-                (app_id,)
-            ).fetchall()
-            if flagged_docs:
-                blocking_docs = []
-                for d in flagged_docs:
-                    d_dict = dict(d) if not isinstance(d, dict) else d
-                    r_status = (d_dict.get('review_status') or '').lower()
-                    r_role = (d_dict.get('reviewer_role') or '').lower()
-                    r_comment = (d_dict.get('review_comment') or '').strip()
-                    if r_status == 'accepted' and r_role in ('admin', 'sco') and r_comment:
-                        continue  # Senior-accepted with documented reason — passes gate
-                    if _staging_workflow_test_document_acceptance_satisfied(d_dict):
-                        continue  # Workflow-only synthetic evidence acceptance — staging only
-                    blocking_docs.append(d_dict['doc_type'])
-                if blocking_docs:
-                    doc_types = ', '.join(blocking_docs)
-                    return (
-                        False,
-                        f"Flagged documents must be resolved before approval: {doc_types}"
-                    )
-
-            # 6. Check screening report for any simulated or degraded provider statuses
+            # 5. Check screening report for any simulated or degraded provider statuses
             #    Required checks (identity verification or CA screening) block approval if simulated.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
             #    company_watchlist with api_status="not_configured" warns but does not block
@@ -936,7 +906,7 @@ class ApprovalGateValidator:
                             "Live screening results are required for approval."
                         )
 
-            # 7. Check AI source provenance from memo data
+            # 6. Check AI source provenance from memo data
             memo_data_str = memo_row.get('memo_data', '{}') if memo_row else '{}'
             if isinstance(memo_data_str, str):
                 import json as _json2
@@ -954,7 +924,7 @@ class ApprovalGateValidator:
                     "Live AI verification required for approval."
                 )
 
-            # 8. Screening freshness: check screening was run after the latest
+            # 7. Screening freshness: check screening was run after the latest
             # screening-relevant application inputs.  KYC/document submission is
             # an operational workflow event and must not stale screening unless
             # it also changes prescreening/company/party risk inputs.
@@ -985,7 +955,7 @@ class ApprovalGateValidator:
                     return (False, "Could not verify screening freshness due to timestamp format error. "
                             "Re-submit the application to trigger fresh screening.")
 
-                    # 9. Screening age validation: screening results must not exceed
+                    # 8. Screening age validation: screening results must not exceed
             #    the configurable validity period (default 90 days).
             #    Fail-closed: missing screening timestamp blocks approval.
             validity_days = get_screening_validity_days()
@@ -1065,7 +1035,7 @@ class ApprovalGateValidator:
                 return (False, "Screening timestamp is missing from the screening report. "
                         "A re-screen is required before approval can proceed.")
 
-            # 10. Staleness detection: application data modified after memo/screening
+            # 9. Staleness detection: application data modified after memo/screening
             # If the application inputs were updated after the memo was generated,
             # the memo may be based on outdated data and should be regenerated.
             # We use inputs_updated_at (substantive input changes only) rather than
@@ -1088,6 +1058,22 @@ class ApprovalGateValidator:
                     logger.warning(f"Could not compare timestamps for staleness check: {ts_err}")
                     return (False, "Could not verify memo freshness due to timestamp format error. "
                             "Please regenerate the compliance memo before approving.")
+
+            # 10. Canonical onboarding/KYC document evidence gate. Evaluate this
+            # after the legacy approval prerequisites so existing fail-closed
+            # gates still expose their precise blocker while otherwise
+            # approval-ready records cannot rely on unverified documents.
+            document_gate = evaluate_document_reliance_gate(
+                db,
+                app,
+                stage="application_approval",
+            )
+            if not document_gate.get("passed"):
+                return (
+                    False,
+                    "Document evidence gate failed: "
+                    + format_document_reliance_blockers(document_gate)
+                )
 
             # EX-10 closeout: Audit log on successful freshness validation
             _screening_age_days = None
@@ -1332,6 +1318,28 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             blocker_group="identity_verification",
             blocker_group_label="Identity Verification",
             action_key="idv.review",
+        ))
+
+    try:
+        document_gate = evaluate_document_reliance_gate(
+            db,
+            app,
+            stage="approval_blocker_summary",
+        )
+        if not document_gate.get("passed"):
+            blockers.extend(document_reliance_blockers_for_approval(document_gate))
+    except Exception as exc:
+        blockers.append(_approval_gate_blocker(
+            "document_evidence_gate_error",
+            "Document Evidence",
+            "Document evidence gate could not be evaluated",
+            f"Document verification status lookup failed: {exc}",
+            cta_label="Resolve documents",
+            tab="kyc-docs",
+            anchor_id="detail-kyc-documents-details",
+            blocker_group="document_evidence",
+            blocker_group_label="Document Evidence",
+            action_key="documents.resolve",
         ))
 
     memo_row = None

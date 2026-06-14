@@ -824,7 +824,7 @@ class TestCaseCommandCentreRuntime:
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "documents" in blocker_ids
-        assert "Document review still needs attention." in result["html"]
+        assert "Document evidence is not reliance-ready." in result["html"]
         assert 'data-action-key="documents.review"' in result["html"]
         assert result["visibleBlockerCardCount"] == len(result["blockers"])
         assert "1 mandatory blocker" not in result["html"]

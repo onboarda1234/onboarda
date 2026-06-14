@@ -20,6 +20,8 @@ def _screening_prescreening():
 
 
 def _insert_approval_ready_app(db, *, risk_level="MEDIUM"):
+    from tests.conftest import insert_verified_required_documents
+
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-idv-gate-{suffix}"
     app_ref = f"ARF-IDV-GATE-{suffix}"
@@ -48,6 +50,7 @@ def _insert_approval_ready_app(db, *, risk_level="MEDIUM"):
         "INSERT INTO directors (id, application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?, ?)",
         (director_id, app_id, "Jane Director", "Mauritius", "No"),
     )
+    insert_verified_required_documents(db, app_id)
     db.execute(
         """
         INSERT INTO compliance_memos

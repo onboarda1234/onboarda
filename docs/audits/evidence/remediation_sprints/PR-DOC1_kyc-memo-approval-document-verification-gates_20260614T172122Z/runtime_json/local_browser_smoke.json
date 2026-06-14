@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "browser": "Playwright Chromium",
+  "targets": [
+    "http://127.0.0.1:4173/arie-backoffice.html",
+    "http://127.0.0.1:4173/arie-portal.html"
+  ],
+  "assertions": [
+    "backoffice_missing_agent_execution_not_ready",
+    "backoffice_document_blocker_descriptions_visible",
+    "backoffice_approval_document_blocker_visible",
+    "portal_skipped_state_visible",
+    "portal_missing_agent_execution_not_ready",
+    "portal_manual_accepted_ready",
+    "portal_reliance_state_markup_present"
+  ],
+  "screenshots": [
+    "screenshots/backoffice_document_readiness.png",
+    "screenshots/portal_document_readiness.png"
+  ]
+}
+

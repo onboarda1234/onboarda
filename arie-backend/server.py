@@ -108,10 +108,16 @@ from verification_state import (
     STATE_FLAGGED,
     STATE_IN_PROGRESS,
     STATE_PENDING,
+    STATE_SKIPPED,
     STATE_VERIFIED,
     decorate_document_verification_state,
     normalize_verification_state,
     verification_state_payload,
+)
+from document_reliance_gate import (
+    document_reliance_error_message,
+    evaluate_document_reliance_gate,
+    format_document_reliance_blockers,
 )
 from screening_freshness_metadata import populate_screening_freshness_metadata
 from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
@@ -3483,7 +3489,7 @@ class ApplicationsHandler(BaseHandler):
             doc_rows = db.execute(
                 "SELECT id, doc_type, doc_name, file_size, verification_status, "
                 "verification_results, verified_at, person_id, review_status, "
-                "review_comment, reviewed_by, reviewed_at, application_id, "
+                "review_comment, reviewed_by, reviewer_role, reviewed_at, application_id, "
                 "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
                 "evidence_class, evidence_classification_note, evidence_classified_by, evidence_classified_at "
                 f"FROM documents WHERE application_id IN ({doc_placeholders}) "
@@ -3536,8 +3542,34 @@ class ApplicationsHandler(BaseHandler):
             app["ubos"] = parties[1]
             app["intermediaries"] = parties[2]
             app_docs = docs_by_app.get(app["id"], [])
+            document_gate = evaluate_document_reliance_gate(
+                db,
+                app,
+                stage="application_detail",
+                documents=app_docs,
+            )
+            # `/api/applications` responses are ETag-cached. The gate's
+            # generated_at is useful in audit snapshots but would make
+            # otherwise identical list responses hash differently.
+            document_gate.pop("generated_at", None)
+            app["document_reliance_summary"] = document_gate
+            app["document_evidence_gate"] = document_gate
+            reliance_by_id = {
+                item.get("document_id"): item
+                for item in document_gate.get("documents") or []
+                if item.get("document_id")
+            }
             # Remove application_id from document dicts (not part of original response)
             for doc in app_docs:
+                reliance_snapshot = reliance_by_id.get(doc.get("id"))
+                if reliance_snapshot:
+                    doc["document_reliance_state"] = reliance_snapshot.get("reliance_state")
+                    doc["document_reliance_status"] = (
+                        "ready" if reliance_snapshot.get("reliance_state") in ("verified", "manual_accepted") else "blocked"
+                    )
+                    doc["document_reliance_blockers"] = reliance_snapshot.get("blocker_reasons") or []
+                    doc["verification_method"] = reliance_snapshot.get("verification_method")
+                    doc["manual_acceptance"] = reliance_snapshot.get("manual_acceptance")
                 doc.pop("application_id", None)
             app["documents"] = app_docs
             app["rmi_requests"] = rmi_by_app.get(app["id"], [])
@@ -4618,6 +4650,8 @@ CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS = {
     "decision_basis",
     "idv_gate_summary",
     "document_history",
+    "document_evidence_gate",
+    "document_reliance_summary",
     "application_notes",
     "decision_records",
     "compliance_memos",
@@ -4637,6 +4671,7 @@ CLIENT_DOCUMENT_FORBIDDEN_KEYS = {
     "reviewed_by_name",
     "reviewer_role",
     "verification_results",
+    "document_reliance_blockers",
     "workflow_test_acceptance_environment",
     "workflow_test_acceptance_reason",
     "workflow_test_accepted",
@@ -5504,6 +5539,28 @@ class ApplicationDetailHandler(BaseHandler):
             result,
             result["documents"],
         )
+        result["document_reliance_summary"] = evaluate_document_reliance_gate(
+            db,
+            result,
+            stage="application_detail",
+            documents=result["documents"],
+        )
+        result["document_evidence_gate"] = result["document_reliance_summary"]
+        reliance_by_id = {
+            item.get("document_id"): item
+            for item in result["document_reliance_summary"].get("documents") or []
+            if item.get("document_id")
+        }
+        for doc in result["documents"]:
+            reliance_snapshot = reliance_by_id.get(doc.get("id"))
+            if reliance_snapshot:
+                doc["document_reliance_state"] = reliance_snapshot.get("reliance_state")
+                doc["document_reliance_status"] = (
+                    "ready" if reliance_snapshot.get("reliance_state") in ("verified", "manual_accepted") else "blocked"
+                )
+                doc["document_reliance_blockers"] = reliance_snapshot.get("blocker_reasons") or []
+                doc["verification_method"] = reliance_snapshot.get("verification_method")
+                doc["manual_acceptance"] = reliance_snapshot.get("manual_acceptance")
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
         base_periodic_reviews = _list_periodic_review_projections(db, application_id=result["id"])
@@ -8050,65 +8107,27 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
 
 
 def _kyc_verified_required_document_gate(db, app):
-    """Return a gate result for submit-kyc required verified documents."""
-    expectations = _kyc_required_document_expectations(db, app)
-    rows = [
-        dict(row) for row in db.execute(
-            f"SELECT id, doc_type, doc_name, person_id, slot_key, verification_status, "
-            f"evidence_class, workflow_test_accepted, workflow_test_acceptance_reason, "
-            f"workflow_test_accepted_by, workflow_test_accepted_at, workflow_test_acceptance_environment "
-            f"FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
-            (app["id"],),
-        ).fetchall()
+    """Return the canonical document evidence gate for KYC submission."""
+    gate = evaluate_document_reliance_gate(db, app, stage="kyc_submission")
+    gate["missing"] = [
+        item for item in gate.get("documents") or []
+        if item.get("reliance_state") == "missing"
     ]
-    docs_by_slot = {}
-    for doc in rows:
-        slot_key = doc.get("slot_key") or _document_slot_key(doc.get("doc_type"), doc.get("person_id"))
-        docs_by_slot[slot_key] = doc
-
-    missing = []
-    not_verified = []
-    workflow_test_accepted = []
-    verified_required_count = 0
-    for expectation in expectations:
-        doc = docs_by_slot.get(expectation["slot_key"])
-        if not doc:
-            missing.append(expectation)
-            continue
-        status = normalize_verification_state(doc.get("verification_status"))
-        if status == STATE_VERIFIED:
-            verified_required_count += 1
-            continue
-        if _document_workflow_test_accepted(doc):
-            workflow_test_accepted.append({
-                "document_id": doc.get("id"),
-                "doc_name": doc.get("doc_name"),
-                "doc_type": doc.get("doc_type"),
-                "slot_key": expectation["slot_key"],
-                "label": expectation["label"],
-                "verification_status": status,
-                "workflow_test_acceptance": _workflow_test_acceptance_payload(db, doc),
-            })
-            continue
-        not_verified.append({
-            "document_id": doc.get("id"),
-            "doc_name": doc.get("doc_name"),
-            "doc_type": doc.get("doc_type"),
-            "slot_key": expectation["slot_key"],
-            "label": expectation["label"],
-            "verification_status": status,
-        })
-    return {
-        "passed": not missing and not not_verified,
-        "required_count": len(expectations),
-        "uploaded_count": len(rows),
-        "verified_required_count": verified_required_count,
-        "satisfied_required_count": verified_required_count + len(workflow_test_accepted),
-        "workflow_test_accepted_required_count": len(workflow_test_accepted),
-        "workflow_test_accepted": workflow_test_accepted,
-        "missing": missing,
-        "not_verified": not_verified,
-    }
+    gate["not_verified"] = [
+        item for item in gate.get("documents") or []
+        if item.get("reliance_state") not in ("verified", "manual_accepted", "missing")
+    ]
+    gate["verified_required_count"] = len([
+        item for item in gate.get("documents") or []
+        if item.get("reliance_state") == "verified"
+    ])
+    gate["manual_accepted_required_count"] = len([
+        item for item in gate.get("documents") or []
+        if item.get("reliance_state") == "manual_accepted"
+    ])
+    gate["workflow_test_accepted_required_count"] = 0
+    gate["workflow_test_accepted"] = []
+    return gate
 
 
 class KYCSubmitHandler(BaseHandler):
@@ -8191,7 +8210,8 @@ class KYCSubmitHandler(BaseHandler):
             not_verified_count = len(verification_gate["not_verified"])
             message = (
                 "All required KYC documents must be uploaded and verified before submission. "
-                f"Missing: {missing_count}; not verified: {not_verified_count}."
+                f"Missing: {missing_count}; not verified: {not_verified_count}. "
+                + format_document_reliance_blockers(verification_gate)
             )
             _audit_blocked_kyc_transition(
                 self, db, user, refreshed_app or app,
@@ -8201,7 +8221,14 @@ class KYCSubmitHandler(BaseHandler):
                 status_code=400,
             )
             db.close()
-            return self.error(message, 400)
+            self.set_status(400)
+            self.write({
+                "error": message,
+                "kyc_verification_blocked": True,
+                "document_evidence_gate": verification_gate,
+                "document_blockers": verification_gate.get("blockers", []),
+            })
+            return
         risk_app_for_submission = dict(refreshed_app or app)
         risk_app_for_submission["status"] = "kyc_submitted"
         risk_error = _application_risk_integrity_error(risk_app_for_submission, "submit KYC documents")
@@ -8260,6 +8287,7 @@ class KYCSubmitHandler(BaseHandler):
                 "application_ref": app["ref"],
                 "required_documents_verified": verification_gate["verified_required_count"],
                 "required_documents_workflow_test_accepted": verification_gate.get("workflow_test_accepted_required_count", 0),
+                "required_documents_manual_accepted": verification_gate.get("manual_accepted_required_count", 0),
                 "required_documents_satisfied": verification_gate.get("satisfied_required_count", verification_gate["verified_required_count"]),
                 "required_documents_total": verification_gate["required_count"],
                 "documents_uploaded": doc_count,
@@ -8276,7 +8304,9 @@ class KYCSubmitHandler(BaseHandler):
             "documents_uploaded": doc_count,
             "required_documents_verified": verification_gate["verified_required_count"],
             "required_documents_workflow_test_accepted": verification_gate.get("workflow_test_accepted_required_count", 0),
+            "required_documents_manual_accepted": verification_gate.get("manual_accepted_required_count", 0),
             "required_documents_satisfied": verification_gate.get("satisfied_required_count", verification_gate["verified_required_count"]),
+            "document_evidence_gate": verification_gate,
         })
 
 
@@ -9220,19 +9250,10 @@ class DocumentVerifyHandler(BaseHandler):
     ):
         _ = force_sync
 
-        # P0-3: Check if Agent 1 (document verification) is enabled before executing
+        # P0-3: Check if Agent 1 (document verification) is enabled before executing.
+        # The disabled/skipped outcome must still be persisted after the document
+        # is loaded so downstream reliance gates fail closed with evidence.
         agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
-        if agent1 and not agent1["enabled"]:
-            if close_db:
-                db.close()
-            self.log_audit(user, "Agent Skipped", "Agent 1", "Document verification skipped — agent disabled")
-            self.success({
-                "status": "skipped",
-                "message": "Document verification agent is currently disabled",
-                "checks": [],
-                "requires_review": True
-            })
-            return
 
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
@@ -9246,6 +9267,85 @@ class DocumentVerifyHandler(BaseHandler):
             if close_db:
                 db.close()
             return self.error("Application not found for document", 404)
+
+        if agent1 and not agent1["enabled"]:
+            skip_results = {
+                "overall": STATE_SKIPPED,
+                "status": STATE_SKIPPED,
+                "checks": [],
+                "system_warning": "agent1_disabled",
+                "skipped_reason": "Document verification agent is currently disabled",
+                "skipped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                "requires_review": True,
+            }
+            _doc_before = _document_verification_transition_state(doc)
+            _doc_after = _document_verification_transition_state(doc, STATE_SKIPPED, checks_count=0)
+            db.execute(
+                "UPDATE documents SET verification_status=?, verification_results=?, verified_at=NULL WHERE id=?",
+                (STATE_SKIPPED, json.dumps(skip_results, default=str), doc_id),
+            )
+            _log_document_verification_transition(
+                self,
+                db,
+                user,
+                app,
+                doc,
+                _doc_before,
+                _doc_after,
+                actor_type=audit_actor_type,
+                trigger="agent1_disabled_skipped",
+                detail_extra=audit_detail_extra,
+            )
+            self.log_audit(
+                user,
+                "Agent Skipped",
+                "Agent 1",
+                f"Document verification skipped for '{doc.get('doc_name', doc_id)}' - agent disabled",
+                before_state=_doc_before,
+                after_state=_doc_after,
+                db=db,
+                commit=False,
+            )
+            if (_doc_before.get("verification_status") or "") != STATE_SKIPPED:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="document_verification_skipped",
+                    reason="Document verification was skipped because Agent 1 is disabled.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    before_state=_doc_before,
+                    after_state=_doc_after,
+                )
+            db.commit()
+            try:
+                log_agent_execution(
+                    application_id=doc.get("application_id", ""),
+                    agent_name="verify_document",
+                    agent_number=1,
+                    status=STATE_SKIPPED,
+                    checks=[],
+                    flags=["agent1_disabled"],
+                    requires_review=True,
+                    document_id=doc_id,
+                )
+            except Exception as e:
+                logger.debug(f"Agent execution logging failed for skipped verification: {e}")
+            if close_db:
+                db.close()
+            self.success({
+                "doc_id": doc_id,
+                "status": STATE_SKIPPED,
+                "verification_status": STATE_SKIPPED,
+                **verification_state_payload(STATE_SKIPPED),
+                "message": "Document verification agent is currently disabled",
+                "checks": [],
+                "verification_results": skip_results,
+                "verified_at": None,
+                "requires_review": True,
+            })
+            return
 
         # PR5: Synchronous verification has an explicit, auditable in-progress state.
         _initial_before = _document_verification_transition_state(doc)
@@ -9688,20 +9788,22 @@ class DocumentReviewHandler(BaseHandler):
 
         user_role = (user.get("role") or "").lower()
 
-        # Senior-officer override gate for flagged documents (EX-06):
-        # Only admin/sco may accept a flagged document, and a non-empty reason
-        # (review_comment) is mandatory.  Non-senior roles are rejected outright.
-        is_flagged = (doc.get("verification_status") or "").lower() == "flagged"
-        if is_flagged and review_status == "accepted":
+        # Senior-officer manual acceptance gate:
+        # Any non-verified document that is accepted as usable evidence must
+        # have admin/SCO role, actor, timestamp (set below), and a reason.
+        verification_status = normalize_verification_state(doc.get("verification_status"))
+        requires_governed_acceptance = verification_status != STATE_VERIFIED
+        is_flagged = verification_status == STATE_FLAGGED
+        if requires_governed_acceptance and review_status == "accepted":
             if user_role not in ("admin", "sco"):
                 db.close()
                 return self.error(
-                    "Only senior compliance officers (admin/sco) may accept flagged documents", 403
+                    "Only senior compliance officers (admin/sco) may manually accept unverified documents", 403
                 )
             if not review_comment:
                 db.close()
                 return self.error(
-                    "A documented reason is required when accepting a flagged document", 400
+                    "A documented reason is required when manually accepting an unverified document", 400
                 )
 
         # Capture before-state for audit trail
@@ -9751,10 +9853,10 @@ class DocumentReviewHandler(BaseHandler):
             "reviewed_by": user.get("sub", ""),
             "reviewer_role": user_role,
         }
-        if is_flagged and review_status == "accepted":
+        if requires_governed_acceptance and review_status == "accepted":
             audit_action = "Document Accepted With Findings"
             audit_detail = (
-                f"Senior override: flagged document '{doc['doc_name']}' (type={doc.get('doc_type')}) "
+                f"Senior manual acceptance: {verification_status} document '{doc['doc_name']}' (type={doc.get('doc_type')}) "
                 f"accepted by {user.get('name', '')} (role={user_role}). "
                 f"Reason: {review_comment}"
             )
@@ -15083,6 +15185,29 @@ class ApplicationEvidencePackHandler(BaseHandler):
                 _decorate_document_workflow_test_acceptance(db, doc)
         pilot_evidence_summary = _pilot_evidence_classification_summary(db, app_dict, documents)
         app_dict["pilot_evidence_summary"] = pilot_evidence_summary
+        document_reliance_summary = evaluate_document_reliance_gate(
+            db,
+            app_dict,
+            stage="evidence_pack",
+            documents=documents,
+        )
+        app_dict["document_reliance_summary"] = document_reliance_summary
+        app_dict["document_evidence_gate"] = document_reliance_summary
+        reliance_by_id = {
+            item.get("document_id"): item
+            for item in document_reliance_summary.get("documents") or []
+            if item.get("document_id")
+        }
+        for doc in documents:
+            reliance_snapshot = reliance_by_id.get(doc.get("id"))
+            if reliance_snapshot:
+                doc["document_reliance_state"] = reliance_snapshot.get("reliance_state")
+                doc["document_reliance_status"] = (
+                    "ready" if reliance_snapshot.get("reliance_state") in ("verified", "manual_accepted") else "blocked"
+                )
+                doc["document_reliance_blockers"] = reliance_snapshot.get("blocker_reasons") or []
+                doc["verification_method"] = reliance_snapshot.get("verification_method")
+                doc["manual_acceptance"] = reliance_snapshot.get("manual_acceptance")
 
         memos = self._dict_rows(
             db.execute(
@@ -15190,6 +15315,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
             "documents": documents,
             "document_history": document_history if include_history else [],
             "pilot_evidence_summary": pilot_evidence_summary,
+            "document_reliance_summary": document_reliance_summary,
             "application_notes": application_notes,
             "rmi_requests": rmi_requests,
             "compliance_memos": memos,
@@ -21438,6 +21564,46 @@ class ComplianceMemoHandler(BaseHandler):
             f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
             (real_id,),
         ).fetchall()]
+        document_gate = evaluate_document_reliance_gate(
+            db,
+            app,
+            stage="memo_generation",
+            documents=documents,
+        )
+        if not document_gate.get("passed"):
+            message = document_reliance_error_message(document_gate, action="memo generation")
+            try:
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        user.get("sub", ""),
+                        user.get("name", ""),
+                        user.get("role", ""),
+                        "Generate Memo Blocked: Document Evidence Gate",
+                        app["ref"],
+                        json.dumps({
+                            "event": "memo_generation_document_evidence_blocked",
+                            "blocker_count": document_gate.get("blocker_count", 0),
+                            "blockers": document_gate.get("blockers", []),
+                        }, default=str, sort_keys=True),
+                        self.get_client_ip(),
+                    ),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            db.close()
+            self.set_status(409)
+            self.write({
+                "error": message,
+                "memo_reliance_status": "blocked",
+                "document_evidence_gate": document_gate,
+                "document_blockers": document_gate.get("blockers", []),
+            })
+            return
         screening_reviews = _load_screening_reviews_for_truth(db, real_id, app["ref"])
 
         # Enrich app with prescreening fields for memo_handler
@@ -21517,6 +21683,8 @@ class ComplianceMemoHandler(BaseHandler):
         )
         latest_memo_row = _latest_compliance_memo_row(db, real_id)
         reused_memo = _memo_payload_if_fingerprint_unchanged(latest_memo_row, memo_input_hash)
+        if reused_memo and not (reused_memo.get("metadata", {}) or {}).get("document_evidence_gate"):
+            reused_memo = None
         if reused_memo:
             reused_blocked = bool(reused_memo.get("metadata", {}).get("blocked"))
             db.execute(
@@ -21570,6 +21738,9 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["memo_version"] = "v" + str(next_version)
         memo["metadata"]["model_version"] = "v1.1"
         memo["metadata"]["build"] = get_build_metadata()
+        memo["metadata"]["document_evidence_gate"] = document_gate
+        memo["metadata"]["memo_reliance_status"] = "ready"
+        memo["document_evidence_snapshot"] = document_gate.get("documents", [])
         authoritative_risk = _application_authoritative_risk_metadata(app)
         memo["metadata"]["authoritative_case_risk"] = authoritative_risk
         memo["metadata"]["risk_calculated_at"] = authoritative_risk.get("calculated_at")
@@ -21817,6 +21988,9 @@ class MemoValidateHandler(BaseHandler):
             "SELECT * FROM applications WHERE id = ? OR ref = ?",
             (app_id, app_id),
         ).fetchone()
+        if not app_row:
+            db.close()
+            return self.error("Application not found.", 404)
         stale = _ensure_memo_fresh_or_mark_stale(
             db,
             app_row,
@@ -21834,6 +22008,23 @@ class MemoValidateHandler(BaseHandler):
                 409,
             )
 
+        document_gate = evaluate_document_reliance_gate(
+            db,
+            app_row,
+            stage="memo_validation",
+        )
+        if not document_gate.get("passed"):
+            message = document_reliance_error_message(document_gate, action="memo validation")
+            db.close()
+            self.set_status(409)
+            self.write({
+                "error": message,
+                "memo_reliance_status": "blocked",
+                "document_evidence_gate": document_gate,
+                "document_blockers": document_gate.get("blockers", []),
+            })
+            return
+
         try:
             memo_data = safe_json_loads(memo_row["memo_data"])
         except (json.JSONDecodeError, TypeError):
@@ -21845,6 +22036,7 @@ class MemoValidateHandler(BaseHandler):
         validation["memo_id"] = memo_row["id"]
         validation["canonical_memo_id"] = memo_row["id"]
         validation["memo_selection"] = memo_selection_metadata(memo_row)
+        validation["document_evidence_gate"] = document_gate
 
         # Store results
         try:
@@ -22840,6 +23032,26 @@ class MemoApproveHandler(BaseHandler):
                 400,
             )
 
+        document_gate = evaluate_document_reliance_gate(
+            db,
+            app_row,
+            stage="memo_approval",
+        )
+        if not document_gate.get("passed"):
+            reason = document_reliance_error_message(document_gate, action="memo approval")
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            self.set_status(409)
+            self.write({
+                "error": reason,
+                "memo_reliance_status": "blocked",
+                "document_evidence_gate": document_gate,
+                "document_blockers": document_gate.get("blockers", []),
+            })
+            return
+
         # ── SERVER-SIDE 5-GATE APPROVAL ENFORCEMENT ──
         # Gate 1: Check if memo is blocked by rule engine
         is_blocked = memo_row.get("blocked") or False
@@ -23036,6 +23248,7 @@ class MemoApproveHandler(BaseHandler):
             "approved_by": user.get("name", ""),
             "approved_at": now_ts,
             "approval_reason": approval_reason,
+            "document_evidence_gate": document_gate,
         }
         if val_status == "pass_with_fixes":
             response["validation_status"] = "pass_with_fixes"
@@ -23678,12 +23891,31 @@ class ApplicationDecisionHandler(BaseHandler):
                     reason, attempt_summary, db=db)
                 db.close()
                 return self.error(reason, 400)
+            document_gate = evaluate_document_reliance_gate(
+                db,
+                app,
+                stage="application_approval",
+            )
+            if not document_gate.get("passed"):
+                reason = document_reliance_error_message(document_gate, action="application approval")
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 409,
+                    reason, attempt_summary, db=db)
+                db.close()
+                self.set_status(409)
+                self.write({
+                    "error": reason,
+                    "document_evidence_gate": document_gate,
+                    "document_blockers": document_gate.get("blockers", []),
+                })
+                return
             approval_gate_snapshot = {
                 "checked_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "result": "pass",
                 "validator": "ApprovalGateValidator.validate_approval",
                 "blocker_count": 0,
                 "blockers": [],
+                "document_evidence_gate": document_gate,
                 "risk_level": approval_risk_level,
                 "risk_score": approval_risk_score,
             }
@@ -23926,6 +24158,7 @@ class ApplicationDecisionHandler(BaseHandler):
             "application_status": new_status,
             "rmi_request_id": rmi_request_id,
             "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None,
+            "approval_gate_snapshot": approval_gate_snapshot if decision == "approve" else None,
         }, 201)
 
 

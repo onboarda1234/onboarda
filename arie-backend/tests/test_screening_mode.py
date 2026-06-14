@@ -2,6 +2,18 @@ import json
 from datetime import datetime, timedelta, timezone
 
 
+REQUIRED_DOC_TYPES = (
+    "cert_inc",
+    "memarts",
+    "reg_sh",
+    "reg_dir",
+    "fin_stmt",
+    "poa",
+    "board_res",
+    "structure_chart",
+)
+
+
 def _live_report():
     now = datetime.now(timezone.utc)
     return {
@@ -216,6 +228,38 @@ def test_store_screening_mode_updates_application_column(db, temp_db):
     assert row["screening_mode"] == "live"
 
 
+def _insert_required_verified_documents(db, app_id):
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    for doc_type in REQUIRED_DOC_TYPES:
+        doc_id = f"doc-{app_id}-{doc_type}"
+        db.execute(
+            """
+            INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path, slot_key,
+             verification_status, verification_results, verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'verified', ?, ?)
+            """,
+            (
+                doc_id,
+                app_id,
+                doc_type,
+                f"{doc_type}.pdf",
+                f"/tmp/{doc_type}.pdf",
+                f"entity:{doc_type}",
+                json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": verified_at}),
+                verified_at,
+            ),
+        )
+        db.execute(
+            """
+            INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+            VALUES (?, ?, 'verify_document', 1, 'verified', ?, 0)
+            """,
+            (app_id, doc_id, json.dumps([{"result": "pass"}])),
+        )
+
+
 def test_approval_gate_rejects_simulated_nested_screening_report(db, temp_db):
     from security_hardening import ApprovalGateValidator
 
@@ -247,6 +291,7 @@ def test_approval_gate_rejects_simulated_nested_screening_report(db, temp_db):
             }),
         ),
     )
+    _insert_required_verified_documents(db, app_id)
     db.execute(
         """
         INSERT INTO compliance_memos
@@ -308,6 +353,7 @@ def _insert_gate5_app(db, app_id, screening_report):
             }),
         ),
     )
+    _insert_required_verified_documents(db, app_id)
     db.execute(
         """
         INSERT INTO compliance_memos

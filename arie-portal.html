@@ -7673,20 +7673,27 @@ var KYC_PERSON_DOC_RULES = {
   }
 };
 
-function getVerificationSummary(status, results, stateMeta) {
-  if (stateMeta && stateMeta.verification_status_label) {
-    var tone = String(stateMeta.verification_status_tone || 'pending').toLowerCase();
-    var icon = stateMeta.verification_success === true ? '✅ ' : tone === 'error' ? '❌ ' : tone === 'warning' ? '⚠️ ' : '⏳ ';
-    var color = tone === 'success' ? 'var(--green)' : tone === 'error' ? 'var(--red)' : tone === 'warning' ? '#d97706' : '#d97706';
+	function getVerificationSummary(status, results, stateMeta) {
+	  var relianceState = String(stateMeta && stateMeta.document_reliance_state || '').toLowerCase();
+	  if (relianceState === 'manual_accepted') return { color: 'var(--green)', text: '✅ Manually accepted' };
+	  if (relianceState === 'stale' || relianceState === 'stale_verification') return { color: '#d97706', text: '⚠️ Verification stale' };
+	  if (stateMeta && Array.isArray(stateMeta.document_reliance_blockers) && stateMeta.document_reliance_blockers.length) {
+	    return { color: '#d97706', text: '⚠️ Blocked from use' };
+	  }
+	  if (stateMeta && stateMeta.verification_status_label) {
+	    var tone = String(stateMeta.verification_status_tone || 'pending').toLowerCase();
+	    var icon = stateMeta.verification_success === true ? '✅ ' : tone === 'error' ? '❌ ' : tone === 'warning' ? '⚠️ ' : '⏳ ';
+	    var color = tone === 'success' ? 'var(--green)' : tone === 'error' ? 'var(--red)' : tone === 'warning' ? '#d97706' : '#d97706';
     return { color: color, text: icon + stateMeta.verification_status_label };
   }
   var normalized = String(status || '').toLowerCase();
   if (normalized === 'verified') return { color: 'var(--green)', text: '✅ Verified' };
   var redFlags = Array.isArray(results && results.red_flags) ? results.red_flags.length : 0;
   var warnings = Array.isArray(results && results.warnings) ? results.warnings.length : 0;
-  if (normalized === 'failed') return { color: 'var(--red)', text: '❌ Verification failed' };
-  if (normalized === 'in_progress') return { color: '#d97706', text: '⏳ Verification in progress' };
-  if (redFlags > 0) return { color: 'var(--red)', text: '❌ Review required' };
+	  if (normalized === 'failed') return { color: 'var(--red)', text: '❌ Verification failed' };
+	  if (normalized === 'in_progress') return { color: '#d97706', text: '⏳ Verification in progress' };
+	  if (normalized === 'skipped') return { color: '#d97706', text: '⚠️ Verification skipped - manual review required' };
+	  if (redFlags > 0) return { color: 'var(--red)', text: '❌ Review required' };
   if (warnings > 0 || normalized === 'flagged') return { color: '#d97706', text: '⚠️ Review required' };
   return { color: '#d97706', text: '⏳ Pending verification' };
 }
@@ -7775,15 +7782,19 @@ function renderPersistedVerification(targetEl, documentRecord) {
 
   var results = documentRecord.verification_results || {};
   var checks = Array.isArray(results.checks) ? results.checks : [];
-  var summary = getVerificationSummary(documentRecord.verification_status, results, documentRecord);
-  var card = document.createElement('div');
-  var verificationSucceeded = documentRecord.verification_success === true ||
-    String(documentRecord.verification_state || documentRecord.verification_status || '').toLowerCase() === 'verified';
-  card.className = 'doc-verify-results';
-  card.setAttribute('data-doc-id', documentRecord.id);
-  card.setAttribute('data-doc-slot', slotKey);
-  card.setAttribute('data-verification-success', verificationSucceeded ? 'true' : 'false');
-  card.setAttribute('data-verification-state', documentRecord.verification_state || documentRecord.verification_status || 'pending');
+	  var summary = getVerificationSummary(documentRecord.verification_status, results, documentRecord);
+	  var card = document.createElement('div');
+	  var relianceState = String(documentRecord.document_reliance_state || '').toLowerCase();
+	  var verificationSucceeded = relianceState
+	    ? (relianceState === 'verified' || relianceState === 'manual_accepted')
+	    : (documentRecord.verification_success === true ||
+	      String(documentRecord.verification_state || documentRecord.verification_status || '').toLowerCase() === 'verified');
+	  card.className = 'doc-verify-results';
+	  card.setAttribute('data-doc-id', documentRecord.id);
+	  card.setAttribute('data-doc-slot', slotKey);
+	  card.setAttribute('data-verification-success', verificationSucceeded ? 'true' : 'false');
+	  card.setAttribute('data-verification-state', documentRecord.verification_state || documentRecord.verification_status || 'pending');
+	  card.setAttribute('data-reliance-state', relianceState || documentRecord.verification_state || documentRecord.verification_status || 'pending');
   card.style.cssText = 'padding:10px 12px;border-radius:8px;background:var(--surface3);font-size:12px;';
 
   var meta = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">' +

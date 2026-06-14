@@ -174,6 +174,7 @@ def _insert_app_and_memo(db, app_id=None,
                           supervisor_status="CONSISTENT",
                           blocked=False, block_reason=None):
     """Helper: insert application + memo with configurable timestamps."""
+    from tests.conftest import insert_verified_required_documents
     import uuid
     suffix = uuid.uuid4().hex[:8]
     if app_id is None:
@@ -215,6 +216,7 @@ def _insert_app_and_memo(db, app_id=None,
           supervisor_status, 1 if blocked else 0, block_reason,
           "Fixture approval reason" if review_status == "approved" else None,
           memo_created))
+    insert_verified_required_documents(db, app_id)
     db.commit()
 
     row = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()

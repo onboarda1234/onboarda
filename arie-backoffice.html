@@ -7863,18 +7863,46 @@ function computeDocumentReadinessSummary(app) {
     return verStatus !== 'verified' || overall === 'flagged' || overall === 'failed' || warnings.length > 0;
   });
 
-  var pepIncomplete = (app.directors || []).concat(app.ubos || []).filter(function(person) {
-    if (normalizeDetailValue(person.pep).toLowerCase() !== 'yes') return false;
-    var decl = person.pep_declaration || {};
-    return !Object.keys(decl).some(function(key) { return normalizeDetailValue(decl[key]) !== '—'; });
-  });
+	  var pepIncomplete = (app.directors || []).concat(app.ubos || []).filter(function(person) {
+	    if (normalizeDetailValue(person.pep).toLowerCase() !== 'yes') return false;
+	    var decl = person.pep_declaration || {};
+	    return !Object.keys(decl).some(function(key) { return normalizeDetailValue(decl[key]) !== '—'; });
+	  });
 
-  return {
-    missingCount: missing.length,
-    issueCount: issueDocs.length,
-    pepIncompleteCount: pepIncomplete.length,
-    requiredCount: required.length,
-    uploadedCount: docs.length,
+	  var reliance = app.documentRelianceSummary || app.document_reliance_summary || app.documentEvidenceGate || app.document_evidence_gate || null;
+	  if (reliance && Array.isArray(reliance.documents)) {
+	    var relianceDocs = reliance.documents || [];
+	    var relianceMissing = relianceDocs.filter(function(item) {
+	      return String(item.reliance_state || '').toLowerCase() === 'missing';
+	    });
+	    var relianceIssues = relianceDocs.filter(function(item) {
+	      var state = String(item.reliance_state || '').toLowerCase();
+	      return state && ['verified', 'manual_accepted', 'missing'].indexOf(state) < 0;
+	    });
+	    var blockerDescriptions = (Array.isArray(reliance.blockers) ? reliance.blockers : []).map(function(blocker) {
+	      return (blocker.title || blocker.doc_type || 'Document') + ': ' + (blocker.reason || blocker.description || 'document evidence is not reliance-ready');
+	    });
+	    return {
+	      missingCount: relianceMissing.length,
+	      issueCount: relianceIssues.length,
+	      blockerCount: reliance.blocker_count || blockerDescriptions.length,
+	      blockerDescriptions: blockerDescriptions,
+	      pepIncompleteCount: pepIncomplete.length,
+	      requiredCount: reliance.required_count || required.length,
+	      uploadedCount: docs.length,
+	      relianceStatus: reliance.reliance_status || (reliance.passed ? 'ready' : 'blocked'),
+	      isIncomplete: reliance.passed === false || relianceMissing.length > 0 || relianceIssues.length > 0 || pepIncomplete.length > 0
+	    };
+	  }
+
+	  return {
+	    missingCount: missing.length,
+	    issueCount: issueDocs.length,
+	    blockerCount: issueDocs.length,
+	    blockerDescriptions: [],
+	    pepIncompleteCount: pepIncomplete.length,
+	    requiredCount: required.length,
+	    uploadedCount: docs.length,
     isIncomplete: missing.length > 0 || issueDocs.length > 0 || pepIncomplete.length > 0
   };
 }
@@ -7886,12 +7914,13 @@ function renderIncompleteSubmissionBadge(summary) {
 
 function renderDocumentReadinessBanner(summary) {
   if (!summary || !summary.isIncomplete) return '';
-  var parts = [];
-  if (summary.missingCount > 0) parts.push(summary.missingCount + ' missing required item(s)');
-  if (summary.issueCount > 0) parts.push(summary.issueCount + ' uploaded document(s) with warnings or failed/flagged checks');
-  if (summary.pepIncompleteCount > 0) parts.push(summary.pepIncompleteCount + ' incomplete PEP declaration(s)');
-  return '<div class="ah-alert-banner warning" style="margin-bottom:12px;"><span style="font-size:18px;">⚠️</span><div><strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(parts.join(' · ')) + '. This case is reviewable but should not be treated as clean.</div></div>';
-}
+	  var parts = [];
+	  if (summary.missingCount > 0) parts.push(summary.missingCount + ' missing required item(s)');
+	  if (summary.issueCount > 0) parts.push(summary.issueCount + ' uploaded document(s) not reliance-ready');
+	  if (summary.blockerCount > summary.issueCount) parts.push(summary.blockerCount + ' document evidence blocker(s)');
+	  if (summary.pepIncompleteCount > 0) parts.push(summary.pepIncompleteCount + ' incomplete PEP declaration(s)');
+	  return '<div class="ah-alert-banner warning" style="margin-bottom:12px;"><span style="font-size:18px;">⚠️</span><div><strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(parts.join(' · ')) + '. This case is reviewable but should not be treated as clean.</div></div>';
+	}
 
 var EVIDENCE_CLASS_LABELS = {
   authoritative_source_document: 'Authoritative source document',
@@ -8554,13 +8583,18 @@ async function fetchApplicationDetail(ref) {
       verification_results: doc.verification_results || {},
       verified_at: doc.verified_at || '',
       uploaded_at: doc.uploaded_at || '',
-      review_status: doc.review_status || 'pending',
-      review_comment: doc.review_comment || '',
-      reviewed_by: doc.reviewed_by || '',
-      reviewed_by_name: doc.reviewed_by_name || '',
-      reviewed_at: doc.reviewed_at || ''
-    };
-  }
+	      review_status: doc.review_status || 'pending',
+	      review_comment: doc.review_comment || '',
+	      reviewed_by: doc.reviewed_by || '',
+	      reviewed_by_name: doc.reviewed_by_name || '',
+	      reviewed_at: doc.reviewed_at || '',
+	      document_reliance_state: doc.document_reliance_state || '',
+	      document_reliance_status: doc.document_reliance_status || '',
+	      document_reliance_blockers: doc.document_reliance_blockers || [],
+	      verification_method: doc.verification_method || '',
+	      manual_acceptance: doc.manual_acceptance || null
+	    };
+	  }
   var documents = (detail.documents || []).map(normalizeApplicationDocument);
   var documentHistory = (detail.document_history || []).map(normalizeApplicationDocument);
   var rawDirectors = (detail.directors && detail.directors.length) ? detail.directors : buildPrescreeningPartyFallback(psData.directors || [], 'director');
@@ -8668,10 +8702,11 @@ async function fetchApplicationDetail(ref) {
     changeRequests: detail.change_requests || [],
     sumsub_idv_statuses: detail.sumsub_idv_statuses || null,
     idvGateSummary: detail.idv_gate_summary || null,
-    approvalGatePresentation: detail.approval_gate_presentation || null,
-    currentGateDiagnostics: detail.current_gate_diagnostics || null,
-    decisionBasis: detail.decision_basis || null,
-    gateBlockers: detail.gate_blockers || [],
+	    approvalGatePresentation: detail.approval_gate_presentation || null,
+	    currentGateDiagnostics: detail.current_gate_diagnostics || null,
+	    decisionBasis: detail.decision_basis || null,
+	    documentRelianceSummary: detail.document_reliance_summary || detail.document_evidence_gate || null,
+	    gateBlockers: detail.gate_blockers || [],
     gateBlockerCount: detail.gate_blocker_count || 0,
     screeningReviews: detail.screening_reviews || [],
     _raw_prescreening: psData,
@@ -21062,10 +21097,12 @@ function getApplicationApprovalBlockers(app) {
   if ((app.risk === 'HIGH' || app.risk === 'VERY_HIGH') && currentUser && currentUser.role === 'co') {
     blockers.push('High-risk approval requires Admin or Senior Compliance Officer.');
   }
-  var documentReadiness = computeDocumentReadinessSummary(app);
-  if (documentReadiness.issueCount > 0) {
-    blockers.push('Resolve or senior-accept flagged/failed document checks before approval.');
-  }
+	  var documentReadiness = computeDocumentReadinessSummary(app);
+	  if (documentReadiness.blockerCount > 0 && Array.isArray(documentReadiness.blockerDescriptions) && documentReadiness.blockerDescriptions.length) {
+	    blockers.push('Resolve document evidence blockers before approval: ' + documentReadiness.blockerDescriptions.slice(0, 3).join('; ') + '.');
+	  } else if (documentReadiness.issueCount > 0) {
+	    blockers.push('Resolve document evidence blockers before approval.');
+	  }
   if (documentReadiness.pepIncompleteCount > 0) {
     blockers.push('Complete PEP declaration details before approval.');
   }
@@ -21575,16 +21612,17 @@ function getCaseCommandBlockers(app) {
     );
   }
 
-  if (documentReadiness.missingCount > 0 || documentReadiness.issueCount > 0 || documentReadiness.pepIncompleteCount > 0) {
-    var documentParts = [];
-    if (documentReadiness.missingCount > 0) documentParts.push(documentReadiness.missingCount + ' missing required document(s)');
-    if (documentReadiness.issueCount > 0) documentParts.push(documentReadiness.issueCount + ' uploaded document(s) with warnings or failed checks');
-    if (documentReadiness.pepIncompleteCount > 0) documentParts.push(documentReadiness.pepIncompleteCount + ' incomplete PEP declaration(s)');
-    addBlocker(
-      'documents',
-      'KYC Documents',
-      'Document review still needs attention.',
-      documentParts.join(' · ') + '. Review the KYC documents tab before approval.',
+	  if (documentReadiness.missingCount > 0 || documentReadiness.issueCount > 0 || documentReadiness.pepIncompleteCount > 0) {
+	    var documentParts = [];
+	    if (documentReadiness.missingCount > 0) documentParts.push(documentReadiness.missingCount + ' missing required document(s)');
+	    if (documentReadiness.issueCount > 0) documentParts.push(documentReadiness.issueCount + ' uploaded document(s) not reliance-ready');
+	    if (documentReadiness.blockerCount > documentReadiness.issueCount) documentParts.push(documentReadiness.blockerCount + ' document evidence blocker(s)');
+	    if (documentReadiness.pepIncompleteCount > 0) documentParts.push(documentReadiness.pepIncompleteCount + ' incomplete PEP declaration(s)');
+	    addBlocker(
+	      'documents',
+	      'KYC Documents',
+	      'Document evidence is not reliance-ready.',
+	      documentParts.join(' · ') + '. Review the KYC documents tab before approval.',
       'Review documents',
       'kyc-docs',
       'detail-kyc-documents-panel',
