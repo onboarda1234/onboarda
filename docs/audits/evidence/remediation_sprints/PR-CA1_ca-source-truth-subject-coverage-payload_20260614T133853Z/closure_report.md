@@ -21,7 +21,7 @@ RegMind had live ComplyAdvantage capability, but provider source-of-truth, subje
 
 - Current `origin/main` SHA: `e1cbe10348ed04b855e38ab99a98ec9037638b98`
 - Branch name: `codex/pr-ca1-ca-source-truth-subject-coverage-payload`
-- Branch commit SHA: pending commit.
+- Branch commit SHA: `81a99caf79bd5226f1f7fade9d99c8facbeac134` at first CI pass; final PR head to be recorded after evidence-only update.
 - Does the issue still exist on current `origin/main`? Yes. Reproduced before branch changes.
 - Evidence: `diagnosis.md`, `runtime_json/`, and local tests listed in `test_results.md`.
 
@@ -124,7 +124,14 @@ Updated stale assertions: 3 passed in 1.56s.
 Subsequent full-suite reruns blocked by native WeasyPrint/CFFI segmentation fault in local macOS environment.
 ```
 
-GitHub CI: pending after PR opens.
+GitHub CI for branch head `81a99caf79bd5226f1f7fade9d99c8facbeac134`:
+
+```text
+lint-and-test: passed in 13m23s
+pdf-tests: passed in 35s
+docker-validate: passed in 50s
+CodeRabbit: passed / review skipped
+```
 
 ## Browser test results, if applicable
 
@@ -187,7 +194,6 @@ Verdict:
 
 ## Remaining risks
 
-- Full CI has not yet passed.
 - PR has not yet been merged to main.
 - Merged main has not yet been deployed to staging.
 - Staging `/api/version`, API smoke, and browser smoke are pending.

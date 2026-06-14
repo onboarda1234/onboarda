@@ -65,6 +65,21 @@ Crash path:
 weasyprint -> cffi -> evidence_pack_export.py -> server.py
 ```
 
+## GitHub CI
+
+Run: `https://github.com/onboarda1234/onboarda/actions/runs/27500906323`
+
+Head SHA: `81a99caf79bd5226f1f7fade9d99c8facbeac134`
+
+Result:
+
+```text
+lint-and-test: passed in 13m23s
+pdf-tests: passed in 35s
+docker-validate: passed in 50s
+CodeRabbit: passed / review skipped
+```
+
 ## Verdict
 
-Local full-suite rerun is blocked by a native WeasyPrint/CFFI dependency crash in this macOS environment. Targeted PR-CA1 tests and the required closed-remediation subset pass locally. Full-suite pass must be confirmed by GitHub CI before merge.
+Local full-suite rerun is blocked by a native WeasyPrint/CFFI dependency crash in this macOS environment. Targeted PR-CA1 tests and the required closed-remediation subset pass locally. GitHub CI passed for branch head `81a99caf79bd5226f1f7fade9d99c8facbeac134`.
