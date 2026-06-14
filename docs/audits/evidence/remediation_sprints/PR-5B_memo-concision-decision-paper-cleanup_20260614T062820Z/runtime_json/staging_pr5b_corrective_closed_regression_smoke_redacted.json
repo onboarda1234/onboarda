@@ -1,0 +1,50 @@
+{
+  "all_pass": true,
+  "results": [
+    {
+      "check": "client_denied_screening_queue",
+      "pass": true,
+      "path": "/screening/queue",
+      "status": 403
+    },
+    {
+      "check": "client_denied_applications",
+      "pass": true,
+      "path": "/applications",
+      "status": 403
+    },
+    {
+      "check": "client_notifications_sanitized",
+      "pass": true,
+      "path": "/notifications",
+      "status": 200
+    },
+    {
+      "check": "client_me_before_logout",
+      "pass": true,
+      "status": 200
+    },
+    {
+      "check": "client_logout",
+      "pass": true,
+      "status": 200
+    },
+    {
+      "check": "client_me_after_logout_same_bearer_denied",
+      "pass": true,
+      "status": 401
+    },
+    {
+      "check": "officer_allowed_applications",
+      "pass": true,
+      "path": "/applications?limit=1&show_fixtures=true",
+      "status": 200
+    },
+    {
+      "check": "officer_allowed_screening_queue",
+      "pass": true,
+      "path": "/screening/queue",
+      "status": 200
+    }
+  ]
+}

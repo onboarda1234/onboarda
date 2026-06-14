@@ -74,3 +74,29 @@ Corrective evidence:
 - Browser report: `runtime_json/staging_pr5b_browser_smoke_report_redacted.json`
 - Corrective branch local browser proof: `runtime_json/pr5b_corrective_local_browser_smoke.json`
 - Corrective local screenshot: `screenshots/pr5b_corrective_local_memo_panel.png`
+
+## Second Corrective Staging Re-Diagnosis
+
+After PR #483 was merged and deployed, staging `/api/version` matched
+`7cf095eeeb619b95fbe08764da529f00c7225b94`.
+
+Focused API/PDF smoke still failed:
+
+- `POST /api/applications/ARF-PR4-AUTO-7f861903/memo` returned `200`.
+- The response reused existing memo `357`.
+- `memo_build_git_sha` was
+  `4e2262dc14db86a6e3caacb617182fbe8579ae5c`, not the deployed corrective SHA.
+- The memo text still contained `HIGH risk with score 25/100`.
+- PDF generation succeeded, but the PDF was generated from the reused stale
+  memo.
+
+This confirms PR #483 fixed new memo rendering but did not invalidate stored
+old-profile memo output that was still eligible for idempotent reuse.
+
+Second corrective evidence:
+
+- `runtime_json/staging_pr5b_corrective_version.json`
+- `runtime_json/staging_pr5b_corrective_generated_memo_summary_redacted.json`
+- `runtime_json/staging_pr5b_corrective_api_pdf_smoke_result.json`
+- `runtime_json/staging_pr5b_corrective_pdf_result_redacted.json`
+- `runtime_json/staging_pr5b_corrective_closed_regression_smoke_redacted.json`

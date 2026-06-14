@@ -146,7 +146,7 @@ from validation_engine import (
     generate_fallback_memo,
 )
 from supervisor_engine import run_memo_supervisor
-from memo_handler import build_compliance_memo
+from memo_handler import MEMO_OUTPUT_PROFILE_VERSION, build_compliance_memo
 from decision_model import (
     build_from_application_decision,
     build_from_supervisor_verdict,
@@ -20290,7 +20290,8 @@ def _memo_row_subset(row, fields):
 def _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_review_summary=None):
     """Stable input fingerprint for idempotent memo generation."""
     payload = {
-        "fingerprint_version": "phase3_v1",
+        "fingerprint_version": "phase3_v2",
+        "memo_output_profile_version": MEMO_OUTPUT_PROFILE_VERSION,
         "application": _memo_row_subset(app, _MEMO_APP_FINGERPRINT_FIELDS),
         "directors": sorted(
             [_memo_row_subset(d, _MEMO_PARTY_FINGERPRINT_FIELDS) for d in directors],
@@ -20309,7 +20310,7 @@ def _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_revie
         ),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return "memo-input-v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return "memo-input-v2:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _memo_stale_bool(value):
@@ -20706,6 +20707,10 @@ def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
     except Exception:
         memo = {}
     if not isinstance(memo, dict):
+        return None
+    metadata = memo.get("metadata") if isinstance(memo.get("metadata"), dict) else {}
+    output_profile = metadata.get("memo_output_profile") if isinstance(metadata.get("memo_output_profile"), dict) else {}
+    if output_profile.get("profile_version") != MEMO_OUTPUT_PROFILE_VERSION:
         return None
     memo.setdefault("metadata", {})
     memo["metadata"]["idempotency"] = {
