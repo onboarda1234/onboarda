@@ -32,9 +32,23 @@ def _safe_json(value: Any) -> str:
 
 
 def _seed_smoke_records(db, run_id: str) -> Dict[str, Any]:
+    client_id = f"pr6_smoke_client_{run_id}"
     app_id = f"pr6_smoke_app_{run_id}"
     doc_id = f"pr6_smoke_doc_{run_id}"
     app_ref = f"ARF-PR6-SMOKE-{run_id.upper()}"
+    db.execute(
+        """
+        INSERT INTO clients (id, email, password_hash, company_name, status)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            client_id,
+            f"pr6-smoke-{run_id}@example.invalid",
+            "synthetic-worker-smoke-no-login",
+            "PR6 Worker Smoke Ltd",
+            "active",
+        ),
+    )
     db.execute(
         """
         INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
@@ -43,7 +57,7 @@ def _seed_smoke_records(db, run_id: str) -> Dict[str, Any]:
         (
             app_id,
             app_ref,
-            "pr6-smoke-client",
+            client_id,
             "PR6 Worker Smoke Ltd",
             "Mauritius",
             "draft",
@@ -72,7 +86,14 @@ def _seed_smoke_records(db, run_id: str) -> Dict[str, Any]:
     )
     app = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
     doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
-    return {"app": app, "doc": doc, "application_id": app_id, "application_ref": app_ref, "document_id": doc_id}
+    return {
+        "app": app,
+        "doc": doc,
+        "client_id": client_id,
+        "application_id": app_id,
+        "application_ref": app_ref,
+        "document_id": doc_id,
+    }
 
 
 def _synthetic_executor(db, job: Dict[str, Any], worker_id: str) -> Dict[str, Any]:
@@ -93,11 +114,12 @@ def _synthetic_executor(db, job: Dict[str, Any], worker_id: str) -> Dict[str, An
     }
 
 
-def _cleanup_smoke_records(db, *, application_id: str, document_id: str, job_id: str) -> None:
+def _cleanup_smoke_records(db, *, client_id: str, application_id: str, document_id: str, job_id: str) -> None:
     db.execute("DELETE FROM audit_log WHERE detail LIKE ?", (f"%{job_id}%",))
     db.execute("DELETE FROM verification_jobs WHERE id=?", (job_id,))
     db.execute("DELETE FROM documents WHERE id=?", (document_id,))
     db.execute("DELETE FROM applications WHERE id=?", (application_id,))
+    db.execute("DELETE FROM clients WHERE id=?", (client_id,))
     db.commit()
 
 
@@ -162,6 +184,7 @@ def run_smoke(
         if cleanup:
             _cleanup_smoke_records(
                 db,
+                client_id=seeded["client_id"],
                 application_id=seeded["application_id"],
                 document_id=seeded["document_id"],
                 job_id=job["id"],
