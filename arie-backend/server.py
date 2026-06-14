@@ -9089,7 +9089,8 @@ def _document_verification_transition_state(doc, status=None, **extra):
 
 
 def _log_document_verification_transition(handler, db, user, app, doc, before_state,
-                                          after_state, *, actor_type, trigger):
+                                          after_state, *, actor_type, trigger,
+                                          detail_extra=None):
     detail = {
         "event": "document_verification_state_transition",
         "actor_type": actor_type,
@@ -9100,6 +9101,8 @@ def _log_document_verification_transition(handler, db, user, app, doc, before_st
         "from": before_state.get("verification_status"),
         "to": after_state.get("verification_status"),
     }
+    if detail_extra:
+        detail.update(dict(detail_extra))
     handler.log_audit(
         user,
         "Document Verification State Changed",
@@ -9195,12 +9198,26 @@ class DocumentVerifyHandler(BaseHandler):
             except Exception:
                 pass
 
-    def _post_with_db(self, doc_id, user, db):
+    def _post_with_db(
+        self,
+        doc_id,
+        user,
+        db,
+        *,
+        force_sync=False,
+        audit_actor_type="user",
+        started_trigger="verify_request_started",
+        completed_trigger="verify_request_completed",
+        audit_detail_extra=None,
+        close_db=True,
+    ):
+        _ = force_sync
 
         # P0-3: Check if Agent 1 (document verification) is enabled before executing
         agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
         if agent1 and not agent1["enabled"]:
-            db.close()
+            if close_db:
+                db.close()
             self.log_audit(user, "Agent Skipped", "Agent 1", "Document verification skipped — agent disabled")
             self.success({
                 "status": "skipped",
@@ -9212,13 +9229,15 @@ class DocumentVerifyHandler(BaseHandler):
 
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
-            db.close()
+            if close_db:
+                db.close()
             return self.error("Document not found", 404)
 
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
         if not app:
-            db.close()
+            if close_db:
+                db.close()
             return self.error("Application not found for document", 404)
 
         # PR5: Synchronous verification has an explicit, auditable in-progress state.
@@ -9237,8 +9256,9 @@ class DocumentVerifyHandler(BaseHandler):
                 doc,
                 _initial_before,
                 _in_progress_after,
-                actor_type="user",
-                trigger="verify_request_started",
+                actor_type=audit_actor_type,
+                trigger=started_trigger,
+                detail_extra=audit_detail_extra,
             )
             db.commit()
             doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
@@ -9570,8 +9590,9 @@ class DocumentVerifyHandler(BaseHandler):
             doc,
             _doc_before,
             _doc_after,
-            actor_type="user",
-            trigger="verify_request_completed",
+            actor_type=audit_actor_type,
+            trigger=completed_trigger,
+            detail_extra=audit_detail_extra,
         )
         self.log_audit(
             user,
@@ -9596,7 +9617,8 @@ class DocumentVerifyHandler(BaseHandler):
                 after_state=_doc_after,
             )
         db.commit()
-        db.close()
+        if close_db:
+            db.close()
 
         # Improvement 8: Log agent execution for traceability
         try:
@@ -19136,7 +19158,7 @@ class SumsubWebhookHandler(BaseHandler):
             if matched_app_ids and is_abstraction_enabled():
                 from screening_storage import webhook_renormalize_from_committed_legacy
                 for app_id in matched_app_ids:
-                    webhook_renormalize_from_committed_legacy(db, app_id)
+                    webhook_renormalize_from_committed_legacy(app_id)
         except _renorm_operational_errors as outer_op_err:
             logger.warning(
                 "Webhook renorm: outer operational error error_type=%s",

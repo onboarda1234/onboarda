@@ -1,0 +1,121 @@
+{
+    "logStreams": [
+        {
+            "logStreamName": "worker/regmind-backend/00ebdc14b74045cfa91cb96514c9f830",
+            "creationTime": 1779981951344,
+            "firstEventTimestamp": 1779981960635,
+            "lastEventTimestamp": 1780295733793,
+            "lastIngestionTime": 1780295735275,
+            "uploadSequenceToken": "49039859674127375571488516304133980719678186571779503559",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/00ebdc14b74045cfa91cb96514c9f830",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/04912d5e110448fbbe9a48508328a873",
+            "creationTime": 1780295786264,
+            "firstEventTimestamp": 1780295795503,
+            "lastEventTimestamp": 1781185296146,
+            "lastIngestionTime": 1781185300131,
+            "uploadSequenceToken": "49039859675309810082150093599585771044784148505603568971",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/04912d5e110448fbbe9a48508328a873",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/055052a24baf43ea861c4b946d3ed07d",
+            "creationTime": 1779973826268,
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/055052a24baf43ea861c4b946d3ed07d",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/07940218794d44bab95135f9b122841f",
+            "creationTime": 1779973785593,
+            "firstEventTimestamp": 1779973794946,
+            "lastEventTimestamp": 1779973831340,
+            "lastIngestionTime": 1779973834577,
+            "uploadSequenceToken": "49039859673699496151844210826774967646296327207142258165",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/07940218794d44bab95135f9b122841f",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/0b9bd8f8b77b47dbb5bfd88baac9993c",
+            "creationTime": 1779978230649,
+            "firstEventTimestamp": 1779978239955,
+            "lastEventTimestamp": 1779978249975,
+            "lastIngestionTime": 1779978254566,
+            "uploadSequenceToken": "49039859673705371324964072201299128221256392533148661216",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/0b9bd8f8b77b47dbb5bfd88baac9993c",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/116475280a3c4bf9ac9c31f5fb8f6822",
+            "creationTime": 1779422269023,
+            "firstEventTimestamp": 1779422278226,
+            "lastEventTimestamp": 1779426691442,
+            "lastIngestionTime": 1779426692875,
+            "uploadSequenceToken": "49039859672972220083884403130147563696188104315413951995",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/116475280a3c4bf9ac9c31f5fb8f6822",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/134decebeb41427b910f335acfdea8bc",
+            "creationTime": 1779297946303,
+            "firstEventTimestamp": 1779297955388,
+            "lastEventTimestamp": 1779299223286,
+            "lastIngestionTime": 1779299225040,
+            "uploadSequenceToken": "49039859672802786269040310778171380580655172288901510423",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/134decebeb41427b910f335acfdea8bc",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/1bd6ae3a892248338a39e2ea028e5a01",
+            "creationTime": 1779419722817,
+            "firstEventTimestamp": 1779419731844,
+            "lastEventTimestamp": 1779419731863,
+            "lastIngestionTime": 1779419736512,
+            "uploadSequenceToken": "49039859672962973491435960785411183627175927343111173481",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/1bd6ae3a892248338a39e2ea028e5a01",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/1ef243bb275e433da95be0cdd9eff758",
+            "creationTime": 1779981610162,
+            "firstEventTimestamp": 1779981618942,
+            "lastEventTimestamp": 1779981657135,
+            "lastIngestionTime": 1779981658578,
+            "uploadSequenceToken": "49039859673709896033012460004349484681066827183891641662",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/1ef243bb275e433da95be0cdd9eff758",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/1f26f93c7dd24df59412bc1a37806b28",
+            "creationTime": 1779974368986,
+            "firstEventTimestamp": 1779974378019,
+            "lastEventTimestamp": 1779978182789,
+            "lastIngestionTime": 1779978187683,
+            "uploadSequenceToken": "49039859673705282422208030118770802607889039480598263235",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/1f26f93c7dd24df59412bc1a37806b28",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/21f1401b7f044a1088d736ba5a8d70ff",
+            "creationTime": 1779773006291,
+            "firstEventTimestamp": 1779773014059,
+            "lastEventTimestamp": 1779773014085,
+            "lastIngestionTime": 1779773018797,
+            "uploadSequenceToken": "49039859673432566195072826233523411235425967313968919830",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/21f1401b7f044a1088d736ba5a8d70ff",
+            "storedBytes": 0
+        },
+        {
+            "logStreamName": "worker/regmind-backend/240a0509c7da43b2aa33f9cabcf517d4",
+            "creationTime": 1779981878150,
+            "firstEventTimestamp": 1779981887638,
+            "lastEventTimestamp": 1780295733876,
+            "lastIngestionTime": 1780295737264,
+            "uploadSequenceToken": "49039859674127378215322999920331656482272676427947537699",
+            "arn": "arn:aws:logs:af-south-1:782913119880:log-group:/ecs/regmind-staging:log-stream:worker/regmind-backend/240a0509c7da43b2aa33f9cabcf517d4",
+            "storedBytes": 0
+        }
+    ],
+    "NextToken": "eyJuZXh0VG9rZW4iOiBudWxsLCAiYm90b190cnVuY2F0ZV9hbW91bnQiOiAxMn0="
+}
