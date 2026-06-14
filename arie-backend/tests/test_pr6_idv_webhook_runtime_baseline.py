@@ -140,6 +140,10 @@ def test_verification_worker_smoke_processes_synthetic_job_without_provider_call
             (result["application_id"],),
         ).fetchone()["c"] == 0
         assert db.execute(
+            "SELECT COUNT(*) AS c FROM clients WHERE id=?",
+            (f"pr6_smoke_client_{result['run_id']}",),
+        ).fetchone()["c"] == 0
+        assert db.execute(
             "SELECT COUNT(*) AS c FROM verification_jobs WHERE id=?",
             (result["job_id"],),
         ).fetchone()["c"] == 0
