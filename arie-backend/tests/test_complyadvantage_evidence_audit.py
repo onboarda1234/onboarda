@@ -106,3 +106,6 @@ def test_application_audit_log_supports_ca_mesh_category_filter():
     assert "ca_screening" in source
     assert "ca_mesh_screening" in source
     assert "complyadvantage mesh" in source
+    assert "category_params" in source
+    assert "LIKE '%ca_screening%'" not in source
+    assert "LIKE '%complyadvantage%'" not in source

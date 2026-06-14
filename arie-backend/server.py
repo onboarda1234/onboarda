@@ -14973,13 +14973,20 @@ class ApplicationAuditLogHandler(BaseHandler):
         if category in ("ca_mesh", "complyadvantage", "ca"):
             category_clause = """
                 AND (
-                    LOWER(COALESCE(action, '')) LIKE '%ca_screening%'
-                    OR LOWER(COALESCE(action, '')) LIKE '%complyadvantage%'
-                    OR LOWER(COALESCE(detail, '')) LIKE '%ca_mesh_screening%'
-                    OR LOWER(COALESCE(detail, '')) LIKE '%complyadvantage mesh%'
-                    OR LOWER(COALESCE(detail, '')) LIKE '%\"provider\": \"complyadvantage\"%'
+                    LOWER(COALESCE(action, '')) LIKE ?
+                    OR LOWER(COALESCE(action, '')) LIKE ?
+                    OR LOWER(COALESCE(detail, '')) LIKE ?
+                    OR LOWER(COALESCE(detail, '')) LIKE ?
+                    OR LOWER(COALESCE(detail, '')) LIKE ?
                 )
             """
+            category_params = [
+                "%ca_screening%",
+                "%complyadvantage%",
+                "%ca_mesh_screening%",
+                "%complyadvantage mesh%",
+                '%"provider": "complyadvantage"%',
+            ]
         rows = db.execute(
             f"SELECT * FROM audit_log WHERE target IN ({placeholders}) {category_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
             (*targets, *category_params, limit, offset)
