@@ -589,9 +589,16 @@ class ApprovalGateValidator:
                     exc,
                 )
 
+            prescreening_for_truth = dict(prescreening_data)
+            prescreening_for_truth["screening_input_updated_at"] = (
+                app.get("screening_input_updated_at")
+                or app.get("risk_inputs_updated_at")
+                or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
+                or app.get("submitted_at")
+            )
             screening_truth = build_screening_truth_summary(
                 screening_report,
-                prescreening_data,
+                prescreening_for_truth,
                 screening_reviews,
             )
             if screening_truth.get("approval_blocking"):
@@ -608,6 +615,12 @@ class ApprovalGateValidator:
                     reason,
                 )
                 if screening_truth.get("canonical_state") == "stale":
+                    if "screening:input_updated_after_screening" in (screening_truth.get("approval_blocked_reasons") or []):
+                        return (
+                            False,
+                            "Application data with screening-relevant inputs was modified after screening. "
+                            "A re-screen is required before approval can proceed."
+                        )
                     screening_valid_until_str = prescreening_data.get("screening_valid_until")
                     if screening_valid_until_str:
                         try:
@@ -1251,7 +1264,14 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref", ""))
         except Exception:
             screening_reviews = []
-        screening_truth = build_screening_truth_summary(screening_report, prescreening, screening_reviews)
+        prescreening_for_truth = dict(prescreening)
+        prescreening_for_truth["screening_input_updated_at"] = (
+            app.get("screening_input_updated_at")
+            or app.get("risk_inputs_updated_at")
+            or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
+            or app.get("submitted_at")
+        )
+        screening_truth = build_screening_truth_summary(screening_report, prescreening_for_truth, screening_reviews)
         if screening_truth.get("approval_blocking"):
             blockers.append(_approval_gate_blocker(
                 "screening_truth",

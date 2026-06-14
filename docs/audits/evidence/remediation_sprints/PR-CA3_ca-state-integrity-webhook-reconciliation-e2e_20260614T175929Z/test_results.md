@@ -49,7 +49,25 @@ PYTHONPATH=arie-backend /opt/homebrew/bin/python3.11 -m pytest \
 Result:
 
 ```text
-199 passed in 2.51s
+201 passed in 2.25s
+```
+
+Note: after merged PR #491 staging smoke found CA truth/gate drift for material input changes after screening, corrective branch `codex/pr-ca3-corrective-input-staleness` added:
+
+- `test_runtime_e2e_material_input_change_marks_ca_truth_stale`
+- `test_runtime_e2e_approval_gate_blocks_material_input_change_after_ca_screening`
+
+Corrective focused compile/diff check:
+
+```text
+py_compile touched Python files: PASS
+git diff --check: PASS
+```
+
+Corrective focused set:
+
+```text
+86 passed in 1.73s
 ```
 
 ## Closed-Control Regression Subset
@@ -81,5 +99,5 @@ PYTHONPATH=arie-backend /opt/homebrew/bin/python3.11 -m pytest \
 Result:
 
 ```text
-205 passed in 7.75s
+205 passed in 7.57s
 ```
