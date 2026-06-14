@@ -3997,6 +3997,81 @@ class TestGovernanceAttemptAudit:
         assert detail["response_code"] == 400
         assert "compliance memo" in detail["rejection_reason"].lower()
 
+    def test_approval_document_gate_failure_returns_structured_blockers(self, api_server):
+        """Final approval document evidence failures must expose blocker payloads."""
+        from auth import create_token
+        from db import get_db
+        from tests.conftest import insert_verified_required_documents
+
+        app_id = "app_prdoc1_approval_structured_blockers"
+        app_ref = "ARF-PRDOC1-APPROVAL-BLOCKERS"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM agent_executions WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, final_risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            "prdoc1_client",
+            "PR-DOC1 Approval Blockers Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "in_review",
+            "MEDIUM",
+            "MEDIUM",
+            42,
+            self._live_prescreening(),
+        ))
+        self._insert_approved_memo(conn, app_id)
+        inserted_docs = insert_verified_required_documents(conn, app_id)
+        pending_doc_id = inserted_docs[0]
+        conn.execute(
+            """
+            UPDATE documents
+               SET verification_status = 'pending',
+                   verification_results = ?,
+                   verified_at = NULL
+             WHERE id = ?
+            """,
+            (json.dumps({"overall": "pending", "checks": []}), pending_doc_id),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing structured PR-DOC1 document blockers.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["document_evidence_gate"]["passed"] is False
+        assert body["document_evidence_gate"]["reliance_status"] == "blocked"
+        assert body["document_blockers"]
+        first_blocker = body["document_blockers"][0]
+        assert first_blocker["code"] == "document_pending_verification"
+        assert first_blocker["document_id"] == pending_doc_id
+        assert first_blocker["doc_type"] == "cert_inc"
+
     def test_memo_json_serialization_normalizes_datetime_date_decimal_and_rows(self):
         """Memo persistence must recursively preserve evidence while making it JSON-safe."""
         from decimal import Decimal
