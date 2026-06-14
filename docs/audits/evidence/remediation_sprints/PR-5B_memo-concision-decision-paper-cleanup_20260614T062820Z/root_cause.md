@@ -29,3 +29,33 @@ Implemented a lightweight PDF appendix index in `pdf_generator.py`:
 
 - Keeps the PDF decision-first.
 - Lists retained appendix evidence without dumping the old long-form memo into the default PDF.
+
+## Corrective Browser Defect Root Cause
+
+The post-merge browser defects had two additional causes:
+
+1. The decision-paper cleanup used `aggregated_risk` / routing risk for visible
+   formal narrative while the application risk chip used canonical application
+   risk. For cases where routing/EDD diagnostics elevate handling but the
+   stored risk score remains low, this produced text such as `HIGH risk with
+   score 25/100`.
+
+2. The back-office memo renderer calculated the visible decision snapshot
+   blockers from `metadata.blocked` and `metadata.is_stale` only. It did not
+   aggregate canonical PR-5B blockers from `metadata.primary_blockers`,
+   `memo_output_profile.primary_blockers`, `executive_summary.decision_summary`,
+   `screening_results.approval_blocked_reasons`, or
+   `red_flags_and_mitigants.approval_blockers`.
+
+3. The validation panel fell through to clean wording whenever the issue list
+   was empty. It did not first check non-clean statuses such as
+   `pass_with_fixes`, failed/blocked statuses, or approval blockers.
+
+Corrective fix strategy:
+
+- Bind formal memo risk wording to canonical `risk_display` / application risk.
+- Keep routing/elevation risk as separate diagnostics, not the headline risk
+  rating.
+- Add a central back-office `memoCanonicalBlockers` helper and use it for the
+  governance panel, memo approval blocker list, and decision snapshot.
+- Make validation-panel empty-state text status-aware and approval-blocker-aware.

@@ -1,0 +1,14 @@
+{
+  "computed_pdf_sha256": "6f9c3e1b2ded760304177dad8c51ced9e410f1064c6ec85f108e79fbe6a22bba",
+  "content_length": "36023",
+  "content_type": "application/pdf",
+  "pdf_bytes": 36023,
+  "pdf_magic": "%PDF",
+  "pdf_path": "docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/staging_pr5b_generated_memo.pdf",
+  "status": 200,
+  "x_build_git_sha": "4e2262dc14db86a6e3caacb617182fbe8579ae5c",
+  "x_memo_build_git_sha": "4e2262dc14db86a6e3caacb617182fbe8579ae5c",
+  "x_memo_id": "357",
+  "x_memo_version": "v1",
+  "x_pdf_sha256": "6f9c3e1b2ded760304177dad8c51ced9e410f1064c6ec85f108e79fbe6a22bba"
+}

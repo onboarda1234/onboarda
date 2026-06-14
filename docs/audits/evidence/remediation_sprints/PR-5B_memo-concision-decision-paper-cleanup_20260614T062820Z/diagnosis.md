@@ -48,3 +48,29 @@ Raw before evidence:
 
 - `runtime_json/memo_before_pr5b_summary.json`
 - `runtime_json/memo_before_pr5b.json`
+
+## Corrective Browser Re-Diagnosis
+
+After PR #482 was merged, deployed, and validated by API/PDF smoke, focused
+staging browser smoke on the back-office memo view found three real
+memo-section contradictions:
+
+1. Risk contradiction.
+   - The application risk chip showed `LOW`.
+   - The memo text said the entity was assessed as `HIGH risk with score 25/100`.
+
+2. Blocker contradiction.
+   - The memo decision snapshot showed `Open blockers: None recorded in memo metadata`.
+   - Screening and document blockers were present in memo metadata and approval
+     gate context.
+
+3. Validation contradiction.
+   - The validation panel could render clean wording (`No issues found`) when
+     the memo status was not a clean pass or approval remained blocked.
+
+Corrective evidence:
+
+- Screenshot: `screenshots/pr5b_backoffice_memo_summary.png`
+- Browser report: `runtime_json/staging_pr5b_browser_smoke_report_redacted.json`
+- Corrective branch local browser proof: `runtime_json/pr5b_corrective_local_browser_smoke.json`
+- Corrective local screenshot: `screenshots/pr5b_corrective_local_memo_panel.png`

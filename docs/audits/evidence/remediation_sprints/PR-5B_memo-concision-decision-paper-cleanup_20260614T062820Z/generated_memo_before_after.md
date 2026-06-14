@@ -54,3 +54,23 @@ After runtime JSON:
 
 - `runtime_json/memo_after_pr5b_summary.json`
 - `runtime_json/memo_after_pr5b.json`
+
+## Corrective Browser-Defect After
+
+The corrective branch updates the PR-5B output and browser renderer contract:
+
+- Formal memo risk sentence uses canonical application risk:
+  `LOW risk with score 22/100`.
+- Routing/elevation risk, where different, is labelled as diagnostics rather
+  than the headline risk rating.
+- Memo metadata and section payload expose the same canonical blocker list.
+- Back-office decision snapshot reads the canonical blocker list and no longer
+  falls back to `Open blockers: None recorded in memo metadata`.
+- Validation panel status text is status-aware:
+  - `pass_with_fixes` does not render `No issues found`.
+  - approval-blocked states do not render clean quality wording.
+
+Corrective local browser evidence:
+
+- `runtime_json/pr5b_corrective_local_browser_smoke.json`
+- `screenshots/pr5b_corrective_local_memo_panel.png`

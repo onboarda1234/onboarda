@@ -14,6 +14,18 @@ Result:
 - 17 skipped
 - Duration: 281.59s
 
+Corrective browser-defect patch full-suite run:
+
+Command:
+
+`pytest arie-backend/tests/ -q --tb=short --ignore=arie-backend/tests/test_pdf_generator.py`
+
+Result:
+
+- 5298 passed
+- 17 skipped
+- Duration: 190.80s
+
 The first full-suite attempt against the initial CI-fix patch failed only in
 `arie-backend/tests/test_enhanced_requirement_memo.py` because the condensed
 memo section rebuild dropped the established `enhanced_review_edd` section. The
@@ -22,7 +34,9 @@ enhanced-review section builder.
 
 ## GitHub CI Evidence Required
 
-GitHub CI must still pass before PR-5B can be merged.
+GitHub CI passed for PR #482 before the initial PR-5B merge. GitHub CI must
+also pass for the corrective browser-defect PR before that corrective PR can be
+merged.
 
 PR-5B remains incomplete until:
 
