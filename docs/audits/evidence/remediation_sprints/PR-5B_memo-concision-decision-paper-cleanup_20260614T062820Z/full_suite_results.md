@@ -2,21 +2,29 @@
 
 ## Local Full-Suite Status
 
-Local full relevant backend execution is blocked by the existing WeasyPrint/Pango CFFI native dependency fault on this macOS environment.
+Final local backend suite passed after the CI-fix patch.
 
-Observed crash:
+Command:
 
-- Command attempted: combined memo/PDF batch including `arie-backend/tests/test_phase3_memo_integrity.py`
-- Failure mode: process exit `139`, Python segmentation fault
-- Import path: `test_phase3_memo_integrity.py` -> `server.py` -> `evidence_pack_export.py` -> `weasyprint` -> `cffi` / Pango shared library load
+`pytest arie-backend/tests/ -q --tb=short --ignore=arie-backend/tests/test_pdf_generator.py`
 
-This is the same native dependency class previously documented in remediation evidence. It is not introduced by PR-5B. Local `test_pdf_generator.py` skips cleanly when run directly, but tests importing `server.py` can still hit the native import path before skip guards.
+Result:
 
-## Authoritative Full-Suite Evidence Required
+- 5295 passed
+- 17 skipped
+- Duration: 281.59s
 
-GitHub CI must provide authoritative full-suite / PDF-native-path evidence before PR-5B can be treated as complete.
+The first full-suite attempt against the initial CI-fix patch failed only in
+`arie-backend/tests/test_enhanced_requirement_memo.py` because the condensed
+memo section rebuild dropped the established `enhanced_review_edd` section. The
+final run passed after restoring that section through the existing sanitized
+enhanced-review section builder.
 
-PR-5B must remain incomplete until:
+## GitHub CI Evidence Required
+
+GitHub CI must still pass before PR-5B can be merged.
+
+PR-5B remains incomplete until:
 
 - GitHub CI passes the relevant backend checks.
 - The PR is merged into main.

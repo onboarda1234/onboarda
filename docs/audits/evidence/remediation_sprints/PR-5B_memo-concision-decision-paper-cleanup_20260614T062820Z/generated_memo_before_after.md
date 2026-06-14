@@ -32,12 +32,13 @@ Before runtime JSON:
 - Decision label: `SCREENING RESOLUTION REQUIRED`
 - Compliance decision section: `REVIEW`
 - Section count: 12
-- Default section word count: 807 (~1.6 pages at 500 words/page before PDF styling)
-- Original verbose section word count retained in appendix: 1754
+- Default section word count: 776 (~1.6 pages at 500 words/page before PDF styling)
+- Original verbose section word count retained in appendix: 1756
 - Pending screening in risk-decreasing factors: 0
 - AI explainability word count: 48
 - Appendix sections present: yes
 - Raw/test-like officer note in default memo: no
+- Sanitized onboarding enhanced review section present: yes
 - Validation status: `pass_with_fixes`
 - Supervisor status: `CONSISTENT_WITH_WARNINGS`
 

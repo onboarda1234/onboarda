@@ -156,11 +156,14 @@ def test_ai_explainability_default_is_compact_and_no_agent_pathway():
 def test_messy_officer_note_is_sanitized_from_formal_default_memo():
     memo = _build_memo()
     flat = _flatten_default_sections(memo).lower()
+    appendix = json.dumps(memo["appendix_sections"]).lower()
 
     assert "test note" not in flat
     assert "messy spacing" not in flat
     assert "raw rough draft" not in flat
-    assert "officer rationale recorded" in json.dumps(memo["appendix_sections"]).lower()
+    assert "officer rationale recorded" in flat
+    assert "test note" in appendix
+    assert "raw rough draft" in appendix
 
 
 def test_pdf_renderer_keeps_decision_paper_and_appendix_index(monkeypatch):

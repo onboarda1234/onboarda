@@ -13,6 +13,7 @@ from datetime import datetime
 from validation_engine import validate_compliance_memo
 from supervisor_engine import run_memo_supervisor
 from edd_routing_policy import evaluate_edd_routing as _evaluate_edd_routing
+from branding import BRAND
 from rule_engine import (
     HIGH_RISK_COUNTRIES, OFFSHORE_COUNTRIES,
     HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
@@ -435,6 +436,41 @@ def _memo_quality_cap_label(cap):
     return labels.get(code) or cap.get("reason") or ""
 
 
+def _memo_pep_detail(record):
+    if not isinstance(record, dict):
+        return ""
+    declaration = record.get("pep_declaration") or {}
+    if isinstance(declaration, str):
+        try:
+            declaration = json.loads(declaration)
+        except Exception:
+            declaration = {}
+    if not isinstance(declaration, dict):
+        declaration = {}
+    values = []
+    for label, keys in (
+        ("role/type", ("pep_role_type", "role_type", "pep_type")),
+        ("position/title", ("position_title", "public_function", "public_position")),
+        ("jurisdiction", ("pep_country_jurisdiction", "country_jurisdiction", "jurisdiction")),
+        ("relationship", ("relationship_type",)),
+        ("source of wealth", ("source_of_wealth_detail", "source_of_wealth_note")),
+        ("source of funds", ("source_of_funds_detail", "source_of_funds_note")),
+        ("evidence/reference", ("supporting_note_evidence", "evidence_reference", "supporting_evidence_reference")),
+    ):
+        for key in keys:
+            value = declaration.get(key)
+            if value not in (None, "", []):
+                values.append(label + ": " + _memo_collapse_text(value, max_len=120))
+                break
+    name = record.get("full_name") or record.get("name") or "associated party"
+    if not values:
+        pep_flag = str(record.get("is_pep") or record.get("pep") or "").strip().lower()
+        if pep_flag in ("yes", "true", "1", "y"):
+            return "PEP declaration recorded for " + str(name)
+        return ""
+    return "PEP declaration recorded for " + str(name) + ": " + "; ".join(values)
+
+
 def _apply_decision_paper_cleanup(memo, context):
     """
     Rewrite the default memo into a concise decision-paper view while preserving
@@ -449,6 +485,8 @@ def _apply_decision_paper_cleanup(memo, context):
 
     original_sections = deepcopy(sections)
     original_word_count = _memo_word_count(original_sections)
+    sections = {}
+    memo["sections"] = sections
 
     app = context.get("app") or {}
     company = app.get("company_name") or memo.get("company_name") or "Unknown entity"
@@ -505,6 +543,7 @@ def _apply_decision_paper_cleanup(memo, context):
         [u.get("full_name") for u in ubos if isinstance(u, dict)],
         max_items=4,
     )
+    pep_detail_lines = _memo_unique_text([_memo_pep_detail(p) for p in all_peps], max_items=4)
     control_name = context.get("control_name") or "not determined"
     control_pct = context.get("control_pct") or "N/A"
     primary_ubo = context.get("primary_ubo")
@@ -515,6 +554,9 @@ def _apply_decision_paper_cleanup(memo, context):
     adverse_media_context = context.get("adverse_media_context") or {}
     enhanced_review_summary = context.get("enhanced_review_summary") or {}
     quality_caps = metadata.get("quality_caps") or []
+    screening_review_evidence = _memo_clean_officer_note(
+        context.get("screening_review_evidence") or ""
+    )
 
     recommendation = str(metadata.get("approval_recommendation") or "REVIEW").strip().upper()
     approval_like = {"APPROVE", "APPROVE_WITH_CONDITIONS"}
@@ -532,7 +574,11 @@ def _apply_decision_paper_cleanup(memo, context):
     if mandatory_edd:
         approval_blockers.append(str(mandatory_edd) + " enhanced review requirement(s) remain outstanding")
     for cap in quality_caps:
-        if isinstance(cap, dict) and cap.get("severity") in ("warning", "critical"):
+        if (
+            isinstance(cap, dict)
+            and cap.get("severity") == "critical"
+            and cap.get("code") == "critical_profile_data_missing"
+        ):
             approval_blockers.append(_memo_quality_cap_label(cap))
     approval_blockers = _memo_unique_text(approval_blockers, max_items=6)
 
@@ -583,7 +629,7 @@ def _apply_decision_paper_cleanup(memo, context):
     if screening_defensible_clear:
         screening_marker = "Low-risk profile supported by clean sanctions screening."
     elif screening_formally_cleared_match:
-        screening_marker = "Screening match(es) formally cleared; no unresolved screening escalation remains; not a no-match result."
+        screening_marker = "Screening match(es) formally cleared as false positive; no unresolved screening escalation remains; not a no-match result."
     elif screening_terminal:
         screening_marker = "Screening returned match(es) requiring officer review and escalation."
     else:
@@ -684,6 +730,7 @@ def _apply_decision_paper_cleanup(memo, context):
             f"The entity has {len(directors)} director(s) and {len(ubos)} UBO(s). "
             + ("Directors: " + ", ".join(director_names) + ". " if director_names else "")
             + ("UBOs: " + ", ".join(ubo_names) + ". " if ubo_names else "")
+            + (" ".join(pep_detail_lines) + ". " if pep_detail_lines else "")
             + f"Ownership risk rating: {own_rating} based on {own_rating_justification}. "
             f"Structure complexity: {struct_complexity}. "
             + (
@@ -742,7 +789,7 @@ def _apply_decision_paper_cleanup(memo, context):
             )
             + f"{provider_reliance}. "
             + (
-                "This is not a no-match result. "
+                "Screening match(es) were formally cleared as false positive. This is not a clear no-match result. "
                 if screening_formally_cleared_match else
                 ""
             )
@@ -751,6 +798,7 @@ def _apply_decision_paper_cleanup(memo, context):
                 if not adverse_media_context.get("terminal") else
                 ""
             )
+            + (screening_review_evidence + " " if screening_review_evidence else "")
             + f"Adverse media: {adverse_media_context.get('checklist') or 'not recorded'}."
         ),
         "screening_terminal": screening_terminal,
@@ -762,7 +810,12 @@ def _apply_decision_paper_cleanup(memo, context):
     sections["document_verification"] = {
         "title": "Document Verification",
         "content": (
-            f"{len(documents)} document(s) submitted; {len(verified_docs)} verified; {len(pending_docs)} outstanding. "
+            f"{len(documents)} document(s) submitted; {len(verified_docs)} verified; "
+            + (
+                f"{len(pending_docs)} outstanding. "
+                if pending_docs else
+                "no open document conditions. "
+            )
             + (
                 "Professional judgement: no documents have been uploaded; entity verification cannot be relied upon. "
                 if not has_documents else
@@ -774,14 +827,15 @@ def _apply_decision_paper_cleanup(memo, context):
             + (
                 "Pending items: " + ", ".join(pending_doc_labels[:6]) + "."
                 if pending_doc_labels else
-                "No pending document conditions."
+                "Document file is complete."
             )
         ),
     }
+    sections["enhanced_review_edd"] = _build_enhanced_review_memo_section(enhanced_review_summary)
     sections["ai_explainability"] = {
         "title": "AI / Rule Explainability",
         "content": (
-            "Rule/model source: Onboarda Composite Risk Engine with deterministic memo controls. "
+            "Rule/model source: " + BRAND["platform_name"] + " Composite Risk Engine with deterministic memo controls. "
             + (
                 "Overall risk score: Not yet scored. "
                 if not risk_display.get("available") else
@@ -1893,7 +1947,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         subject = f"{review.get('subject_type', 'subject')}:{review.get('subject_name', 'Unknown')}"
         disposition_text = str(review.get("disposition") or "").replace("_", " ")
         code = review.get("disposition_code") or "no code recorded"
-        rationale = _memo_clean_officer_note(review.get("rationale") or review.get("notes"))
+        rationale = review.get("rationale") or review.get("notes") or ""
         reviewer = review.get("reviewer_name") or review.get("reviewer_id") or "unknown reviewer"
         line = f"{subject} — {disposition_text} ({code}) by {reviewer}: {rationale}"
         if review.get("requires_four_eyes"):
@@ -1901,12 +1955,15 @@ def build_compliance_memo(app, directors, ubos, documents):
             if second_reviewer:
                 line += f" Second review completed by {second_reviewer}"
                 if review.get("second_rationale"):
-                    line += f": {_memo_clean_officer_note(review.get('second_rationale'))}"
+                    line += f": {review.get('second_rationale')}"
             else:
                 line += " Second review required but not yet completed"
+        line = str(line).strip()
+        if line and line[-1] not in ".!?":
+            line += "."
         screening_review_lines.append(line[:1000])
     screening_review_evidence = (
-        " Officer disposition evidence: " + " ".join(screening_review_lines)
+        " Officer disposition evidence: " + " ".join(screening_review_lines) + " "
         if screening_review_lines else ""
     )
 
@@ -3126,14 +3183,78 @@ def build_compliance_memo(app, directors, ubos, documents):
         "tx_rating": tx_rating,
         "fc_rating": fc_rating,
         "now_ts": now_ts,
+        "screening_review_evidence": screening_review_evidence,
     })
 
     # Re-run the supervisor after the officer-facing memo is condensed so the
     # displayed supervisor summary is based on the same decision-paper text.
     supervisor_result = run_memo_supervisor(memo)
+    if not has_documents:
+        supervisor_result["can_approve"] = False
+        reasons = list(supervisor_result.get("mandatory_escalation_reasons") or [])
+        if "no_documents_uploaded" not in reasons:
+            reasons.append("no_documents_uploaded")
+        supervisor_result["mandatory_escalation_reasons"] = reasons
     memo["supervisor"] = supervisor_result
     memo["metadata"]["supervisor_status"] = supervisor_result["verdict"]
     memo["metadata"]["supervisor_confidence"] = supervisor_result["supervisor_confidence"]
+    try:
+        routing_facts = dict(agent5_input_contract)
+        routing_facts["supervisor_mandatory_escalation"] = bool(
+            supervisor_result.get("mandatory_escalation", False)
+        )
+        routing_facts["supervisor_mandatory_escalation_reasons"] = list(
+            supervisor_result.get("mandatory_escalation_reasons") or []
+        )
+        edd_routing = _evaluate_edd_routing(routing_facts)
+    except Exception as _routing_err:  # pragma: no cover - defensive
+        logger.error("EDD routing evaluation after memo cleanup failed: %s", _routing_err)
+        edd_routing = {
+            "policy_version": "edd_routing_policy_v1",
+            "route": "edd",
+            "triggers": ["routing_evaluation_failed"],
+            "inputs": {},
+            "evaluated_at": now_ts,
+        }
+    memo["metadata"]["edd_routing"] = edd_routing
+    _final_route_is_edd = (edd_routing or {}).get("route") == "edd"
+    _final_edd_satisfied = bool(
+        edd_completion.get("satisfied")
+        and edd_completion.get("covers_current_triggers")
+    )
+    _final_supervisor_can_approve = bool(supervisor_result.get("can_approve", False))
+    _final_supervisor_mandatory = bool(supervisor_result.get("mandatory_escalation", False))
+    _current_recommendation = memo["metadata"].get("approval_recommendation")
+    if _final_route_is_edd and not _final_edd_satisfied and _current_recommendation in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+        memo["metadata"]["approval_recommendation_original"] = _current_recommendation
+        memo["metadata"]["approval_recommendation"] = "ESCALATE_TO_EDD"
+        memo["metadata"]["decision_label"] = "ESCALATE TO EDD"
+        _decision_sec = (memo.get("sections") or {}).get("compliance_decision") or {}
+        if isinstance(_decision_sec, dict):
+            _decision_sec["decision"] = "ESCALATE_TO_EDD"
+            _decision_sec["decision_label"] = "ESCALATE TO EDD"
+            _decision_sec["content"] = (
+                "Recommendation: ESCALATE TO EDD (ESCALATE_TO_EDD) — deterministic routing policy "
+                "requires Enhanced Due Diligence before any approval. This memo is not an approval recommendation."
+            )
+            memo["sections"]["compliance_decision"] = _decision_sec
+    elif (
+        (not _final_route_is_edd)
+        and (_final_supervisor_mandatory or not _final_supervisor_can_approve)
+        and _current_recommendation in ("APPROVE", "APPROVE_WITH_CONDITIONS")
+    ):
+        memo["metadata"]["approval_recommendation_original"] = _current_recommendation
+        memo["metadata"]["approval_recommendation"] = "REVIEW"
+        memo["metadata"]["decision_label"] = "SUPERVISOR REVIEW REQUIRED"
+        _decision_sec = (memo.get("sections") or {}).get("compliance_decision") or {}
+        if isinstance(_decision_sec, dict):
+            _decision_sec["decision"] = "REVIEW"
+            _decision_sec["decision_label"] = "SUPERVISOR REVIEW REQUIRED"
+            _decision_sec["content"] = (
+                "Recommendation: SUPERVISOR REVIEW REQUIRED (REVIEW) — the final memo supervisor "
+                "verdict prevents approval-like recommendations."
+            )
+            memo["sections"]["compliance_decision"] = _decision_sec
 
     # Run validation engine — now with rule engine awareness
     validation_result = validate_compliance_memo(memo)

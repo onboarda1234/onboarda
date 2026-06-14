@@ -46,10 +46,12 @@ The long narrative memo was generated before final governance gates corrected me
 
 - Blocked screening produces `REVIEW` with `SCREENING RESOLUTION REQUIRED`.
 - Pending screening is a blocker/dependency, not a mitigant.
-- Default memo is about 807 words for the same representative case.
+- Default memo is about 776 words for the same representative case.
 - Original verbose sections are retained in `appendix_sections`.
 - AI explainability is compact.
 - Officer note rough/test text is sanitized from formal memo output.
+- Raw officer-note source evidence remains traceable in `appendix_sections`.
+- Existing sanitized onboarding enhanced-review memo section remains visible.
 - PDF renderer includes a concise appendix evidence index.
 
 ## Tests Added / Updated
@@ -62,9 +64,9 @@ See `test_results.md`.
 
 ## Full Suite Results
 
-Local full relevant backend suite is blocked by known WeasyPrint/Pango CFFI segfault when importing the full server/evidence-pack stack. See `full_suite_results.md`.
+Local full relevant backend suite passed: 5295 passed, 17 skipped in 281.59s. See `full_suite_results.md`.
 
-GitHub CI must provide authoritative full-suite evidence before completion.
+GitHub CI must also pass before merge.
 
 ## Browser Test Results
 
@@ -94,7 +96,7 @@ Pending post-merge staging deploy.
 
 - Staging PDF generation still requires live deployed runtime proof.
 - Staging browser memo view still requires visual proof.
-- GitHub CI must confirm native PDF path on supported Linux runner.
+- GitHub CI must pass on the PR branch.
 
 ## Items Not Closed By This PR
 

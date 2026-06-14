@@ -8,6 +8,7 @@
 ## Focused PR-5B Tests
 
 - `pytest -q arie-backend/tests/test_pr5b_memo_concision.py` - 7 passed
+- `pytest -q arie-backend/tests/test_enhanced_requirement_memo.py arie-backend/tests/test_pr5b_memo_concision.py arie-backend/tests/test_pr5_memo_governance.py` - 19 passed
 
 Coverage:
 
@@ -18,6 +19,8 @@ Coverage:
 - Repeated screening-pending boilerplate is constrained in default content.
 - AI explainability is compact and has no default agent pathway.
 - Messy officer-note text is sanitized from formal memo output.
+- Raw officer-note source evidence remains traceable in `appendix_sections`.
+- Existing sanitized `enhanced_review_edd` memo section remains present.
 - PDF renderer produces a decision-paper view plus appendix evidence index via fake WeasyPrint adapter.
 
 ## Memo Governance / PR-5 Regression
@@ -41,8 +44,17 @@ Coverage:
 
 - `pytest -q arie-backend/tests/test_phase3_memo_integrity.py -k 'not authoritative_risk_metadata and not fingerprint'` - 17 passed, 5 deselected
 
-The deselected tests import `server.py`, which imports `evidence_pack_export.py`, which locally triggers the known WeasyPrint/Pango CFFI segfault. This is documented in `full_suite_results.md`.
+The deselected tests were covered by the subsequent full local backend suite.
 
 ## Local PDF Test Module
 
 - `pytest -q arie-backend/tests/test_pdf_generator.py` - 8 skipped locally because native WeasyPrint libraries are unavailable.
+
+## Full Local Backend Suite
+
+- `pytest arie-backend/tests/ -q --tb=short --ignore=arie-backend/tests/test_pdf_generator.py` - 5295 passed, 17 skipped in 281.59s
+
+Notes:
+
+- First full-suite run on the CI-fix patch failed only in `test_enhanced_requirement_memo.py` because the condensed section rebuild dropped `enhanced_review_edd`.
+- The final run passed after restoring `enhanced_review_edd` through the existing sanitized enhanced-review section builder.
