@@ -80,7 +80,7 @@ def _seed_smoke_records(db, run_id: str) -> Dict[str, Any]:
             64,
             "application/pdf",
             "pending",
-            1,
+            True,
             1,
         ),
     )
