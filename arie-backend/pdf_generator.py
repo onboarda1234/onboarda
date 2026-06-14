@@ -420,6 +420,36 @@ def _render_ownership(section: Dict) -> str:
     return html
 
 
+def _render_appendix_index(memo_data: Dict) -> str:
+    """Render a concise index for preserved appendix evidence."""
+    appendix = memo_data.get("appendix_sections")
+    if not isinstance(appendix, dict) or not appendix:
+        return ""
+    profile = (memo_data.get("metadata") or {}).get("memo_output_profile") or {}
+    html = '<h2>Appendix Evidence Index</h2><div class="section-content">'
+    html += (
+        "<p>Full pre-cleanup section detail is retained in the memo export payload as "
+        "<strong>appendix_sections</strong>. The default PDF remains decision-first and lists the retained evidence below.</p>"
+    )
+    html += '<table class="risk-table"><tr><th>Retained Evidence Section</th><th>Status</th></tr>'
+    for key, section in appendix.items():
+        title = key.replace("_", " ").title()
+        if isinstance(section, dict) and section.get("title"):
+            title = section.get("title")
+        html += f'<tr><td>{_esc(title)}</td><td>Retained in appendix_sections</td></tr>'
+    html += "</table>"
+    if profile.get("original_sections_word_count"):
+        html += (
+            "<p><strong>Original detail word count:</strong> "
+            + _esc(profile.get("original_sections_word_count"))
+            + " words. <strong>Default memo word count:</strong> "
+            + _esc(profile.get("default_sections_word_count", "not recorded"))
+            + " words.</p>"
+        )
+    html += "</div>"
+    return html
+
+
 # ══════════════════════════════════════════════════════════
 # MAIN PDF GENERATION
 # ══════════════════════════════════════════════════════════
@@ -572,6 +602,8 @@ def generate_memo_pdf(
     # ── Section 12: Audit & Governance ──
     html += '<h2>12. Audit &amp; Governance</h2>'
     html += _render_section_content(sections.get("audit_and_governance", {}))
+
+    html += _render_appendix_index(memo_data)
 
     # ── Validation & Supervisor Summary Box ──
     val_status = "N/A"
