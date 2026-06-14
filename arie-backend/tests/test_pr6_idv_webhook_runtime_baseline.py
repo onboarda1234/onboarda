@@ -147,3 +147,28 @@ def test_verification_worker_smoke_processes_synthetic_job_without_provider_call
             "SELECT COUNT(*) AS c FROM verification_jobs WHERE id=?",
             (result["job_id"],),
         ).fetchone()["c"] == 0
+
+
+def test_verification_worker_smoke_binds_document_is_current_as_boolean():
+    smoke = _load_script("verification_worker_smoke.py")
+
+    class _Cursor:
+        def fetchone(self):
+            return {}
+
+    class _FakeDB:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return _Cursor()
+
+    db = _FakeDB()
+    smoke._seed_smoke_records(db, "unitbool")
+
+    document_insert = next(
+        params for sql, params in db.calls
+        if "INSERT INTO documents" in sql
+    )
+    assert document_insert[8] is True
