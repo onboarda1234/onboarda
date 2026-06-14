@@ -1,6 +1,7 @@
 {
   "origin_main_sha": "6b6ea16881ae7f93a0eeb4256bb4f205692be757",
   "branch": "codex/pr-doc1-kyc-memo-approval-document-verification-gates",
+  "initial_implementation_commit_sha": "49532b572e902eac9a0cc10a371ed08669ad5f60",
   "targeted_doc_tests": {
     "result": "passed",
     "summary": "86 passed, 7 warnings in 10.54s"
@@ -18,4 +19,3 @@
   },
   "doc_001_status": "PARTIALLY FIXED"
 }
-

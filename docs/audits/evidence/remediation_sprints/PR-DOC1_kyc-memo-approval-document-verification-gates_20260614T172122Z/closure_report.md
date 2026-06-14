@@ -16,7 +16,8 @@ KYC submission, memo generation, memo approval, and application approval could r
 
 - Current `origin/main` SHA: `6b6ea16881ae7f93a0eeb4256bb4f205692be757`
 - Branch name: `codex/pr-doc1-kyc-memo-approval-document-verification-gates`
-- Branch commit SHA: pending at evidence creation time.
+- Initial implementation commit SHA: `49532b572e902eac9a0cc10a371ed08669ad5f60`
+- Final branch tip SHA is recorded in the PR metadata and final handoff.
 - Does the issue still exist on current `origin/main`? Yes.
 - Evidence: `diagnosis.md`
 
@@ -106,4 +107,3 @@ Local browser smoke passed. Staging browser smoke remains required. See `browser
 `PARTIALLY FIXED`
 
 Rationale: branch implementation and local validation are complete, but merge, staging deployment, staging `/api/version`, staging API smoke, and staging browser smoke are not complete.
-
