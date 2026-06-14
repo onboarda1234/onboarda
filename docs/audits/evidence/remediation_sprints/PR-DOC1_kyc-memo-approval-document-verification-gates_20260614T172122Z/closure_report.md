@@ -14,9 +14,10 @@ KYC submission, memo generation, memo approval, and application approval could r
 
 ## Re-diagnosis result
 
-- Current `origin/main` SHA: `6b6ea16881ae7f93a0eeb4256bb4f205692be757`
+- Initial diagnosis `origin/main` SHA: `6b6ea16881ae7f93a0eeb4256bb4f205692be757`
+- Current rebased `origin/main` SHA: `787ce4a26abfbaceaa043011df4e3f961fa4f418`
 - Branch name: `codex/pr-doc1-kyc-memo-approval-document-verification-gates`
-- Initial implementation commit SHA: `49532b572e902eac9a0cc10a371ed08669ad5f60`
+- Rebased implementation commit SHA: `0324d39b33b98ed3f50117c9292e10a9da6b39c3`
 - Final branch tip SHA is recorded in the PR metadata and final handoff.
 - Does the issue still exist on current `origin/main`? Yes.
 - Evidence: `diagnosis.md`

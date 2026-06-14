@@ -5,12 +5,13 @@
 - Remediation ID: DOC-001
 - PR: PR-DOC1 - KYC, Memo and Approval Document Verification Gates
 - Branch: `codex/pr-doc1-kyc-memo-approval-document-verification-gates`
-- Current `origin/main` SHA diagnosed: `6b6ea16881ae7f93a0eeb4256bb4f205692be757`
-- Diagnosis source: latest `origin/main`, not prior reports or screenshots.
+- Initial `origin/main` SHA diagnosed: `6b6ea16881ae7f93a0eeb4256bb4f205692be757`
+- Post-PR rebase `origin/main` SHA validated: `787ce4a26abfbaceaa043011df4e3f961fa4f418`
+- Diagnosis source: latest `origin/main` at diagnosis time, plus rebase validation against current `origin/main`; not prior reports or screenshots.
 
 ## Re-diagnosis Result
 
-DOC-001 existed on latest `origin/main`.
+DOC-001 existed on the diagnosed `origin/main` base and remained applicable after rebasing onto current `origin/main`. The upstream delta was limited to PR-CA2 ComplyAdvantage audit filtering and did not alter the canonical document upload, verification, KYC, memo, approval, or readiness surfaces in this scope.
 
 Required onboarding/KYC documents could be relied on without verified, current, Agent 1-backed verification evidence:
 
@@ -47,4 +48,3 @@ Required onboarding/KYC documents could be relied on without verified, current, 
 - Application list/detail/evidence-pack serializers.
 - Portal document verification status rendering.
 - Back-office document readiness and approval blocker rendering.
-

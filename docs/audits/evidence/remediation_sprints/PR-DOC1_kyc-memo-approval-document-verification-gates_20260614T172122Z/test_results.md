@@ -45,7 +45,7 @@ Command:
 Result:
 
 ```text
-86 passed, 7 warnings in 10.54s
+86 passed, 7 warnings in 10.84s
 ```
 
 Coverage included:
@@ -82,6 +82,5 @@ Command:
 Result:
 
 ```text
-168 passed in 8.72s
+168 passed in 10.73s
 ```
-
