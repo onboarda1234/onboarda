@@ -336,3 +336,18 @@ class TestDirectorsUBOsReport(DirectorsUBOsReportHTTPBase):
         enrich_src = inspect.getsource(_directors_ubos_enrich_record)
         assert get_src.count("db.execute(") <= 6
         assert "get_db(" not in enrich_src
+
+    def test_report_cte_escapes_literal_like_patterns_for_psycopg(self):
+        from server import _directors_ubos_report_cte
+
+        cte = _directors_ubos_report_cte()
+        literal_patterns = [
+            "confirmed_pep",
+            "pending_review",
+            "false_positive",
+            "not_pep",
+            "declared_yes",
+        ]
+        for pattern in literal_patterns:
+            assert f"LIKE '%{pattern}%'" not in cte
+            assert f"LIKE '%%{pattern}%%'" in cte

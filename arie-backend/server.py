@@ -14214,11 +14214,11 @@ def _directors_ubos_report_cte():
                 CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 50 THEN 1 ELSE 0 END AS ownership_above_50,
                 CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 75 THEN 1 ELSE 0 END AS ownership_above_75,
                 CASE
-                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%confirmed_pep%' THEN 'confirmed_pep'
-                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%pending_review%' THEN 'pending_review'
-                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%false_positive%' THEN 'false_positive'
-                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%not_pep%' THEN 'not_pep'
-                    WHEN g.declared_pep_bool = 1 OR LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%declared_yes%' THEN 'declared_yes'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%%confirmed_pep%%' THEN 'confirmed_pep'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%%pending_review%%' THEN 'pending_review'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%%false_positive%%' THEN 'false_positive'
+                    WHEN LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%%not_pep%%' THEN 'not_pep'
+                    WHEN g.declared_pep_bool = 1 OR LOWER(COALESCE(g.pep_declaration_text, '')) LIKE '%%declared_yes%%' THEN 'declared_yes'
                     WHEN COALESCE(g.pep_declaration_text, '') IN ('', '{{}}', 'null') THEN 'not_verified'
                     ELSE 'declared_no'
                 END AS pep_status,
