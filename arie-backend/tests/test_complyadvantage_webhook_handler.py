@@ -118,7 +118,9 @@ def _call_handler_body(
     with patch.dict(os.environ, env, clear=False):
         if secret is None:
             os.environ.pop("COMPLYADVANTAGE_WEBHOOK_SECRET", None)
-        handler.post()
+        with patch("screening_complyadvantage.webhook_handler.record_complyadvantage_webhook_receipt") as receipt:
+            handler.post()
+            handler._receipt_mock = receipt
     return handler
 
 
@@ -154,6 +156,7 @@ def test_known_case_created_returns_202_and_spawns_callback():
     callback, envelope = fake_loop.spawn_callback.call_args.args
     assert callback == handler._process_webhook_async
     assert envelope.webhook_type == "CASE_CREATED"
+    handler._receipt_mock.assert_called_once()
     storage.assert_not_called()
 
 

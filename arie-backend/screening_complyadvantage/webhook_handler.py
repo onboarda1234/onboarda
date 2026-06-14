@@ -1,14 +1,11 @@
 """Tornado handler for ComplyAdvantage webhooks.
 
-The receiver uses the C4 spawn-callback hybrid: it reads the raw body first,
-verifies the HMAC synchronously, parses the envelope, returns HTTP 202 with an
-empty body for known events, and only then schedules the heavier fetch-back and
-dual-write sequence with ``IOLoop.spawn_callback``. This keeps ComplyAdvantage
-from timing out on long fetch-back work, but work can be lost if the process dies
-after the 202 and before/during the callback. The v1 mitigation is natural DB
-deduplication: ``screening_reports_normalized`` is unique by provider/hash and
-``monitoring_alerts`` is unique by provider/case_identifier; future reconcile
-jobs can repair inconsistent state.
+The receiver uses a durable-receipt spawn-callback hybrid: it reads the raw
+body first, verifies the HMAC synchronously, parses the envelope, records a
+redacted delivery row, returns HTTP 202 for known events, and then schedules
+the heavier fetch-back and dual-write sequence with ``IOLoop.spawn_callback``.
+If the process dies after acknowledgement, the saved receipt can be retried by
+the reconciliation helper.
 """
 
 import base64
@@ -30,7 +27,11 @@ from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from .models.webhooks import CACaseAlertListUpdatedWebhook, CACaseCreatedWebhook, CAUnknownWebhookEnvelope
 from .observability import accepts_keyword, emit_metric, emit_operational, inbound_trace_id
 from .webhook_fetch import WebhookEnvelopeError, extract_case_identifier, validate_alert_identifiers
-from .webhook_storage import process_complyadvantage_webhook
+from .webhook_storage import (
+    process_complyadvantage_webhook,
+    record_complyadvantage_webhook_receipt,
+    stable_webhook_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,33 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             self.set_status(202)
             return
 
+        webhook_id = _standard_webhook_id(self.request.headers) or stable_webhook_id(payload, body=body)
+        try:
+            record_complyadvantage_webhook_receipt(
+                envelope,
+                webhook_id=webhook_id,
+                trace_id=trace_id,
+                payload=payload,
+            )
+        except Exception:
+            logger.error(
+                "ca_webhook_receipt_persist_failed webhook_type=%s case_identifier=%s",
+                event_type,
+                envelope.case_identifier,
+                exc_info=True,
+            )
+            emit_metric(
+                "webhook_receipt_persist_failed",
+                metric_name="WebhookReceiptPersistFailures",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                webhook_type=event_type,
+                case_identifier=envelope.case_identifier,
+            )
+            self.set_status(503)
+            return
+
         emit_metric(
             "webhook_delivery",
             metric_name="WebhookDeliveries",
@@ -243,7 +271,6 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             customer_identifier=getattr(envelope.customer, "identifier", None),
         )
         self.set_status(202)
-        webhook_id = _standard_webhook_id(self.request.headers)
         tornado.ioloop.IOLoop.current().spawn_callback(
             self._process_webhook_async,
             envelope,

@@ -1,6 +1,53 @@
 import json
 
 
+def test_queue_resolver_quarantines_stale_clear_claim():
+    from screening_state import resolve_screening_queue_state
+
+    resolved = resolve_screening_queue_state({
+        "status_key": "screened_no_match",
+        "status_label": "No Match",
+        "screening_state": "completed_clear",
+        "screening_truth_state": "stale",
+        "provider_availability": "stale",
+        "screening_result": "clear",
+        "terminal": True,
+        "defensible_clear": True,
+        "total_hits": 0,
+    })
+
+    assert resolved["status_key"] == "stale"
+    assert resolved["canonical_status"] == "Stale / Requires Refresh"
+    assert resolved["terminal"] is False
+    assert resolved["defensible_clear"] is False
+    assert "screening_stale_requires_refresh" in resolved["blocking_flags"]
+    assert "stale_screening_claimed_clear" in resolved["state_integrity_flags"]
+
+
+def test_queue_resolver_blocks_clear_with_partial_evidence():
+    from screening_state import resolve_screening_queue_state
+
+    resolved = resolve_screening_queue_state({
+        "status_key": "screened_no_match",
+        "status_label": "No Match",
+        "screening_state": "completed_clear",
+        "screening_truth_state": "completed_clear",
+        "provider_availability": "available",
+        "screening_result": "clear",
+        "terminal": True,
+        "defensible_clear": True,
+        "total_hits": 0,
+        "evidence_quality": "partial",
+        "missing_reason": "missing_provider_identifiers",
+    })
+
+    assert resolved["status_key"] == "review_required"
+    assert resolved["canonical_status"] == "Review Required"
+    assert resolved["terminal"] is False
+    assert "provider_evidence_incomplete" in resolved["blocking_flags"]
+    assert "incomplete_evidence_claimed_clear" in resolved["state_integrity_flags"]
+
+
 def test_screening_queue_payload_uses_application_level_metrics(db, temp_db):
     from server import _build_screening_queue_payload
 

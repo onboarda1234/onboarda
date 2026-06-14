@@ -1,14 +1,17 @@
 """Storage orchestration for ComplyAdvantage webhook dual-write processing."""
 
+import hashlib
+import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from screening_config import get_active_provider_name
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_storage import persist_normalized_report
 
 from .evidence import evidence_hash, extract_monitoring_evidence
+from .evidence_policy import redact_provider_payload
 from .normalizer import ScreeningApplicationContext
 from .observability import accepts_keyword, emit_audit, emit_metric as _emit_metric, emit_operational
 from .subscriptions import update_monitoring_subscription_event
@@ -17,10 +20,67 @@ from .webhook_mapping import map_normalized_to_monitoring_alert
 
 logger = logging.getLogger(__name__)
 
+_WEBHOOK_RETRYABLE_STATUSES = frozenset({"received", "retry_pending", "failed"})
+_WEBHOOK_STUCK_PROCESSING_SECONDS = 300
+_WEBHOOK_MAX_RETRIES = 3
+
 
 def emit_metric(name, **fields):
     component = fields.pop("component", "webhook_storage")
     return _emit_metric(name, component=component, **fields)
+
+
+def stable_webhook_id(payload, *, body=None):
+    """Return a deterministic legacy id when Mesh did not send webhook-id."""
+    if body not in (None, b"", ""):
+        raw = body if isinstance(body, bytes) else str(body).encode("utf-8")
+    else:
+        raw = json.dumps(payload or {}, sort_keys=True, default=str).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:32]
+    event_type = str((payload or {}).get("webhook_type") or (payload or {}).get("type") or "unknown").lower()
+    case_identifier = str((payload or {}).get("case_identifier") or "no-case")
+    return f"legacy:{event_type}:{case_identifier}:{digest}"
+
+
+def record_complyadvantage_webhook_receipt(
+    envelope,
+    *,
+    webhook_id=None,
+    trace_id=None,
+    payload=None,
+    db_factory=None,
+):
+    """Durably record a validated webhook receipt before HTTP acknowledgement."""
+    db_factory = db_factory or _default_db_factory
+    customer_identifier = getattr(getattr(envelope, "customer", None), "identifier", None)
+    case_identifier = getattr(envelope, "case_identifier", None)
+    webhook_type = getattr(envelope, "webhook_type", "none")
+    alert_identifiers = getattr(envelope, "alert_identifiers", None) or []
+    safe_payload = redact_provider_payload(payload or _envelope_payload(envelope))
+    db = db_factory()
+    try:
+        _record_webhook_delivery_receipt(
+            db,
+            webhook_id=webhook_id,
+            webhook_type=webhook_type,
+            case_identifier=case_identifier,
+            customer_identifier=customer_identifier,
+            trace_id=trace_id,
+            payload_json=json.dumps(safe_payload, default=str, sort_keys=True),
+            alert_identifiers_json=json.dumps(list(alert_identifiers), default=str, sort_keys=True),
+        )
+    finally:
+        _close(db)
+    emit_operational(
+        "ca_webhook_receipt_recorded",
+        trace_id=trace_id,
+        component="webhook_storage",
+        outcome="success",
+        webhook_type=webhook_type,
+        case_identifier=case_identifier,
+        customer_identifier=customer_identifier,
+    )
+    return {"status": "received", "webhook_id": webhook_id}
 
 
 async def process_complyadvantage_webhook(
@@ -99,9 +159,10 @@ async def process_complyadvantage_webhook(
                 _finish_webhook_delivery(
                     db,
                     webhook_id,
-                    status="failed",
+                    status="retry_pending",
                     result="exception",
                     failure_reason=exc.__class__.__name__,
+                    retryable=True,
                 )
             finally:
                 _close(db)
@@ -765,10 +826,34 @@ def _claim_webhook_delivery(db, *, webhook_id, webhook_type, case_identifier, cu
     if not webhook_id:
         return {"claimed": False, "duplicate": False}
     existing = db.execute(
-        "SELECT processing_status FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
+        "SELECT processing_status, retry_count FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
         (webhook_id,),
     ).fetchone()
     if existing:
+        status = _row_value(existing, "processing_status")
+        retry_count = int(_row_value(existing, "retry_count") or 0)
+        if status in ("received", "retry_pending", "failed") and retry_count < _WEBHOOK_MAX_RETRIES:
+            db.execute(
+                """
+                UPDATE complyadvantage_webhook_deliveries
+                   SET processing_status = 'processing',
+                       processing_result = '',
+                       failure_reason = '',
+                       last_seen_at = CURRENT_TIMESTAMP,
+                       retry_count = CASE
+                           WHEN processing_status IN ('retry_pending', 'failed') THEN COALESCE(retry_count, 0) + 1
+                           ELSE COALESCE(retry_count, 0)
+                       END,
+                       webhook_type = COALESCE(NULLIF(webhook_type, ''), ?),
+                       case_identifier = COALESCE(NULLIF(case_identifier, ''), ?),
+                       customer_identifier = COALESCE(NULLIF(customer_identifier, ''), ?),
+                       trace_id = COALESCE(NULLIF(trace_id, ''), ?)
+                 WHERE webhook_id = ?
+                """,
+                (webhook_type, case_identifier, customer_identifier, trace_id, webhook_id),
+            )
+            _commit(db)
+            return {"claimed": True, "duplicate": False}
         db.execute(
             """
             UPDATE complyadvantage_webhook_deliveries
@@ -797,20 +882,24 @@ def _claim_webhook_delivery(db, *, webhook_id, webhook_type, case_identifier, cu
     return {"claimed": True, "duplicate": False}
 
 
-def _finish_webhook_delivery(db, webhook_id, *, status, result, failure_reason=""):
+def _finish_webhook_delivery(db, webhook_id, *, status, result, failure_reason="", retryable=False):
     if not webhook_id:
         return
+    next_retry_at = None
+    if retryable:
+        next_retry_at = (datetime.now(timezone.utc) + timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     db.execute(
         """
         UPDATE complyadvantage_webhook_deliveries
            SET processing_status = ?,
                processing_result = ?,
                failure_reason = ?,
+               next_retry_at = ?,
                processed_at = CURRENT_TIMESTAMP,
                last_seen_at = CURRENT_TIMESTAMP
          WHERE webhook_id = ?
         """,
-        (status, result, failure_reason, webhook_id),
+        (status, result, failure_reason, next_retry_at, webhook_id),
     )
     _commit(db)
 
@@ -833,6 +922,204 @@ def _source_reference_value(alert_row, key):
     except Exception:
         ref = {}
     return ref.get(key)
+
+
+async def reconcile_complyadvantage_webhook_deliveries(
+    *,
+    db_factory=None,
+    client_factory=None,
+    fetch_normalized=fetch_webhook_single_pass,
+    persist_report=persist_normalized_report,
+    agent_executor=None,
+    limit=50,
+    stuck_after_seconds=_WEBHOOK_STUCK_PROCESSING_SECONDS,
+    max_retries=_WEBHOOK_MAX_RETRIES,
+):
+    """Retry recoverable CA webhook deliveries from durable receipt rows."""
+    db_factory = db_factory or _default_db_factory
+    client_factory = client_factory or build_default_client
+    db = db_factory()
+    try:
+        rows = _candidate_webhook_deliveries(
+            db,
+            limit=limit,
+            stuck_after_seconds=stuck_after_seconds,
+            max_retries=max_retries,
+        )
+    finally:
+        _close(db)
+
+    results = []
+    for row in rows:
+        webhook_id = _row_value(row, "webhook_id")
+        payload = _load_payload_json(_row_value(row, "payload_json"))
+        if not payload:
+            db = db_factory()
+            try:
+                _finish_webhook_delivery(
+                    db,
+                    webhook_id,
+                    status="failed",
+                    result="missing_payload",
+                    failure_reason="missing_payload",
+                )
+            finally:
+                _close(db)
+            results.append({"webhook_id": webhook_id, "status": "missing_payload"})
+            continue
+        try:
+            envelope = _envelope_from_payload(payload)
+        except Exception as exc:
+            db = db_factory()
+            try:
+                _finish_webhook_delivery(
+                    db,
+                    webhook_id,
+                    status="failed",
+                    result="invalid_payload",
+                    failure_reason=exc.__class__.__name__,
+                )
+            finally:
+                _close(db)
+            results.append({"webhook_id": webhook_id, "status": "invalid_payload"})
+            continue
+
+        db = db_factory()
+        try:
+            db.execute(
+                """
+                UPDATE complyadvantage_webhook_deliveries
+                   SET processing_status = 'processing',
+                       processing_result = '',
+                       failure_reason = '',
+                       retry_count = COALESCE(retry_count, 0) + 1,
+                       last_seen_at = CURRENT_TIMESTAMP
+                 WHERE webhook_id = ?
+                """,
+                (webhook_id,),
+            )
+            _commit(db)
+        finally:
+            _close(db)
+
+        trace_id = _row_value(row, "trace_id")
+        try:
+            result = await _process_claimed_webhook(
+                envelope,
+                trace_id=trace_id,
+                webhook_id=webhook_id,
+                db_factory=db_factory,
+                client_factory=client_factory,
+                fetch_normalized=fetch_normalized,
+                persist_report=persist_report,
+                agent_executor=agent_executor,
+                webhook_claimed=True,
+            )
+            results.append({"webhook_id": webhook_id, **(result or {})})
+        except Exception as exc:
+            db = db_factory()
+            try:
+                _finish_webhook_delivery(
+                    db,
+                    webhook_id,
+                    status="retry_pending",
+                    result="reconcile_exception",
+                    failure_reason=exc.__class__.__name__,
+                    retryable=True,
+                )
+            finally:
+                _close(db)
+            results.append({"webhook_id": webhook_id, "status": "retry_pending", "error": exc.__class__.__name__})
+    return {"processed": len(results), "results": results}
+
+
+def _candidate_webhook_deliveries(db, *, limit, stuck_after_seconds, max_retries):
+    limit = max(1, min(int(limit or 50), 500))
+    stale_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stuck_after_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return db.execute(
+        """
+        SELECT webhook_id, webhook_type, case_identifier, customer_identifier,
+               processing_status, retry_count, trace_id, payload_json
+          FROM complyadvantage_webhook_deliveries
+         WHERE COALESCE(retry_count, 0) < ?
+           AND (
+                processing_status IN ('received', 'retry_pending', 'failed')
+                OR (processing_status = 'processing' AND COALESCE(last_seen_at, first_received_at) < ?)
+           )
+         ORDER BY first_received_at ASC
+         LIMIT ?
+        """,
+        (max_retries, stale_cutoff, limit),
+    ).fetchall()
+
+
+def _load_payload_json(value):
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _envelope_from_payload(payload):
+    from .models.webhooks import CACaseAlertListUpdatedWebhook, CACaseCreatedWebhook
+
+    event_type = payload.get("webhook_type") or payload.get("type") or ""
+    if event_type == "CASE_ALERT_LIST_UPDATED":
+        return CACaseAlertListUpdatedWebhook.model_validate(payload)
+    if event_type == "CASE_CREATED":
+        return CACaseCreatedWebhook.model_validate(payload)
+    raise ValueError("unsupported_webhook_type")
+
+
+def _record_webhook_delivery_receipt(
+    db,
+    *,
+    webhook_id,
+    webhook_type,
+    case_identifier,
+    customer_identifier,
+    trace_id,
+    payload_json,
+    alert_identifiers_json,
+):
+    db.execute(
+        """
+        INSERT INTO complyadvantage_webhook_deliveries
+            (webhook_id, webhook_type, case_identifier, customer_identifier,
+             processing_status, processing_result, trace_id, payload_json,
+             alert_identifiers_json, first_received_at, last_seen_at)
+        VALUES (?, ?, ?, ?, 'received', '', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(webhook_id)
+        DO UPDATE SET
+            last_seen_at = CURRENT_TIMESTAMP,
+            duplicate_count = COALESCE(complyadvantage_webhook_deliveries.duplicate_count, 0) + 1,
+            webhook_type = COALESCE(NULLIF(complyadvantage_webhook_deliveries.webhook_type, ''), EXCLUDED.webhook_type),
+            case_identifier = COALESCE(NULLIF(complyadvantage_webhook_deliveries.case_identifier, ''), EXCLUDED.case_identifier),
+            customer_identifier = COALESCE(NULLIF(complyadvantage_webhook_deliveries.customer_identifier, ''), EXCLUDED.customer_identifier),
+            trace_id = COALESCE(NULLIF(complyadvantage_webhook_deliveries.trace_id, ''), EXCLUDED.trace_id),
+            payload_json = COALESCE(NULLIF(complyadvantage_webhook_deliveries.payload_json, ''), EXCLUDED.payload_json),
+            alert_identifiers_json = COALESCE(NULLIF(complyadvantage_webhook_deliveries.alert_identifiers_json, ''), EXCLUDED.alert_identifiers_json)
+        """,
+        (
+            webhook_id,
+            webhook_type,
+            case_identifier,
+            customer_identifier,
+            trace_id,
+            payload_json,
+            alert_identifiers_json,
+        ),
+    )
+    _commit(db)
+
+
+def _envelope_payload(envelope):
+    if hasattr(envelope, "model_dump"):
+        return envelope.model_dump(mode="json")
+    return dict(envelope or {})
 
 
 def _json(value):

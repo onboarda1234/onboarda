@@ -6,7 +6,12 @@ import pytest
 
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseAlertListUpdatedWebhook
-from screening_complyadvantage.webhook_storage import process_complyadvantage_webhook
+from screening_complyadvantage.webhook_storage import (
+    process_complyadvantage_webhook,
+    reconcile_complyadvantage_webhook_deliveries,
+    record_complyadvantage_webhook_receipt,
+    stable_webhook_id,
+)
 
 
 class NoCloseDB:
@@ -89,6 +94,10 @@ def _db():
             processing_result TEXT,
             failure_reason TEXT,
             trace_id TEXT,
+            payload_json TEXT,
+            alert_identifiers_json TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            next_retry_at TEXT,
             processed_at TEXT
         );
         CREATE TABLE monitoring_alert_evidence (
@@ -432,3 +441,119 @@ async def test_missing_article_link_stores_honest_limitation(monkeypatch):
     assert evidence["source_url"] is None
     assert evidence["source_url_available"] == 0
     assert "not available from ComplyAdvantage payload" in evidence["source_url_unavailable_reason"]
+
+
+@pytest.mark.asyncio
+async def test_pre_ack_receipt_is_claimed_and_processed_idempotently(monkeypatch):
+    conn = _db()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+    envelope = _envelope()
+    payload = envelope.model_dump(mode="json")
+
+    record_complyadvantage_webhook_receipt(
+        envelope,
+        webhook_id="wh-pre-ack",
+        trace_id="trace-pre-ack",
+        payload=payload,
+        db_factory=lambda: NoCloseDB(conn),
+    )
+
+    before = conn.execute(
+        "SELECT processing_status, payload_json, alert_identifiers_json FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
+        ("wh-pre-ack",),
+    ).fetchone()
+    assert before["processing_status"] == "received"
+    assert "alert-1" in before["alert_identifiers_json"]
+    assert "webhook-signature" not in before["payload_json"]
+
+    result = await process_complyadvantage_webhook(
+        envelope,
+        webhook_id="wh-pre-ack",
+        db_factory=lambda: NoCloseDB(conn),
+        client_factory=lambda: object(),
+        fetch_normalized=lambda client, envelope, context: _normalized("hash-pre-ack"),
+    )
+
+    assert result["status"] == "processed"
+    delivery = conn.execute(
+        "SELECT processing_status, processing_result, duplicate_count FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
+        ("wh-pre-ack",),
+    ).fetchone()
+    assert delivery["processing_status"] == "processed"
+    assert delivery["processing_result"] == "success"
+    assert delivery["duplicate_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_detail_fetch_failure_marks_retry_pending_for_reconciliation(monkeypatch):
+    conn = _db()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+    envelope = _envelope()
+    record_complyadvantage_webhook_receipt(
+        envelope,
+        webhook_id="wh-fetch-fails",
+        trace_id="trace-fetch-fails",
+        payload=envelope.model_dump(mode="json"),
+        db_factory=lambda: NoCloseDB(conn),
+    )
+
+    with pytest.raises(RuntimeError):
+        await process_complyadvantage_webhook(
+            envelope,
+            webhook_id="wh-fetch-fails",
+            db_factory=lambda: NoCloseDB(conn),
+            client_factory=lambda: object(),
+            fetch_normalized=lambda client, envelope, context: (_ for _ in ()).throw(RuntimeError("provider timeout")),
+        )
+
+    delivery = conn.execute(
+        "SELECT processing_status, processing_result, failure_reason, next_retry_at FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
+        ("wh-fetch-fails",),
+    ).fetchone()
+    assert delivery["processing_status"] == "retry_pending"
+    assert delivery["processing_result"] == "exception"
+    assert delivery["failure_reason"] == "RuntimeError"
+    assert delivery["next_retry_at"]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_recovers_retry_pending_without_duplicate_rows(monkeypatch):
+    conn = _db()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+    envelope = _envelope()
+    record_complyadvantage_webhook_receipt(
+        envelope,
+        webhook_id="wh-reconcile",
+        trace_id="trace-reconcile",
+        payload=envelope.model_dump(mode="json"),
+        db_factory=lambda: NoCloseDB(conn),
+    )
+    conn.execute(
+        "UPDATE complyadvantage_webhook_deliveries SET processing_status = 'retry_pending', processing_result = 'detail_fetch_failed' WHERE webhook_id = ?",
+        ("wh-reconcile",),
+    )
+    conn.commit()
+
+    result = await reconcile_complyadvantage_webhook_deliveries(
+        db_factory=lambda: NoCloseDB(conn),
+        client_factory=lambda: object(),
+        fetch_normalized=lambda client, envelope, context: _normalized("hash-reconcile"),
+    )
+
+    assert result["processed"] == 1
+    assert result["results"][0]["status"] == "processed"
+    assert conn.execute("SELECT COUNT(*) FROM screening_reports_normalized").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM monitoring_alerts").fetchone()[0] == 1
+    delivery = conn.execute(
+        "SELECT processing_status, processing_result, retry_count FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",
+        ("wh-reconcile",),
+    ).fetchone()
+    assert delivery["processing_status"] == "processed"
+    assert delivery["processing_result"] == "success"
+    assert delivery["retry_count"] == 1
+
+
+def test_stable_legacy_webhook_id_is_deterministic():
+    payload = _envelope().model_dump(mode="json")
+    assert stable_webhook_id(payload) == stable_webhook_id(dict(payload))
+    assert stable_webhook_id(payload).startswith("legacy:case_alert_list_updated:case-1:")
