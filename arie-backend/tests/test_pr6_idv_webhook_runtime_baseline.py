@@ -172,3 +172,29 @@ def test_verification_worker_smoke_binds_document_is_current_as_boolean():
         if "INSERT INTO documents" in sql
     )
     assert document_insert[8] is True
+
+
+def test_webhook_renorm_prescreening_loader_accepts_postgres_jsonb_dict():
+    from screening_storage import _load_prescreening_data
+
+    payload = {
+        "screening_report": {
+            "overall_flags": [],
+            "sumsub_webhook": {"reviewResult": {"reviewAnswer": "GREEN"}},
+        }
+    }
+
+    assert _load_prescreening_data(payload) == payload
+
+
+def test_webhook_renorm_prescreening_loader_accepts_sqlite_json_text():
+    from screening_storage import _load_prescreening_data
+
+    payload = {
+        "screening_report": {
+            "overall_flags": [],
+            "sumsub_webhook": {"reviewResult": {"reviewAnswer": "GREEN"}},
+        }
+    }
+
+    assert _load_prescreening_data(json.dumps(payload)) == payload
