@@ -1,0 +1,11 @@
+{
+  "body": {
+    "build_time": "2026-06-14T07:50:06Z",
+    "environment": "staging",
+    "git_sha": "4e2262dc14db86a6e3caacb617182fbe8579ae5c",
+    "git_sha_short": "4e2262d",
+    "image_tag": "4e2262dc14db86a6e3caacb617182fbe8579ae5c",
+    "service": "regmind-backend"
+  },
+  "status": 200
+}

@@ -5,10 +5,20 @@
 - `git diff --check` - pass
 - `python3 -m py_compile arie-backend/memo_handler.py arie-backend/pdf_generator.py arie-backend/tests/test_pr5b_memo_concision.py` - pass
 
+Corrective PR-5B browser-defect patch:
+
+- `git diff --check` - pass
+- `python3 -m py_compile arie-backend/memo_handler.py arie-backend/tests/test_pr5b_memo_concision.py` - pass
+
 ## Focused PR-5B Tests
 
 - `pytest -q arie-backend/tests/test_pr5b_memo_concision.py` - 7 passed
 - `pytest -q arie-backend/tests/test_enhanced_requirement_memo.py arie-backend/tests/test_pr5b_memo_concision.py arie-backend/tests/test_pr5_memo_governance.py` - 19 passed
+
+Corrective PR-5B browser-defect patch:
+
+- `pytest -q arie-backend/tests/test_pr5b_memo_concision.py arie-backend/tests/test_pr5_memo_governance.py` - 17 passed
+- `pytest -q arie-backend/tests/test_backoffice_review_audit.py::TestDayThreeMemoQualityTruthfulness arie-backend/tests/test_risk_display_integrity.py` - 27 passed
 
 Coverage:
 
@@ -22,6 +32,10 @@ Coverage:
 - Raw officer-note source evidence remains traceable in `appendix_sections`.
 - Existing sanitized `enhanced_review_edd` memo section remains present.
 - PDF renderer produces a decision-paper view plus appendix evidence index via fake WeasyPrint adapter.
+- LOW canonical risk score does not render as HIGH risk in memo text.
+- Canonical memo blockers are exposed for the back-office decision snapshot.
+- `pass_with_fixes` and approval-blocked validation states do not render clean
+  `No issues found` wording.
 
 ## Memo Governance / PR-5 Regression
 
@@ -53,6 +67,10 @@ The deselected tests were covered by the subsequent full local backend suite.
 ## Full Local Backend Suite
 
 - `pytest arie-backend/tests/ -q --tb=short --ignore=arie-backend/tests/test_pdf_generator.py` - 5295 passed, 17 skipped in 281.59s
+
+Corrective PR-5B browser-defect patch:
+
+- `pytest arie-backend/tests/ -q --tb=short --ignore=arie-backend/tests/test_pdf_generator.py` - 5298 passed, 17 skipped in 190.80s
 
 Notes:
 

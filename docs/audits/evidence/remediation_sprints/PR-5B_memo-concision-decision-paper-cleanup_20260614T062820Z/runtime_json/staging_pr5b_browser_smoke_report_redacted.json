@@ -1,0 +1,85 @@
+{
+  "script": "pr5b_focused_staging_browser_smoke",
+  "baseUrl": "https://staging.regmind.co",
+  "startedAt": "2026-06-14T08:29:58.856Z",
+  "credentialHandling": "credentials supplied by environment variables only; omitted from report",
+  "tokenInjectionUsed": false,
+  "authBypassUsed": false,
+  "applicationRefRedacted": "ARF-REDACTED-7f861903",
+  "screenshots": [
+    "/Users/Aisha/onboarda-pr5b-memo-concision-decision-paper-cleanup/docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/screenshots/pr5b_backoffice_memo_summary.png",
+    "/Users/Aisha/onboarda-pr5b-memo-concision-decision-paper-cleanup/docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/screenshots/pr5b_backoffice_memo_full_details_expanded.png",
+    "/Users/Aisha/onboarda-pr5b-memo-concision-decision-paper-cleanup/docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/screenshots/pr5b_client_portal_my_apps.png",
+    "/Users/Aisha/onboarda-pr5b-memo-concision-decision-paper-cleanup/docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/screenshots/pr5b_client_portal_notifications.png"
+  ],
+  "checks": {
+    "backofficeLogin": true,
+    "memoGovernanceVisible": true,
+    "memoStatusPanelHasDecisionFields": true,
+    "memoNoApproveWithConditions": true,
+    "memoShowsNotReadyOrBlocked": true,
+    "memoShowsScreeningBlocker": true,
+    "memoShowsDocumentBlocker": true,
+    "memoNoRawOfficerNoteArtifact": true,
+    "memoNoAgentPathwayNoise": true,
+    "memoFullDetailsAccessible": true,
+    "memoFullDetailsCollapsedByDefault": true,
+    "memoAppendixEvidenceAvailable": true,
+    "clientLogin": true,
+    "clientPortalOwnAppsLoads": true,
+    "clientNotificationsLoads": true,
+    "clientPortalNoInternalMemoLeak": true,
+    "noTokenInjection": true,
+    "noAuthBypass": true,
+    "screenshotsCaptured": true,
+    "noBlockingConsoleErrors": false,
+    "noPageErrors": true,
+    "noFailedRequests": true,
+    "noUnexpectedBadResponses": true
+  },
+  "observations": {
+    "backofficeFill": {
+      "attempt": 2,
+      "emailRetained": true,
+      "credentialLengthRedacted": "[REDACTED]"
+    },
+    "backofficeLoginStatus": 200,
+    "backofficeMemo": {
+      "summaryTextSample": "MEMO STATUS\nNEEDS APPROVAL REASON\nAPPROVAL READINESS\nBlocked\nPRIMARY BLOCKER\nApproval reason is required before memo approval.\nNEXT ACTION\nEnter approval reason",
+      "memoTextLength": 1995,
+      "fullDetailsExists": true,
+      "fullDetailsOpenBefore": false
+    },
+    "fullDetailsExpandedTextSample": "Full Memo / Diagnostics\n1\nDECISION SUMMARY\nPR4 Monitoring Automation Smoke 7f861903 Ltd (ARF-PR4-AUTO-7f861903) is assessed as HIGH risk with score 25/100. Recommendation: ESCALATE TO EDD. Screening position: Sanctions screening status: PENDING \u2014 required screening has not yet returned a terminal provider result. Not recommended for approval while screening remains unresolved. Approval readiness: NOT READY. Primary blockers: Screening is not terminal / not approval-ready; screening:not_terminal; 1 document(s) outstanding: passport. Required next action: Complete live terminal screening and regenerate/revalidate this memo. Model confidence: 60%.\n2\nCASE FACTS\nEntity: PR4 Monitoring Automation Smoke 7f861903 Ltd. BRN: not provided. Jurisdiction: Mauritius. Entity type: SME. Sector: Technology. Business activity: Information not provided. Source of funds: Information not provided. Expected volume: Information not provided.\n3\nOWNERSHIP & CONTROL\nStructure:\nSIMPLE\nControl:\nEffective control ",
+    "clientFill": {
+      "attempt": 1,
+      "emailRetained": true,
+      "credentialLengthRedacted": "[REDACTED]"
+    },
+    "clientLoginStatus": 200,
+    "clientPortalVisibleTextSample": "Welcome back, [REDACTED_CLIENT_EMAIL] \ud83d\udc4b\n\nHere's your overview.\n\nTOTAL APPLICATIONS\n166\nSince Jan 2026\nIN PROGRESS\n21\nAwaiting review or docs\nAPPROVED\n5\nAccount active\n\u25b6\ufe0f\nResume Application\nQA Draft High Volume Only 202606041136 Ltd \u00b7 Awaiting action\nRef: ARF-2026-900283\n\u2192\n\u2795\nStart New Application\nOpen an account for a new company. Our AI agent will pre-fill the form from global registries.\n\u2192\nPeriodic Review Tasks\nShort attestations only\nPeriodic Review Attestation\nPRS Final Demo 20260608054405 Ltd \u00b7 PR-48\nNot started\nDUE DATE\nNot set\nWHAT YOU NEED TO DO\nAnswer 8 short questions\nThis step is a short review attestation only. Supporting documents may be requested separately if needed.\nStart review\nPeriodic Review Attestation\nCodex PR293 Final Low Clear 20260512055759 Ltd \u00b7 PR-21\nSubmitted\nDUE DATE\n5/12/2029\nWHAT YOU NEED TO DO\nAnswer 8 short questions\nThis step is a short review attestation only. Supporting documents may be requested separately if needed.\nView submitted attestation\nPeriodic Review Attestation\nCodex PR293 Low Clear 20260512054822 Ltd \u00b7 PR-45\nSubmitted\nDUE DATE\n5/12/2029\nWHAT YOU NEED TO DO\nAnswer 8 short questions\nThis step is a short review attestation only. Supporting doc",
+    "clientPortalForbiddenMatches": []
+  },
+  "consoleErrors": [
+    {
+      "surface": "backoffice",
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    }
+  ],
+  "consoleWarnings": [],
+  "pageErrors": [],
+  "failedRequests": [],
+  "badResponses": [],
+  "knownRoleDeniedResponses": [],
+  "unexpectedBadResponses": [],
+  "blockingConsoleErrors": [
+    {
+      "surface": "backoffice",
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    }
+  ],
+  "finishedAt": "2026-06-14T08:30:14.675Z",
+  "allPass": false
+}

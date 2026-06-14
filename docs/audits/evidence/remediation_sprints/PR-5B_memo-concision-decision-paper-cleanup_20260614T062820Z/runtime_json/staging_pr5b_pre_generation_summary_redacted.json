@@ -1,0 +1,11 @@
+{
+  "app_status": "approved",
+  "doc_count": 1,
+  "memo_count": 0,
+  "pending_docs": 1,
+  "ref_hash": "98378c72d5c7",
+  "ref_tail": "7f861903",
+  "risk_level": "LOW",
+  "risk_score": 25.0,
+  "status": 200
+}

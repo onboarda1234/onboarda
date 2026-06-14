@@ -500,6 +500,7 @@ def _apply_decision_paper_cleanup(memo, context):
     exp_vol = context.get("exp_vol") or "Information not provided"
     risk_display = context.get("risk_display") or {}
     aggregated_risk = context.get("aggregated_risk") or metadata.get("aggregated_risk") or metadata.get("risk_rating") or "NOT_RATED"
+    display_risk_level = risk_display.get("level") if risk_display.get("available") else "NOT_RATED"
     risk_score = risk_display.get("score")
     if risk_score is None:
         risk_score = metadata.get("display_risk_score", metadata.get("risk_score", "not recorded"))
@@ -639,9 +640,14 @@ def _apply_decision_paper_cleanup(memo, context):
         risk_statement = "No canonical risk rating or score is recorded; memo is not yet risk-rated"
     else:
         risk_statement = (
-            f"{aggregated_risk} risk"
+            f"{display_risk_level} risk"
             + (f" with score {risk_score}/100" if risk_score not in (None, "not recorded") else "")
         )
+    routing_risk_statement = (
+        ""
+        if aggregated_risk in (None, "", "NOT_RATED", display_risk_level)
+        else f" Routing diagnostics indicate {aggregated_risk} handling for escalation/EDD controls; this is separate from the canonical risk rating."
+    )
     if recommendation == "ESCALATE_TO_EDD":
         recommendation_phrase = "Recommendation: ESCALATE TO EDD"
     elif recommendation == "REJECT":
@@ -743,7 +749,9 @@ def _apply_decision_paper_cleanup(memo, context):
     sections["risk_assessment"] = {
         "title": "Key Risk Position",
         "content": (
-            f"Composite position: {aggregated_risk}; recorded score: {risk_score}. "
+            f"Canonical risk rating: {display_risk_level}; recorded score: {risk_score}. "
+            + routing_risk_statement
+            + " "
             "Key risk-increasing factors: " + _memo_format_items(risk_increasing) + ". "
             "Key risk-reducing factors: " + _memo_format_items(risk_decreasing) + "."
         ),

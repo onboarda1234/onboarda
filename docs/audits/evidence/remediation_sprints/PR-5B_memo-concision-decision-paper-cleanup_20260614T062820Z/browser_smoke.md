@@ -1,12 +1,27 @@
 # Browser Smoke
 
-Branch-stage browser smoke was not run.
+Branch-stage browser smoke for the original PR-5B branch was not run because it
+did not modify frontend files.
 
-Reason:
+Post-merge staging browser smoke then found a real defect in the back-office
+memo view. Corrective branch browser smoke was run against the real
+`arie-backoffice.html` renderer over local HTTP with a generated PR-5B memo
+fixture.
 
-- PR-5B does not modify frontend files.
-- The back-office memo UI already renders the memo decision snapshot and collapses full memo/diagnostics.
-- The backend output shape remains compatible with the existing `sections` keys consumed by the UI.
+Corrective branch result:
+
+- `runtime_json/pr5b_corrective_local_browser_smoke.json` - pass
+- `screenshots/pr5b_corrective_local_memo_panel.png`
+
+Checks passed:
+
+- Memo governance summary uses canonical blockers.
+- LOW canonical risk score renders as LOW in memo text.
+- `HIGH risk with score 22/100` is absent.
+- Decision snapshot no longer says `Open blockers: None` when blockers exist.
+- Validation panel does not show `No issues found` for non-clean/blocked state.
+- Full Memo / Diagnostics remains accessible and collapsed by default.
+- No console errors or failed requests in the local HTTP browser harness.
 
 Required post-merge staging browser smoke remains pending:
 

@@ -1,0 +1,81 @@
+{
+  "current_memo_id": 357,
+  "current_memo_version": 1,
+  "memo_count": 1,
+  "status": 200,
+  "summary": {
+    "ai_explainability_word_count": 106,
+    "appendix_sections": [
+      "executive_summary",
+      "client_overview",
+      "ownership_and_control",
+      "risk_assessment",
+      "screening_results",
+      "document_verification",
+      "enhanced_review_edd",
+      "ai_explainability",
+      "red_flags_and_mitigants",
+      "compliance_decision",
+      "ongoing_monitoring",
+      "audit_and_governance"
+    ],
+    "appendix_word_count_estimate": 1683,
+    "approval_readiness": "NOT READY",
+    "decision_label": "ESCALATE TO EDD",
+    "default_contains_future_agent_pathway": false,
+    "default_sections": [
+      "executive_summary",
+      "client_overview",
+      "ownership_and_control",
+      "risk_assessment",
+      "screening_results",
+      "document_verification",
+      "enhanced_review_edd",
+      "ai_explainability",
+      "red_flags_and_mitigants",
+      "compliance_decision",
+      "ongoing_monitoring",
+      "audit_and_governance"
+    ],
+    "default_word_count_estimate": 776,
+    "has_content_hash": false,
+    "has_generated_timestamp": true,
+    "memo_output_profile": {
+      "approval_readiness": "NOT READY",
+      "authoritative_recommendation": "ESCALATE_TO_EDD",
+      "default_sections_word_count": 761,
+      "default_view": "concise_decision_paper",
+      "original_sections_preserved_as": "appendix_sections",
+      "original_sections_word_count": 1672,
+      "primary_blockers": [
+        "Screening is not terminal / not approval-ready",
+        "screening:not_terminal",
+        "1 document(s) outstanding: passport"
+      ],
+      "profile_version": "pr5b_decision_paper_v1",
+      "recommendation_label": "ESCALATE TO EDD",
+      "required_next_action": "Complete live terminal screening and regenerate/revalidate this memo",
+      "screening_pending_is_blocker_not_mitigant": true
+    },
+    "metadata_recommendation": "ESCALATE_TO_EDD",
+    "pending_screening_in_mitigants": 0,
+    "phrase_counts": {
+      "approval_blocked": 2,
+      "approve_with_conditions": 0,
+      "provider_not_terminal": 0,
+      "screening_not_terminal": 4,
+      "screening_resolution_required": 0
+    },
+    "primary_blockers": [
+      "Screening is not terminal / not approval-ready",
+      "screening:not_terminal",
+      "1 document(s) outstanding: passport"
+    ],
+    "raw_test_artifact_in_default": false,
+    "ref_hash": "98378c72d5c7",
+    "ref_tail": "7f861903",
+    "required_next_action": "Complete live terminal screening and regenerate/revalidate this memo",
+    "supervisor_status": "CONSISTENT_WITH_WARNINGS",
+    "validation_status": "pass_with_fixes"
+  }
+}

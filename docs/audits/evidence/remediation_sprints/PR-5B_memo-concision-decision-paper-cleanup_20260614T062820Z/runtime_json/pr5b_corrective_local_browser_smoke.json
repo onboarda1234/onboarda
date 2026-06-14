@@ -1,0 +1,22 @@
+{
+  "checks": {
+    "summaryShowsCanonicalBlocker": true,
+    "memoShowsLowRisk": true,
+    "memoDoesNotShowHighRiskForLowScore": true,
+    "openBlockersNotNone": true,
+    "validationDoesNotSayNoIssues": true,
+    "validationShowsNonCleanState": true,
+    "fullDetailsAccessible": true,
+    "fullDetailsCollapsedByDefault": true,
+    "noConsoleErrors": true,
+    "noFailedRequests": true
+  },
+  "consoleErrors": [],
+  "failedRequests": [],
+  "screenshotPath": "/Users/Aisha/onboarda-pr5b-memo-concision-decision-paper-cleanup/docs/audits/evidence/remediation_sprints/PR-5B_memo-concision-decision-paper-cleanup_20260614T062820Z/screenshots/pr5b_corrective_local_memo_panel.png",
+  "samples": {
+    "summaryText": "MEMO STATUS\nBLOCKED\nAPPROVAL READINESS\nBlocked\nPRIMARY BLOCKER\nScreening is not terminal / not approval-ready\nNEXT ACTION\nResolve listed memo blockers and regenerate/revalidate if needed",
+    "decisionText": "DECISION SUMMARY\nPR5B Simple Review Ltd (ARF-PR5B-001) is assessed as LOW risk with score 22/100. Recommendation: REVIEW - SCREENING RESOLUTION REQUIRED. Screening position: Sanctions screening status: PENDING — required screening has not yet returned a terminal provider result. Not recommended for approval while screening remains unresolved. Approval readiness: NOT READY. Primary blockers: Screening is not terminal / not approval-ready; company_screening:provider_pending_not_terminal; 1 document(s) outstanding: Bank Reference. Required next action: Complete live terminal screening and regenerate/revalidate this memo. Model confidence: 60%.\nRecommended decision\nREVIEW\nRisk\nLOW\nKey risks: Canonical risk rating: LOW; recorded score: 22. Key risk-increasing factors: Documentation gap: 1 outstanding item(s); Screening dependency remains unresolved; Limited trading history reduces forward-loo",
+    "validationText": "6.4\n6.4 / 10 — Needs fixes before approval\nMemo v1 | Validated: 2026-06-14 14:44:54\nPASS WITH FIXES\nISSUES FOUND (10)\nℹ️\ndecision alignment: LOW-risk memo recommends REVIEW with a disclosed non-risk-rating control reason. This is not a contradiction.\n💡 Fix: No action required — ensure the review reason remains visible in the memo.\n🔴\nscreening: Screening truth remains approval-blocking (state=pending, disposition=unresolved). The memo cannot receive a clean validation pass until screening is formally resolved.\n💡 Fix: Complete a valid screening disposition or EDD escalation and regenerate the memo before approval reliance.\n🟡\nscreening: Screening matches found but no false positive analysis included.\n💡 Fix: Add false positive determination for each screening match.\nℹ️\nscreening: Screening provider not explicitly named.\n💡 Fix: Reference the screening data source for audit defensibility"
+  }
+}
