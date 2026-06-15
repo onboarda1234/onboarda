@@ -1,0 +1,35 @@
+{
+  "url": "http://127.0.0.1:8765/arie-backoffice.html#screening",
+  "checks": {
+    "searchPlaceholder": "Search subject, company, ARF, or Mesh reference",
+    "searchWidth": 363,
+    "applicationReferenceFilterVisible": false,
+    "typeOptions": [
+      {
+        "value": "",
+        "text": "All"
+      },
+      {
+        "value": "entity",
+        "text": "Entity"
+      },
+      {
+        "value": "director",
+        "text": "Director"
+      },
+      {
+        "value": "ubo",
+        "text": "UBO"
+      },
+      {
+        "value": "intermediary",
+        "text": "Intermediary"
+      }
+    ],
+    "hasLegacyCompanySanctionsWording": false,
+    "hasEntityAmlWording": true,
+    "hasQueueRows": true,
+    "activeTitle": "Screening Queue"
+  },
+  "consoleMessages": []
+}

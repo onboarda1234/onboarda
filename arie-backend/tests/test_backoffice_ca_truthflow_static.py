@@ -438,6 +438,44 @@ def test_backoffice_screening_queue_source_links_are_conditional():
     assert "raw JSON" not in card_region.lower()
 
 
+def test_backoffice_screening_queue_filter_bar_is_universal_and_not_redundant():
+    html = BACKOFFICE_HTML.read_text()
+
+    filter_region = html[html.index("<!-- ═══════════════ SCREENING QUEUE"):html.index("screening-provider-status-panel")]
+    read_filters_region = _function_region(html, "readScreeningQueueFiltersFromDom", "screeningQueueQueryParams")
+    directors_region = _function_region(html, "openDirectorsUboScreening", "openDirectorsUboDocuments")
+
+    assert "Search subject, company, ARF, or Mesh reference" in filter_region
+    assert "screening-filter-application-ref" not in filter_region
+    assert "Application reference" not in filter_region
+    assert "application_ref: val('screening-filter-application-ref')" not in read_filters_region
+    assert "document.getElementById('screening-queue-search')" in directors_region
+
+
+def test_backoffice_screening_queue_hides_individual_filter_until_backend_reports_other_people():
+    html = BACKOFFICE_HTML.read_text()
+
+    filter_region = html[html.index("<!-- ═══════════════ SCREENING QUEUE"):html.index("screening-provider-status-panel")]
+    type_region = _function_region(html, "updateScreeningQueueTypeFilterOptions", "readScreeningQueueFiltersFromDom")
+
+    assert '<option value="individual">Individual</option>' not in filter_region
+    assert "Other person" in type_region
+    assert "available_type_filters" in type_region
+    assert "item.value === 'individual'" in type_region
+
+
+def test_backoffice_screening_queue_lazy_loads_full_evidence_before_detail_view():
+    html = BACKOFFICE_HTML.read_text()
+
+    lazy_region = _function_region(html, "screeningQueueRowHasFullEvidence", "screeningDispositionLabel")
+
+    assert "function ensureScreeningQueueRowEvidence" in lazy_region
+    assert "include_evidence=1" in lazy_region
+    assert "screeningQueueRowsMatch(candidate, row)" in lazy_region
+    assert "SCREENING_REVIEW_ROWS[rowKey] = Object.assign({}, row, fullRow)" in lazy_region
+    assert "row = await ensureScreeningQueueRowEvidence(rowKey)" in lazy_region
+
+
 def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     html = BACKOFFICE_HTML.read_text()
 

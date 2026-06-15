@@ -109,9 +109,9 @@ def test_complyadvantage_is_not_labelled_identity_verification():
     assert _scan_for(prohibited) == []
 
 
-def test_screening_queue_filter_is_result_source_not_runtime_provider_selector():
+def test_screening_queue_filter_is_source_not_runtime_provider_selector():
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
-    assert "Result Source Filter" in html
+    assert ">Source" in html
     assert "Provider/source" not in html
     assert "ComplyAdvantage Mesh screening source" in html
     assert "Sumsub IDV/KYC source" in html

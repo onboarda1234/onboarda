@@ -18937,6 +18937,20 @@ def _screening_queue_filter_value(value):
     return str(value or "").strip().lower()
 
 
+def _screening_queue_extend_search_values(parts, value):
+    if value in (None, ""):
+        return
+    if isinstance(value, dict):
+        for nested in value.values():
+            _screening_queue_extend_search_values(parts, nested)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for nested in value:
+            _screening_queue_extend_search_values(parts, nested)
+        return
+    parts.append(value)
+
+
 def _screening_queue_search_blob(row):
     parts = [
         row.get("subject_name"),
@@ -18976,6 +18990,12 @@ def _screening_queue_search_blob(row):
         ))
         parts.extend(evidence_summary.get("categories") or [])
         parts.extend(evidence_summary.get("providers") or [])
+        _screening_queue_extend_search_values(parts, evidence_summary.get("provider_case_ids"))
+        _screening_queue_extend_search_values(parts, evidence_summary.get("provider_alert_ids"))
+        _screening_queue_extend_search_values(parts, evidence_summary.get("provider_risk_ids"))
+        _screening_queue_extend_search_values(parts, evidence_summary.get("provider_profile_ids"))
+        _screening_queue_extend_search_values(parts, evidence_summary.get("provider_customer_ids"))
+        _screening_queue_extend_search_values(parts, evidence_summary.get("provider_workflow_ids"))
     for evidence in screening_evidence.get("items") or []:
         if isinstance(evidence, dict):
             parts.extend(evidence.get(k) for k in (
@@ -19109,16 +19129,12 @@ def _filter_screening_queue_rows(rows, filters):
     provider_filter = _screening_queue_filter_value(filters.get("provider"))
     pep_filter = _screening_queue_filter_value(filters.get("pep"))
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
+    universal_terms = [token for token in (search, app_ref_filter) if token]
 
     filtered = []
     for row in rows:
-        if search and search not in _screening_queue_search_blob(row):
-            continue
-        if (
-            app_ref_filter
-            and app_ref_filter not in _screening_queue_filter_value(row.get("application_ref"))
-            and app_ref_filter not in _screening_queue_filter_value(row.get("company_name"))
-        ):
+        blob = _screening_queue_search_blob(row)
+        if any(term not in blob for term in universal_terms):
             continue
         if status_filter and status_filter != "all" and _screening_queue_status_group(row) != status_filter:
             continue
@@ -19132,7 +19148,54 @@ def _filter_screening_queue_rows(rows, filters):
     return filtered
 
 
-def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None):
+_SCREENING_QUEUE_TYPE_FILTER_LABELS = {
+    "entity": "Entity",
+    "director": "Director",
+    "ubo": "UBO",
+    "intermediary": "Intermediary",
+    "individual": "Other person",
+}
+
+
+def _screening_queue_available_type_filters(rows):
+    available = {_screening_queue_type_group(row) for row in rows or []}
+    order = ("entity", "director", "ubo", "intermediary", "individual")
+    return [
+        {"value": key, "label": _SCREENING_QUEUE_TYPE_FILTER_LABELS[key]}
+        for key in order
+        if key in available
+    ]
+
+
+def _screening_queue_summary_row(row):
+    summary_row = dict(row or {})
+    provider_evidence = [
+        item for item in summary_row.get("provider_evidence") or []
+        if isinstance(item, dict)
+    ]
+    screening_evidence = summary_row.get("screening_evidence") or {}
+    screening_items = [
+        item for item in screening_evidence.get("items") or []
+        if isinstance(item, dict)
+    ] if isinstance(screening_evidence, dict) else []
+    summary = summary_row.get("evidence_summary") or {}
+    summary_screening_evidence = {
+        key: value
+        for key, value in (screening_evidence.items() if isinstance(screening_evidence, dict) else [])
+        if key not in ("items", "technical_details")
+    }
+    if summary and "provider_references" not in summary_screening_evidence:
+        summary_screening_evidence["provider_references"] = summary.get("provider_references") or {}
+    summary_row["screening_evidence"] = summary_screening_evidence
+    summary_row["evidence_summary"] = summary
+    summary_row["evidence_detail_available"] = bool(provider_evidence or screening_items)
+    summary_row["evidence_detail_count"] = len(screening_items)
+    summary_row["provider_evidence_count"] = len(provider_evidence)
+    summary_row.pop("provider_evidence", None)
+    return summary_row
+
+
+def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None, include_evidence=True):
     query = "SELECT * FROM applications WHERE 1=1"
     params = []
     if user["type"] == "client":
@@ -19200,7 +19263,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         company_registry_found = company_screening.get("found")
         company_facts = _screening_combined_company_facts(company_screening)
 
-        # Priority A: derive canonical company sanctions state from provider
+        # Priority A: derive canonical entity AML state from provider
         # api_status. Never coerce pending/not_configured/error/unavailable
         # into "clear".
         company_sanctions_state = derive_screening_state(company_sanctions)
@@ -19252,24 +19315,24 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 required=True,
             )
             company_provider_mode = company_screening_truth.get("provider_mode")
-            # Surface explicit non-terminal sanctions state so officers cannot
+            # Surface explicit non-terminal entity AML state so officers cannot
             # mistake "we did not get a real answer" for "clear".
             if company_provider_mode == "simulated_fallback":
-                company_context.append("Company sanctions screening simulated fallback")
+                company_context.append("Entity AML screening simulated fallback")
             elif company_provider_mode == "sandbox_provider":
-                company_context.append("Company sanctions screening sandbox provider")
+                company_context.append("Entity AML screening sandbox provider")
             elif company_sanctions_state == _SCR_NOT_CONFIGURED:
-                company_context.append("Company sanctions screening not configured")
+                company_context.append("Entity AML screening not configured")
             elif company_sanctions_state == _SCR_FAILED:
-                company_context.append("Company sanctions screening unavailable")
+                company_context.append("Entity AML screening unavailable")
             elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
-                company_context.append("Company sanctions screening pending")
+                company_context.append("Entity AML screening pending")
         else:
             company_provider_record = {}
             company_screening_truth = {}
             company_provider_mode = None
 
-        # Fail-closed: any non-terminal company sanctions state requires
+        # Fail-closed: any non-terminal entity AML state requires
         # officer review. Previously only ``matched`` triggered review,
         # which silently passed not_configured / pending / unavailable.
         # Equivalent to "anything that is not completed_clear", expressed
@@ -19687,6 +19750,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     metrics["subject_rows"] = len(rows)
     metrics["filtered_subject_rows"] = len(filtered_rows)
     total_rows = len(filtered_rows)
+    available_type_filters = _screening_queue_available_type_filters(rows)
     if offset < 0:
         offset = 0
     if limit is None:
@@ -19695,16 +19759,22 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     else:
         page_limit = max(1, int(limit))
         paginated_rows = filtered_rows[offset:offset + page_limit]
+    response_rows = paginated_rows if include_evidence else [
+        _screening_queue_summary_row(row)
+        for row in paginated_rows
+    ]
     return {
         "metrics": metrics,
-        "rows": paginated_rows,
+        "rows": response_rows,
         "filters": filters or {},
+        "available_type_filters": available_type_filters,
+        "evidence_mode": "full" if include_evidence else "summary",
         "show_fixtures": show_fixtures,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "pagination": {
             "limit": page_limit,
             "offset": offset,
-            "returned": len(paginated_rows),
+            "returned": len(response_rows),
             "total_rows": total_rows,
             "has_next": bool(limit is not None and (offset + page_limit) < total_rows),
             "has_prev": offset > 0,
@@ -19728,6 +19798,7 @@ class ScreeningQueueHandler(BaseHandler):
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         limit = _bounded_int(self.get_argument("limit", 50), 50, min_value=1, max_value=100)
         offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
+        include_evidence = self.get_argument("include_evidence", "false").strip().lower() in {"1", "true", "yes", "full"}
         filters = {
             "search": self.get_argument("search", "").strip(),
             "status": self.get_argument("status", "").strip(),
@@ -19744,6 +19815,7 @@ class ScreeningQueueHandler(BaseHandler):
             limit=limit,
             offset=offset,
             filters=filters,
+            include_evidence=include_evidence,
         )
         db.close()
         self.success(payload)
