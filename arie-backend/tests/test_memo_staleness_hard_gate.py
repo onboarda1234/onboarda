@@ -162,6 +162,97 @@ def _insert_approved_memo(db, app_id, *, created_at=None, raw_output_hash=None, 
     db.commit()
 
 
+def _set_ca_entity_screening(db, app_id):
+    now = datetime.now(timezone.utc)
+    prescreening = {
+        "screening_report": {
+            "screening_mode": "live",
+            "screened_at": now.isoformat(),
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "total_hits": 0,
+            "adverse_media_coverage": "none",
+            "company_screening": {
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "matched": False,
+                "sanctions": {
+                    "api_status": "live",
+                    "matched": False,
+                    "source": "complyadvantage",
+                    "provider": "complyadvantage",
+                    "results": [],
+                },
+                "adverse_media": {
+                    "api_status": "live",
+                    "matched": False,
+                    "source": "complyadvantage",
+                    "provider": "complyadvantage",
+                    "results": [],
+                },
+            },
+        },
+        "screening_valid_until": (now + timedelta(days=30)).isoformat(),
+    }
+    db.execute(
+        "UPDATE applications SET prescreening_data = ?, inputs_updated_at = updated_at WHERE id = ?",
+        (json.dumps(prescreening), app_id),
+    )
+    db.commit()
+
+
+def _insert_ca_entity_adverse_media_evidence(db, app_id):
+    suffix = app_id.replace("-", "_")
+    source_reference = {
+        "provider": "complyadvantage",
+        "case_identifier": f"case-ca4b-{suffix}",
+        "alert_identifier": f"alert-ca4b-{suffix}",
+        "risk_identifier": f"risk-ca4b-{suffix}",
+        "subject_scope": "entity",
+    }
+    db.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (application_id, client_name, alert_type, severity, detected_by,
+             summary, source_reference, status, provider, case_identifier, discovered_via)
+        VALUES (?, 'Memo Stale Ltd', 'media', 'High', 'complyadvantage',
+                'ComplyAdvantage Mesh adverse-media match', ?, 'open',
+                'complyadvantage', ?, 'manual')
+        """,
+        (app_id, json.dumps(source_reference), f"case-ca4b-{suffix}"),
+    )
+    alert_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    db.execute(
+        """
+        INSERT INTO monitoring_alert_evidence
+            (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+             risk_identifier, profile_identifier, evidence_type, matched_subject_name,
+             relationship_to_client, match_category, risk_indicator, match_confidence,
+             source_title, source_name, source_url, source_url_available, publication_date,
+             snippet, evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+        VALUES (?, ?, 'complyadvantage', ?, ?,
+                ?, ?, 'adverse_media', 'Memo Stale Ltd',
+                'entity', 'Adverse Media', 'Adverse Media', '0.95',
+                'Provider adverse-media article', 'Provider News',
+                'https://provider.example.test/article', 1, '2026-06-01',
+                'Provider adverse-media snippet for memo parity.',
+                ?, ?, 'fetched', 'hash-ca4b-evidence', ?)
+        """,
+        (
+            alert_id,
+            app_id,
+            f"case-ca4b-{suffix}",
+            f"alert-ca4b-{suffix}",
+            f"risk-ca4b-{suffix}",
+            f"profile-ca4b-{suffix}",
+            json.dumps({"title": "Provider adverse-media article", "source_name": "Provider News"}),
+            json.dumps({"risk_identifier": f"risk-ca4b-{suffix}", "profile_identifier": f"profile-ca4b-{suffix}"}),
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ),
+    )
+    db.commit()
+
+
 def _app(db, app_id):
     return dict(db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())
 
@@ -343,3 +434,83 @@ def test_risk_snapshot_mismatch_marks_memo_stale_and_blocks_approval(db):
     ).fetchone()
     assert audit is not None
     assert "memo_risk_snapshot_mismatch" in audit["detail"]
+
+
+def test_ca_adverse_media_current_truth_marks_old_no_media_memo_stale(db):
+    from server import _attach_memo_screening_current_snapshot, _ensure_memo_fresh_or_mark_stale, _memo_staleness_view
+
+    app_id, ref = _insert_gate_ready_app(db)
+    _set_ca_entity_screening(db, app_id)
+    _insert_ca_entity_adverse_media_evidence(db, app_id)
+    _insert_approved_memo(
+        db,
+        app_id,
+        memo_metadata={
+            "adverse_media_state_summary": {
+                "coverage": "none",
+                "has_hit": False,
+                "terminal": False,
+            },
+            "canonical_screening_current_summary": {
+                "current_risk_count": 0,
+                "current_unresolved_risk_count": 0,
+                "has_adverse_media_hit": False,
+                "adverse_media_coverage": "none",
+            },
+        },
+    )
+
+    app = _attach_memo_screening_current_snapshot(db, _app(db, app_id))
+    snapshot = app["memo_screening_current_snapshot"]
+    assert snapshot["has_adverse_media_hit"] is True
+    assert snapshot["current_risk_count"] >= 1
+    assert snapshot["current_unresolved_risk_count"] == snapshot["current_risk_count"]
+
+    stale_view = _memo_staleness_view(app, _latest_memo(db, app_id))
+    assert stale_view["is_stale"] is True
+    assert stale_view["trigger"] == "memo_screening_adverse_media_truth_mismatch"
+    assert "ComplyAdvantage Mesh evidence" in stale_view["reason"]
+
+    persisted = _ensure_memo_fresh_or_mark_stale(
+        db,
+        _app(db, app_id),
+        _latest_memo(db, app_id),
+        actor={"sub": "admin001", "name": "Admin", "role": "admin"},
+        ip_address="127.0.0.1",
+        context="memo_approval",
+    )
+    db.commit()
+
+    assert persisted["is_stale"] is True
+    memo_after = _latest_memo(db, app_id)
+    assert memo_after["is_stale"] in (1, True)
+    assert memo_after["stale_trigger"] == "memo_screening_adverse_media_truth_mismatch"
+    audit = db.execute(
+        "SELECT before_state, after_state FROM audit_log WHERE target = ? AND action = 'Memo Marked Stale' ORDER BY id DESC LIMIT 1",
+        (ref,),
+    ).fetchone()
+    assert audit is not None
+    assert "memo_adverse_media_state_summary" in audit["before_state"]
+    assert "current_canonical_screening_summary" in audit["after_state"]
+
+
+def test_regenerated_memo_consumes_db_backed_ca_adverse_media_snapshot(db):
+    from memo_handler import build_compliance_memo
+    from server import _attach_memo_screening_current_snapshot
+
+    app_id, _ = _insert_gate_ready_app(db)
+    _set_ca_entity_screening(db, app_id)
+    _insert_ca_entity_adverse_media_evidence(db, app_id)
+
+    app = _attach_memo_screening_current_snapshot(db, _app(db, app_id))
+    memo, _, _, _ = build_compliance_memo(
+        app,
+        [],
+        [],
+        [{"id": "doc-ca4b", "doc_type": "cert_inc", "verification_status": "verified"}],
+    )
+
+    adverse = memo["metadata"]["adverse_media_state_summary"]
+    assert adverse["coverage"] == "provider_evidence"
+    assert adverse["has_hit"] is True
+    assert "adverse_media_hit" in memo["metadata"]["risk_evidence"]["financial_crime"]["triggers"]

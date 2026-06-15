@@ -5678,6 +5678,8 @@ class ApplicationDetailHandler(BaseHandler):
                 is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
             """,
         )
+        if user["type"] != "client":
+            result = _attach_memo_screening_current_snapshot(db, result)
         if latest_memo:
             latest_memo_dict = dict(latest_memo)
             latest_memo_selection = memo_selection_metadata(latest_memo_dict)
@@ -18522,6 +18524,288 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
     }
 
 
+def _memo_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _memo_boolish(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "hit", "match"}
+
+
+def _memo_screening_quality(qualities):
+    rank = {
+        "provider_error": 0,
+        "unavailable": 1,
+        "partial": 2,
+        "stale": 2,
+        "complete": 3,
+    }
+    selected = "complete"
+    selected_rank = rank[selected]
+    for quality in qualities or []:
+        key = str(quality or "").strip().lower() or "unavailable"
+        key = "complete" if key == "available" else key
+        current_rank = rank.get(key, 1)
+        if current_rank < selected_rank:
+            selected = key
+            selected_rank = current_rank
+    return selected
+
+
+def _memo_screening_snapshot_from_app_only(app_row):
+    app = dict(app_row or {})
+    prescreening = safe_json_loads(app.get("prescreening_data"))
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    report = prescreening.get("screening_report") if isinstance(prescreening.get("screening_report"), dict) else {}
+    truth_summary = app.get("screening_truth_summary") if isinstance(app.get("screening_truth_summary"), dict) else {}
+    if not truth_summary:
+        try:
+            truth_summary = build_screening_truth_summary(
+                report,
+                prescreening,
+                app.get("screening_reviews") if isinstance(app.get("screening_reviews"), list) else [],
+            )
+        except Exception:
+            truth_summary = {}
+
+    has_adverse = bool(
+        _screening_structured_adverse_media_hit(report)
+        or _screening_structured_adverse_media_hit(prescreening)
+        or _memo_boolish(report.get("has_adverse_media_hit"))
+        or _memo_boolish(prescreening.get("has_adverse_media_hit"))
+    )
+    coverage = str(
+        report.get("adverse_media_coverage")
+        or prescreening.get("adverse_media_coverage")
+        or ("provider_evidence" if has_adverse else "none")
+    ).strip().lower() or "none"
+    if has_adverse and coverage == "none":
+        coverage = "provider_evidence"
+    total_hits = _memo_int(report.get("total_hits"), 0)
+    return {
+        "source": "application_prescreening",
+        "canonical_state": truth_summary.get("canonical_state"),
+        "screening_result": truth_summary.get("screening_result"),
+        "approval_blocking": bool(truth_summary.get("approval_blocking")),
+        "current_risk_count": total_hits,
+        "current_unresolved_risk_count": total_hits if has_adverse or bool(truth_summary.get("approval_blocking")) else 0,
+        "stale_risk_count": 0,
+        "historical_risk_count": 0,
+        "duplicate_provider_record_count": 0,
+        "has_adverse_media_hit": has_adverse,
+        "adverse_media_coverage": coverage,
+        "evidence_quality": "complete" if has_adverse else "unavailable",
+        "adverse_media_evidence_quality": "complete" if has_adverse else "unavailable",
+    }
+
+
+def _memo_subject_names_for_screening_snapshot(db, app, report):
+    subjects = []
+
+    def add(subject_type, name):
+        name = str(name or "").strip()
+        if not name:
+            return
+        key = (subject_type, name)
+        if key not in subjects:
+            subjects.append(key)
+
+    add("entity", app.get("company_name"))
+    if db is not None and app.get("id"):
+        try:
+            directors, ubos, intermediaries = get_application_parties(db, app["id"])
+        except Exception:
+            directors, ubos, intermediaries = [], [], []
+        for person in directors or []:
+            add("director", person.get("full_name"))
+        for person in ubos or []:
+            add("ubo", person.get("full_name"))
+        for intermediary in intermediaries or []:
+            add("intermediary", intermediary.get("entity_name") or intermediary.get("full_name"))
+
+    for item in (report.get("director_screenings") or []):
+        add("director", item.get("person_name") or item.get("name"))
+    for item in (report.get("ubo_screenings") or []):
+        add("ubo", item.get("person_name") or item.get("name"))
+    for item in (report.get("intermediary_screenings") or []):
+        add("intermediary", item.get("entity_name") or item.get("person_name") or item.get("name"))
+    return subjects
+
+
+def _build_memo_screening_current_snapshot(db, app_row):
+    app = dict(app_row or {})
+    app_id = app.get("id")
+    base = _memo_screening_snapshot_from_app_only(app)
+    prescreening = safe_json_loads(app.get("prescreening_data"))
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    report = prescreening.get("screening_report") if isinstance(prescreening.get("screening_report"), dict) else {}
+    if db is None or not app_id:
+        return base
+
+    current_count = 0
+    unresolved_count = 0
+    stale_count = 0
+    historical_count = 0
+    duplicate_count = 0
+    has_adverse = bool(base.get("has_adverse_media_hit"))
+    qualities = []
+    adverse_qualities = []
+    subject_count = 0
+
+    for subject_type, subject_name in _memo_subject_names_for_screening_snapshot(db, app, report):
+        try:
+            context = _screening_review_subject_context(db, app, subject_type, subject_name)
+        except Exception as exc:
+            logger.warning(
+                "memo_screening_snapshot_subject_failed app_id=%s subject_type=%s subject_name=%s error=%s",
+                app_id,
+                subject_type,
+                subject_name,
+                exc,
+            )
+            continue
+        subject_count += 1
+        summary = context.get("evidence_summary") if isinstance(context.get("evidence_summary"), dict) else {}
+        current_count += _memo_int(summary.get("current_risk_count"), 0)
+        unresolved_count += _memo_int(summary.get("current_unresolved_risk_count"), 0)
+        stale_count += _memo_int(summary.get("stale_risk_count"), 0)
+        historical_count += _memo_int(summary.get("historical_risk_count"), 0)
+        duplicate_count += _memo_int(summary.get("duplicate_provider_record_count"), 0)
+        quality = summary.get("evidence_quality") or context.get("evidence_quality")
+        if quality:
+            qualities.append(quality)
+        subject_has_adverse = bool(
+            summary.get("has_adverse_media_hit")
+            or context.get("adverse_media_hit")
+            or "Adverse Media" in (summary.get("categories") or [])
+        )
+        if subject_has_adverse:
+            has_adverse = True
+            if quality:
+                adverse_qualities.append(quality)
+
+    evidence_quality = _memo_screening_quality(qualities) if qualities else base.get("evidence_quality") or "unavailable"
+    adverse_quality = _memo_screening_quality(adverse_qualities) if adverse_qualities else (
+        "complete" if has_adverse else "unavailable"
+    )
+    if has_adverse:
+        coverage = "provider_evidence" if adverse_quality == "complete" else adverse_quality
+    else:
+        coverage = "none"
+
+    return {
+        **base,
+        "source": "canonical_screening_evidence_rollup",
+        "current_risk_count": current_count if subject_count else base.get("current_risk_count", 0),
+        "current_unresolved_risk_count": unresolved_count if subject_count else base.get("current_unresolved_risk_count", 0),
+        "stale_risk_count": stale_count,
+        "historical_risk_count": historical_count,
+        "duplicate_provider_record_count": duplicate_count,
+        "has_adverse_media_hit": has_adverse,
+        "adverse_media_coverage": coverage,
+        "evidence_quality": evidence_quality,
+        "adverse_media_evidence_quality": adverse_quality,
+        "subject_count": subject_count,
+    }
+
+
+def _attach_memo_screening_current_snapshot(db, app_row):
+    app = dict(app_row or {})
+    snapshot = _build_memo_screening_current_snapshot(db, app)
+    app["memo_screening_current_snapshot"] = snapshot
+    prescreening = safe_json_loads(app.get("prescreening_data"))
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    prescreening = dict(prescreening)
+    prescreening["canonical_screening_current_summary"] = snapshot
+    if snapshot.get("has_adverse_media_hit"):
+        prescreening["has_adverse_media_hit"] = True
+        if str(prescreening.get("adverse_media_coverage") or "none").strip().lower() == "none":
+            prescreening["adverse_media_coverage"] = snapshot.get("adverse_media_coverage") or "provider_evidence"
+    app["prescreening_data"] = prescreening
+    return app
+
+
+def _memo_screening_current_mismatch(app_row, memo_row):
+    if not app_row or not memo_row:
+        return None
+    current = (
+        (app_row or {}).get("memo_screening_current_snapshot")
+        if isinstance(app_row, dict)
+        else None
+    )
+    if not isinstance(current, dict):
+        current = _memo_screening_snapshot_from_app_only(app_row)
+    try:
+        memo_data = safe_json_loads((dict(memo_row)).get("memo_data") or "{}")
+    except Exception:
+        memo_data = {}
+    if not isinstance(memo_data, dict):
+        memo_data = {}
+    metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
+    memo_current = metadata.get("canonical_screening_current_summary")
+    if not isinstance(memo_current, dict):
+        memo_current = {}
+    memo_adverse = metadata.get("adverse_media_state_summary")
+    if not isinstance(memo_adverse, dict):
+        memo_adverse = {}
+
+    mismatches = []
+    current_has_adverse = bool(current.get("has_adverse_media_hit"))
+    memo_has_adverse = _memo_boolish(memo_current.get("has_adverse_media_hit")) or _memo_boolish(memo_adverse.get("has_hit"))
+    memo_coverage = str(
+        memo_current.get("adverse_media_coverage")
+        or memo_adverse.get("coverage")
+        or "none"
+    ).strip().lower() or "none"
+    if current_has_adverse and not memo_has_adverse:
+        mismatches.append("memo_missing_adverse_media_hit")
+    if current_has_adverse and memo_coverage == "none":
+        mismatches.append("memo_adverse_media_coverage_none")
+
+    for key in ("current_risk_count", "current_unresolved_risk_count"):
+        current_value = _memo_int(current.get(key), 0)
+        memo_value_present = key in memo_current
+        memo_value = _memo_int(memo_current.get(key), 0) if memo_value_present else None
+        if current_value > 0 and (memo_value is None or memo_value != current_value):
+            mismatches.append(f"memo_{key}_mismatch")
+        elif memo_value is not None and memo_value != current_value:
+            mismatches.append(f"memo_{key}_mismatch")
+
+    current_quality = str(current.get("evidence_quality") or "").strip().lower()
+    memo_quality = str(memo_current.get("evidence_quality") or "").strip().lower()
+    if current_quality in {"partial", "unavailable", "stale", "provider_error"} and memo_quality == "complete":
+        mismatches.append("memo_evidence_quality_overstated")
+
+    if not mismatches:
+        return None
+
+    return {
+        "trigger": "memo_screening_adverse_media_truth_mismatch",
+        "reason": (
+            "Memo screening/adverse-media metadata no longer matches current canonical "
+            "ComplyAdvantage Mesh evidence. Regenerate the memo before approval reliance."
+        ),
+        "before_state": {
+            "memo_adverse_media_state_summary": memo_adverse,
+            "memo_canonical_screening_current_summary": memo_current,
+        },
+        "after_state": {
+            "current_canonical_screening_summary": current,
+            "mismatches": sorted(set(mismatches)),
+        },
+    }
+
+
 def _screening_sensitive_flags(app, row, subject_type, disposition, context_error=False):
     # Four-eyes is intentionally scoped to clearing a sensitive hit. Escalate
     # and follow-up dispositions preserve the concern rather than clearing it.
@@ -21144,7 +21428,7 @@ _MEMO_APP_FINGERPRINT_FIELDS = (
     "risk_dimensions", "risk_escalations", "risk_computed_at", "risk_config_version",
     "operating_countries",
     "incorporation_date", "business_activity", "assigned_to",
-    "prescreening_data", "screening_reviews",
+    "prescreening_data", "screening_reviews", "memo_screening_current_snapshot",
 )
 _MEMO_PARTY_FINGERPRINT_FIELDS = (
     "id", "person_key", "full_name", "nationality", "date_of_birth",
@@ -21291,6 +21575,21 @@ def _memo_staleness_view(app_row, memo_row):
             "trigger": trigger,
             "marked_at": None,
             "reasons": reasons or [{"trigger": trigger, "reason": reason}],
+            "before_state": risk_mismatch.get("before_state"),
+            "after_state": risk_mismatch.get("after_state"),
+        }
+    screening_mismatch = _memo_screening_current_mismatch(app_row, row)
+    if screening_mismatch:
+        reason = screening_mismatch["reason"]
+        trigger = screening_mismatch["trigger"]
+        return {
+            "is_stale": True,
+            "reason": reason,
+            "trigger": trigger,
+            "marked_at": None,
+            "reasons": reasons or [{"trigger": trigger, "reason": reason}],
+            "before_state": screening_mismatch.get("before_state"),
+            "after_state": screening_mismatch.get("after_state"),
         }
     if _memo_timestamp_stale(app_row, row):
         reason = "Application input data changed after the latest memo was generated."
@@ -21370,6 +21669,7 @@ def _memo_fingerprint_source(db, app_row):
     except Exception as exc:
         logger.error("Failed to build enhanced review memo summary for staleness check %s: %s", app_id, exc, exc_info=True)
         app["enhanced_review_summary"] = {}
+    app = _attach_memo_screening_current_snapshot(db, app)
     return app, directors, ubos, documents, app.get("enhanced_review_summary")
 
 
@@ -21525,7 +21825,7 @@ def _mark_latest_memo_stale(
 def _ensure_memo_fresh_or_mark_stale(db, app_row, memo_row, *, actor=None, ip_address="", context="memo_control"):
     if not app_row or not memo_row:
         return {"is_stale": False, "reason": "", "trigger": ""}
-    app = dict(app_row)
+    app = _attach_memo_screening_current_snapshot(db, app_row)
     memo = dict(memo_row)
     view = _memo_staleness_view(app, memo)
     if view["is_stale"]:
@@ -21539,6 +21839,8 @@ def _ensure_memo_fresh_or_mark_stale(db, app_row, memo_row, *, actor=None, ip_ad
             actor=actor,
             app_ref=app.get("ref"),
             ip_address=ip_address,
+            before_state=view.get("before_state"),
+            after_state=view.get("after_state"),
         )
         return view
 
@@ -21807,6 +22109,7 @@ class ComplianceMemoHandler(BaseHandler):
                 "overall_status": "not_triggered",
                 "warnings": ["enhanced_review_summary_unavailable"],
             }
+        app = _attach_memo_screening_current_snapshot(db, app)
 
         memo_input_hash = _memo_generation_fingerprint(
             app,
@@ -21873,6 +22176,16 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["model_version"] = "v1.1"
         memo["metadata"]["build"] = get_build_metadata()
         memo["metadata"]["document_evidence_gate"] = document_gate
+        memo["metadata"]["canonical_screening_current_summary"] = app.get("memo_screening_current_snapshot") or {}
+        current_screening_snapshot = memo["metadata"]["canonical_screening_current_summary"]
+        if current_screening_snapshot.get("has_adverse_media_hit"):
+            memo_adverse_summary = memo["metadata"].setdefault("adverse_media_state_summary", {})
+            memo_adverse_summary["has_hit"] = True
+            coverage = current_screening_snapshot.get("adverse_media_coverage") or "provider_evidence"
+            if str(memo_adverse_summary.get("coverage") or "none").strip().lower() == "none":
+                memo_adverse_summary["coverage"] = coverage
+            if coverage in ("full", "provider_evidence"):
+                memo_adverse_summary["terminal"] = True
         memo["metadata"]["memo_reliance_status"] = "ready"
         memo["document_evidence_snapshot"] = document_gate.get("documents", [])
         authoritative_risk = _application_authoritative_risk_metadata(app)

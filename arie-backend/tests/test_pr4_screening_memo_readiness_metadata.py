@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from tornado.testing import AsyncHTTPTestCase
 
@@ -213,3 +214,152 @@ class PR4ScreeningMemoReadinessMetadataTest(AsyncHTTPTestCase):
         assert contract_summary["screening_gate_ready"] is False
         assert contract_summary["approval_gate_ready"] is False
         assert contract_summary["approval_blocked_reasons"] == ["director_screening_0:live_terminal_match"]
+
+    def test_application_detail_marks_memo_stale_when_ca_adverse_media_truth_changed(self):
+        app_id = "pr4_ca4b_memo_app"
+        suffix = uuid.uuid4().hex[:8]
+        now = datetime.now(timezone.utc)
+        prescreening = {
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": now.isoformat(),
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "total_hits": 0,
+                "adverse_media_coverage": "none",
+                "company_screening": {
+                    "provider": "complyadvantage",
+                    "source": "complyadvantage",
+                    "matched": False,
+                    "sanctions": {
+                        "api_status": "live",
+                        "matched": False,
+                        "source": "complyadvantage",
+                        "provider": "complyadvantage",
+                        "results": [],
+                    },
+                    "adverse_media": {
+                        "api_status": "live",
+                        "matched": False,
+                        "source": "complyadvantage",
+                        "provider": "complyadvantage",
+                        "results": [],
+                    },
+                },
+            },
+            "screening_valid_until": (now + timedelta(days=30)).isoformat(),
+        }
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO clients
+                (id, email, password_hash, company_name, status)
+            VALUES ('pr4_ca4b_client', 'pr4_ca4b@example.test', 'test-only',
+                    'PR4 CA4B Client Ltd', 'active')
+            """
+        )
+        self.db.execute(
+            """
+            INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type,
+                 status, risk_score, risk_level, prescreening_data, updated_at,
+                 inputs_updated_at)
+            VALUES (?, 'PR4-CA4B-MEMO', 'pr4_ca4b_client', 'PR4 CA4B Memo Ltd',
+                    'Mauritius', 'Technology', 'Company', 'under_review',
+                    45, 'MEDIUM', ?, '2026-06-01T09:00:00Z',
+                    '2026-06-01T09:00:00Z')
+            """,
+            (app_id, json.dumps(prescreening)),
+        )
+        source_reference = {
+            "provider": "complyadvantage",
+            "case_identifier": f"case-pr4-ca4b-{suffix}",
+            "alert_identifier": f"alert-pr4-ca4b-{suffix}",
+            "risk_identifier": f"risk-pr4-ca4b-{suffix}",
+            "subject_scope": "entity",
+        }
+        self.db.execute(
+            """
+            INSERT INTO monitoring_alerts
+                (application_id, client_name, alert_type, severity, detected_by,
+                 summary, source_reference, status, provider, case_identifier,
+                 discovered_via)
+            VALUES (?, 'PR4 CA4B Memo Ltd', 'media', 'High', 'complyadvantage',
+                    'ComplyAdvantage Mesh adverse-media match', ?, 'open',
+                    'complyadvantage', ?, 'manual')
+            """,
+            (app_id, json.dumps(source_reference), f"case-pr4-ca4b-{suffix}"),
+        )
+        alert_id = self.db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        self.db.execute(
+            """
+            INSERT INTO monitoring_alert_evidence
+                (monitoring_alert_id, application_id, provider, case_identifier,
+                 alert_identifier, risk_identifier, profile_identifier,
+                 evidence_type, matched_subject_name, relationship_to_client,
+                 match_category, risk_indicator, match_confidence, source_title,
+                 source_name, source_url, source_url_available, publication_date,
+                 snippet, evidence_json, raw_provider_reference, evidence_status,
+                 evidence_hash, fetched_at)
+            VALUES (?, ?, 'complyadvantage', ?, ?, ?, ?, 'adverse_media',
+                    'PR4 CA4B Memo Ltd', 'entity', 'Adverse Media',
+                    'Adverse Media', '0.95', 'Provider adverse-media article',
+                    'Provider News', 'https://provider.example.test/article',
+                    1, '2026-06-01',
+                    'Provider adverse-media snippet for memo parity.',
+                    ?, ?, 'fetched', ?, '2026-06-15T00:00:00Z')
+            """,
+            (
+                alert_id,
+                app_id,
+                f"case-pr4-ca4b-{suffix}",
+                f"alert-pr4-ca4b-{suffix}",
+                f"risk-pr4-ca4b-{suffix}",
+                f"profile-pr4-ca4b-{suffix}",
+                json.dumps({"title": "Provider adverse-media article"}),
+                json.dumps({"risk_identifier": f"risk-pr4-ca4b-{suffix}"}),
+                f"hash-pr4-ca4b-{suffix}",
+            ),
+        )
+        memo_data = {
+            "sections": {"summary": {"content": "Existing stale memo row"}},
+            "metadata": {
+                "adverse_media_state_summary": {
+                    "coverage": "none",
+                    "has_hit": False,
+                    "terminal": False,
+                },
+                "canonical_screening_current_summary": {
+                    "current_risk_count": 0,
+                    "current_unresolved_risk_count": 0,
+                    "has_adverse_media_hit": False,
+                    "adverse_media_coverage": "none",
+                },
+            },
+        }
+        self.db.execute(
+            """
+            INSERT INTO compliance_memos
+                (application_id, version, memo_data, review_status,
+                 validation_status, quality_score, memo_version, created_at,
+                 raw_output_hash)
+            VALUES (?, 1, ?, 'approved', 'pass', 0.91, '1.0',
+                    '2026-06-01T10:00:00Z', 'legacy-hash')
+            """,
+            (app_id, json.dumps(memo_data)),
+        )
+        self.db.commit()
+
+        response = self.fetch(f"/api/applications/{app_id}", headers=self._headers())
+        assert response.code == 200, response.body.decode()
+        body = self._json(response)
+
+        assert body["memo_is_stale"] is True
+        assert body["memo_requires_regeneration"] is True
+        assert body["memo_stale_trigger"] == "memo_screening_adverse_media_truth_mismatch"
+        snapshot = body["memo_screening_current_snapshot"]
+        assert snapshot["has_adverse_media_hit"] is True
+        assert snapshot["current_risk_count"] >= 1
+        assert snapshot["current_unresolved_risk_count"] == snapshot["current_risk_count"]
+        metadata = body["latest_memo_data"]["metadata"]
+        assert metadata["is_stale"] is True
+        assert metadata["stale_trigger"] == "memo_screening_adverse_media_truth_mismatch"
