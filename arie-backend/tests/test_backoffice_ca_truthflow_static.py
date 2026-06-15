@@ -112,7 +112,7 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     assert "function setScreeningReviewFocus" in html
     assert "function buildScreeningTriageSubjects" in html
     assert "Second Review Required" in triage_region
-    assert "No Match" in html
+    assert "Clear as False Positive" in html
     assert "Declared PEP · No provider matches" in triage_region
     assert "screeningSubjectRoleBadge(subject.subject_type)" in triage_region
     assert "screeningQueueCanonicalStatus(subject)" in triage_region
@@ -259,7 +259,7 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     categories_region = _function_region(html, "evidenceCategories", "evidenceGroupedIdentifiers")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
 
-    assert "Provider screening hit" in categories_region
+    assert "Unclassified Provider Risk" in categories_region
     assert "Potential provider match" not in categories_region
     assert "Unclassified provider hit" not in categories_region
     assert "key === 'other'" in category_region
@@ -269,7 +269,7 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     assert "Regulatory" in category_region
     assert "function isPepEvidenceRelevant" in html
     assert "if (isPepEvidenceRelevant(hit, categories, riskLabels))" in drawer_region
-    assert "if (mediaTitle || mediaSnippet || mediaUrl)" in drawer_region
+    assert "if (mediaTitle || mediaSnippet || mediaUrl || categories.join(' ').toLowerCase().indexOf('adverse') !== -1)" in drawer_region
 
 
 def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
@@ -316,10 +316,10 @@ def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
     assert "function evidenceReviewRationale" in html
     assert "return 'PEP';" in category_label_region
     assert "return 'adverse media';" in category_label_region
-    assert "return 'provider screening';" in category_label_region
+    assert "return 'unclassified provider risk';" in category_label_region
     assert "found a potential PEP match" in rationale_region
     assert "found potential adverse media" in rationale_region
-    assert "returned a provider screening hit" in rationale_region
+    assert "returned an unresolved unclassified provider risk" in rationale_region
     assert "var reviewRationale = evidenceReviewRationale(provider, categories, hit, matchedName);" in drawer_region
     assert "escapeHtml(reviewRationale)" in drawer_region
 
@@ -380,9 +380,11 @@ def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel(
     assert "function screeningQueueEvidenceQualityReason" in html
     assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in entity_region
     assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in person_region
-    assert "Screening Summary" in panel_region
+    assert "ComplyAdvantage Mesh Screening Summary" in panel_region
     assert "Client / application" in panel_region
     assert "Role / relationship" in panel_region
+    assert "Current risks" in panel_region
+    assert "Unresolved current risks" in panel_region
     assert "Evidence readiness:" in panel_region
     assert "evidence_quality_reason" in reason_region
     assert "screeningQueueEvidenceQualityReason(row, qualityLabel, items)" in panel_region
@@ -391,9 +393,10 @@ def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel(
     assert "Provider did not return source link." in reason_region
     assert "Evidence" in panel_region
     assert "Officer Decision" in panel_region
-    assert "Technical Details" in panel_region
+    assert "View provider references" in panel_region
     assert "data-screening-technical-details" in panel_region
-    assert "Source link not available from provider payload." in panel_region
+    assert "SCREENING_SOURCE_UNAVAILABLE_MESSAGE" in panel_region
+    assert "Source unavailable from provider payload" in html
     assert "Detailed provider evidence is partial or unavailable for this screening result." in panel_region
     assert "Provider case IDs" in panel_region
     assert "Provider alert IDs" in panel_region
@@ -421,7 +424,8 @@ def test_backoffice_screening_queue_source_links_are_conditional():
     assert "var sourceUrl = item.source_url || ''" in card_region
     assert "Open source" in card_region
     assert "sourceUrl ? '<div" in card_region
-    assert "Source link not available from provider payload." in card_region
+    assert "SCREENING_SOURCE_UNAVAILABLE_MESSAGE" in card_region
+    assert "Source unavailable from provider payload" in html
     assert "raw JSON" not in card_region.lower()
 
 
@@ -457,7 +461,7 @@ def test_backoffice_screening_disposition_modal_matches_api_contract():
     assert "screening_evidence=true" in html
     assert "evidence_reference: evidenceReference" in submit_region
     assert "evidence_document_id: uploadedEvidence ? uploadedEvidence.id : ''" in submit_region
-    assert "No Match disposition requires Compliance Officer, SCO, or Admin role" in submit_region
+    assert "Clear as False Positive requires Compliance Officer, SCO, or Admin role" in submit_region
     assert "False-positive clearance requires an evidence / provider reference" not in submit_region
 
 
@@ -475,7 +479,7 @@ def test_backoffice_screening_disposition_history_surfaces_evidence_reference():
     assert "review_evidence_reference" in history_region
     assert "Evidence/reference:" in history_region
     assert "canClearScreeningDisposition()" in queue_region
-    assert "No Match requires Compliance Officer, SCO, or Admin role." in queue_region
+    assert "Clear as False Positive requires Compliance Officer, SCO, or Admin role." in queue_region
 
 
 def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_clear():
@@ -496,7 +500,7 @@ def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_cle
     approval_region = _function_region(html, "getApplicationApprovalBlockers", "renderDecisionReadiness")
     assert "screening.screening_truth_summary" in approval_region
     assert "screeningTruthBlocksApproval(screeningTruth)" in approval_region
-    assert "Screening gate is blocked:" in approval_region
+    assert "caseCommandScreeningTruthCopy(screeningTruth)" in approval_region
 
 
 def test_backoffice_screening_truth_fallback_does_not_mark_uncleared_matches_ready():

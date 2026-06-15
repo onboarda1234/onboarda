@@ -131,6 +131,45 @@ def test_terminal_adverse_media_hit_elevates_fincrime_evidence():
     assert memo["sections"]["risk_assessment"]["sub_sections"]["financial_crime_risk"]["rating"] == "HIGH"
 
 
+def test_memo_consumes_canonical_company_adverse_media_evidence_without_rollup_flag():
+    report = _terminal_screening_report(
+        adverse_media_coverage="none",
+        company_screening={
+            "sanctions": {
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "source": "complyadvantage",
+            },
+            "adverse_media": {
+                "api_status": "live",
+                "matched": True,
+                "provider": "complyadvantage",
+                "results": [{
+                    "provider": "complyadvantage",
+                    "match_category": "Adverse Media",
+                    "is_adverse_media": True,
+                    "provider_risk_identifier": "risk-memo-media",
+                    "summary": "Canonical CA adverse-media evidence",
+                }],
+            },
+        },
+    )
+    app = _app(prescreening_data={"screening_report": report})
+
+    memo, _, _, _ = build_compliance_memo(app, _directors(), _ubos(), _documents())
+
+    adverse = memo["metadata"]["adverse_media_state_summary"]
+    assert adverse["terminal"] is True
+    assert adverse["coverage"] == "provider_evidence"
+    assert adverse["has_hit"] is True
+    fincrime = memo["metadata"]["risk_evidence"]["financial_crime"]
+    assert "adverse_media_hit" in fincrime["triggers"]
+    fc_content = memo["sections"]["risk_assessment"]["sub_sections"]["financial_crime_risk"]["content"]
+    assert "returned relevant hit(s)" in fc_content
+    assert "no relevant adverse-media hits are recorded" not in fc_content
+
+
 def test_memo_hydrates_parties_from_prescreening_when_party_tables_empty():
     app = _app(
         prescreening_data={

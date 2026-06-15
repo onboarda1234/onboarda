@@ -326,10 +326,13 @@ def _screening_adverse_media_context(screening_report, prescreening_data):
     )
     legacy_clear = any(term in legacy_status for term in clear_terms)
     legacy_hit = bool(legacy_status) and not legacy_clear and any(term in legacy_status for term in hit_terms)
-    has_hit = any(v is True for v in values) or legacy_hit
+    canonical_provider_hit = _screening_contains_adverse_media_evidence(report) or _screening_contains_adverse_media_evidence(prescreening)
+    has_hit = any(v is True for v in values) or legacy_hit or canonical_provider_hit
+    if canonical_provider_hit and coverage == "none":
+        coverage = "provider_evidence"
 
     terminal = False
-    if coverage == "full":
+    if coverage in ("full", "provider_evidence"):
         terminal = True
     if legacy_status and (legacy_clear or legacy_hit):
         terminal = True
@@ -340,6 +343,13 @@ def _screening_adverse_media_context(screening_report, prescreening_data):
             "officer disposition and rationale are required before reliance."
         )
         checklist = "Adverse media review completed — relevant hit(s) require documented disposition"
+    elif has_hit:
+        phrase = (
+            "Adverse Media Screening: provider adverse-media evidence is present, but coverage is "
+            + coverage
+            + "; officer disposition and evidence completion are required before reliance."
+        )
+        checklist = "Adverse media evidence present — disposition and evidence completion required"
     elif terminal:
         phrase = (
             "Adverse Media Screening: terminal full-coverage adverse-media review completed; "
@@ -361,6 +371,67 @@ def _screening_adverse_media_context(screening_report, prescreening_data):
         "phrase": phrase,
         "checklist": checklist,
     }
+
+
+def _screening_contains_adverse_media_evidence(value):
+    if isinstance(value, list):
+        return any(_screening_contains_adverse_media_evidence(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+
+    for key in ("has_adverse_media_hit", "adverse_media_hit", "is_adverse_media"):
+        if value.get(key) is True:
+            return True
+
+    adverse = value.get("adverse_media")
+    if isinstance(adverse, dict):
+        if adverse.get("matched") is True:
+            return True
+        if _screening_contains_adverse_media_evidence(adverse.get("results") or []):
+            return True
+
+    category_blob = " ".join(
+        str(value.get(key) or "")
+        for key in (
+            "category",
+            "match_category",
+            "evidence_type",
+            "risk_indicator",
+            "alert_type",
+            "type",
+        )
+    ).lower()
+    if isinstance(value.get("match_categories"), list):
+        category_blob += " " + " ".join(str(item or "") for item in value.get("match_categories"))
+    if isinstance(value.get("risk_type_labels"), list):
+        category_blob += " " + " ".join(str(item or "") for item in value.get("risk_type_labels"))
+    category_blob = category_blob.lower()
+    if ("adverse" in category_blob or "media" in category_blob) and (
+        value.get("matched") is True
+        or value.get("provider_risk_identifier")
+        or value.get("provider_alert_identifier")
+        or value.get("provider_profile_identifier")
+        or value.get("source_title")
+        or value.get("media_title")
+        or value.get("summary")
+    ):
+        return True
+
+    for key in (
+        "results",
+        "alerts",
+        "provider_evidence",
+        "screening_evidence",
+        "items",
+        "company_screening",
+        "director_screenings",
+        "ubo_screenings",
+        "intermediary_screenings",
+    ):
+        child = value.get(key)
+        if _screening_contains_adverse_media_evidence(child):
+            return True
+    return False
 
 
 def _quality_cap(code, max_score, severity, reason, fix):

@@ -1023,10 +1023,11 @@ class TestInlineScreeningRuntime:
                 },
             )
         )
-        assert "No Match" in result["unresolvedHtml"]
-        assert "Match" in result["unresolvedHtml"]
+        assert "Clear as False Positive" in result["unresolvedHtml"]
+        assert "Confirm True Match" in result["unresolvedHtml"]
         assert "Escalate" in result["unresolvedHtml"]
         assert "Follow-Up Required" not in result["unresolvedHtml"]
+        assert "Request More Information" in result["unresolvedHtml"]
         assert "Save disposition" in result["unresolvedHtml"]
         assert "required for escalation" in result["unresolvedHtml"]
         assert "Upload supporting evidence (optional)" in result["unresolvedHtml"]
@@ -1131,11 +1132,11 @@ class TestInlineScreeningRuntime:
         assert "read-only" in result["resolvedHtml"]
         assert "View audit trail" in result["resolvedHtml"]
         assert "Save disposition" not in result["resolvedHtml"]
-        assert "No Match" in result["resolvedBadgeHtml"]
+        assert "Cleared False Positive" in result["resolvedBadgeHtml"]
         assert "Review Required" not in result["resolvedBadgeHtml"]
-        assert result["dedupedQueueStatusHtml"].count("No Match") == 1
+        assert result["dedupedQueueStatusHtml"].count("Cleared False Positive") == 1
         assert "Pending" not in result["resolvedSupportBadgeHtml"]
-        assert "No Match" in result["resolvedSupportBadgeHtml"]
+        assert "Cleared False Positive" in result["resolvedSupportBadgeHtml"]
 
     def test_screening_queue_dirty_flag_forces_refetch(self):
         html = _read_backoffice()
@@ -1153,7 +1154,7 @@ class TestInlineScreeningRuntime:
         assert "offset=0" in queue_paths[0]
         assert "Pending" not in result["renderedHtml"]
         assert "Loading screening queue" not in result["renderedHtml"]
-        assert "No Match" in result["renderedHtml"]
+        assert "Clear" in result["renderedHtml"]
         assert len(result["staleGuardPaths"]) == 2
         assert result["staleGuardQueueRowLabel"] == "Newest Result"
         assert result["staleGuardOffset"] == 50
@@ -1178,7 +1179,7 @@ class TestInlineScreeningRuntime:
         )
         assert "Evidence groups" in result["providerHighlightsHtml"]
         assert "PEP · 2 evidence records" in result["providerHighlightsHtml"]
-        assert "Provider Screening Hit · 2 evidence records" in result["providerHighlightsHtml"]
+        assert "Unclassified Provider Risk · 2 evidence records" in result["providerHighlightsHtml"]
         assert result["providerHighlightsHtml"].count("Vladimir Putin") >= 4
         assert "Show evidence" in result["providerHighlightsHtml"]
         assert "Technical provider details" in result["providerHighlightsHtml"]
@@ -1207,8 +1208,8 @@ class TestInlineScreeningRuntime:
         )
         assert result["triageSubjectOrder"] == [
             "Jane Director|Review Required",
-            "John Harbor|Follow-Up Required",
-            "Triage Holdings Ltd|No Match",
+            "John Harbor|Request More Information",
+            "Triage Holdings Ltd|Cleared False Positive",
         ]
         assert result["capturedFocus"] == {
             "application_ref": "ARF-TRIAGE-12",
@@ -1252,9 +1253,10 @@ class TestInlineScreeningRuntime:
         assert director_subject["reviewRequired"] is True
         assert director_subject["reviewActionable"] is True
         assert "Focused subject: <strong>Jane Director</strong> (director)" in result["directDetailWithoutQueueHtml"]
-        assert "No Match" in result["directDetailWithoutQueueHtml"]
-        assert "Match" in result["directDetailWithoutQueueHtml"]
+        assert "Clear as False Positive" in result["directDetailWithoutQueueHtml"]
+        assert "Confirm True Match" in result["directDetailWithoutQueueHtml"]
         assert "Escalate" in result["directDetailWithoutQueueHtml"]
+        assert "Request More Information" in result["directDetailWithoutQueueHtml"]
         assert "Save disposition" in result["directDetailWithoutQueueHtml"]
         assert "Follow-Up Required</button>" not in result["directDetailWithoutQueueHtml"]
         fallback_calls = result["fallbackSubmitResult"]["calls"]
@@ -1272,7 +1274,7 @@ class TestInlineScreeningRuntime:
         result = _run_node(_activity_log_runtime_js(html))
         assert "Screening Review Completed" in result["html"]
         assert "Screening review completed for John Harbor" in result["html"]
-        assert "No Match" in result["html"]
+        assert "Cleared False Positive" in result["html"]
         assert "Show technical details" in result["html"]
         assert "Copy technical details" in result["html"]
         assert "Status Change" in result["html"]

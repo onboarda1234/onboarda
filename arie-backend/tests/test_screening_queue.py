@@ -761,8 +761,11 @@ def test_screening_queue_links_ca_evidence_by_exact_identifiers(db, temp_db):
     assert evidence["provider_risk_id"] == "risk-sq2"
     assert evidence["match_score"] == "0.92"
     assert evidence["source_url"] == ""
-    assert evidence["source_url_unavailable_message"] == "Source link not available from provider payload."
+    assert evidence["source_url_unavailable_message"] == "Source unavailable from provider payload — verify in Mesh or attach supporting evidence."
     assert evidence["linking_method"] == "exact_identifier"
+    assert row["current_risk_count"] == 1
+    assert row["current_unresolved_risk_count"] == 1
+    assert row["has_adverse_media_hit"] is True
     assert row["screening_evidence"]["evidence_quality_reason"] == "Evidence linked from CA provider evidence."
     diagnostics = row["screening_evidence"]["technical_details"]["diagnostics"]
     assert diagnostics["provider"] == "complyadvantage"
@@ -818,6 +821,63 @@ def test_screening_queue_preserves_nested_provider_references():
     refs = row["screening_evidence"]["provider_references"]
     assert refs["customer_ids"] == ["customer-nested"]
     assert refs["workflow_ids"] == ["workflow-nested"]
+
+
+def test_screening_queue_rolls_up_current_duplicate_stale_and_historical_risks():
+    from server import _enrich_screening_queue_evidence
+
+    row = _enrich_screening_queue_evidence(
+        {
+            "application_id": "app_rollup",
+            "application_ref": "ARF-ROLLUP",
+            "company_name": "Rollup Ltd",
+            "subject_name": "Rollup Ltd",
+            "subject_type": "entity",
+            "status_key": "review_required",
+            "status_label": "Review Required",
+            "review_required": True,
+            "total_hits": 4,
+            "provider_evidence": [
+                {
+                    "provider": "complyadvantage",
+                    "provider_risk_identifier": "risk-current-media",
+                    "match_category": "Adverse Media",
+                    "media_title": "Current media",
+                    "summary": "Current adverse-media risk",
+                },
+                {
+                    "provider": "complyadvantage",
+                    "provider_risk_identifier": "risk-current-media",
+                    "match_category": "Adverse Media",
+                    "media_title": "Current media duplicate",
+                    "summary": "Duplicate provider record",
+                },
+                {
+                    "provider": "complyadvantage",
+                    "provider_risk_identifier": "risk-stale",
+                    "match_category": "Sanctions",
+                    "provider_status": "stale",
+                    "summary": "Stale risk",
+                },
+                {
+                    "provider": "complyadvantage",
+                    "provider_risk_identifier": "risk-historical",
+                    "match_category": "PEP",
+                    "risk_status": "archived",
+                    "summary": "Historical risk",
+                },
+            ],
+        },
+        [],
+    )
+
+    assert row["current_risk_count"] == 1
+    assert row["current_unresolved_risk_count"] == 1
+    assert row["stale_risk_count"] == 1
+    assert row["historical_risk_count"] == 1
+    assert row["duplicate_provider_record_count"] == 1
+    assert row["has_adverse_media_hit"] is True
+    assert row["evidence_summary"]["risk_category_counts"] == {"Adverse Media": 1}
 
 
 def test_screening_queue_does_not_attach_mismatched_ca_subject(db, temp_db):
@@ -897,7 +957,7 @@ def test_screening_queue_reports_structured_evidence_unavailable_honestly(db, te
     row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ2-UNAVAILABLE" and r["subject_type"] == "director")
 
     assert row["screening_evidence"]["evidence_status"] == "partial"
-    assert row["screening_evidence"]["items"][0]["source_url_unavailable_message"] == "Source link not available from provider payload."
+    assert row["screening_evidence"]["items"][0]["source_url_unavailable_message"] == "Source unavailable from provider payload — verify in Mesh or attach supporting evidence."
     assert row["evidence_summary"]["partial_evidence_message"] == "Detailed provider evidence is partial or unavailable for this screening result."
     assert row["status_key"] == "review_required"
 
