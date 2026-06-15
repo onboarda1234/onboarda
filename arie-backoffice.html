@@ -751,6 +751,8 @@ a { color:var(--brand); text-decoration:none; }
 .agent1-gate-badge.review { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
 .agent1-gate-badge.library { background:rgba(100,116,139,.1); color:#475569; border-color:rgba(100,116,139,.22); }
 .agent1-status-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; background:var(--green-bg); color:var(--green); border:1px solid rgba(22,163,74,.2); }
+.agent1-status-badge.manual-review-only { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
+.agent1-status-badge.future-enterprise { background:rgba(100,116,139,.1); color:#475569; border-color:rgba(100,116,139,.22); }
 .agent1-policy-empty { border:1px dashed var(--border1); border-radius:12px; background:var(--surface2); padding:20px; text-align:center; color:var(--text3); font-size:13px; }
 @media (max-width:900px) {
   .agent1-filter-bar { grid-template-columns:1fr; }
@@ -1118,7 +1120,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item role-admin-only" onclick="showView('users',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> User Management</div>
     <div class="snav-item role-admin-only" onclick="showView('roles',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span> Roles &amp; Permissions</div>
     <div class="snav-item role-admin-only" onclick="showView('risk-model',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg></span> Risk Scoring Model</div>
-    <div class="snav-item role-admin-only" onclick="showView('ai-checks',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span> AI Verification Checks</div>
+    <div class="snav-item role-admin-only" onclick="showView('ai-checks',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span> Document Verification Policies</div>
     <div class="snav-item role-admin-only" onclick="showView('ai-agents',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></svg></span> AI Agents</div>
     <div class="snav-item role-admin-only" data-pilot-hidden="agent-health" style="display:none;" onclick="showView('agent-health',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Agent Health</div>
     <div class="snav-item role-enhanced-settings" data-view="enhanced-requirements" onclick="showView('enhanced-requirements',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><path d="M21 12a9 9 0 1 1-6.22-8.56"/><path d="M21 3v6h-6"/></svg></span> Enhanced Requirements</div>
@@ -2794,7 +2796,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div>
         <div class="agent1-policy-eyebrow">Agent 1 Evidence Control Layer</div>
         <h3 class="agent1-policy-title">Document Policy Registry</h3>
-        <p class="agent1-policy-subtitle">Lifecycle-wide policy coverage for documents and compliance evidence. This registry defines what Agent 1 should classify, verify, gate, preserve for audit, and route for officer action without allowing Agent 1 to approve, reject, waive, or override a compliance decision.</p>
+        <p class="agent1-policy-subtitle">Agent 1 verifies each document type consistently. Workflows decide when the document is required, what it blocks, and what follow-up it triggers.</p>
       </div>
       <button class="btn btn-primary" onclick="saveAIChecks()">💾 Save Check Configuration</button>
     </div>
@@ -2804,10 +2806,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="card" style="padding:16px;margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px;">
       <div>
-        <div class="card-title">Policy Coverage</div>
-        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Search and filter document policies by lifecycle, gate behaviour, and active status. Underlying editable onboarding checks remain available below.</p>
+        <div class="card-title">Canonical Policy Coverage</div>
+        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Document-first registry showing active runtime policies, manual-review evidence, and future/enterprise scope without duplicating checks by lifecycle.</p>
       </div>
-      <span class="badge" style="background:var(--brand-dim);color:var(--brand);">Registry version DOC-POLICY-REGISTRY-v1</span>
+      <span class="badge" style="background:var(--brand-dim);color:var(--brand);">Registry version DOC-POLICY-CANONICAL-v1</span>
     </div>
     <div class="agent1-filter-bar">
       <div>
@@ -2815,9 +2817,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <input class="form-input" id="agent1-policy-search" placeholder="Search documents, checks, gate behaviour..." oninput="renderPolicyRegistry()" />
       </div>
       <div>
-        <label class="form-label" style="font-size:10px;">Lifecycle</label>
+        <label class="form-label" style="font-size:10px;">Document family</label>
         <select class="form-select" id="agent1-policy-lifecycle-filter" onchange="switchPolicyTab(this.value)">
-          <option value="all">All lifecycles</option>
+          <option value="all">All families</option>
         </select>
       </div>
       <div>
@@ -2834,7 +2836,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <select class="form-select" id="agent1-policy-status-filter" onchange="renderPolicyRegistry()">
           <option value="all">All statuses</option>
           <option value="active">Active</option>
-          <option value="foundation">Foundation</option>
+          <option value="manual review only">Manual review only</option>
+          <option value="future / enterprise">Future / enterprise</option>
         </select>
       </div>
     </div>
@@ -4923,6 +4926,7 @@ async function loadFromAPI() {
 
   await safeLoadModule('Verification checks', async function() {
     var checksResp = await boApiCall('GET', '/config/verification-checks');
+    applyAgent1PolicyPayload(checksResp);
     if (checksResp.entity && checksResp.entity.length > 0) {
       ENTITY_DOC_CHECKS = checksResp.entity.map(function(item) {
         return {
@@ -5201,6 +5205,7 @@ async function loadAIAgentsFromAPI(options) {
 
 async function loadVerificationChecksFromAPI(options) {
   var checksResp = await boApiCall('GET', '/config/verification-checks', null, options);
+  applyAgent1PolicyPayload(checksResp);
   if (checksResp.entity && checksResp.entity.length > 0) {
     ENTITY_DOC_CHECKS = checksResp.entity.map(function(item) {
       return {
@@ -5957,6 +5962,39 @@ var currentApp = null;
 var currentScreeningReviewFocus = null;
 var detailLifecycleSummaryOverview = null;
 
+function applyAgent1PolicyPayload(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  if (Array.isArray(payload.document_policies) && payload.document_policies.length > 0) {
+    AGENT1_DOCUMENT_POLICIES = payload.document_policies.map(function(policy) {
+      var normalized = Object.assign({}, policy);
+      normalized.family = normalized.family || normalized.display_label || normalized.document_type;
+      normalized.stage = normalized.stage || normalized.category || 'evidence';
+      normalized.stageLabel = normalized.stageLabel || normalized.category_label || normalized.stage;
+      normalized.policyId = normalized.policyId || normalized.policy_id || '';
+      normalized.materialChecks = normalized.materialChecks || (Array.isArray(normalized.material_checks) ? normalized.material_checks.map(function(check) { return check.label || check; }) : []);
+      normalized.technicalChecks = normalized.technicalChecks || (Array.isArray(normalized.technical_checks) ? normalized.technical_checks.map(function(check) { return check.label || check; }) : []);
+      normalized.gateBehavior = normalized.gateBehavior || (Array.isArray(normalized.blocks) ? normalized.blocks.join('; ') : normalized.gate_behaviour || '');
+      normalized.gateType = normalized.gateType || (String(normalized.gateBehavior || '').toLowerCase().indexOf('block') >= 0 ? 'blocking' : 'review');
+      normalized.manualAcceptanceAllowed = normalized.manualAcceptanceAllowed !== false;
+      normalized.manualAcceptance = normalized.manualAcceptance || normalized.manual_acceptance || (normalized.manualAcceptanceAllowed ? 'Allowed with documented reason' : 'Not allowed');
+      normalized.rescreeningTrigger = normalized.rescreeningTrigger || (normalized.re_screening_trigger ? 'Yes' : 'No');
+      normalized.usedIn = normalized.usedIn || normalized.used_in || [];
+      normalized.status = normalized.status || normalized.active_pilot_status || 'Manual review only';
+      normalized.coverageStatus = normalized.coverageStatus || normalized.status;
+      return normalized;
+    });
+    window.AGENT1_DOCUMENT_POLICIES = AGENT1_DOCUMENT_POLICIES;
+  }
+  if (Array.isArray(payload.workflow_usages)) {
+    AGENT1_WORKFLOW_USAGES = payload.workflow_usages;
+    window.AGENT1_WORKFLOW_USAGES = AGENT1_WORKFLOW_USAGES;
+  }
+  if (payload.summary) {
+    AGENT1_POLICY_SUMMARY = payload.summary;
+    window.AGENT1_POLICY_SUMMARY = AGENT1_POLICY_SUMMARY;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════
 // DYNAMIC DROPDOWN POPULATION
@@ -6055,7 +6093,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'Document Verification Policies', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
   var globalSearch = document.getElementById('global-search');
   if (globalSearch) globalSearch.placeholder = name === 'screening' ? 'Search screening queue...' : 'Search applications, clients...';
@@ -8408,7 +8446,7 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
     '</div>' +
     '<div class="evidence-meta-grid">' +
       renderEvidenceMetaChip('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)) +
-      renderEvidenceMetaChip('Policy ID/version', policyLabel + ' / ' + policyVersion) +
+      renderEvidenceMetaChip('Blocks', policy && policy.gateBehavior ? policy.gateBehavior : 'Officer review / reliance') +
       renderEvidenceMetaChip('Last verified', firstMeaningfulDetailValue(doc.verified_at, doc.verification_results && doc.verification_results.verified_at)) +
       renderEvidenceMetaChip('Uploaded by', uploadedBy) +
       renderEvidenceMetaChip('Verification status', verLabel) +
@@ -8426,12 +8464,12 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
     reviewComment +
     renderEvidenceClassificationPanel(doc) +
     '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
-      '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁 View</button>' +
+      '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">Details</button>' +
       '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
       '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
-      '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
-      '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">✗ Reject</button>' +
-      '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">ℹ Request Info</button>' +
+      '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">Accept with reason</button>' +
+      '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">Reject</button>' +
+      '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">Request replacement</button>' +
     '</div>' +
   '</div>';
 }
@@ -10311,7 +10349,7 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
   summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
   updateEnhancedRequirementsPanelState(summary, requirements || []);
   var blockedText = summary.approval_blocked ? 'Yes' : 'No';
-  var blockedTone = summary.approval_blocked ? 'red' : 'green';
+  var blockedTone = summary.approval_blocked ? 'red' : '';
   var triggerText = (summary.trigger_labels || []).length ? summary.trigger_labels.join(', ') : '—';
   var typeCounts = summary.type_counts || {};
   var chips = [
@@ -25241,7 +25279,7 @@ var AGENT1_POLICY_LIFECYCLES = [
   { key:'edd', label:'EDD Evidence' },
   { key:'change', label:'Change Management Evidence' },
   { key:'periodic', label:'Periodic Review Evidence' },
-  { key:'monitoring', label:'Monitoring / SAR Evidence' },
+  { key:'monitoring', label:'Monitoring Evidence' },
   { key:'regulatory', label:'Regulatory / Resource Evidence' },
   { key:'technical', label:'Technical Checks' }
 ];
@@ -25328,7 +25366,7 @@ var AGENT1_DOCUMENT_POLICIES = [
   agent1Policy('monitoring','DOC-MON-ADVERSE-MEDIA-CAPTURE-v1','adverse media source capture',['adverse_media_source_capture'],'Required when media source is used in investigation or memo reasoning.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['publisher/source capture', 'article date']),'Blocks alert/adverse media closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('monitoring','DOC-MON-TRANSACTION-EVIDENCE-v1','transaction support evidence',['transaction_support_evidence'],'Required when transaction monitoring case relies on client/officer evidence.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['transaction reference match', 'counterparty relevance']),'Blocks transaction monitoring case closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('monitoring','DOC-MON-CLIENT-EXPLANATION-v1','client explanation / response',['client_explanation','client_response_document'],'Required where client response is used to close or disposition an alert.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['response completeness', 'case question coverage']),'Blocks alert closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
-  agent1Policy('monitoring','DOC-MON-SAR-SUPPORT-v1','SAR/STR support document',['sar_support_document','str_support_document'],'Required where SAR/STR evidence is attached to a report or decision record.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['report reference match', 'sensitive handling marker']),'Blocks SAR/STR closure if failed/pending/stale/unclassified.','MLRO/SCO manual acceptance required.','No'),
+  agent1Policy('monitoring','DOC-MON-SAR-SUPPORT-v1','SAR/STR support document',['sar_support_document','str_support_document'],'Future / enterprise. SAR/STR implementation is not active in pilot scope.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['future MLRO/SCO report evidence controls']),'Future / enterprise; not active runtime verified in pilot.','Manual acceptance not available in pilot.','No', { status:'Future / enterprise', coverageStatus:'Future / enterprise', manualAcceptanceAllowed:false }),
   agent1Policy('monitoring','DOC-MON-CLOSURE-EVIDENCE-v1','investigation closure evidence',['investigation_closure_evidence'],'Required where closure decision relies on uploaded evidence.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['closure rationale consistency']),'Blocks monitoring alert closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
 
   agent1Policy('regulatory','DOC-REG-GUIDANCE-v1','regulatory guidance',['regulatory_guidance'],'Library-only unless relied on in a case, memo, policy, or decision. If relied upon, source/date/version verification is required.',AGENT1_RESOURCE_MATERIAL_CHECKS,'Library only; blocks reliance if cited and source/date/version are unverified.','Compliance owner acceptance required if cited evidence cannot be verified.','No', { gateType:'library' }),
@@ -25352,6 +25390,129 @@ var AGENT1_DOCUMENT_POLICIES = [
   agent1Policy('technical','DOC-UNKNOWN-UNCLASSIFIED-v1','Unclassified document / unknown policy',['unknown','unclassified','supporting_document'],'Any uploaded document that cannot be classified into a known policy.', ['document classification required', 'officer classification route', 'automated reliance blocked'], 'Unclassified documents are blocked from automated reliance, routed for officer classification, and excluded from memo/approval reliance until classified and verified or manually accepted with reason.', 'Senior manual acceptance allowed with documented reason after classification.', 'No', { gateType:'review', coverageStatus:'Active' })
 ];
 window.AGENT1_DOCUMENT_POLICIES = AGENT1_DOCUMENT_POLICIES;
+
+// PR-DOC-POLICY-CANONICAL-1: canonical document policies replace the
+// prior lifecycle-row fallback. The backend /config/document-policies payload
+// supersedes these values at runtime when available.
+AGENT1_POLICY_REGISTRY_VERSION = 'DOC-POLICY-CANONICAL-v1';
+AGENT1_POLICY_LIFECYCLES = [
+  { key:'entity', label:'Entity Documents' },
+  { key:'person', label:'Person / KYC Documents' },
+  { key:'edd', label:'EDD Evidence' },
+  { key:'change', label:'Change Management Evidence' },
+  { key:'periodic', label:'Periodic Review Evidence' },
+  { key:'monitoring', label:'Monitoring Evidence' },
+  { key:'regulatory', label:'Regulatory / Resource Evidence' },
+  { key:'evidence', label:'Supporting Evidence' }
+];
+
+function canonicalAgent1Policy(stage, policyId, family, docTypes, status, backendExecutable, materialChecks, gateBehavior, usedIn, triggers, options) {
+  options = options || {};
+  var lifecycle = AGENT1_POLICY_LIFECYCLES.find(function(item) { return item.key === stage; }) || { label: stage };
+  return {
+    stage: stage,
+    stageLabel: lifecycle.label,
+    category: stage,
+    category_label: lifecycle.label,
+    policyId: policyId,
+    policy_id: policyId,
+    version: options.version || 'v1',
+    family: family,
+    display_label: family,
+    document_type: (docTypes && docTypes[0]) || '',
+    docTypes: docTypes || [],
+    aliases: options.aliases || [],
+    status: status,
+    active_pilot_status: status,
+    backend_executable: !!backendExecutable,
+    runtime_verified: !!backendExecutable,
+    coverageStatus: status,
+    materialChecks: materialChecks || [],
+    material_checks: (materialChecks || []).map(function(label, index) {
+      return { id:'CHECK-' + (index + 1), label:label, method: options.method || (backendExecutable ? 'Hybrid' : 'Manual') };
+    }),
+    technicalChecks: options.technicalChecks || AGENT1_DEFAULT_TECHNICAL_CHECKS,
+    gateBehavior: gateBehavior,
+    gate_behaviour: [gateBehavior],
+    gateType: /block/i.test(gateBehavior || '') ? 'blocking' : 'review',
+    manualAcceptanceAllowed: options.manualAcceptanceAllowed !== false,
+    manualAcceptance: options.manualAcceptance || (options.manualAcceptanceAllowed === false ? 'Not allowed' : 'Allowed with documented reason'),
+    rescreeningTrigger: (triggers || []).some(function(t) { return /screen/i.test(t); }) ? 'Yes' : 'No',
+    usedIn: usedIn || [],
+    used_in: usedIn || [],
+    triggers: triggers || []
+  };
+}
+
+var AGENT1_WORKFLOW_USAGES = [
+  { workflow:'onboarding', label:'Onboarding / KYC', required_documents:['cert_inc','cert_reg','memarts','reg_dir','reg_sh','ubo_declaration','structure_chart','poa','passport','national_id','poa_person'], blockers:['Blocks KYC submission','Blocks memo generation','Blocks approval'], triggers:['document replacement stales memo'] },
+  { workflow:'director_change', label:'Director change', required_documents:['reg_dir','passport','national_id','poa_person'], blockers:['Blocks change completion'], triggers:['new/changed director re-screening required'] },
+  { workflow:'ubo_change', label:'UBO change', required_documents:['reg_sh','ubo_declaration','passport','national_id','poa_person'], blockers:['Blocks change completion'], triggers:['new/changed UBO re-screening required'] },
+  { workflow:'ownership_percentage_change', label:'Ownership percentage change', required_documents:['reg_sh','structure_chart'], blockers:['Blocks change completion'], triggers:['before/after comparison','total ownership validation','risk recalculation if material','re-screening if material'] },
+  { workflow:'address_change', label:'Address change', required_documents:['poa','cert_inc','cert_reg'], blockers:['Blocks change completion'], triggers:['address/risk consistency refresh'] },
+  { workflow:'company_name_change', label:'Company name change', required_documents:['certificate_name_change'], blockers:['Blocks change completion'], triggers:['entity re-screening required','stales memo','audits old name to new name'] },
+  { workflow:'dob_correction', label:'DOB correction', required_documents:['passport'], blockers:['Blocks change completion'], triggers:['identity continuity review'] },
+  { workflow:'nationality_correction', label:'Nationality correction', required_documents:['passport'], blockers:['Blocks change completion'], triggers:['re-screening and country-risk refresh if nationality/risk changes'] },
+  { workflow:'passport_expiry', label:'Passport expiry replacement', required_documents:['passport'], blockers:['Blocks reliance on superseded passport until replacement is verified or manually accepted'], triggers:['replacement document supersedes old passport after verification/manual acceptance'] },
+  { workflow:'periodic_review', label:'Periodic review', required_documents:['cert_inc','reg_dir','reg_sh','poa','passport','national_id','periodic_review_attestation'], blockers:['Blocks periodic review completion if required evidence is missing/pending/failed/stale/manual-review-required'], triggers:['risk-relevant delta check','refreshed evidence can stale memo'] },
+  { workflow:'edd_basic', label:'EDD basic pilot', required_documents:['source_wealth','source_funds','bank_statements','bankref'], blockers:['Blocks EDD closure only for active required documents'], triggers:['EDD evidence replacement stales memo'] },
+  { workflow:'monitoring', label:'Monitoring evidence', required_documents:['monitoring_support_evidence'], blockers:['Manual review only in pilot unless runtime verification exists'], triggers:['case-by-case officer risk refresh'] },
+  { workflow:'regulatory_source_evidence', label:'Regulatory / source evidence', required_documents:['regulatory_intelligence'], blockers:['Library-only by default; source/date/version review required if relied upon'], triggers:['cited source/version changes can stale memo/reasoning'] }
+];
+
+AGENT1_DOCUMENT_POLICIES = [
+  canonicalAgent1Policy('entity','DOC-ENTITY-COI-v1','Certificate of Incorporation',['cert_inc','certificate_of_incorporation'],'Active',true,['entity name match','registration number match','incorporation date match','jurisdiction match','document clarity','certification'],'Blocks KYC submission, memo generation, and approval when required and failed/pending/stale.',['Onboarding / KYC','Periodic review'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-REGISTRATION-v1','Certificate of Registration / Business registration',['cert_reg','business_registration'],'Manual review only',false,['issuer/authority review','entity name match','registration number/date review'],'Manual review only; not presented as runtime verified.',['Onboarding / KYC','Address change'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-MEMARTS-v1','Memorandum of Association',['memarts','memorandum_and_articles','articles_of_association'],'Active',true,['entity name match','authorised share capital','completeness','business objects / activities','certification'],'Blocks KYC submission, memo generation, and approval when required and failed/pending/stale.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-REGDIR-v1','Register of Directors',['reg_dir','register_of_directors'],'Active',true,['director extraction','director list consistency','completeness','certification'],'Blocks onboarding approval, director change completion, and periodic review completion when required.',['Onboarding / KYC','Director change','Periodic review'],['new/changed director re-screening required']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-REGSH-v1','Register of Shareholders',['reg_sh','register_of_shareholders','register_of_members'],'Active',true,['shareholder extraction','ownership percentage validation','UBO threshold detection','total ownership validation','certification'],'Blocks onboarding approval, UBO/ownership change completion, and periodic review completion when required.',['Onboarding / KYC','UBO change','Ownership percentage change','Periodic review'],['risk recalculation if material','re-screening if material']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-UBO-DECL-v1','UBO Declaration',['ubo_declaration'],'Manual review only',false,['declared UBO match','ownership percentage review','natural-person trace'],'Manual review only unless mapped to verified shareholder register/ownership chart evidence.',['Onboarding / KYC','UBO change'],['new/changed UBO re-screening required']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-OWNERSHIP-CHART-v1','Ownership chart / structure chart',['structure_chart','ownership_chart'],'Active',true,['UBO chain','ownership match','legibility','certification'],'Blocks ownership reliance when required and failed/pending/stale.',['Onboarding / KYC','Ownership percentage change'],['risk recalculation if material']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-BOARD-RES-v1','Board resolution / authorised signatory resolution',['board_res','board_resolution','authorised_signatory_resolution'],'Active',true,['signatory match','resolution date','scope of authority','certification'],'Blocks signatory/authority reliance when required and failed/pending/stale.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-REGISTERED-ADDRESS-v1','Proof of registered address',['poa','proof_of_registered_address'],'Active',true,['document date','entity name match','address match','clarity/readability','certification'],'Blocks onboarding approval, address change completion, and periodic review completion when required.',['Onboarding / KYC','Address change','Periodic review'],['address/risk consistency refresh']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-FINANCIALS-v1','Financial statements / management accounts',['fin_stmt','financial_statements'],'Active',true,['financial period','entity name match','turnover consistency','certification'],'Blocks reliance when required as business scale or periodic review evidence.',['Onboarding / KYC','Periodic review'],['risk recalculation where financial/business activity changes']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-LICENCE-v1','Regulatory licence',['licence','business_licence'],'Active',true,['licence applicability gate','entity name match','licence validity','licence scope','certification'],'Blocks reliance where a regulated/licensed business activity is declared.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-CONTRACTS-v1','Contracts / invoices / business activity evidence',['contracts','invoices'],'Active',true,['name match','business relevance','clarity'],'Blocks automated reliance only when used in memo or approval reasoning.',['Onboarding / KYC','Periodic review'],['memo staleness if cited evidence changes']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-AML-POLICY-v1','AML/compliance policy',['aml_policy','compliance_policy'],'Active',true,['policy completeness','policy date','relevance'],'Blocks reliance when required for regulated/high-risk/intermediary review.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-GOOD-STANDING-v1','Certificate of Good Standing / Incumbency',['cert_gs','certificate_good_standing'],'Manual review only',false,['issuer/authority review','date/freshness','entity continuity'],'Manual review only; accepted upload type but not runtime verified in pilot.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-TRUST-DEED-v1','Trust deed / foundation charter / partnership agreement',['trust_deed','foundation_charter','partnership_agreement'],'Manual review only',false,['legal form review','party/beneficiary extraction','control/person trace'],'Manual review only for pilot.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('person','DOC-PERSON-PASSPORT-v1','Passport',['passport','passport_copy'],'Active',true,['document expiry','name match','DOB match','nationality match','photo quality','certification'],'Blocks KYC, director/UBO changes, DOB/nationality correction, and passport replacement until verified or manually accepted.',['Onboarding / KYC','Director change','UBO change','DOB correction','Nationality correction','Passport expiry replacement','Periodic review'],['re-screening and country-risk refresh if nationality/risk changes']),
+  canonicalAgent1Policy('person','DOC-PERSON-NATIONAL-ID-v1','National ID / government ID',['national_id','id_card','drivers_license','director_id','ubo_id'],'Active',true,['document expiry','name match','DOB match','nationality match','photo quality'],'Blocks identity reliance when required and failed/pending/stale.',['Onboarding / KYC','Director change','UBO change','Periodic review'],['re-screening if identity fields change']),
+  canonicalAgent1Policy('person','DOC-PERSON-ADDRESS-v1','Proof of address',['poa_person','personal_poa','residential_address_proof'],'Active',true,['document date','name match','address match','clarity/readability','certification'],'Blocks person address reliance when required and failed/pending/stale.',['Onboarding / KYC','Director change','UBO change','Periodic review'],[]),
+  canonicalAgent1Policy('person','DOC-PERSON-CV-v1','CV / LinkedIn profile',['cv','linkedin_profile'],'Active',true,['name match','employment history presence','employment relevance'],'Blocks EDD/person background reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
+  canonicalAgent1Policy('evidence','DOC-EVIDENCE-BANK-REFERENCE-v1','Bank reference',['bankref','bank_reference','pep_bank_reference','edd_bank_reference'],'Active',true,['bank letterhead','document date','entity/person name match','account standing','signatory'],'Blocks EDD/person/entity reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
+  canonicalAgent1Policy('person','DOC-PERSON-PEP-SUPPORT-v1','PEP declaration support',['pep_declaration','pep-declaration','pep_support'],'Active',true,['name match','source of wealth evidence','consistency / plausibility'],'Blocks EDD and approval reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-SOW-v1','Source of Wealth',['source_wealth','sow','source_of_wealth'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks EDD closure only when active required SOW evidence is requested.',['EDD basic pilot','Periodic review'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-SOF-v1','Source of Funds',['source_funds','sof','source_of_funds'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks EDD closure only when active required SOF evidence is requested.',['EDD basic pilot','Periodic review'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-BANK-STATEMENTS-v1','Bank statements',['bank_statements','bank_statement'],'Active',true,['statement period','account holder match','completeness'],'Blocks EDD closure only when active required bank statement evidence is requested.',['EDD basic pilot','Periodic review'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-TAX-RETURN-v1','Tax return',['tax_return'],'Manual review only',false,['party match','tax year/date review','income/source consistency'],'Manual review only in pilot.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-PAYSLIP-v1','Payslip / employment income proof',['payslip','employment_income_proof'],'Manual review only',false,['party match','employer match','income period review'],'Manual review only in pilot.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-INVESTMENT-INCOME-v1','Dividend / investment income proof',['investment_income','dividend_income'],'Manual review only',false,['issuer/investment match','value/date consistency'],'Manual review only in pilot.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-SALE-AGREEMENT-v1','Sale agreement',['sale_agreement'],'Manual review only',false,['buyer/seller match','asset/value consistency','date review'],'Manual review only in pilot.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-INHERITANCE-v1','Inheritance evidence',['inheritance_evidence'],'Manual review only',false,['beneficiary match','estate/source consistency','date review'],'Manual review only in pilot.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-LOAN-v1','Loan agreement',['loan_agreement'],'Manual review only',false,['lender/borrower match','repayment/source plausibility'],'Manual review only in pilot.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-ADVERSE-MEDIA-RESPONSE-v1','Adverse media response',['adverse_media_response'],'Manual review only',false,['allegation coverage','response relevance','supporting evidence consistency'],'Manual review only in pilot; adverse-media screening remains outside Agent 1.',['EDD basic pilot'],[]),
+  canonicalAgent1Policy('edd','DOC-EDD-SENIOR-APPROVAL-v1','Senior management approval evidence',['senior_approval_evidence'],'Manual review only',false,['approver authority','approval date','scope of approval'],'Manual review only; cannot be auto-accepted by Agent 1.',['EDD basic pilot'],[],{ manualAcceptanceAllowed:false }),
+  canonicalAgent1Policy('periodic','DOC-PR-ATTESTATION-v1','Periodic review attestation / no-change confirmation',['periodic_review_attestation','no_change_confirmation'],'Manual review only',false,['attestation completeness','signatory authority','no-change scope'],'Manual review only unless current periodic-review runtime supports this evidence object.',['Periodic review'],[]),
+  canonicalAgent1Policy('change','DOC-CHANGE-COMPANY-NAME-v1','Certificate of Name Change',['certificate_name_change'],'Manual review only',false,['old company name','new company name','registration number','issuer/authority','date','entity continuity'],'Blocks company name change completion when required; manual review only in pilot.',['Company name change'],['entity re-screening required','stales memo','audits old name to new name']),
+  canonicalAgent1Policy('monitoring','DOC-MON-SUPPORT-v1','Monitoring alert support evidence',['monitoring_support_evidence','transaction_support_evidence','client_response_document'],'Manual review only',false,['alert/case match','evidence relevance','source/date capture','investigation consistency'],'Manual review only in pilot; not presented as runtime verified.',['Monitoring evidence'],[]),
+  canonicalAgent1Policy('monitoring','DOC-MON-SAR-FUTURE-v1','SAR/STR support document',['sar_str_support'],'Future / enterprise',false,['future MLRO/SCO report evidence controls'],'Future / enterprise. SAR/STR implementation is not active in pilot scope.',['Monitoring evidence'],[],{ manualAcceptanceAllowed:false }),
+  canonicalAgent1Policy('regulatory','DOC-REG-INTELLIGENCE-v1','Regulatory intelligence source document',['regulatory_intelligence','regulatory_guidance','laws_regulations','compliance_resource_file','source_document_used_in_memo'],'Manual review only',false,['source/date/version required','jurisdiction relevance','memo/reasoning citation match'],'Library-only by default. If relied on in a case, memo, policy, or decision, source/date/version review is required.',['Regulatory / source evidence'],['cited source/version changes can stale memo/reasoning']),
+  canonicalAgent1Policy('evidence','DOC-UNKNOWN-UNCLASSIFIED-v1','Unclassified / supporting document',['supporting_document','general','unknown','unclassified'],'Manual review only',false,['officer classification required','automated reliance blocked','manual acceptance reason required'],'Unknown documents require review and are blocked from automated reliance until classified and verified or manually accepted with reason.',['Onboarding / KYC','EDD basic pilot','Periodic review','Monitoring evidence'],[])
+];
+window.AGENT1_DOCUMENT_POLICIES = AGENT1_DOCUMENT_POLICIES;
+window.AGENT1_WORKFLOW_USAGES = AGENT1_WORKFLOW_USAGES;
+var AGENT1_POLICY_SUMMARY = {
+  registry_version: AGENT1_POLICY_REGISTRY_VERSION,
+  total_policies: AGENT1_DOCUMENT_POLICIES.length,
+  active_policies: AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.status === 'Active'; }).length,
+  manual_review_only_policies: AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.status === 'Manual review only'; }).length,
+  future_enterprise_policies: AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.status === 'Future / enterprise'; }).length,
+  policies_that_block_decisions: AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.gateType === 'blocking'; }).length,
+  unknown_documents_require_review: true,
+  sar_str_active: false
+};
+window.AGENT1_POLICY_SUMMARY = AGENT1_POLICY_SUMMARY;
 
 var activePolicyLifecycle = 'entity';
 
@@ -25377,6 +25538,9 @@ function policyContainsSearch(policy, query) {
     policy.gateBehavior,
     policy.manualAcceptance,
     policy.rescreeningTrigger,
+    policy.status,
+    (policy.usedIn || policy.used_in || []).join(' '),
+    (policy.triggers || []).join(' '),
     (policy.materialChecks || []).join(' '),
     (policy.technicalChecks || []).join(' ')
   ].join(' ').toLowerCase();
@@ -25387,6 +25551,8 @@ function renderPolicySummary() {
   var container = document.getElementById('agent1-policy-summary');
   if (!container) return;
   var active = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'active'; }).length;
+  var manual = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'manual review only'; }).length;
+  var future = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'future / enterprise'; }).length;
   var stages = AGENT1_POLICY_LIFECYCLES.filter(function(stage) {
     return AGENT1_DOCUMENT_POLICIES.some(function(policy) { return policy.stage === stage.key; });
   }).length;
@@ -25395,9 +25561,11 @@ function renderPolicySummary() {
   var stats = [
     ['Total document policies', AGENT1_DOCUMENT_POLICIES.length],
     ['Active policies', active],
-    ['Lifecycle stages covered', stages],
-    ['Documents with blockers', blockers],
-    ['Unknown handling enabled', unknownEnabled ? 'Yes' : 'No']
+    ['Manual review only', manual],
+    ['Future / enterprise', future],
+    ['Policy families covered', stages],
+    ['Policies that block decisions', blockers],
+    ['Unknown documents require review', unknownEnabled ? 'Yes' : 'No']
   ];
   container.innerHTML = stats.map(function(stat) {
     return '<div class="agent1-summary-card"><div class="agent1-summary-label">' + escapeHtml(stat[0]) + '</div><div class="agent1-summary-value">' + escapeHtml(stat[1]) + '</div></div>';
@@ -25425,31 +25593,40 @@ function renderPolicyChipList(items, cls) {
 
 function renderAgent1PolicyCard(policy, index) {
   var open = index < 2 || policy.policyId === 'DOC-UNKNOWN-UNCLASSIFIED-v1';
+  var usedIn = policy.usedIn || policy.used_in || [];
+  var triggers = policy.triggers || [];
+  var statusClass = String(policy.status || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  var executableLabel = policy.backend_executable || policy.runtime_verified ? 'Runtime verified' : (String(policy.status).toLowerCase() === 'future / enterprise' ? 'Future scope' : 'Manual review');
   return '<details class="agent1-policy-card" ' + (open ? 'open' : '') + '>' +
     '<summary>' +
       '<div style="min-width:0;">' +
         '<div class="agent1-policy-family">' + escapeHtml(policy.family) + '</div>' +
         '<div class="agent1-policy-meta">' +
           '<span class="agent1-chip">' + escapeHtml(policy.stageLabel) + '</span>' +
-          '<span class="agent1-chip">' + escapeHtml(policy.policyId + ' / ' + policy.version) + '</span>' +
-          '<span class="agent1-gate-badge ' + gateBadgeClass(policy) + '">' + escapeHtml(policy.gateType === 'blocking' ? 'Reliance gate' : policy.gateType === 'library' ? 'Library / cited reliance' : 'Review gate') + '</span>' +
+          '<span class="agent1-chip ' + (policy.backend_executable ? 'material' : '') + '">' + escapeHtml(executableLabel) + '</span>' +
+          '<span class="agent1-gate-badge ' + gateBadgeClass(policy) + '">' + escapeHtml(policy.gateType === 'blocking' ? 'Blocks decisions' : policy.gateType === 'library' ? 'Library / cited reliance' : 'Requires review') + '</span>' +
         '</div>' +
       '</div>' +
-      '<span class="agent1-status-badge">' + escapeHtml(policy.status) + '</span>' +
+      '<span class="agent1-status-badge ' + escapeHtml(statusClass) + '">' + escapeHtml(policy.status) + '</span>' +
     '</summary>' +
     '<div class="agent1-policy-body">' +
-      '<div class="agent1-policy-section-label">When required</div>' +
-      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.whenRequired) + '</div>' +
-      '<div class="agent1-policy-section-label">Gate behaviour</div>' +
+      '<div class="agent1-policy-section-label">Used in</div>' +
+      '<div class="agent1-chip-row">' + renderPolicyChipList(usedIn.length ? usedIn : ['Not mapped to an active workflow'], '') + '</div>' +
+      '<div class="agent1-policy-section-label">Blocks / gate behaviour</div>' +
       '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.gateBehavior) + '</div>' +
+      '<div class="agent1-policy-section-label">Triggers</div>' +
+      '<div class="agent1-chip-row">' + renderPolicyChipList(triggers.length ? triggers : ['No automatic trigger'], triggers.length ? 'material' : '') + '</div>' +
       '<div class="agent1-policy-section-label">Manual acceptance</div>' +
       '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.manualAcceptanceAllowed ? policy.manualAcceptance : 'Manual acceptance not allowed') + '</div>' +
-      '<div class="agent1-policy-section-label">Re-screening trigger</div>' +
-      '<span class="agent1-chip ' + (String(policy.rescreeningTrigger).toLowerCase().indexOf('yes') >= 0 || String(policy.rescreeningTrigger).toLowerCase().indexOf('re-screen') >= 0 ? 'material' : '') + '">' + escapeHtml(policy.rescreeningTrigger) + '</span>' +
       '<div class="agent1-policy-section-label">Material checks</div>' +
       '<div class="agent1-chip-row">' + renderPolicyChipList(policy.materialChecks, 'material') + '</div>' +
       '<div class="agent1-policy-section-label">Technical checks</div>' +
       '<div class="agent1-chip-row">' + renderPolicyChipList(policy.technicalChecks, 'technical') + '</div>' +
+      '<div class="agent1-policy-section-label">Audit details</div>' +
+      '<div class="agent1-chip-row">' +
+        '<span class="agent1-chip">' + escapeHtml(policy.policyId + ' / ' + policy.version) + '</span>' +
+        '<span class="agent1-chip">' + escapeHtml(policy.backend_executable ? 'backend executable' : 'not backend executable') + '</span>' +
+      '</div>' +
     '</div>' +
   '</details>';
 }
@@ -25614,8 +25791,8 @@ async function saveAIChecks() {
 // ═══════════════════════════════════════════════════════════
 var AI_AGENTS = [
   { id:1, name:'Identity & Document Integrity Agent', icon:'🔍', stage:'Onboarding', enabled:true,
-    description:'Validates authenticity and consistency of identity documents. Performs ~36 checks including MRZ extraction, expiry validation, tampering detection, cross-document consistency. Does NOT do sanctions screening or registry lookups.',
-    checks:['Detect passport type', 'Extract MRZ (machine-readable zone)', 'Verify MRZ checksum', 'Match name with application data', 'Check date of birth consistency', 'Extract expiry date', 'Check if expired', 'Check if near expiry', 'Validate issue date vs expiry rules', 'Detect tampering', 'Detect image manipulation', 'Verify watermark patterns', 'Detect cropped or incomplete documents', 'Passport name vs application name', 'Passport address vs proof of address', 'Director name vs registry data', 'Missing pages detection', 'Missing UBO documents', 'Incomplete shareholder register', 'Blur detection', 'Cropping detection', 'Certificate of incorporation validity', 'Shareholder register completeness', 'Director list consistency', 'Nationality consistency', 'Proof of address issue date', 'Proof of address address match', 'Proof of address document type validity', 'Document type classification', 'Image quality assessment', 'Document orientation check', 'Multi-page document completeness', 'Signature presence check', 'Photo quality assessment', 'Document language detection'] },
+    description:'Validates uploaded documents against canonical document policies. Checks are document-type based, not lifecycle duplicated; workflows map verified documents to onboarding, change management, periodic review, and EDD blockers/triggers. Agent 1 can verify, flag, block, recommend, and trigger required follow-up. Agent 1 does not approve, reject, waive, or override compliance decisions and does not perform sanctions, PEP, or adverse-media screening.',
+    checks:['Canonical document policy registry', 'Document-type verification checks', 'Upload gate checks', 'Material issue detection', 'Manual-review-only evidence routing', 'Future/enterprise scope separation', 'Workflow blocker mapping', 'Re-screening requirement markers', 'Risk refresh requirement markers', 'Memo staleness requirement markers', 'Unknown document review routing', 'Audit/export detail preservation'] },
   { id:2, name:'External Database Cross-Verification Agent', icon:'🔎', stage:'Onboarding', enabled:true,
     description:'Rule-based registry verification with provider abstraction. Checks company identity data against external registries (OpenCorporates, Companies House, CBRD, ADGM, DIFC). Runs in degraded mode when no external API credentials are configured.',
     checks:['Registry source selection (rule)', 'Company registration number lookup (rule)', 'Entity name match to registry (rule)', 'Incorporation date match (rule)', 'Company status check (rule)', 'Jurisdiction match (rule)', 'Company type / legal form (rule)', 'Registered address match (hybrid)', 'Director names cross-check (hybrid)', 'Shareholder names cross-check (hybrid)', 'UBO declarations vs registry shareholders (hybrid)', 'Registry filing recency / availability (rule)', 'Interpretation of unusual registry output (hybrid)'] },
@@ -25674,7 +25851,7 @@ function renderAgentsPipeline() {
     '<div class="stat-card"><div class="stat-card-label">Total Agents</div><div class="stat-card-value">' + AI_AGENTS.length + '</div></div>' +
     '<div class="stat-card"><div class="stat-card-label">Active Agents</div><div class="stat-card-value" style="color:var(--green);">' + enabled + '</div></div>' +
     '<div class="stat-card"><div class="stat-card-label">Disabled Agents</div><div class="stat-card-value" style="color:var(--red);">' + (AI_AGENTS.length - enabled) + '</div></div>' +
-    '<div class="stat-card"><div class="stat-card-label">Total Checks</div><div class="stat-card-value" style="color:var(--brand);">' + totalChecks + '</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Pipeline Check Labels</div><div class="stat-card-value" style="color:var(--brand);">' + totalChecks + '</div></div>' +
   '</div>';
 
   AI_AGENTS.forEach(function(agent, ai) {
@@ -25686,7 +25863,7 @@ function renderAgentsPipeline() {
           '<div class="agent-config-desc">' + agent.description + '</div>' +
         '</div>' +
         '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px;">' + agent.stage + '</span>' +
-        '<span class="badge" style="font-size:10px;">' + agent.checks.length + ' checks</span>' +
+        '<span class="badge" style="font-size:10px;">' + (agent.id === 1 && AGENT1_POLICY_SUMMARY ? (AGENT1_POLICY_SUMMARY.active_policies + ' active policies') : (agent.checks.length + ' checks')) + '</span>' +
         '<div class="toggle-switch' + (agent.enabled ? ' on' : '') + '" onclick="event.stopPropagation();toggleAgent(' + ai + ',this)"></div>' +
       '</div>' +
       '<div class="agent-config-body">' +

@@ -65,6 +65,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Import database module
 from db import get_db as db_get_db, init_db as db_init_db, USE_POSTGRESQL, log_agent_execution
+from document_policy_registry import build_document_policy_payload
 
 # S3 support (optional)
 try:
@@ -13097,7 +13098,8 @@ class VerificationChecksHandler(BaseHandler):
                 entity.append(item)
             else:
                 person.append(item)
-        self.success({"entity": entity, "person": person})
+        policy_payload = build_document_policy_payload()
+        self.success({"entity": entity, "person": person, **policy_payload})
 
     def put(self):
         user = self.require_auth(roles=["admin"])
@@ -13165,6 +13167,15 @@ class VerificationChecksHandler(BaseHandler):
         db.commit()
         db.close()
         self.success({"status": "saved"})
+
+
+class DocumentPoliciesHandler(BaseHandler):
+    """GET /api/config/document-policies"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        self.success(build_document_policy_payload())
 
 
 # ══════════════════════════════════════════════════════════
@@ -22626,6 +22637,13 @@ DOCUMENT_TYPE_NORMALIZE = {
     "source of wealth": "source_wealth",
     "source_of_funds": "source_funds",
     "source of funds": "source_funds",
+    "id_card": "national_id",
+    "identity_card": "national_id",
+    "drivers_license": "national_id",
+    "driver_license": "national_id",
+    "driving_license": "national_id",
+    "director_id": "national_id",
+    "ubo_id": "national_id",
     "doc-memarts": "memarts",
     "memorandum_of_association": "memarts",
     "memorandum of association": "memarts",
@@ -30651,6 +30669,7 @@ def make_app():
         (r"/api/config/roles-permissions", RolesPermissionsHandler),
         (r"/api/config/ai-agents", AIAgentsHandler),
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
+        (r"/api/config/document-policies", DocumentPoliciesHandler),
         (r"/api/config/verification-checks", VerificationChecksHandler),
         (r"/api/config/environment", EnvironmentInfoHandler),
         (r"/api/settings/enhanced-requirements", EnhancedRequirementRulesHandler),

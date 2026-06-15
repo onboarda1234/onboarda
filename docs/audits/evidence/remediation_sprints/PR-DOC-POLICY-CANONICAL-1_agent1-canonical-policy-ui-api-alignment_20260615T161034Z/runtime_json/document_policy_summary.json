@@ -1,0 +1,20 @@
+{
+  "active_policies": 20,
+  "backend_executable_policies": 20,
+  "check_method_counts": {
+    "AI": 8,
+    "Hybrid": 35,
+    "Manual": 54,
+    "Rule": 45,
+    "Unknown": 0
+  },
+  "executable_check_instances": 88,
+  "future_enterprise_policies": 1,
+  "lifecycle_stages_covered": 13,
+  "manual_review_only_policies": 17,
+  "policies_that_block_decisions": 22,
+  "registry_version": "DOC-POLICY-CANONICAL-v1",
+  "sar_str_active": false,
+  "total_policies": 38,
+  "unknown_documents_require_review": true
+}

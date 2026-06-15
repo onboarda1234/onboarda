@@ -79,9 +79,12 @@ def test_doc2a_agent1_settings_is_lifecycle_policy_registry():
     assert "agent1-policy-status-filter" in html
     assert "Total document policies" in html
     assert "Active policies" in html
-    assert "Lifecycle stages covered" in html
-    assert "Documents with blockers" in html
-    assert "Unknown handling enabled" in html
+    assert "Manual review only" in html
+    assert "Future / enterprise" in html
+    assert "Policy families covered" in html
+    assert "Policies that block decisions" in html
+    assert "Unknown documents require review" in html
+    assert "DOC-POLICY-CANONICAL-v1" in html
 
     for section in [
         "Entity Documents",
@@ -89,9 +92,9 @@ def test_doc2a_agent1_settings_is_lifecycle_policy_registry():
         "EDD Evidence",
         "Change Management Evidence",
         "Periodic Review Evidence",
-        "Monitoring / SAR Evidence",
+        "Monitoring Evidence",
         "Regulatory / Resource Evidence",
-        "Technical Checks",
+        "Supporting Evidence",
     ]:
         assert section in html
 
@@ -101,23 +104,22 @@ def test_doc2a_policy_registry_lists_required_document_families():
 
     required_families = [
         "Certificate of Incorporation",
-        "Business registration / licence",
-        "Memorandum & Articles",
+        "Certificate of Registration / Business registration",
+        "Memorandum of Association",
         "Register of Directors",
         "Register of Shareholders",
-        "UBO declaration",
-        "Ownership chart",
+        "UBO Declaration",
+        "Ownership chart / structure chart",
         "Board resolution / authorised signatory resolution",
         "Proof of registered address",
-        "Financial statements",
-        "AML/compliance policy where required",
-        "Contracts / invoices where used as business activity evidence",
+        "Financial statements / management accounts",
+        "AML/compliance policy",
+        "Contracts / invoices / business activity evidence",
         "Passport",
-        "National ID",
+        "National ID / government ID",
         "Proof of address",
-        "CV",
+        "CV / LinkedIn profile",
         "Bank reference",
-        "Signatory authority",
         "PEP declaration support",
         "Source of Wealth",
         "Source of Funds",
@@ -130,35 +132,12 @@ def test_doc2a_policy_registry_lists_required_document_families():
         "Loan agreement",
         "Adverse media response",
         "Senior management approval evidence",
-        "Enhanced due diligence memo support",
-        "Director change evidence",
-        "UBO change evidence",
-        "Ownership percentage change evidence",
-        "Registered address change evidence",
-        "PEP status change evidence",
-        "DOB correction evidence",
-        "Nationality correction evidence",
-        "Name correction evidence",
-        "refreshed Certificate of Incorporation / registry extract",
-        "updated registers",
-        "updated proof of address",
-        "expired document replacement",
-        "periodic review attestation",
-        "no-change confirmation",
-        "refreshed SOW/SOF where high-risk",
-        "updated financial/business activity evidence",
-        "monitoring alert support document",
-        "adverse media source capture",
-        "transaction support evidence",
-        "client explanation / response",
+        "Periodic review attestation / no-change confirmation",
+        "Certificate of Name Change",
+        "Monitoring alert support evidence",
         "SAR/STR support document",
-        "investigation closure evidence",
-        "regulatory guidance",
-        "laws/regulations",
-        "internal policy document",
-        "compliance resource file",
         "regulatory intelligence source document",
-        "source document used in memo/reasoning",
+        "Unclassified / supporting document",
     ]
 
     for family in required_families:
@@ -169,24 +148,18 @@ def test_doc2a_change_management_policy_baselines_are_explicit():
     html = _backoffice_html()
 
     for expected in [
-        "updated register of directors + person KYC",
+        "Director change",
         "director extraction",
-        "appointment/removal detection",
-        "person KYC present",
-        "name/DOB/nationality match",
-        "updated shareholder register + person KYC",
-        "UBO extraction",
+        "new/changed director re-screening required",
+        "UBO change",
         "ownership percentage validation",
-        "natural-person trace",
-        "application consistency",
+        "new/changed UBO re-screening required",
         "before/after comparison",
         "total ownership validation",
-        "threshold/materiality detection",
-        "DOB extraction",
-        "nationality extraction",
+        "DOB correction",
+        "Nationality correction",
         "identity continuity",
-        "re-screening required",
-        "Risk recalculation and re-screening if material",
+        "risk recalculation if material",
     ]:
         assert expected in html
 
@@ -203,10 +176,10 @@ def test_doc2a_policy_cards_show_required_controls():
         "manualAcceptanceAllowed",
         "rescreeningTrigger",
         "coverageStatus",
-        "When required",
-        "Gate behaviour",
+        "Used in",
+        "Blocks / gate behaviour",
         "Manual acceptance",
-        "Re-screening trigger",
+        "Triggers",
         "Material checks",
         "Technical checks",
     ]:
@@ -217,19 +190,47 @@ def test_doc2a_unclassified_documents_are_not_auto_reliable():
     html = _backoffice_html()
 
     assert "DOC-UNKNOWN-UNCLASSIFIED-v1" in html
-    assert "Unclassified document / unknown policy" in html
-    assert "blocked from automated reliance" in html
-    assert "routed for officer classification" in html
-    assert "excluded from memo/approval reliance until classified and verified or manually accepted with reason" in html
+    assert "Unclassified / supporting document" in html
+    assert "automated reliance blocked" in html
+    assert "officer classification required" in html
+    assert "blocked from automated reliance until classified and verified or manually accepted with reason" in html
     assert "Officer must classify this document before it can be relied on automatically." in html
 
 
 def test_doc2a_resource_documents_are_library_only_unless_relied_on():
     html = _backoffice_html()
 
-    assert "Library-only unless relied on in a case, memo, policy, or decision" in html
-    assert "source/date/version verification is required" in html
-    assert "Library only; blocks reliance if cited and source/date/version are unverified" in html
+    assert "Library-only by default" in html
+    assert "source/date/version review is required" in html
+    assert "source/date/version required" in html
+
+
+def test_doc_policy_canonical_ui_renames_and_pipeline_boundary():
+    html = _backoffice_html()
+
+    assert "Document Verification Policies" in html
+    assert "Agent 1 verifies each document type consistently" in html
+    assert "Checks are document-type based, not lifecycle duplicated" in html
+    assert "Agent 1 does not approve, reject, waive, or override compliance decisions" in html
+    assert "does not perform sanctions, PEP, or adverse-media screening" in html
+    assert "Pipeline Check Labels" in html
+
+
+def test_doc_policy_canonical_ui_status_and_scope_are_honest():
+    html = _backoffice_html()
+
+    assert "Runtime verified" in html
+    assert "Manual review only" in html
+    assert "Future / enterprise" in html
+    assert "Future / enterprise. SAR/STR implementation is not active in pilot scope." in html
+    assert "sar_str_active: false" in html
+    assert "Manual review only; not presented as runtime verified" in html
+
+
+def test_approval_blocked_chip_is_not_green_when_not_blocked():
+    html = _backoffice_html()
+
+    assert "var blockedTone = summary.approval_blocked ? 'red' : '';" in html
 
 
 def test_doc2a_document_upload_attribution_schema_is_migrated(tmp_path, monkeypatch):
