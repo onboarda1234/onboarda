@@ -1,0 +1,298 @@
+{
+  "generated_at": "2026-06-15T09:21:40Z",
+  "base_origin_main_sha": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+  "staging_version": {
+    "git_sha": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "git_sha_short": "6e44c13",
+    "build_time": "2026-06-15T08:12:29Z",
+    "image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "environment": "staging",
+    "service": "regmind-backend"
+  },
+  "screening_status": {
+    "provider_truth": {
+      "active_aml_screening_provider": "ComplyAdvantage Mesh",
+      "active_aml_screening_provider_key": "complyadvantage",
+      "identity_verification_provider": "Sumsub IDV/KYC",
+      "identity_verification_provider_key": "sumsub",
+      "registry_kyb_provider": "OpenCorporates registry/enrichment",
+      "registry_kyb_status": "simulated",
+      "requested_screening_provider": "complyadvantage",
+      "requested_screening_provider_label": "ComplyAdvantage Mesh",
+      "screening_abstraction_enabled": true,
+      "screening_abstraction_required_for_ca": true,
+      "simulation_fallback_mode": "disabled",
+      "simulation_fallback_enabled": false,
+      "last_provider_status_check": "2026-06-15T09:21:33Z",
+      "sumsub_provider_scope": "individual_kyc_identity_verification",
+      "aml_provider_scope": "aml_sanctions_pep_rca_adverse_media_monitoring",
+      "provider_labels_safe": true
+    },
+    "opencorporates": {
+      "configured": false,
+      "status": "simulated",
+      "role": "Registry/KYB enrichment provider",
+      "description": "Company registry verification and enrichment"
+    },
+    "ip_geolocation": {
+      "configured": true,
+      "status": "live",
+      "description": "IP address geolocation and risk assessment"
+    },
+    "sumsub": {
+      "configured": true,
+      "status": "live",
+      "role": "Identity Verification Provider",
+      "provider_scope": "individual_kyc_identity_verification",
+      "description": "Individual identity verification and KYC (document + selfie + liveness)"
+    },
+    "complyadvantage": {
+      "configured": true,
+      "status": "live",
+      "active": true,
+      "requested_provider": "complyadvantage",
+      "requested_provider_label": "ComplyAdvantage Mesh",
+      "provider_display_name": "ComplyAdvantage Mesh",
+      "abstraction_enabled": true,
+      "implementation_status": "active",
+      "fallback_mode": "disabled",
+      "simulation_fallback_enabled": false,
+      "role": "AML sanctions, PEP/RCA, adverse-media screening, and ongoing monitoring",
+      "description": "ComplyAdvantage Mesh AML, sanctions, PEP/RCA, adverse-media, and monitoring integration",
+      "blockers": []
+    },
+    "anthropic": {
+      "configured": true,
+      "status": "configured",
+      "description": "Claude-backed document verification and optional analysis paths; the live compliance memo approval path remains deterministic"
+    },
+    "environment": "staging"
+  },
+  "staging_secret": {
+    "arn_hash": "da27bba1c9c2695c",
+    "name": "regmind/staging",
+    "version_ids": [
+      {
+        "version_id_hash": "23272ea700e0e71f",
+        "stages": [
+          "AWSPREVIOUS"
+        ],
+        "created_date": "2026-05-03T21:17:07.505000+04:00"
+      },
+      {
+        "version_id_hash": "f670583df4288c90",
+        "stages": [
+          "AWSCURRENT"
+        ],
+        "created_date": "2026-06-05T14:20:26.611000+04:00"
+      }
+    ],
+    "provider_config_redacted": {
+      "SCREENING_PROVIDER": null,
+      "ENABLE_SCREENING_ABSTRACTION": null,
+      "COMPLYADVANTAGE_API_BASE_URL": {
+        "configured": true,
+        "host": "api.mesh.complyadvantage.com",
+        "sha256_16": "24cd31c7b008e9d4"
+      },
+      "COMPLYADVANTAGE_AUTH_URL": {
+        "configured": true,
+        "host": "api.mesh.complyadvantage.com",
+        "sha256_16": "ac4420b2ca99ba3b"
+      },
+      "COMPLYADVANTAGE_REALM": {
+        "configured": true,
+        "sha256_16": "6ccfd8cc3c42712d"
+      },
+      "COMPLYADVANTAGE_USERNAME": {
+        "configured": true,
+        "sha256_16": "ab99b576767901e6"
+      },
+      "COMPLYADVANTAGE_PASSWORD": {
+        "configured": true
+      },
+      "webhook_secret": {
+        "configured": true
+      },
+      "credential_mode_inferred_from_urls": "production_domain_or_unsuffixed_provider_url",
+      "COMPLYADVANTAGE_SCREENING_CONFIG_ID": {
+        "configured": true,
+        "sha256_16": "d7b7302405db3858"
+      },
+      "COMPLYADVANTAGE_DEFAULT_WORKFLOW_ID": {
+        "configured": true,
+        "sha256_16": "380d1bba9fbb24c5"
+      }
+    }
+  },
+  "webhook_secret": {
+    "arn_hash": "a9ea2089c43758aa",
+    "name": "regmind/staging/complyadvantage/webhook-secret",
+    "version_ids": [
+      {
+        "version_id_hash": "ad6dec27191f758f",
+        "stages": [
+          "AWSPREVIOUS"
+        ],
+        "created_date": "2026-05-02T19:17:04.412000+04:00"
+      },
+      {
+        "version_id_hash": "617bea16b1c1fdeb",
+        "stages": [
+          "AWSCURRENT"
+        ],
+        "created_date": "2026-05-11T10:33:26.451000+04:00"
+      }
+    ]
+  },
+  "ecs": {
+    "cluster": "regmind-staging",
+    "service": "regmind-backend",
+    "task_definition_arn": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581",
+    "desired_count": 2,
+    "running_count": 2,
+    "deployments": [
+      {
+        "id": "ecs-svc/0615194667908293263",
+        "status": "PRIMARY",
+        "taskDefinition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581",
+        "desiredCount": 2,
+        "runningCount": 2,
+        "createdAt": "2026-06-15T12:13:30.027000+04:00",
+        "updatedAt": "2026-06-15T12:16:52.423000+04:00"
+      }
+    ],
+    "task_definition_summary": {
+      "task_definition_arn": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581",
+      "revision": 581,
+      "container_image_hash": "5da6ecf7b008abf5",
+      "environment": {
+        "ENVIRONMENT": "staging",
+        "SCREENING_PROVIDER": "complyadvantage",
+        "ENABLE_SCREENING_ABSTRACTION": "true",
+        "COMPLYADVANTAGE_API_BASE_URL": {
+          "configured": true,
+          "host": "api.mesh.complyadvantage.com",
+          "sha256_16": "24cd31c7b008e9d4"
+        },
+        "COMPLYADVANTAGE_AUTH_URL": {
+          "configured": true,
+          "host": "api.mesh.complyadvantage.com",
+          "sha256_16": "ac4420b2ca99ba3b"
+        },
+        "COMPLYADVANTAGE_REALM": {
+          "from_secret": true,
+          "secret_ref_hash": "c9febabffaa9d2e0"
+        },
+        "COMPLYADVANTAGE_USERNAME": {
+          "from_secret": true,
+          "secret_ref_hash": "9dbd6bd1ecebdbd8"
+        },
+        "COMPLYADVANTAGE_PASSWORD": {
+          "from_secret": true,
+          "secret_ref_hash": "4fbc7dc7124cf999"
+        },
+        "COMPLYADVANTAGE_WEBHOOK_SECRET": {
+          "from_secret": true,
+          "secret_ref_hash": "a9ea2089c43758aa"
+        },
+        "SUMSUB_APP_TOKEN": {
+          "from_secret": true,
+          "secret_ref_hash": "902065c2d2fda3e0"
+        },
+        "SUMSUB_SECRET_KEY": {
+          "from_secret": true,
+          "secret_ref_hash": "e7edec1870a70389"
+        },
+        "GIT_SHA": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+        "IMAGE_TAG": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+        "BUILD_TIME": "2026-06-15T08:12:29Z",
+        "COMPLYADVANTAGE_SCREENING_CONFIG_ID": {
+          "configured": true,
+          "sha256_16": "d7b7302405db3858"
+        }
+      },
+      "secret_names_present": [
+        "ADMIN_CLIENT_RESET_CONFIRMATION",
+        "ADMIN_OFFICER_RESET_CONFIRMATION",
+        "ANTHROPIC_API_KEY",
+        "COMPLYADVANTAGE_PASSWORD",
+        "COMPLYADVANTAGE_REALM",
+        "COMPLYADVANTAGE_USERNAME",
+        "COMPLYADVANTAGE_WEBHOOK_SECRET",
+        "DATABASE_URL",
+        "JWT_SECRET",
+        "METRICS_TOKEN",
+        "PII_ENCRYPTION_KEY",
+        "SUMSUB_APP_TOKEN",
+        "SUMSUB_SECRET_KEY",
+        "SUMSUB_WEBHOOK_SECRET"
+      ]
+    },
+    "worker_service": "regmind-verification-worker",
+    "worker_task_definition_arn": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:30",
+    "worker_task_definition_summary": {
+      "task_definition_arn": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:30",
+      "revision": 30,
+      "container_image_hash": "5da6ecf7b008abf5",
+      "environment": {
+        "ENVIRONMENT": "staging",
+        "SCREENING_PROVIDER": "complyadvantage",
+        "ENABLE_SCREENING_ABSTRACTION": "true",
+        "COMPLYADVANTAGE_API_BASE_URL": {
+          "configured": true,
+          "host": "api.mesh.complyadvantage.com",
+          "sha256_16": "24cd31c7b008e9d4"
+        },
+        "COMPLYADVANTAGE_AUTH_URL": {
+          "configured": true,
+          "host": "api.mesh.complyadvantage.com",
+          "sha256_16": "ac4420b2ca99ba3b"
+        },
+        "COMPLYADVANTAGE_REALM": {
+          "from_secret": true,
+          "secret_ref_hash": "c9febabffaa9d2e0"
+        },
+        "COMPLYADVANTAGE_USERNAME": {
+          "from_secret": true,
+          "secret_ref_hash": "9dbd6bd1ecebdbd8"
+        },
+        "COMPLYADVANTAGE_PASSWORD": {
+          "from_secret": true,
+          "secret_ref_hash": "4fbc7dc7124cf999"
+        },
+        "COMPLYADVANTAGE_WEBHOOK_SECRET": {
+          "from_secret": true,
+          "secret_ref_hash": "a9ea2089c43758aa"
+        },
+        "SUMSUB_APP_TOKEN": {
+          "from_secret": true,
+          "secret_ref_hash": "902065c2d2fda3e0"
+        },
+        "SUMSUB_SECRET_KEY": {
+          "from_secret": true,
+          "secret_ref_hash": "e7edec1870a70389"
+        },
+        "GIT_SHA": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+        "IMAGE_TAG": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+        "BUILD_TIME": "2026-06-15T08:12:29Z"
+      },
+      "secret_names_present": [
+        "ADMIN_CLIENT_RESET_CONFIRMATION",
+        "ADMIN_OFFICER_RESET_CONFIRMATION",
+        "ANTHROPIC_API_KEY",
+        "COMPLYADVANTAGE_PASSWORD",
+        "COMPLYADVANTAGE_REALM",
+        "COMPLYADVANTAGE_USERNAME",
+        "COMPLYADVANTAGE_WEBHOOK_SECRET",
+        "DATABASE_URL",
+        "JWT_SECRET",
+        "METRICS_TOKEN",
+        "PII_ENCRYPTION_KEY",
+        "SUMSUB_APP_TOKEN",
+        "SUMSUB_SECRET_KEY",
+        "SUMSUB_WEBHOOK_SECRET"
+      ]
+    }
+  }
+}

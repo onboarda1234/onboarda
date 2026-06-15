@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-06-15T09:24:04Z",
+  "operation": "CA OAuth credential-only probe; no screening request sent",
+  "secrets_redacted": true,
+  "token_omitted": true,
+  "verdict": "PASS",
+  "configured": true,
+  "auth_succeeded": true,
+  "api_base_host": "api.mesh.complyadvantage.com",
+  "auth_host": "api.mesh.complyadvantage.com",
+  "realm_configured": true,
+  "screening_configuration_identifier_configured": true,
+  "elapsed_ms": 1916.73
+}

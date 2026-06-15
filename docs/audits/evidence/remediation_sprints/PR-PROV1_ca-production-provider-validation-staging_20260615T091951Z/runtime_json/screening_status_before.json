@@ -1,0 +1,59 @@
+{
+  "provider_truth": {
+    "active_aml_screening_provider": "ComplyAdvantage Mesh",
+    "active_aml_screening_provider_key": "complyadvantage",
+    "identity_verification_provider": "Sumsub IDV/KYC",
+    "identity_verification_provider_key": "sumsub",
+    "registry_kyb_provider": "OpenCorporates registry/enrichment",
+    "registry_kyb_status": "simulated",
+    "requested_screening_provider": "complyadvantage",
+    "requested_screening_provider_label": "ComplyAdvantage Mesh",
+    "screening_abstraction_enabled": true,
+    "screening_abstraction_required_for_ca": true,
+    "simulation_fallback_mode": "disabled",
+    "simulation_fallback_enabled": false,
+    "last_provider_status_check": "2026-06-15T09:21:33Z",
+    "sumsub_provider_scope": "individual_kyc_identity_verification",
+    "aml_provider_scope": "aml_sanctions_pep_rca_adverse_media_monitoring",
+    "provider_labels_safe": true
+  },
+  "opencorporates": {
+    "configured": false,
+    "status": "simulated",
+    "role": "Registry/KYB enrichment provider",
+    "description": "Company registry verification and enrichment"
+  },
+  "ip_geolocation": {
+    "configured": true,
+    "status": "live",
+    "description": "IP address geolocation and risk assessment"
+  },
+  "sumsub": {
+    "configured": true,
+    "status": "live",
+    "role": "Identity Verification Provider",
+    "provider_scope": "individual_kyc_identity_verification",
+    "description": "Individual identity verification and KYC (document + selfie + liveness)"
+  },
+  "complyadvantage": {
+    "configured": true,
+    "status": "live",
+    "active": true,
+    "requested_provider": "complyadvantage",
+    "requested_provider_label": "ComplyAdvantage Mesh",
+    "provider_display_name": "ComplyAdvantage Mesh",
+    "abstraction_enabled": true,
+    "implementation_status": "active",
+    "fallback_mode": "disabled",
+    "simulation_fallback_enabled": false,
+    "role": "AML sanctions, PEP/RCA, adverse-media screening, and ongoing monitoring",
+    "description": "ComplyAdvantage Mesh AML, sanctions, PEP/RCA, adverse-media, and monitoring integration",
+    "blockers": []
+  },
+  "anthropic": {
+    "configured": true,
+    "status": "configured",
+    "description": "Claude-backed document verification and optional analysis paths; the live compliance memo approval path remains deterministic"
+  },
+  "environment": "staging"
+}
