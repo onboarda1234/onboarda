@@ -6514,10 +6514,10 @@ _AGENT_METADATA = {
 _AGENT_DEFINITIONS_V2 = {
     1: {
         "description": (
-            "Validates authenticity and consistency of uploaded documents against predefined deterministic checks. "
-            "Each document type has a fixed set of checks defined in the rule engine — the AI evaluates each check but does NOT decide what checks to run. "
-            "Covers entity documents (COI, M&A, registers, financials, etc.) and person documents (passport, PoA, CV, bank reference). "
-            "Does NOT do sanctions screening or registry lookups."
+            "Validates uploaded documents against canonical document policies. Checks are document-type based, not duplicated by lifecycle stage; "
+            "workflows map verified documents to onboarding, change management, periodic review, and EDD blockers/triggers. "
+            "Agent 1 can verify, flag, block, recommend, and mark required follow-up, but does not approve, reject, waive, or override compliance decisions. "
+            "Agent 1 does not perform sanctions, PEP, or adverse-media screening."
         ),
         "checks": [
             "COI: Entity Name Match", "COI: Registration Number", "COI: Document Clarity",
@@ -7202,10 +7202,10 @@ def seed_initial_data(db: DBConnection):
         agents_seed = [
             (
                 1, "Identity & Document Integrity Agent", "🔍", "Onboarding",
-                "Validates authenticity and consistency of uploaded documents against predefined deterministic checks. "
-                "Each document type has a fixed set of checks defined in the rule engine — the AI evaluates each check but does NOT decide what checks to run. "
-                "Covers entity documents (COI, M&A, registers, financials, etc.) and person documents (passport, PoA, CV, bank reference). "
-                "Does NOT do sanctions screening or registry lookups.",
+                "Validates uploaded documents against canonical document policies. Checks are document-type based, not duplicated by lifecycle stage; "
+                "workflows map verified documents to onboarding, change management, periodic review, and EDD blockers/triggers. "
+                "Agent 1 can verify, flag, block, recommend, and mark required follow-up, but does not approve, reject, waive, or override compliance decisions. "
+                "Agent 1 does not perform sanctions, PEP, or adverse-media screening.",
                 1, agent1_checks
             ),
             (
@@ -7513,6 +7513,13 @@ def normalize_legacy_doc_types(db: DBConnection):
         "bank statements": "bank_statements",
         "doc-aml-policy": "aml_policy",
         "aml policy": "aml_policy",
+        "id_card": "national_id",
+        "identity_card": "national_id",
+        "drivers_license": "national_id",
+        "driver_license": "national_id",
+        "driving_license": "national_id",
+        "director_id": "national_id",
+        "ubo_id": "national_id",
         "pep-declaration": "pep_declaration",
     }
     total_updated = 0
