@@ -17,7 +17,7 @@ Command:
 
 Result:
 
-- `40 passed in 2.04s`
+- `40 passed in 2.60s`
 
 Coverage added:
 
@@ -65,5 +65,7 @@ Result:
 - `63 passed in 0.61s`
 
 ## Notes
+
+CodeRabbit review follow-up converted the new CA4B application-detail regression to a standalone pytest async HTTP test and corrected the PR-CA4B evidence status wording. The focused memo/API suite above was rerun after that follow-up.
 
 The system `/usr/bin/python3` is Python 3.9.6 and cannot import existing repo code using Python 3.10+ union type syntax. The repo requires Python `>=3.11`, and GitHub CI uses Python 3.11, so branch validation used `/opt/homebrew/bin/python3.11`.

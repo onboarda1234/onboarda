@@ -4,7 +4,7 @@
   "branch": "codex/pr-ca4b-memo-adverse-media-parity-staleness-fix",
   "runtime": "Python 3.11.15",
   "results": {
-    "focused_memo_api": "40 passed in 2.04s",
+    "focused_memo_api": "40 passed in 2.60s after CodeRabbit pytest refactor",
     "ca4_rollup_regressions": "55 passed in 1.65s",
     "closed_control_subset": "99 passed in 7.34s",
     "ca2_ca3_evidence_webhook_regressions": "63 passed in 0.61s",

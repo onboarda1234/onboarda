@@ -8,4 +8,4 @@ PR-CA4B has not yet been merged to `main` or deployed to staging. This file must
 2. Merged `main` is deployed to staging.
 3. Staging `/api/version` returns both `git_sha` and `image_tag` equal to the merged main SHA.
 
-Until then, PR-CA4 remains `PARTIALLY FIXED`.
+Until then, PR-CA4B remains `PARTIALLY FIXED`.
