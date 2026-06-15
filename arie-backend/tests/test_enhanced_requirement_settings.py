@@ -693,10 +693,10 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." not in html
     assert "function kycDocumentNeedsAttention(doc)" in html
     assert "function enhancedRequirementNeedsAttention(req)" in html
-    assert "Show technical verification checks" in html
-    assert "Failed or warning checks" in html
-    assert "if (result === 'pass') technicalCheckItems.push(checkHtml);" in html
-    assert "else visibleCheckItems.push(checkHtml);" in html
+    assert "Technical checks and audit details" in html
+    assert "Material issues" in html
+    assert "if (result !== 'pass') visibleCheckItems.push(checkHtml);" in html
+    assert "allCheckItems.push(checkHtml);" in html
 
     assert "C — Additional Required Documents" in portal_html
     assert "Upload requested risk-triggered evidence documents here." not in portal_html

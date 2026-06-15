@@ -1,0 +1,13 @@
+{
+  "id": "ff8e37eabb314137",
+  "application_id": "demo-scenario-05",
+  "doc_type": "cert_inc",
+  "doc_name": "levant_coi.pdf",
+  "verification_status": "verified",
+  "review_status": "pending",
+  "evidence_class": "approval_proof",
+  "uploaded_by": "admin001",
+  "uploaded_at": "2026-06-15 11:37:49",
+  "verified_at": "2026-06-15T11:45:00Z",
+  "verification_results": "{\"overall\": \"Review required\", \"summary\": \"Material review required before reliance.\", \"confidence\": 0.82, \"warnings\": [\"Low OCR confidence on registry number\"], \"verification_method\": \"hybrid\", \"agent_execution_id\": \"agent1-smoke-doc2a-001\", \"evidence_hash\": \"doc2a-smoke-hash-001\", \"verified_at\": \"2026-06-15T11:45:00Z\", \"policy_id\": \"DOC-ENTITY-COI-v1\", \"policy_version\": \"v1\", \"checks\": [{\"label\": \"File format\", \"result\": \"pass\", \"classification\": \"rule\", \"message\": \"PDF format accepted\"}, {\"label\": \"File size\", \"result\": \"pass\", \"classification\": \"rule\", \"message\": \"File is within upload size limit\"}, {\"label\": \"Duplicate detection\", \"result\": \"pass\", \"classification\": \"rule\", \"message\": \"No duplicate file hash found\"}, {\"label\": \"Company name match\", \"result\": \"pass\", \"classification\": \"hybrid\", \"message\": \"Extracted name matches application\"}, {\"label\": \"Low OCR confidence\", \"result\": \"warn\", \"classification\": \"hybrid\", \"message\": \"Registry number OCR confidence below policy threshold\", \"confidence\": 0.62}]}"
+}

@@ -3491,7 +3491,8 @@ class ApplicationsHandler(BaseHandler):
                 "verification_results, verified_at, person_id, review_status, "
                 "review_comment, reviewed_by, reviewer_role, reviewed_at, application_id, "
                 "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
-                "evidence_class, evidence_classification_note, evidence_classified_by, evidence_classified_at "
+                "evidence_class, evidence_classification_note, evidence_classified_by, evidence_classified_at, "
+                "uploaded_at, uploaded_by, file_sha256 "
                 f"FROM documents WHERE application_id IN ({doc_placeholders}) "
                 f"AND {ACTIVE_DOCUMENT_SQL}",
                 app_ids,
@@ -3499,6 +3500,7 @@ class ApplicationsHandler(BaseHandler):
             for d in doc_rows:
                 doc = dict(d)
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+                doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
                 decorate_document_verification_state(doc)
                 _decorate_document_evidence_classification(db, doc)
                 docs_by_app.setdefault(d["application_id"], []).append(doc)
@@ -5529,6 +5531,7 @@ class ApplicationDetailHandler(BaseHandler):
         for doc in result["documents"]:
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
             decorate_document_verification_state(doc)
             _decorate_document_evidence_classification(db, doc)
         if include_history:
@@ -5539,6 +5542,7 @@ class ApplicationDetailHandler(BaseHandler):
             for doc in result["document_history"]:
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+                doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
                 decorate_document_verification_state(doc)
                 _decorate_document_evidence_classification(db, doc)
         result["pilot_evidence_summary"] = _pilot_evidence_classification_summary(
@@ -8619,7 +8623,8 @@ class DocumentUploadHandler(BaseHandler):
             "expiry_date, valid_until, expiry_source, expiry_confidence, expiry_extracted_at, "
             "verification_status, verification_results, verified_at, review_status, "
             "review_comment, reviewed_by, reviewed_at, evidence_class, "
-            "evidence_classification_note, evidence_classified_by, evidence_classified_at "
+            "evidence_classification_note, evidence_classified_by, evidence_classified_at, "
+            "uploaded_at, uploaded_by, file_sha256 "
             f"FROM documents WHERE application_id = ?{where_active} "
             "ORDER BY uploaded_at DESC, id DESC",
             (app["id"],)).fetchall()]
@@ -8632,6 +8637,7 @@ class DocumentUploadHandler(BaseHandler):
                 except (json.JSONDecodeError, TypeError):
                     pass
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
             decorate_document_verification_state(doc)
             _decorate_document_evidence_classification(db, doc)
 
@@ -8874,12 +8880,12 @@ class DocumentUploadHandler(BaseHandler):
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version, verification_status,
-                 verification_results, file_sha256)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 verification_results, file_sha256, uploaded_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
                 len(body), content_type, replacement["slot_key"], True, replacement["version"],
-                STATE_PENDING, "{}", file_sha256,
+                STATE_PENDING, "{}", file_sha256, user.get("sub"),
             ))
             _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
 

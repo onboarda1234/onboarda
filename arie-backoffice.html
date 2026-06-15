@@ -695,6 +695,67 @@ a { color:var(--brand); text-decoration:none; }
 .doc-status-info { color:var(--amber); font-size:11px; font-weight:600; margin-top:4px; }
 .doc-comment-input { width:100%; padding:5px 8px; border:1px solid var(--border2); border-radius:4px; font-size:11px; margin-top:4px; background:var(--surface); color:var(--text1); outline:none; }
 .doc-comment-input:focus { border-color:var(--brand); }
+.evidence-control-card { border:1px solid #dfe7f2; border-radius:14px; padding:14px 15px; margin-bottom:12px; background:var(--surface); box-shadow:0 8px 18px rgba(16,24,40,0.05); }
+.evidence-control-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+.evidence-control-title-row { display:flex; align-items:flex-start; gap:10px; min-width:0; flex:1; }
+.evidence-control-icon { width:34px; height:34px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; background:var(--brand-dim); color:var(--brand); font-size:17px; flex:0 0 auto; }
+.evidence-control-title { font-size:14px; font-weight:800; color:var(--text1); line-height:1.25; overflow-wrap:anywhere; }
+.evidence-control-subtitle { font-size:11px; color:var(--text3); line-height:1.45; margin-top:3px; overflow-wrap:anywhere; }
+.evidence-meta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:7px; margin:8px 0 10px; }
+.evidence-meta-chip { border:1px solid var(--border1); border-radius:8px; background:var(--surface2); padding:6px 8px; min-width:0; }
+.evidence-meta-label { font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text3); margin-bottom:2px; }
+.evidence-meta-value { font-size:12px; font-weight:700; color:var(--text1); line-height:1.25; overflow-wrap:anywhere; }
+.evidence-action-panel { border:1px solid rgba(37,99,235,0.18); border-radius:10px; background:rgba(37,99,235,0.05); padding:9px 10px; margin:8px 0; }
+.evidence-action-label { font-size:10px; font-weight:800; color:#1d4ed8; letter-spacing:.06em; text-transform:uppercase; margin-bottom:3px; }
+.evidence-action-copy { font-size:12px; color:var(--text1); font-weight:650; line-height:1.45; }
+.evidence-material-panel { border:1px solid var(--border1); border-radius:10px; background:var(--surface2); padding:10px 11px; margin-top:8px; }
+.evidence-material-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
+.reliance-badge { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:800; border:1px solid transparent; white-space:nowrap; }
+.reliance-badge.verified { background:var(--green-bg); color:var(--green); border-color:rgba(22,163,74,.22); }
+.reliance-badge.review-required, .reliance-badge.request-info { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
+.reliance-badge.failed, .reliance-badge.rejected { background:var(--red-bg); color:var(--red); border-color:rgba(220,38,38,.24); }
+.reliance-badge.pending { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
+.reliance-badge.stale { background:rgba(100,116,139,.12); color:#475569; border-color:rgba(100,116,139,.25); }
+.reliance-badge.manual-accepted { background:rgba(43,47,143,.08); color:var(--brand); border-color:rgba(43,47,143,.24); }
+.verification-technical-details { margin-top:8px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); overflow:hidden; }
+.verification-technical-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
+.verification-audit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:7px; margin:0 0 8px; }
+.verification-audit-fact { border:1px solid var(--border1); border-radius:8px; background:var(--surface2); padding:6px 8px; font-size:11px; color:var(--text2); overflow-wrap:anywhere; }
+.agent1-policy-hero { border:1px solid #d7def2; border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f7f9ff 100%); box-shadow:0 10px 24px rgba(16,24,40,0.06); padding:18px 20px; margin-bottom:16px; }
+.agent1-policy-eyebrow { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--brand); margin-bottom:4px; }
+.agent1-policy-title { font-size:20px; font-weight:800; color:var(--text1); letter-spacing:0; line-height:1.25; }
+.agent1-policy-subtitle { font-size:13px; color:var(--text2); margin-top:6px; max-width:860px; line-height:1.5; }
+.agent1-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:14px; }
+.agent1-summary-card { border:1px solid var(--border1); border-radius:10px; background:var(--surface); padding:11px 12px; }
+.agent1-summary-label { font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text3); }
+.agent1-summary-value { font-size:20px; font-weight:800; color:var(--text1); margin-top:2px; }
+.agent1-filter-bar { display:grid; grid-template-columns:minmax(220px,1fr) repeat(3,minmax(150px,190px)); gap:10px; align-items:end; margin:12px 0 14px; }
+.agent1-lifecycle-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 14px; }
+.agent1-lifecycle-tab { border:1px solid var(--border1); border-radius:999px; padding:7px 10px; background:var(--surface); color:var(--text2); font-size:12px; font-weight:700; cursor:pointer; }
+.agent1-lifecycle-tab.active { border-color:var(--brand); background:var(--brand-dim); color:var(--brand); }
+.agent1-policy-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; align-items:start; }
+.agent1-policy-card { border:1px solid #dfe7f2; border-radius:14px; background:var(--surface); box-shadow:0 8px 16px rgba(16,24,40,0.04); overflow:hidden; }
+.agent1-policy-card summary { list-style:none; cursor:pointer; padding:13px 14px; display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+.agent1-policy-card summary::-webkit-details-marker { display:none; }
+.agent1-policy-card[open] summary { border-bottom:1px solid var(--border1); background:#fbfcff; }
+.agent1-policy-family { font-size:14px; font-weight:800; color:var(--text1); line-height:1.28; }
+.agent1-policy-meta { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
+.agent1-policy-body { padding:12px 14px 14px; }
+.agent1-policy-section-label { font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text3); margin:10px 0 5px; }
+.agent1-chip-row { display:flex; flex-wrap:wrap; gap:5px; }
+.agent1-chip { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; background:var(--surface2); border:1px solid var(--border1); color:var(--text2); font-size:10px; font-weight:700; line-height:1.45; }
+.agent1-chip.material { background:rgba(37,99,235,.07); border-color:rgba(37,99,235,.18); color:#1d4ed8; }
+.agent1-chip.technical { background:rgba(100,116,139,.08); border-color:rgba(100,116,139,.18); color:#475569; }
+.agent1-gate-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; border:1px solid transparent; }
+.agent1-gate-badge.blocking { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
+.agent1-gate-badge.review { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
+.agent1-gate-badge.library { background:rgba(100,116,139,.1); color:#475569; border-color:rgba(100,116,139,.22); }
+.agent1-status-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; background:var(--green-bg); color:var(--green); border:1px solid rgba(22,163,74,.2); }
+.agent1-policy-empty { border:1px dashed var(--border1); border-radius:12px; background:var(--surface2); padding:20px; text-align:center; color:var(--text3); font-size:13px; }
+@media (max-width:900px) {
+  .agent1-filter-bar { grid-template-columns:1fr; }
+  .agent1-policy-grid { grid-template-columns:1fr; }
+}
 
 /* ── Risk Model Visual Enhancements ── */
 .weight-slider-container { display:flex; align-items:center; gap:10px; flex:1; }
@@ -2728,21 +2789,77 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ AI VERIFICATION CHECKS VIEW ═══════════════ -->
 <div class="view" id="view-ai-checks">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
-    <div>
-      <h3 style="font-size:16px;font-weight:700;">AI Document Verification Checks</h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Configure the automated verification rules run by the AI engine when documents are uploaded. Currently <strong id="total-checks-count">0</strong> checks active.</p>
+  <div class="agent1-policy-hero">
+    <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+      <div>
+        <div class="agent1-policy-eyebrow">Agent 1 Evidence Control Layer</div>
+        <h3 class="agent1-policy-title">Document Policy Registry</h3>
+        <p class="agent1-policy-subtitle">Lifecycle-wide policy coverage for documents and compliance evidence. This registry defines what Agent 1 should classify, verify, gate, preserve for audit, and route for officer action without allowing Agent 1 to approve, reject, waive, or override a compliance decision.</p>
+      </div>
+      <button class="btn btn-primary" onclick="saveAIChecks()">💾 Save Check Configuration</button>
     </div>
-    <button class="btn btn-primary" onclick="saveAIChecks()">💾 Save Changes</button>
+    <div id="agent1-policy-summary" class="agent1-summary-grid"></div>
   </div>
 
-  <div class="tab-bar" style="margin-bottom:0;">
-    <div class="tab active" onclick="switchCheckTab('entity',this)">Entity Documents</div>
-    <div class="tab" onclick="switchCheckTab('person',this)">Person (KYC) Documents</div>
+  <div class="card" style="padding:16px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px;">
+      <div>
+        <div class="card-title">Policy Coverage</div>
+        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Search and filter document policies by lifecycle, gate behaviour, and active status. Underlying editable onboarding checks remain available below.</p>
+      </div>
+      <span class="badge" style="background:var(--brand-dim);color:var(--brand);">Registry version DOC-POLICY-REGISTRY-v1</span>
+    </div>
+    <div class="agent1-filter-bar">
+      <div>
+        <label class="form-label" style="font-size:10px;">Search policy</label>
+        <input class="form-input" id="agent1-policy-search" placeholder="Search documents, checks, gate behaviour..." oninput="renderPolicyRegistry()" />
+      </div>
+      <div>
+        <label class="form-label" style="font-size:10px;">Lifecycle</label>
+        <select class="form-select" id="agent1-policy-lifecycle-filter" onchange="switchPolicyTab(this.value)">
+          <option value="all">All lifecycles</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:10px;">Gate behaviour</label>
+        <select class="form-select" id="agent1-policy-gate-filter" onchange="renderPolicyRegistry()">
+          <option value="all">All gates</option>
+          <option value="blocking">Blocking gates</option>
+          <option value="review">Review / classify</option>
+          <option value="library">Library only</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label" style="font-size:10px;">Status</label>
+        <select class="form-select" id="agent1-policy-status-filter" onchange="renderPolicyRegistry()">
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="foundation">Foundation</option>
+        </select>
+      </div>
+    </div>
+    <div id="agent1-policy-tabs" class="agent1-lifecycle-tabs"></div>
+    <div id="agent1-policy-registry" class="agent1-policy-grid"></div>
   </div>
 
-  <div id="checks-entity-tab"></div>
-  <div id="checks-person-tab" style="display:none;"></div>
+  <details class="card" style="padding:0;overflow:hidden;">
+    <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:16px 18px;list-style-position:inside;">
+      <div>
+        <div class="card-title">Underlying Verification Check Configuration</div>
+        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Editable onboarding check rules currently persisted through <code>/config/verification-checks</code>. Currently <strong id="total-checks-count">0</strong> checks active.</p>
+      </div>
+      <span style="font-size:11px;color:var(--brand);font-weight:800;white-space:nowrap;">Expand editor</span>
+    </summary>
+    <div style="padding:0 18px 18px;">
+      <div class="tab-bar" style="margin-bottom:0;">
+        <div class="tab active" onclick="switchCheckTab('entity',this)">Entity Documents</div>
+        <div class="tab" onclick="switchCheckTab('person',this)">Person / KYC Documents</div>
+      </div>
+
+      <div id="checks-entity-tab"></div>
+      <div id="checks-person-tab" style="display:none;"></div>
+    </div>
+  </details>
 </div>
 
 <!-- ═══════════════ AI AGENTS VIEW ═══════════════ -->
@@ -4593,6 +4710,10 @@ function mapApplicationFromApi(a) {
       evidence_classified_by: d.evidence_classified_by || '',
       evidence_classified_by_name: d.evidence_classified_by_name || '',
       evidence_classified_at: d.evidence_classified_at || '',
+      uploaded_at: d.uploaded_at || '',
+      uploaded_by: d.uploaded_by || '',
+      uploaded_by_name: d.uploaded_by_name || '',
+      file_sha256: d.file_sha256 || '',
       workflow_test_accepted: d.workflow_test_accepted,
       workflow_test_acceptance_reason: d.workflow_test_acceptance_reason || '',
       workflow_test_accepted_by: d.workflow_test_accepted_by || '',
@@ -7684,13 +7805,13 @@ function buildVerificationResultsHtml(results) {
     var overallValue = firstMeaningfulDetailValue(results.overall, results.overall_result, results.result, results.status);
     var overallTone = String(overallValue || '').toLowerCase().indexOf('fail') >= 0 || String(overallValue || '').toLowerCase().indexOf('flag') >= 0 ? 'red'
       : String(overallValue || '').toLowerCase().indexOf('warn') >= 0 ? 'amber' : '';
-    pushItem('Overall Result', overallValue, overallTone);
+    pushItem('Reliance status', overallValue, overallTone);
     pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
     pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
     pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
     pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
     pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
-    pushItem('Warnings', Array.isArray(results.warnings) ? results.warnings.join(', ') : '', 'amber');
+    pushItem('Why review is required', Array.isArray(results.warnings) ? results.warnings.join(', ') : '', 'amber');
     pushItem('Red Flags', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '', 'red');
     if (Array.isArray(results.checks)) {
       var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
@@ -7700,7 +7821,7 @@ function buildVerificationResultsHtml(results) {
         items.push('<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>');
       }
       var visibleCheckItems = [];
-      var technicalCheckItems = [];
+      var allCheckItems = [];
       function buildCheckHtml(check, idx) {
         if (!check || typeof check !== 'object') return;
         var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
@@ -7735,17 +7856,35 @@ function buildVerificationResultsHtml(results) {
       results.checks.forEach(function(check, idx) {
         var checkHtml = buildCheckHtml(check, idx);
         if (!checkHtml) return;
+        allCheckItems.push(checkHtml);
         var result = String(firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
-        if (result === 'pass') technicalCheckItems.push(checkHtml);
-        else visibleCheckItems.push(checkHtml);
+        if (result !== 'pass') visibleCheckItems.push(checkHtml);
       });
       if (visibleCheckItems.length) {
-        items.push('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;color:var(--text1);text-transform:uppercase;letter-spacing:.03em;">Failed or warning checks</div>' + visibleCheckItems.join('') + '</div>');
+        items.push('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;color:var(--text1);text-transform:uppercase;letter-spacing:.03em;">Material issues</div>' + visibleCheckItems.join('') + '</div>');
       }
-      if (technicalCheckItems.length) {
-        items.push('<details style="margin-top:8px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);overflow:hidden;">' +
-          '<summary style="cursor:pointer;padding:8px 10px;font-size:11px;font-weight:800;color:var(--brand);list-style-position:inside;">Show technical verification checks</summary>' +
-          '<div style="padding:0 10px 8px;">' + technicalCheckItems.join('') + '</div>' +
+      if (allCheckItems.length) {
+        var auditFacts = [];
+        function pushAuditFact(label, value) {
+          var normalized = normalizeDetailValue(value);
+          if (normalized === '—') return;
+          auditFacts.push('<div class="verification-audit-fact"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
+        }
+        var policyVersion = firstMeaningfulDetailValue(results.policy_version, results.policyVersion);
+        var policyId = firstMeaningfulDetailValue(results.policy_id, results.policyId);
+        pushAuditFact('Method', firstMeaningfulDetailValue(results.verification_method, results.method, results.check_method));
+        pushAuditFact('Agent execution ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id));
+        pushAuditFact('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash));
+        pushAuditFact('Verification timestamp', firstMeaningfulDetailValue(results.verified_at, results.verification_timestamp, results.completed_at));
+        pushAuditFact('Policy ID/version', policyId && policyVersion ? policyId + ' / ' + policyVersion : firstMeaningfulDetailValue(policyId, policyVersion));
+        var auditHtml = auditFacts.length ? '<div class="verification-audit-grid">' + auditFacts.join('') + '</div>' : '';
+        items.push('<details class="verification-technical-details">' +
+          '<summary>Technical checks and audit details</summary>' +
+          '<div style="padding:0 10px 9px;">' +
+            auditHtml +
+            '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:3px 0 5px;">Full check result list</div>' +
+            allCheckItems.join('') +
+          '</div>' +
         '</details>');
       }
     } else {
@@ -7939,10 +8078,10 @@ function renderPilotEvidenceSummaryBanner(app) {
   var cls = summary.pilot_evidence_classification || 'unclassified';
   var color = cls === 'approval_proof' ? '#16a34a' : cls === 'workflow_only' ? '#d97706' : '#6b7280';
   var title = cls === 'approval_proof'
-    ? 'Pilot approval proof'
+    ? 'Approval evidence classification'
     : cls === 'workflow_only'
       ? 'Workflow-only evidence'
-      : 'Pilot evidence not fully classified';
+      : 'Evidence not fully classified';
   var detail = summary.reason || '';
   var counts = 'Required: ' + (summary.required_count || 0) +
     ' · Eligible: ' + (summary.eligible_required_count || 0) +
@@ -8150,13 +8289,93 @@ function kycTaxonomyGroupShell(title, subtitle, bodyHtml, tone, expanded) {
   '</details>';
 }
 
+function normalizePolicyDocTypeKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function agent1PolicyForDocument(doc, linkedRequirement) {
+  var policies = (typeof window !== 'undefined' && Array.isArray(window.AGENT1_DOCUMENT_POLICIES)) ? window.AGENT1_DOCUMENT_POLICIES : (typeof AGENT1_DOCUMENT_POLICIES !== 'undefined' ? AGENT1_DOCUMENT_POLICIES : []);
+  var typeKey = normalizePolicyDocTypeKey(doc && (doc.doc_type || doc.slot_key));
+  var labelKey = normalizePolicyDocTypeKey(kycDocumentSlotLabel(doc || {}, linkedRequirement));
+  return policies.find(function(policy) {
+    return Array.isArray(policy.docTypes) && policy.docTypes.some(function(candidate) {
+      var normalized = normalizePolicyDocTypeKey(candidate);
+      return normalized === typeKey || normalized === labelKey;
+    });
+  }) || null;
+}
+
+function relianceBadgeClass(label) {
+  var normalized = String(label || '').toLowerCase().replace(/\s+/g, '-');
+  if (normalized === 'pending-verification') return 'pending';
+  return normalized || 'review-required';
+}
+
+function documentRelianceDisplayState(doc, policy) {
+  var reviewStatus = String((doc && doc.review_status) || '').toLowerCase();
+  var relianceState = String((doc && (doc.document_reliance_state || doc.document_reliance_status)) || '').toLowerCase();
+  var verificationState = String((doc && (doc.verification_state || doc.verification_status)) || '').toLowerCase();
+  var results = (doc && doc.verification_results) || {};
+  var overall = String((results && (results.overall || results.overall_result || results.status)) || '').toLowerCase();
+  var warnings = Array.isArray(results.warnings) ? results.warnings : [];
+  var issues = Array.isArray(results.issues) ? results.issues : [];
+  var redFlags = Array.isArray(results.red_flags) ? results.red_flags : [];
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  var hasFailedCheck = checks.some(function(check) {
+    var result = String((check && (check.result || check.status)) || '').toLowerCase();
+    return ['fail', 'failed', 'flagged', 'blocked'].indexOf(result) >= 0;
+  });
+  var hasWarningCheck = checks.some(function(check) {
+    var result = String((check && (check.result || check.status)) || '').toLowerCase();
+    return ['warn', 'warning', 'review'].indexOf(result) >= 0;
+  });
+  if (reviewStatus === 'rejected') return { label: 'Rejected', tone: 'rejected' };
+  if (reviewStatus === 'info_requested') return { label: 'Request info', tone: 'request-info' };
+  if (!policy) return { label: 'Review required', tone: 'review-required' };
+  if (relianceState === 'manual_accepted') return { label: 'Manual accepted', tone: 'manual-accepted' };
+  if (relianceState === 'stale' || verificationState === 'stale' || (doc && doc.is_current === false)) return { label: 'Stale', tone: 'stale' };
+  if (['pending', 'uploaded'].indexOf(relianceState) >= 0 || ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0) return { label: 'Pending verification', tone: 'pending' };
+  if (['failed', 'flagged', 'skipped', 'blocked'].indexOf(relianceState) >= 0 || ['failed', 'flagged', 'skipped'].indexOf(verificationState) >= 0 || ['failed', 'flagged'].indexOf(overall) >= 0 || redFlags.length > 0 || hasFailedCheck) return { label: 'Failed', tone: 'failed' };
+  if (overall.indexOf('review') >= 0 || overall.indexOf('warn') >= 0 || warnings.length > 0 || issues.length > 0 || hasWarningCheck) return { label: 'Review required', tone: 'review-required' };
+  if (relianceState === 'verified' || doc && doc.verification_success === true) return { label: 'Verified', tone: 'verified' };
+  return { label: 'Review required', tone: 'review-required' };
+}
+
+function renderRelianceBadge(state) {
+  return '<span class="reliance-badge ' + relianceBadgeClass(state && (state.tone || state.label)) + '">' + escapeHtml((state && state.label) || 'Review required') + '</span>';
+}
+
+function documentRequiredAction(doc, policy, state) {
+  var label = (state && state.label) || 'Review required';
+  var blockers = Array.isArray(doc && doc.document_reliance_blockers) ? doc.document_reliance_blockers : [];
+  if (!policy) return 'Officer must classify this document before it can be relied on automatically.';
+  if (label === 'Verified') return 'No officer action required unless case context changes or the document becomes stale.';
+  if (label === 'Pending verification') return 'Wait for Agent 1 verification or re-run verification before using this document as compliance evidence.';
+  if (label === 'Failed') return 'Reject, request corrected evidence, or manually accept only with the required senior-approved rationale where policy allows.';
+  if (label === 'Stale') return 'Request a refreshed document or re-verify the current evidence before relying on it.';
+  if (label === 'Rejected') return 'Rejected evidence cannot support memo, approval, or closure decisions.';
+  if (label === 'Request info') return 'Client remediation or officer follow-up is required before reliance.';
+  if (label === 'Manual accepted') return 'Manual acceptance is recorded; retain rationale and audit evidence for decision review.';
+  if (blockers.length) return 'Resolve document reliance blockers before this evidence supports a decision.';
+  return 'Officer review required before automated reliance.';
+}
+
+function documentLifecycleLabel(doc, policy, linkedRequirement) {
+  if (policy && policy.stageLabel) return policy.stageLabel;
+  if (linkedRequirement) return 'EDD / enhanced requirement';
+  return 'Onboarding / KYC';
+}
+
+function renderEvidenceMetaChip(label, value) {
+  var normalized = normalizeDetailValue(value);
+  return '<div class="evidence-meta-chip"><div class="evidence-meta-label">' + escapeHtml(label) + '</div><div class="evidence-meta-value">' + escapeHtml(normalized) + '</div></div>';
+}
+
 function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
   var officerReview = normalizeDetailValue(doc.review_status || 'pending');
   var reviewBadgeColor = officerReview === 'accepted' ? '#16a34a' : officerReview === 'rejected' ? '#dc2626' : officerReview === 'info_requested' ? '#d97706' : '#6b7280';
   var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status);
   var verLabel = normalizeDetailValue(doc.verification_status_label || verStatus);
-  var verTone = normalizeDetailValue(doc.verification_status_tone || '').toLowerCase();
-  var verStatusColor = doc.verification_success === true || verTone === 'success' ? '#16a34a' : verTone === 'error' || verStatus.toLowerCase() === 'failed' || verStatus.toLowerCase() === 'fail' ? '#dc2626' : verTone === 'warning' || verStatus.toLowerCase() === 'flagged' ? '#d97706' : '#6b7280';
   var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
   var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
     ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Reviewed by: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
@@ -8166,24 +8385,41 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
   var linkedMeta = linkedRequirement
     ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Linked enhanced requirement: ' + escapeHtml(linkedRequirement.requirement_key || linkedRequirement.id || '') + '</div>'
     : '';
-  return '<div style="border:1px solid var(--border1);border-radius:10px;padding:16px;margin-bottom:12px;background:var(--surface);">' +
-    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px;">' +
-      '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">' +
-        '<span style="font-size:22px;">📄</span>' +
-        '<div>' +
-          '<div style="font-weight:800;font-size:13px;color:var(--text1);">' + escapeHtml(slotLabel) + '</div>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Uploaded file: ' + escapeHtml(doc.doc_name || '—') + '</div>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + ' · Owner: ' + escapeHtml(findDocumentOwnerLabelForApp(app, doc)) + '</div>' +
+  var policy = agent1PolicyForDocument(doc, linkedRequirement);
+  var relianceState = documentRelianceDisplayState(doc, policy);
+  var policyLabel = policy ? (policy.policyId || policy.id) : 'Unclassified';
+  var policyVersion = policy ? (policy.version || 'v1') : 'Officer classification required';
+  var evidenceClass = doc.evidence_class_label || EVIDENCE_CLASS_LABELS[doc.evidence_class] || 'Unclassified';
+  var uploadedBy = normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by);
+  return '<div class="evidence-control-card">' +
+    '<div class="evidence-control-header">' +
+      '<div class="evidence-control-title-row">' +
+        '<span class="evidence-control-icon">📄</span>' +
+        '<div style="min-width:0;">' +
+          '<div class="evidence-control-title">' + escapeHtml(slotLabel) + '</div>' +
+          '<div class="evidence-control-subtitle">File: ' + escapeHtml(doc.doc_name || '—') + ' · Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + ' · Owner: ' + escapeHtml(findDocumentOwnerLabelForApp(app, doc)) + '</div>' +
           linkedMeta +
         '</div>' +
       '</div>' +
-      '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0;flex-wrap:wrap;">' +
-        '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + verStatusColor + '18;color:' + verStatusColor + ';border:1px solid ' + verStatusColor + '44;font-weight:500;">Verification: ' + escapeHtml(verLabel) + '</span>' +
-        '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + reviewBadgeColor + '18;color:' + reviewBadgeColor + ';border:1px solid ' + reviewBadgeColor + '44;font-weight:500;">Review: ' + escapeHtml(officerReview) + '</span>' +
+      '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">' +
+        '<span class="agent1-chip">' + escapeHtml(evidenceClass) + '</span>' +
+        renderRelianceBadge(relianceState) +
       '</div>' +
     '</div>' +
-    '<div style="background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px 12px;margin-bottom:10px;">' +
-      '<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px;">Verification Checks</div>' +
+    '<div class="evidence-meta-grid">' +
+      renderEvidenceMetaChip('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)) +
+      renderEvidenceMetaChip('Policy ID/version', policyLabel + ' / ' + policyVersion) +
+      renderEvidenceMetaChip('Last verified', firstMeaningfulDetailValue(doc.verified_at, doc.verification_results && doc.verification_results.verified_at)) +
+      renderEvidenceMetaChip('Uploaded by', uploadedBy) +
+      renderEvidenceMetaChip('Verification status', verLabel) +
+      renderEvidenceMetaChip('Officer review', officerReview) +
+    '</div>' +
+    '<div class="evidence-action-panel">' +
+      '<div class="evidence-action-label">Required action</div>' +
+      '<div class="evidence-action-copy">' + escapeHtml(documentRequiredAction(doc, policy, relianceState)) + '</div>' +
+    '</div>' +
+    '<div class="evidence-material-panel">' +
+      '<div class="evidence-material-title">Material issues and reliance evidence</div>' +
       buildVerificationResultsHtml(doc.verification_results) +
     '</div>' +
     reviewMeta +
@@ -8333,10 +8569,10 @@ function renderEvidenceClassificationPanel(doc) {
         '<input class="form-input" id="' + noteId + '" value="' + escapeHtml(note) + '" placeholder="Classification note (optional)" style="font-size:12px;padding:7px 9px;" />' +
         '<button class="btn btn-outline btn-sm" onclick="saveDocumentEvidenceClassification(\'' + doc.id + '\')">Save class</button>' +
       '</div>'
-    : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Compliance officer, SCO, or admin access is required to classify pilot evidence.</div>';
+    : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Compliance officer, SCO, or admin access is required to classify evidence.</div>';
   var workflowBanner = workflowAccepted
     ? '<div style="margin-top:8px;padding:8px 10px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:11px;line-height:1.4;">' +
-        '<strong>Workflow-only accepted synthetic evidence.</strong> Verification remains ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '; this does not count as pilot approval proof.' +
+        '<strong>Workflow-only accepted synthetic evidence.</strong> Verification remains ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '; this does not count as approval proof.' +
         (workflowAcceptance.reason || doc.workflow_test_acceptance_reason ? '<br>Reason: ' + escapeHtml(workflowAcceptance.reason || doc.workflow_test_acceptance_reason) : '') +
         (workflowAcceptance.accepted_by_name || doc.workflow_test_accepted_by_name ? '<br>Accepted by: ' + escapeHtml(workflowAcceptance.accepted_by_name || doc.workflow_test_accepted_by_name) : '') +
       '</div>'
@@ -8345,13 +8581,13 @@ function renderEvidenceClassificationPanel(doc) {
     ? '<div style="margin-top:8px;display:flex;justify-content:flex-start;">' +
         '<button class="btn btn-outline btn-sm" onclick="saveWorkflowTestEvidenceAcceptance(\'' + doc.id + '\')">Accept for workflow testing only</button>' +
       '</div>' +
-      '<div style="font-size:10px;color:var(--text3);margin-top:4px;">Staging-only. Leaves verification truth unchanged and forces workflow-only pilot evidence status.</div>'
+      '<div style="font-size:10px;color:var(--text3);margin-top:4px;">Staging-only. Leaves verification truth unchanged and forces workflow-only evidence status.</div>'
     : (selected === 'test_only_synthetic' && APP_ENV !== 'staging'
         ? '<div style="font-size:11px;color:#b91c1c;margin-top:8px;">Workflow-test acceptance is unavailable outside staging.</div>'
         : '');
   return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
     '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">' +
-      '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;">Pilot evidence classification</div>' +
+      '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;">Evidence Classification</div>' +
       '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:#64748b18;color:#475569;border:1px solid #64748b33;font-weight:600;">' + escapeHtml(label) + '</span>' +
     '</div>' +
     (note ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Note: ' + escapeHtml(note) + '</div>' : '') +
@@ -8374,7 +8610,7 @@ async function saveDocumentEvidenceClassification(docId) {
       evidence_class: evidenceClass,
       note: note
     });
-    showToast('Pilot evidence classification saved.');
+    showToast('Evidence classification saved.');
     await loadFromAPI();
     openAppDetail(currentApp && (currentApp.ref || currentApp.id));
   } catch (e) {
@@ -8388,7 +8624,7 @@ async function saveWorkflowTestEvidenceAcceptance(docId, enhancedRequirementId) 
     showToast('Only admin or SCO users can accept synthetic evidence for workflow testing on staging.');
     return;
   }
-  var reason = prompt('Reason for staging workflow-only acceptance. This does not verify the document or count as pilot approval proof.');
+  var reason = prompt('Reason for staging workflow-only acceptance. This does not verify the document or count as approval proof.');
   if (!reason || !reason.trim()) {
     showToast('A reason is required for workflow-only evidence acceptance.');
     return;
@@ -8579,16 +8815,19 @@ async function fetchApplicationDetail(ref) {
       verification_results: doc.verification_results || {},
       verified_at: doc.verified_at || '',
       uploaded_at: doc.uploaded_at || '',
-	      review_status: doc.review_status || 'pending',
-	      review_comment: doc.review_comment || '',
-	      reviewed_by: doc.reviewed_by || '',
-	      reviewed_by_name: doc.reviewed_by_name || '',
-	      reviewed_at: doc.reviewed_at || '',
-	      document_reliance_state: doc.document_reliance_state || '',
-	      document_reliance_status: doc.document_reliance_status || '',
-	      document_reliance_blockers: doc.document_reliance_blockers || [],
-	      verification_method: doc.verification_method || '',
-	      manual_acceptance: doc.manual_acceptance || null
+      uploaded_by: doc.uploaded_by || '',
+      uploaded_by_name: doc.uploaded_by_name || '',
+      file_sha256: doc.file_sha256 || '',
+      review_status: doc.review_status || 'pending',
+      review_comment: doc.review_comment || '',
+      reviewed_by: doc.reviewed_by || '',
+      reviewed_by_name: doc.reviewed_by_name || '',
+      reviewed_at: doc.reviewed_at || '',
+      document_reliance_state: doc.document_reliance_state || '',
+      document_reliance_status: doc.document_reliance_status || '',
+      document_reliance_blockers: doc.document_reliance_blockers || [],
+      verification_method: doc.verification_method || '',
+      manual_acceptance: doc.manual_acceptance || null
 	    };
 	  }
   var documents = (detail.documents || []).map(normalizeApplicationDocument);
@@ -10114,7 +10353,7 @@ function renderApplicationEnhancedRequirementActions(req) {
   var linkedDocWorkflowAccepted = linkedDoc && linkedDoc.workflow_test_acceptance && linkedDoc.workflow_test_acceptance.accepted === true;
   var workflowAcceptHtml = '';
   if (linkedDocWorkflowAccepted) {
-    workflowAcceptHtml = '<div style="margin-top:6px;padding:7px 8px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:10px;line-height:1.35;">Workflow-only synthetic evidence accepted. Verification truth is unchanged; this cannot count as pilot approval proof.</div>';
+    workflowAcceptHtml = '<div style="margin-top:6px;padding:7px 8px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:10px;line-height:1.35;">Workflow-only synthetic evidence accepted. Verification truth is unchanged; this cannot count as approval proof.</div>';
   } else if (canAcceptWorkflowTestEvidence() && linkedDoc && linkedDoc.evidence_class === 'test_only_synthetic') {
     workflowAcceptHtml = '<button class="btn btn-outline btn-sm" onclick="saveWorkflowTestEvidenceAcceptance(\'' + escapeHtml(String(linkedDoc.id)) + '\', \'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;margin-top:6px;">Accept linked synthetic evidence for workflow only</button>';
   }
@@ -24987,7 +25226,270 @@ var PERSON_DOC_CHECKS = [
   ]}
 ];
 
+var AGENT1_POLICY_REGISTRY_VERSION = 'DOC-POLICY-REGISTRY-v1';
+var AGENT1_DEFAULT_TECHNICAL_CHECKS = ['file format', 'file size', 'duplicate detection', 'hash generation', 'OCR confidence', 'clarity/readability', 'crop/page completeness', 'redaction/tamper indicators'];
+var AGENT1_ENTITY_MATERIAL_CHECKS = ['entity name match', 'registration number match', 'jurisdiction match', 'date/freshness', 'certification/notarisation where required'];
+var AGENT1_PERSON_MATERIAL_CHECKS = ['person match', 'DOB match', 'nationality match', 'expiry check', 'certification/notarisation where required'];
+var AGENT1_EDD_MATERIAL_CHECKS = ['party match', 'source category match', 'value plausibility', 'date/freshness', 'supporting evidence consistency'];
+var AGENT1_PERIODIC_MATERIAL_CHECKS = ['refresh date/freshness', 'current entity/person match', 'no-change consistency', 'expired document replacement', 'risk-relevant delta check'];
+var AGENT1_MONITORING_MATERIAL_CHECKS = ['alert/case match', 'source/date capture', 'evidence relevance', 'investigation consistency', 'closure support'];
+var AGENT1_RESOURCE_MATERIAL_CHECKS = ['source verification', 'publication date', 'version/date control', 'jurisdiction relevance', 'memo/reasoning citation match'];
+
+var AGENT1_POLICY_LIFECYCLES = [
+  { key:'entity', label:'Entity Documents' },
+  { key:'person', label:'Person / KYC Documents' },
+  { key:'edd', label:'EDD Evidence' },
+  { key:'change', label:'Change Management Evidence' },
+  { key:'periodic', label:'Periodic Review Evidence' },
+  { key:'monitoring', label:'Monitoring / SAR Evidence' },
+  { key:'regulatory', label:'Regulatory / Resource Evidence' },
+  { key:'technical', label:'Technical Checks' }
+];
+
+function agent1Policy(stage, policyId, family, docTypes, whenRequired, materialChecks, gateBehavior, manualAcceptance, rescreeningTrigger, options) {
+  options = options || {};
+  var lifecycle = AGENT1_POLICY_LIFECYCLES.find(function(item) { return item.key === stage; }) || { label: stage };
+  return {
+    stage: stage,
+    stageLabel: lifecycle.label,
+    policyId: policyId,
+    version: options.version || 'v1',
+    family: family,
+    docTypes: docTypes || [],
+    whenRequired: whenRequired,
+    materialChecks: materialChecks || [],
+    technicalChecks: options.technicalChecks || AGENT1_DEFAULT_TECHNICAL_CHECKS,
+    gateBehavior: gateBehavior,
+    gateType: options.gateType || (String(gateBehavior || '').toLowerCase().indexOf('library') >= 0 ? 'library' : String(gateBehavior || '').toLowerCase().indexOf('review') >= 0 ? 'review' : 'blocking'),
+    manualAcceptance: manualAcceptance,
+    manualAcceptanceAllowed: options.manualAcceptanceAllowed !== false,
+    rescreeningTrigger: rescreeningTrigger || 'No',
+    status: options.status || 'Active',
+    coverageStatus: options.coverageStatus || 'Foundation',
+    notes: options.notes || ''
+  };
+}
+
+var AGENT1_DOCUMENT_POLICIES = [
+  agent1Policy('entity','DOC-ENTITY-COI-v1','Certificate of Incorporation',['cert_inc','certificate_of_incorporation'],'Required for legal entity onboarding and refreshed registry evidence.',AGENT1_ENTITY_MATERIAL_CHECKS,'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-LICENCE-v1','Business registration / licence',['licence','business_registration','business_licence','cert_reg'],'Required where the entity declares regulated or licensed business activity.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['licence validity', 'licence scope match']),'Blocks reliance if failed/pending/stale when required by business activity.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-MEMARTS-v1','Memorandum & Articles',['memarts','memorandum_and_articles','articles_of_association'],'Required for corporate constitutional review.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['business objects / activities match', 'page completeness']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-REGDIR-v1','Register of Directors',['reg_dir','register_of_directors','director_register'],'Required for directors/officers evidence.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['director extraction', 'director list consistency']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, when director list changes'),
+  agent1Policy('entity','DOC-ENTITY-REGSH-v1','Register of Shareholders',['reg_sh','register_of_shareholders','shareholder_register'],'Required for ownership and UBO evidence.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['shareholder extraction', 'ownership percentage validation', 'UBO threshold detection']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, when shareholder/UBO data changes'),
+  agent1Policy('entity','DOC-ENTITY-UBO-DECL-v1','UBO declaration',['ubo_declaration','beneficial_owner_declaration'],'Required where beneficial ownership cannot be proven from registers alone.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['declared UBO match', 'natural-person trace']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','Yes, when UBO data changes'),
+  agent1Policy('entity','DOC-ENTITY-OWNERSHIP-CHART-v1','Ownership chart',['structure_chart','ownership_chart','company_structure_chart'],'Required for multi-layer, complex, or enhanced ownership review.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['ownership chain trace', 'natural-person endpoint', 'intermediary consistency']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','Yes, when ownership changes'),
+  agent1Policy('entity','DOC-ENTITY-BOARD-RES-v1','Board resolution / authorised signatory resolution',['board_res','board_resolution','signatory_resolution'],'Required to verify authority to act/open account/sign documents.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['signatory match', 'scope of authority', 'resolution date']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-REGISTERED-ADDRESS-v1','Proof of registered address',['poa','proof_of_registered_address','registered_address_proof'],'Required for registered office/address verification.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['address match', 'document date within policy window']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-FINANCIALS-v1','Financial statements',['fin_stmt','financial_statements','management_accounts'],'Required where financial/business scale evidence is needed.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['financial period', 'turnover consistency', 'going-concern issue check']),'Blocks reliance if required and failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-AML-POLICY-v1','AML/compliance policy where required',['aml_policy','compliance_policy'],'Required for regulated/high-risk businesses or intermediary reliance.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['policy ownership', 'policy scope', 'policy currency']),'Blocks reliance if required and failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-CONTRACTS-INVOICES-v1','Contracts / invoices where used as business activity evidence',['contracts','invoices','business_activity_evidence'],'Required when contracts/invoices support stated activity, revenue, or counterparties.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['counterparty relevance', 'activity consistency', 'date/freshness']),'Blocks automated reliance if failed/pending/stale when used in memo or approval reasoning.','Senior manual acceptance allowed with reason.','No'),
+
+  agent1Policy('person','DOC-PERSON-PASSPORT-v1','Passport',['passport','passport_copy'],'Required for director, UBO, authorised signatory, and relevant person identity.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['MRZ/identity continuity where available']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, if nationality/DOB/name changes'),
+  agent1Policy('person','DOC-PERSON-NATIONAL-ID-v1','National ID',['national_id','national_identity_card'],'Required where national ID is accepted as identity evidence.',AGENT1_PERSON_MATERIAL_CHECKS,'Blocks reliance if failed/pending/stale when used as identity evidence.','Senior manual acceptance allowed with reason.','Yes, if nationality/DOB/name changes'),
+  agent1Policy('person','DOC-PERSON-ADDRESS-v1','Proof of address',['poa_person','personal_poa','proof_of_address'],'Required for residential address verification.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['address match', 'document date within policy window']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('person','DOC-PERSON-CV-v1','CV',['cv','curriculum_vitae'],'Required for high-risk, PEP, or expertise/background review.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['employment history presence', 'role/business relevance']),'Blocks EDD/person review reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('person','DOC-PERSON-BANKREF-v1','Bank reference',['bankref','bank_reference'],'Required for PEP/high-risk person or relationship evidence where policy requires.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['bank letterhead', 'account standing', 'date/freshness']),'Blocks EDD/person review reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('person','DOC-PERSON-SIGNATORY-v1','Signatory authority',['signatory_authority','authorised_signatory'],'Required for authorised signatory identity and authority evidence.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['authority source match', 'resolution consistency']),'Blocks reliance if failed/pending/stale when used as signatory evidence.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('person','DOC-PERSON-PEP-SUPPORT-v1','PEP declaration support',['pep_declaration','pep_support'],'Required for declared or detected PEP exposure support.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['PEP role consistency', 'source of wealth support', 'public function details']),'Blocks EDD closure and approval reliance if failed/pending/stale.','Senior management acceptance required.','No'),
+
+  agent1Policy('edd','DOC-EDD-SOW-v1','Source of Wealth',['sow','source_wealth','source_of_wealth'],'Required for PEP, high-risk, material UBO, or enhanced due diligence triggers.',AGENT1_EDD_MATERIAL_CHECKS,'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-SOF-v1','Source of Funds',['sof','source_funds','source_of_funds'],'Required where transaction or onboarding funding source must be evidenced.',AGENT1_EDD_MATERIAL_CHECKS,'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-BANK-STATEMENTS-v1','Bank statements',['bank_statements','bank_statement'],'Required for SOW/SOF corroboration or high-risk financial review.',AGENT1_EDD_MATERIAL_CHECKS.concat(['account holder match', 'transaction pattern plausibility']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-BANK-REFERENCE-v1','Bank reference',['edd_bank_reference','pep_bank_reference','bankref'],'Required for PEP/high-risk enhanced evidence where bank standing is requested.',AGENT1_EDD_MATERIAL_CHECKS.concat(['bank letterhead', 'account standing', 'date/freshness']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-TAX-RETURN-v1','Tax return',['tax_return'],'Required where tax evidence supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['tax year match', 'declared income consistency']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-PAYSLIP-v1','Payslip / employment income proof',['payslip','employment_income_proof'],'Required where employment income supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['employer match', 'income period']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-DIVIDEND-v1','Dividend / investment income proof',['dividend_income','investment_income_proof'],'Required where investment or dividend income supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['issuer/investment match', 'value/date consistency']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-SALE-AGREEMENT-v1','Sale agreement',['sale_agreement'],'Required where asset or business sale supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['buyer/seller match', 'asset/value consistency']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-INHERITANCE-v1','Inheritance evidence',['inheritance_evidence'],'Required where inheritance supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['beneficiary match', 'estate/source consistency']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-LOAN-v1','Loan agreement',['loan_agreement'],'Required where borrowing supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['lender/borrower match', 'repayment/source plausibility']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-ADVERSE-MEDIA-RESPONSE-v1','Adverse media response',['adverse_media_response'],'Required where adverse media requires client/officer response evidence.',AGENT1_EDD_MATERIAL_CHECKS.concat(['allegation coverage', 'response relevance', 'supporting evidence consistency']),'Blocks EDD/adverse-media closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-SENIOR-APPROVAL-v1','Senior management approval evidence',['senior_management_approval','senior_review_evidence'],'Required for high-risk onboarding or EDD completion sign-off.',AGENT1_EDD_MATERIAL_CHECKS.concat(['approver authority', 'approval date', 'scope of approval']),'Blocks EDD closure and approval if failed/pending/stale.','Manual acceptance not allowed without replacement approval evidence.','No', { manualAcceptanceAllowed:false }),
+  agent1Policy('edd','DOC-EDD-MEMO-SUPPORT-v1','Enhanced due diligence memo support',['edd_memo_support','enhanced_requirement'],'Required where a document is referenced in EDD memo reasoning.',AGENT1_EDD_MATERIAL_CHECKS.concat(['memo citation match', 'decision relevance']),'Blocks EDD memo reliance if failed/pending/stale.','Senior approval required.','No'),
+
+  agent1Policy('change','DOC-CHANGE-DIRECTOR-v1','Director change evidence',['director_change_evidence','change_director','reg_dir'],'Required evidence: updated register of directors + person KYC.', ['director extraction', 'appointment/removal detection', 'person KYC present', 'name/DOB/nationality match'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'Yes, re-screening required'),
+  agent1Policy('change','DOC-CHANGE-UBO-v1','UBO change evidence',['ubo_change_evidence','change_ubo','reg_sh'],'Required evidence: updated shareholder register + person KYC.', ['UBO extraction', 'person KYC present', 'ownership percentage validation', 'natural-person trace', 'application consistency'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'Yes, re-screening required'),
+  agent1Policy('change','DOC-CHANGE-OWNERSHIP-PCT-v1','Ownership percentage change evidence',['ownership_percentage_change','shareholding_change'],'Required evidence: updated shareholder register or ownership evidence.', ['before/after comparison', 'total ownership validation', 'threshold/materiality detection'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'Risk recalculation and re-screening if material'),
+  agent1Policy('change','DOC-CHANGE-REGISTERED-ADDRESS-v1','Registered address change evidence',['registered_address_change','address_change_evidence'],'Required when registered address is corrected or changed.', ['address extraction', 'entity match', 'freshness', 'application consistency'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'No'),
+  agent1Policy('change','DOC-CHANGE-PEP-v1','PEP status change evidence',['pep_status_change','pep_change_evidence'],'Required when PEP status is changed or corrected.', ['PEP declaration match', 'public function support', 'source/date verification', 'person match'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior management acceptance required.', 'Yes, re-screening required'),
+  agent1Policy('change','DOC-CHANGE-DOB-v1','DOB correction evidence',['dob_correction','date_of_birth_correction'],'Required evidence: passport copy.', ['DOB extraction', 'person match', 'identity continuity'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'Re-screening if nationality/risk changes'),
+  agent1Policy('change','DOC-CHANGE-NATIONALITY-v1','Nationality correction evidence',['nationality_correction'],'Required evidence: passport copy.', ['nationality extraction', 'person match', 'identity continuity'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'Re-screening if nationality/risk changes'),
+  agent1Policy('change','DOC-CHANGE-NAME-v1','Name correction evidence',['name_correction','legal_name_change'],'Required where a person/entity name is corrected or changed.', ['name extraction', 'person/entity match', 'identity continuity', 'supporting source consistency'], 'Blocks change implementation if failed/pending/stale/unclassified.', 'Senior manual acceptance allowed with reason.', 'Yes, re-screening required'),
+
+  agent1Policy('periodic','DOC-PR-COI-REFRESH-v1','refreshed Certificate of Incorporation / registry extract',['periodic_cert_inc','registry_extract_refresh'],'Required during periodic review where entity registry evidence must be refreshed.',AGENT1_PERIODIC_MATERIAL_CHECKS,'Blocks periodic review closure if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('periodic','DOC-PR-UPDATED-REGISTERS-v1','updated registers',['periodic_updated_registers','periodic_reg_dir','periodic_reg_sh'],'Required to confirm directors/shareholders/UBOs during review.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['director/UBO delta detection']),'Blocks periodic review closure if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, if directors/UBOs changed'),
+  agent1Policy('periodic','DOC-PR-ADDRESS-v1','updated proof of address',['periodic_poa','periodic_address_proof'],'Required when address proof refresh is due.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['address match']),'Blocks periodic review closure if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('periodic','DOC-PR-EXPIRED-REPLACEMENT-v1','expired document replacement',['expired_document_replacement'],'Required when an existing evidence item expires or becomes stale.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['superseded document link', 'expiry resolution']),'Blocks periodic review closure and reliance if failed/pending/stale.','Senior manual acceptance allowed with reason.','Depends on replaced document'),
+  agent1Policy('periodic','DOC-PR-ATTESTATION-v1','periodic review attestation',['periodic_review_attestation'],'Required where client/officer attestation supports periodic review.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['attestation completeness', 'signatory authority']),'Blocks periodic review closure if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('periodic','DOC-PR-NO-CHANGE-v1','no-change confirmation',['no_change_confirmation'],'Required where the client confirms no material changes.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['confirmation scope', 'signatory match']),'Blocks periodic review closure if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('periodic','DOC-PR-HIGH-RISK-SOW-SOF-v1','refreshed SOW/SOF where high-risk',['periodic_sow','periodic_sof'],'Required for high-risk periodic review refresh.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['source plausibility', 'supporting evidence consistency']),'Blocks periodic review closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('periodic','DOC-PR-BUSINESS-ACTIVITY-v1','updated financial/business activity evidence',['periodic_financials','periodic_business_activity'],'Required when activity, turnover, or financial evidence must be refreshed.',AGENT1_PERIODIC_MATERIAL_CHECKS.concat(['business activity consistency', 'turnover plausibility']),'Blocks periodic review closure if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+
+  agent1Policy('monitoring','DOC-MON-ALERT-SUPPORT-v1','monitoring alert support document',['monitoring_alert_support','alert_support_document'],'Required when alert investigation relies on uploaded support evidence.',AGENT1_MONITORING_MATERIAL_CHECKS,'Blocks monitoring alert closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('monitoring','DOC-MON-ADVERSE-MEDIA-CAPTURE-v1','adverse media source capture',['adverse_media_source_capture'],'Required when media source is used in investigation or memo reasoning.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['publisher/source capture', 'article date']),'Blocks alert/adverse media closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('monitoring','DOC-MON-TRANSACTION-EVIDENCE-v1','transaction support evidence',['transaction_support_evidence'],'Required when transaction monitoring case relies on client/officer evidence.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['transaction reference match', 'counterparty relevance']),'Blocks transaction monitoring case closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('monitoring','DOC-MON-CLIENT-EXPLANATION-v1','client explanation / response',['client_explanation','client_response_document'],'Required where client response is used to close or disposition an alert.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['response completeness', 'case question coverage']),'Blocks alert closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('monitoring','DOC-MON-SAR-SUPPORT-v1','SAR/STR support document',['sar_support_document','str_support_document'],'Required where SAR/STR evidence is attached to a report or decision record.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['report reference match', 'sensitive handling marker']),'Blocks SAR/STR closure if failed/pending/stale/unclassified.','MLRO/SCO manual acceptance required.','No'),
+  agent1Policy('monitoring','DOC-MON-CLOSURE-EVIDENCE-v1','investigation closure evidence',['investigation_closure_evidence'],'Required where closure decision relies on uploaded evidence.',AGENT1_MONITORING_MATERIAL_CHECKS.concat(['closure rationale consistency']),'Blocks monitoring alert closure if failed/pending/stale/unclassified.','Senior manual acceptance allowed with reason.','No'),
+
+  agent1Policy('regulatory','DOC-REG-GUIDANCE-v1','regulatory guidance',['regulatory_guidance'],'Library-only unless relied on in a case, memo, policy, or decision. If relied upon, source/date/version verification is required.',AGENT1_RESOURCE_MATERIAL_CHECKS,'Library only; blocks reliance if cited and source/date/version are unverified.','Compliance owner acceptance required if cited evidence cannot be verified.','No', { gateType:'library' }),
+  agent1Policy('regulatory','DOC-REG-LAWS-v1','laws/regulations',['law','regulation','laws_regulations'],'Library-only unless relied on in a case, memo, policy, or decision. If relied upon, source/date/version verification is required.',AGENT1_RESOURCE_MATERIAL_CHECKS,'Library only; blocks reliance if cited and source/date/version are unverified.','Compliance owner acceptance required if cited evidence cannot be verified.','No', { gateType:'library' }),
+  agent1Policy('regulatory','DOC-REG-INTERNAL-POLICY-v1','internal policy document',['internal_policy_document'],'Library/control evidence unless used in memo or decision reasoning.',AGENT1_RESOURCE_MATERIAL_CHECKS.concat(['owner approval', 'effective date']),'Library only; blocks reliance if cited and version/source are unverified.','Compliance owner acceptance required.','No', { gateType:'library' }),
+  agent1Policy('regulatory','DOC-REG-COMPLIANCE-RESOURCE-v1','compliance resource file',['compliance_resource_file'],'Library-only unless relied on in a case, memo, policy, or decision.',AGENT1_RESOURCE_MATERIAL_CHECKS,'Library only; blocks reliance if cited and source/date/version are unverified.','Compliance owner acceptance required.','No', { gateType:'library' }),
+  agent1Policy('regulatory','DOC-REG-INTELLIGENCE-SOURCE-v1','regulatory intelligence source document',['regulatory_intelligence_source_document'],'Required when regulatory intelligence enters compliance reasoning.',AGENT1_RESOURCE_MATERIAL_CHECKS.concat(['source credibility', 'change suggestion trace']),'Blocks implementation/reasoning reliance if source/date/version are unverified.','Compliance owner acceptance required.','No', { gateType:'review' }),
+  agent1Policy('regulatory','DOC-REG-MEMO-SOURCE-v1','source document used in memo/reasoning',['source_document_used_in_memo','reasoning_source_document'],'Required when a resource is referenced in a compliance memo, supervisor review, or decision record.',AGENT1_RESOURCE_MATERIAL_CHECKS.concat(['citation match', 'decision relevance']),'Blocks memo/reasoning reliance if source/date/version are unverified.','Compliance owner acceptance required.','No', { gateType:'review' }),
+
+  agent1Policy('technical','DOC-TECH-FORMAT-v1','file format',['technical_file_format'],'Always runs as upload/verification gate.', ['supported extension', 'MIME/magic-byte consistency'], 'Gate-only technical control; failed/warning shown immediately.', 'Not applicable.', 'No', { technicalChecks:['file format'], gateType:'review', manualAcceptanceAllowed:false }),
+  agent1Policy('technical','DOC-TECH-SIZE-v1','file size',['technical_file_size'],'Always runs as upload/verification gate.', ['maximum file size'], 'Gate-only technical control; failed/warning shown immediately.', 'Not applicable.', 'No', { technicalChecks:['file size'], gateType:'review', manualAcceptanceAllowed:false }),
+  agent1Policy('technical','DOC-TECH-DUPLICATE-v1','duplicate detection',['technical_duplicate_detection'],'Runs when a document is uploaded or replaced.', ['duplicate hash comparison'], 'Gate-only technical control; failed/warning shown immediately.', 'Not applicable.', 'No', { technicalChecks:['duplicate detection'], gateType:'review', manualAcceptanceAllowed:false }),
+  agent1Policy('technical','DOC-TECH-HASH-v1','hash generation',['technical_hash_generation'],'Always persisted for audit/export where supported.', ['evidence hash generated'], 'Audit-only unless hash generation fails.', 'Not applicable.', 'No', { technicalChecks:['hash generation'], gateType:'review', manualAcceptanceAllowed:false }),
+  agent1Policy('technical','DOC-TECH-OCR-v1','OCR confidence',['technical_ocr_confidence'],'Runs where OCR/extraction is used by verification.', ['OCR confidence threshold'], 'Warning or failed OCR remains visible and may block reliance.', 'Senior manual acceptance allowed with reason.', 'No', { technicalChecks:['OCR confidence'], gateType:'review' }),
+  agent1Policy('technical','DOC-TECH-CLARITY-v1','clarity/readability',['technical_clarity_readability'],'Runs where image or PDF readability affects verification.', ['readability', 'blur detection'], 'Warning or failed clarity remains visible and may block reliance.', 'Senior manual acceptance allowed with reason.', 'No', { technicalChecks:['clarity/readability'], gateType:'review' }),
+  agent1Policy('technical','DOC-TECH-CROP-v1','crop/page completeness',['technical_crop_page_completeness'],'Runs where page completeness can be evaluated.', ['cropped document', 'missing pages'], 'Warning or failed completeness remains visible and may block reliance.', 'Senior manual acceptance allowed with reason.', 'No', { technicalChecks:['crop/page completeness'], gateType:'review' }),
+  agent1Policy('technical','DOC-TECH-TAMPER-v1','redaction/tamper indicators',['technical_tamper_redaction'],'Runs where visual/metadata tamper signals are available.', ['tamper signal', 'unexpected redaction'], 'Failed/warning tamper signal is material and visible immediately.', 'Senior manual acceptance allowed with reason.', 'No', { technicalChecks:['redaction/tamper indicators'], gateType:'review' }),
+  agent1Policy('technical','DOC-TECH-MALWARE-v1','malware/virus scan placeholder',['technical_malware_scan'],'Placeholder until malware scanning is implemented.', ['malware scan placeholder'], 'Documented fallback; not a full scan until implemented.', 'Not applicable.', 'No', { technicalChecks:['malware/virus scan placeholder'], gateType:'review', coverageStatus:'Foundation' }),
+  agent1Policy('technical','DOC-TECH-METADATA-v1','metadata extraction where available',['technical_metadata_extraction'],'Runs where metadata extraction is available.', ['metadata extraction', 'metadata anomaly review'], 'Audit/control evidence; warnings remain visible.', 'Senior manual acceptance allowed with reason.', 'No', { technicalChecks:['metadata extraction'], gateType:'review' }),
+
+  agent1Policy('technical','DOC-UNKNOWN-UNCLASSIFIED-v1','Unclassified document / unknown policy',['unknown','unclassified','supporting_document'],'Any uploaded document that cannot be classified into a known policy.', ['document classification required', 'officer classification route', 'automated reliance blocked'], 'Unclassified documents are blocked from automated reliance, routed for officer classification, and excluded from memo/approval reliance until classified and verified or manually accepted with reason.', 'Senior manual acceptance allowed with documented reason after classification.', 'No', { gateType:'review', coverageStatus:'Active' })
+];
+window.AGENT1_DOCUMENT_POLICIES = AGENT1_DOCUMENT_POLICIES;
+
+var activePolicyLifecycle = 'entity';
+
+function ensurePolicyLifecycleFilterOptions() {
+  var select = document.getElementById('agent1-policy-lifecycle-filter');
+  if (!select || select.dataset.loaded === 'true') return;
+  AGENT1_POLICY_LIFECYCLES.forEach(function(stage) {
+    var opt = document.createElement('option');
+    opt.value = stage.key;
+    opt.textContent = stage.label;
+    select.appendChild(opt);
+  });
+  select.dataset.loaded = 'true';
+}
+
+function policyContainsSearch(policy, query) {
+  if (!query) return true;
+  var haystack = [
+    policy.family,
+    policy.stageLabel,
+    policy.policyId,
+    policy.whenRequired,
+    policy.gateBehavior,
+    policy.manualAcceptance,
+    policy.rescreeningTrigger,
+    (policy.materialChecks || []).join(' '),
+    (policy.technicalChecks || []).join(' ')
+  ].join(' ').toLowerCase();
+  return haystack.indexOf(query.toLowerCase()) >= 0;
+}
+
+function renderPolicySummary() {
+  var container = document.getElementById('agent1-policy-summary');
+  if (!container) return;
+  var active = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'active'; }).length;
+  var stages = AGENT1_POLICY_LIFECYCLES.filter(function(stage) {
+    return AGENT1_DOCUMENT_POLICIES.some(function(policy) { return policy.stage === stage.key; });
+  }).length;
+  var blockers = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.gateType === 'blocking'; }).length;
+  var unknownEnabled = AGENT1_DOCUMENT_POLICIES.some(function(policy) { return policy.policyId === 'DOC-UNKNOWN-UNCLASSIFIED-v1'; });
+  var stats = [
+    ['Total document policies', AGENT1_DOCUMENT_POLICIES.length],
+    ['Active policies', active],
+    ['Lifecycle stages covered', stages],
+    ['Documents with blockers', blockers],
+    ['Unknown handling enabled', unknownEnabled ? 'Yes' : 'No']
+  ];
+  container.innerHTML = stats.map(function(stat) {
+    return '<div class="agent1-summary-card"><div class="agent1-summary-label">' + escapeHtml(stat[0]) + '</div><div class="agent1-summary-value">' + escapeHtml(stat[1]) + '</div></div>';
+  }).join('');
+}
+
+function renderPolicyLifecycleTabs() {
+  var container = document.getElementById('agent1-policy-tabs');
+  if (!container) return;
+  container.innerHTML = AGENT1_POLICY_LIFECYCLES.map(function(stage) {
+    var count = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.stage === stage.key; }).length;
+    return '<button type="button" class="agent1-lifecycle-tab ' + (activePolicyLifecycle === stage.key ? 'active' : '') + '" onclick="switchPolicyTab(\'' + stage.key + '\')">' + escapeHtml(stage.label) + ' <span style="opacity:.7;">' + count + '</span></button>';
+  }).join('');
+}
+
+function gateBadgeClass(policy) {
+  return policy.gateType === 'library' ? 'library' : policy.gateType === 'review' ? 'review' : 'blocking';
+}
+
+function renderPolicyChipList(items, cls) {
+  return (items || []).map(function(item) {
+    return '<span class="agent1-chip ' + cls + '">' + escapeHtml(item) + '</span>';
+  }).join('');
+}
+
+function renderAgent1PolicyCard(policy, index) {
+  var open = index < 2 || policy.policyId === 'DOC-UNKNOWN-UNCLASSIFIED-v1';
+  return '<details class="agent1-policy-card" ' + (open ? 'open' : '') + '>' +
+    '<summary>' +
+      '<div style="min-width:0;">' +
+        '<div class="agent1-policy-family">' + escapeHtml(policy.family) + '</div>' +
+        '<div class="agent1-policy-meta">' +
+          '<span class="agent1-chip">' + escapeHtml(policy.stageLabel) + '</span>' +
+          '<span class="agent1-chip">' + escapeHtml(policy.policyId + ' / ' + policy.version) + '</span>' +
+          '<span class="agent1-gate-badge ' + gateBadgeClass(policy) + '">' + escapeHtml(policy.gateType === 'blocking' ? 'Reliance gate' : policy.gateType === 'library' ? 'Library / cited reliance' : 'Review gate') + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<span class="agent1-status-badge">' + escapeHtml(policy.status) + '</span>' +
+    '</summary>' +
+    '<div class="agent1-policy-body">' +
+      '<div class="agent1-policy-section-label">When required</div>' +
+      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.whenRequired) + '</div>' +
+      '<div class="agent1-policy-section-label">Gate behaviour</div>' +
+      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.gateBehavior) + '</div>' +
+      '<div class="agent1-policy-section-label">Manual acceptance</div>' +
+      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.manualAcceptanceAllowed ? policy.manualAcceptance : 'Manual acceptance not allowed') + '</div>' +
+      '<div class="agent1-policy-section-label">Re-screening trigger</div>' +
+      '<span class="agent1-chip ' + (String(policy.rescreeningTrigger).toLowerCase().indexOf('yes') >= 0 || String(policy.rescreeningTrigger).toLowerCase().indexOf('re-screen') >= 0 ? 'material' : '') + '">' + escapeHtml(policy.rescreeningTrigger) + '</span>' +
+      '<div class="agent1-policy-section-label">Material checks</div>' +
+      '<div class="agent1-chip-row">' + renderPolicyChipList(policy.materialChecks, 'material') + '</div>' +
+      '<div class="agent1-policy-section-label">Technical checks</div>' +
+      '<div class="agent1-chip-row">' + renderPolicyChipList(policy.technicalChecks, 'technical') + '</div>' +
+    '</div>' +
+  '</details>';
+}
+
+function renderPolicyRegistry() {
+  ensurePolicyLifecycleFilterOptions();
+  renderPolicySummary();
+  var lifecycleSelect = document.getElementById('agent1-policy-lifecycle-filter');
+  var lifecycleFilter = lifecycleSelect ? lifecycleSelect.value : activePolicyLifecycle;
+  if (lifecycleFilter && lifecycleFilter !== 'all') activePolicyLifecycle = lifecycleFilter;
+  renderPolicyLifecycleTabs();
+  var searchEl = document.getElementById('agent1-policy-search');
+  var gateEl = document.getElementById('agent1-policy-gate-filter');
+  var statusEl = document.getElementById('agent1-policy-status-filter');
+  var query = searchEl ? searchEl.value.trim() : '';
+  var gate = gateEl ? gateEl.value : 'all';
+  var status = statusEl ? statusEl.value : 'all';
+  var effectiveLifecycle = lifecycleFilter || activePolicyLifecycle;
+  var policies = AGENT1_DOCUMENT_POLICIES.filter(function(policy) {
+    if (effectiveLifecycle !== 'all' && policy.stage !== activePolicyLifecycle) return false;
+    if (gate !== 'all' && policy.gateType !== gate) return false;
+    if (status !== 'all' && String(policy.status).toLowerCase() !== status && String(policy.coverageStatus).toLowerCase() !== status) return false;
+    return policyContainsSearch(policy, query);
+  });
+  var container = document.getElementById('agent1-policy-registry');
+  if (!container) return;
+  container.innerHTML = policies.length
+    ? policies.map(renderAgent1PolicyCard).join('')
+    : '<div class="agent1-policy-empty">No document policies match the selected filters.</div>';
+}
+
+function switchPolicyTab(stage) {
+  activePolicyLifecycle = stage || 'entity';
+  var lifecycleSelect = document.getElementById('agent1-policy-lifecycle-filter');
+  if (lifecycleSelect) lifecycleSelect.value = activePolicyLifecycle;
+  renderPolicyRegistry();
+}
+
 function renderAIChecks() {
+  renderPolicyRegistry();
   renderCheckTab('entity');
   renderCheckTab('person');
   // Count total

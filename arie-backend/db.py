@@ -497,6 +497,7 @@ def _get_postgres_schema() -> str:
         workflow_test_accepted_by TEXT REFERENCES users(id),
         workflow_test_accepted_at TIMESTAMP,
         workflow_test_acceptance_environment TEXT,
+        uploaded_by TEXT REFERENCES users(id),
         uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         verified_at TIMESTAMP,
         reviewed_at TIMESTAMP
@@ -1611,6 +1612,7 @@ def _get_sqlite_schema() -> str:
         workflow_test_accepted_by TEXT REFERENCES users(id),
         workflow_test_accepted_at TEXT,
         workflow_test_acceptance_environment TEXT,
+        uploaded_by TEXT REFERENCES users(id),
         uploaded_at TEXT DEFAULT (datetime('now')),
         verified_at TEXT,
         reviewed_at TEXT
@@ -3879,6 +3881,12 @@ def _ensure_document_workflow_test_acceptance_schema(db: DBConnection):
     for column, definition in columns:
         if not _safe_column_exists(db, "documents", column):
             db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
+
+
+def _ensure_document_upload_audit_schema(db: DBConnection):
+    """Ensure documents can record who uploaded evidence for officer auditability."""
+    if not _safe_column_exists(db, "documents", "uploaded_by"):
+        db.execute("ALTER TABLE documents ADD COLUMN uploaded_by TEXT REFERENCES users(id)")
 
 
 def _ensure_document_current_slot_unique_index(db: DBConnection):
@@ -6327,6 +6335,20 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.41: Ensured workflow-test evidence acceptance schema")
     except Exception as e:
         logger.error("Migration v2.41 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.42: Officer upload attribution for canonical evidence rows.
+    # Existing databases may already have document evidence columns without this
+    # audit field, so keep it idempotent and independent from enforcement.
+    try:
+        _ensure_document_upload_audit_schema(db)
+        db.commit()
+        logger.info("Migration v2.42: Ensured document upload audit schema")
+    except Exception as e:
+        logger.error("Migration v2.42 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
