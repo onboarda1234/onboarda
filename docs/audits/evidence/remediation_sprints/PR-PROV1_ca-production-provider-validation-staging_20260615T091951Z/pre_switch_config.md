@@ -2,9 +2,13 @@
 
 ## Verdict
 
-`READY TO SWITCH / AWAITING APPROVAL`
+`BLOCKED / NEEDS EVIDENCE`
 
-Technical readiness is partially confirmed, but runtime provider screening is not approved yet. No credential switch was performed.
+Technical readiness is confirmed for read-only staging/API checks, and operator
+approval for controlled runtime screening is now recorded. Runtime provider
+screening remains blocked because dashboard/account mode was not independently
+confirmed as Production after prior dashboard evidence reportedly showed
+Sandbox. No credential switch was performed.
 
 ## Source Of Truth
 
@@ -63,8 +67,10 @@ Redacted configuration evidence:
 
 Credential mode:
 
-- Inferred from configured hosts: `production_domain_or_unsuffixed_provider_url`.
-- This is not sufficient business approval by itself. An operator must confirm whether this is the intended CA production-provider credential set for staging validation.
+- Inferred from configured hosts: `production_domain`.
+- Operator approved current CA production credentials for controlled staging
+  validation.
+- Dashboard/account visual mode remains unconfirmed in this run.
 
 ## Credential-Only Probe
 
@@ -82,8 +88,9 @@ OAuth-only probe:
 
 The following are not yet confirmed:
 
-- Explicit operator approval to run controlled screenings against current CA production-domain provider configuration.
-- Exact synthetic/internal/authorized test subject list.
-- Approved case cap and expected CA billing impact.
-- CA Mesh dashboard webhook subscription targeting staging.
-- Whether credentials should be retained after testing or rolled back.
+- Redacted dashboard/account evidence showing active CA Mesh mode is Production,
+  or written operator confirmation explaining why the prior Sandbox screenshot
+  does not apply to the active staging API credentials.
+- Before/after screenshot if dashboard production mode must be selected/switched.
+- Runtime screening, webhook, browser, memo/gate, and audit smoke after the mode
+  conflict is resolved.

@@ -2,11 +2,16 @@
 
 ## Status
 
-NOT RUN.
+BLOCKED / NEEDS EVIDENCE.
 
-No controlled provider screening cases were created or reused under PR-PROV1, so a meaningful officer-facing browser validation could not be performed.
+No controlled provider screening cases were created or reused under PR-PROV1, so
+a meaningful officer-facing browser validation could not be performed.
 
-## Required After Approval
+The in-app browser tool was not available in this session. Headless browser
+fallback would have been acceptable for RegMind UI smoke, but runtime cases were
+not created because dashboard/account mode remains unconfirmed.
+
+## Required After Dashboard/Account-Mode Confirmation
 
 Browser smoke must verify:
 
@@ -20,4 +25,5 @@ Browser smoke must verify:
 
 ## Screenshots
 
-No PR-PROV1 screenshots captured yet.
+No PR-PROV1 screenshots captured. Dashboard before/after screenshots remain
+required if dashboard mode is used to prove Production account state.

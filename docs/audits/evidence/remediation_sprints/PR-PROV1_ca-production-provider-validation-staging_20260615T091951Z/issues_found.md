@@ -2,33 +2,44 @@
 
 ## Status
 
-No product defect confirmed yet because controlled runtime provider screening was not run.
+No product defect confirmed because controlled runtime provider screening was
+not run.
 
 ## Readiness Gaps
 
 ### PROV1-GAP-001 - Explicit switch/test approval missing
 
-- Severity: Blocking for runtime validation.
-- Evidence: User requested the workstream but did not explicitly approve switching or retaining production CA credentials for controlled screening.
-- Required action: Operator approval before Phase 3/4.
+- Status: resolved by operator input on 2026-06-15.
+- Evidence: approved provider mode, subject list, case cap, billing cap, and
+  webhook subscription confirmation were provided.
 
 ### PROV1-GAP-002 - Controlled test subject list missing
 
-- Severity: Blocking for runtime validation.
-- Evidence: No exact synthetic/internal/authorized subjects were provided.
-- Required action: Provide application refs or subject details that are lawful and approved for CA production-provider screening on staging.
+- Status: resolved by operator input on 2026-06-15.
+- Evidence: approved subject list captured in `provider_status_before.md` and
+  `runtime_test_cases.md`.
 
 ### PROV1-GAP-003 - Cost cap missing
 
-- Severity: Blocking for runtime validation.
-- Evidence: No approved case cap or expected CA billing exposure was provided.
-- Required action: Approve test cap and usage monitoring owner.
+- Status: resolved by operator input on 2026-06-15.
+- Evidence: maximum `10` screening cases and `USD 50` expected exposure.
 
 ### PROV1-GAP-004 - Webhook dashboard subscription not independently confirmed
 
-- Severity: Blocking for webhook smoke.
-- Evidence: RegMind route and secret are configured, but CA Mesh dashboard subscription target was not verified in PR-PROV1.
-- Required action: Confirm CA Mesh webhook target and event subscriptions, or provide dashboard evidence with secrets redacted.
+- Status: partially resolved by operator input on 2026-06-15.
+- Evidence: operator confirmed the CA Mesh webhook subscription to staging.
+- Remaining gap: no signed provider webhook was delivered because runtime
+  screening was not started.
+
+### PROV1-GAP-005 - Dashboard/account mode not independently confirmed
+
+- Severity: Blocking for runtime validation.
+- Evidence: API credential URLs are production-domain and OAuth succeeds, but a
+  prior CA Mesh dashboard screenshot reportedly showed `Sandbox`.
+- Required action: Provide redacted dashboard/account-mode evidence showing
+  Production, or document why the prior Sandbox dashboard is not tied to the
+  active staging API credentials.
+- Safety action taken: no screening requests were sent.
 
 ## Corrective PRs
 

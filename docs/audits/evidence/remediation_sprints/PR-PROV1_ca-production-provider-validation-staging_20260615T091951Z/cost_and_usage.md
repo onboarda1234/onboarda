@@ -2,38 +2,36 @@
 
 ## Status
 
-AWAITING APPROVAL.
+APPROVED CAPS RECORDED; RUNTIME BLOCKED.
 
 ## Completed Usage
 
 - CA OAuth credential-only probe: 1 token acquisition.
+- Post-approval authenticated RegMind status checks: read-only.
 - Screening requests sent: 0.
 - Webhooks triggered: 0.
 - Expected screening cost incurred by PR-PROV1 so far: none.
 
+## Approved Runtime Caps
+
+- Approved screening case cap: maximum `10` screening cases total.
+- Approved expected CA usage/cost exposure: maximum `USD 50`.
+- Approved subjects:
+  - Entity: `Multigate Technologies Limited`
+  - Director: `Stephen Margolis`
+  - UBO: `Sir Michael Lawrence Davis`
+  - Intermediary: `Gemrock UK Plc`
+
 ## Required Before Runtime Screening
 
-Operator must approve:
-
-- Exact case cap.
-- Expected number of entity screenings.
-- Expected number of director screenings.
-- Expected number of UBO screenings.
-- Expected number of intermediary screenings.
-- Expected number of rescreen attempts.
-- Whether adverse media provider calls are expected to bill separately.
-- CA dashboard/usage monitoring owner.
-
-Recommended initial cap:
-
-- Maximum 5 applications.
-- Maximum 15 subject screenings.
-- Maximum 1 rescreen per controlled case.
-- No uncontrolled monitoring subscriptions unless explicitly approved.
+Dashboard/account/API mode must be intentionally confirmed as Production before
+spending any screening calls because prior dashboard evidence reportedly showed
+Sandbox. API credential URLs are production-domain, but dashboard/account mode
+was not independently confirmed in this run.
 
 ## Monitoring
 
-To be completed after approval:
+To be completed after dashboard/account-mode confirmation:
 
 - CA Mesh usage dashboard checked by operator.
 - CloudWatch application/provider logs checked for errors only, with no secrets exported.

@@ -2,9 +2,12 @@
 
 ## Status
 
-PARTIAL.
+BLOCKED / NEEDS EVIDENCE.
 
-Configuration and credential-only smoke passed. Controlled runtime screening smoke was not run because approval/test data is pending.
+Configuration, authenticated status, ECS provenance, and credential-only smoke
+passed. Controlled runtime screening smoke was not run because dashboard/account
+mode could not be independently confirmed as Production after a prior screenshot
+reportedly showed Sandbox.
 
 ## Completed
 
@@ -33,9 +36,27 @@ PASS.
 - Token omitted from logs/evidence.
 - Evidence: `runtime_json/ca_oauth_probe.json`.
 
+### Post-Approval Authenticated Preflight
+
+PASS for read-only checks.
+
+- Staging QA officer login succeeded; token redacted.
+- `/api/version`: PASS.
+- `/api/screening/status`: PASS.
+- ECS backend/worker runtime alignment: PASS.
+- API credential mode inference: `production_domain`.
+- Dashboard/account mode: NOT independently confirmed.
+- Screening requests sent after approval: `0`.
+
+Evidence:
+
+- `runtime_json/post_approval_preflight_redacted.json`
+- `runtime_json/post_approval_ecs_runtime_redacted.json`
+
 ## Not Run
 
-The following require explicit approval and authorized test subjects:
+The following were intentionally not run because the production-vs-sandbox
+dashboard/account-mode conflict remains unresolved:
 
 - Entity no-hit screening.
 - Entity unresolved-hit screening.
@@ -52,3 +73,5 @@ The following require explicit approval and authorized test subjects:
 - `runtime_json/screening_status_before.json`
 - `runtime_json/pre_switch_runtime_snapshot.json`
 - `runtime_json/ca_oauth_probe.json`
+- `runtime_json/post_approval_preflight_redacted.json`
+- `runtime_json/post_approval_ecs_runtime_redacted.json`

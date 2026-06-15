@@ -2,7 +2,7 @@
 
 ## Status
 
-NOT RUN.
+BLOCKED / NEEDS EVIDENCE.
 
 ## Confirmed
 
@@ -10,6 +10,7 @@ NOT RUN.
 - Staging CA webhook secret is configured in Secrets Manager.
 - Current task definition references `COMPLYADVANTAGE_WEBHOOK_SECRET` through secret wiring.
 - Existing PR-CA3/CA4C regression coverage includes Standard Webhooks signature verification, idempotency, and reconciliation paths.
+- Operator confirmed the CA Mesh webhook subscription to staging.
 
 ## Not Confirmed
 
@@ -18,7 +19,10 @@ NOT RUN.
 - A duplicate delivery was received and deduped in staging during PR-PROV1.
 - Webhook audit events were created for a controlled provider-backed case during PR-PROV1.
 
-## Required After Approval
+No provider-backed webhook was expected because no runtime screening request was
+sent under the unresolved dashboard/account-mode stop condition.
+
+## Required After Dashboard/Account-Mode Confirmation
 
 Use an approved controlled provider event or safe fixture to verify:
 
