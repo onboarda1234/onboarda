@@ -729,6 +729,212 @@ def _insert_sq2_ca_evidence(
     )
 
 
+def test_screening_queue_summary_payload_omits_heavy_evidence_until_requested(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_sq4c_summary",
+        ref="ARF-SQ4C-SUMMARY",
+        case_id="case-sq4c-summary",
+        alert_id="alert-sq4c-summary",
+        risk_id="risk-sq4c-summary",
+        profile_id="profile-sq4c-summary",
+    )
+    _insert_sq2_ca_evidence(
+        db,
+        monitoring_id=19401,
+        app_id="app_sq4c_summary",
+        case_id="case-sq4c-summary",
+        alert_id="alert-sq4c-summary",
+        risk_id="risk-sq4c-summary",
+        profile_id="profile-sq4c-summary",
+        evidence_hash="hash-sq4c-summary",
+    )
+    db.commit()
+
+    summary_payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": "ARF-SQ4C-SUMMARY"},
+        include_evidence=False,
+    )
+    row = next(r for r in summary_payload["rows"] if r["application_ref"] == "ARF-SQ4C-SUMMARY" and r["subject_type"] == "director")
+
+    assert summary_payload["evidence_mode"] == "summary"
+    assert row["evidence_detail_available"] is True
+    assert row["provider_evidence_count"] >= 1
+    assert "provider_evidence" not in row
+    assert "items" not in row["screening_evidence"]
+    assert "technical_details" not in row["screening_evidence"]
+    assert row["evidence_summary"]["provider_risk_ids"] == ["risk-sq4c-summary"]
+
+    full_payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": "ARF-SQ4C-SUMMARY"},
+        include_evidence=True,
+    )
+    full_row = next(r for r in full_payload["rows"] if r["application_ref"] == "ARF-SQ4C-SUMMARY" and r["subject_type"] == "director")
+
+    assert full_payload["evidence_mode"] == "full"
+    assert full_row["provider_evidence"]
+    assert full_row["screening_evidence"]["items"]
+    assert full_row["screening_evidence"]["technical_details"]
+
+
+def test_screening_queue_universal_search_matches_application_subject_company_and_mesh_refs(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_sq4c_search",
+        ref="ARF-SQ4C-SEARCH",
+        subject_name="Universal Search Director",
+        case_id="case-sq4c-search",
+        alert_id="alert-sq4c-search",
+        risk_id="risk-sq4c-search",
+        profile_id="profile-sq4c-search",
+    )
+    _insert_sq2_ca_evidence(
+        db,
+        monitoring_id=19402,
+        app_id="app_sq4c_search",
+        case_id="case-sq4c-search",
+        alert_id="alert-sq4c-search",
+        matched_subject="Universal Search Director",
+        risk_id="risk-sq4c-search",
+        profile_id="profile-sq4c-search",
+        evidence_hash="hash-sq4c-search",
+    )
+    db.commit()
+
+    user = {"type": "officer", "sub": "admin001"}
+    for search_term in (
+        "ARF-SQ4C-SEARCH",
+        "Universal Search Director",
+        "SQ2 Evidence Ltd",
+        "case-sq4c-search",
+        "alert-sq4c-search",
+        "risk-sq4c-search",
+        "profile-sq4c-search",
+    ):
+        payload = _build_screening_queue_payload(
+            db,
+            user,
+            filters={"search": search_term},
+            include_evidence=False,
+        )
+        assert any(
+            row["application_ref"] == "ARF-SQ4C-SEARCH" and row["subject_name"] == "Universal Search Director"
+            for row in payload["rows"]
+        ), search_term
+
+
+def test_screening_queue_entity_pending_uses_broad_aml_wording(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_sq4c_pending_entity",
+            "ARF-SQ4C-PENDING-ENTITY",
+            "client_sq4c",
+            "Pending Entity AML Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "screened_at": "2026-06-01T00:00:00Z",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "found": True,
+                        "source": "complyadvantage",
+                        "provider": "complyadvantage",
+                        "sanctions": {
+                            "matched": False,
+                            "results": [],
+                            "source": "complyadvantage",
+                            "provider": "complyadvantage",
+                            "api_status": "pending",
+                        },
+                    },
+                    "director_screenings": [],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": [],
+                    "total_hits": 0,
+                }
+            }),
+        ),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": "ARF-SQ4C-PENDING-ENTITY"},
+    )
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ4C-PENDING-ENTITY" and r["subject_type"] == "entity")
+
+    assert "Entity AML screening pending" in row["entity_context"]
+    assert all("Company sanctions screening" not in item for item in row["entity_context"])
+
+
+def test_screening_queue_available_type_filters_label_uncategorized_people_as_other_person():
+    from server import _screening_queue_available_type_filters
+
+    filters = _screening_queue_available_type_filters([
+        {"subject_type": "entity"},
+        {"subject_type": "director"},
+        {"subject_type": "person"},
+    ])
+
+    assert {"value": "individual", "label": "Other person"} in filters
+
+
+def test_screening_queue_summary_payload_respects_limit_and_offset(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    for idx in range(5):
+        _insert_sq2_screened_director(
+            db,
+            app_id=f"app_sq4c_page_{idx}",
+            ref=f"ARF-SQ4C-PAGE-{idx}",
+            subject_name=f"Paged Director {idx}",
+            case_id=f"case-sq4c-page-{idx}",
+            alert_id=f"alert-sq4c-page-{idx}",
+            risk_id=f"risk-sq4c-page-{idx}",
+            profile_id=f"profile-sq4c-page-{idx}",
+        )
+    db.commit()
+
+    payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": "ARF-SQ4C-PAGE"},
+        limit=2,
+        offset=2,
+        include_evidence=False,
+    )
+
+    assert payload["pagination"]["limit"] == 2
+    assert payload["pagination"]["offset"] == 2
+    assert payload["pagination"]["returned"] == 2
+    assert payload["pagination"]["total_rows"] == 10
+    assert payload["pagination"]["has_next"] is True
+    assert payload["pagination"]["has_prev"] is True
+    assert len(payload["rows"]) == 2
+    assert all("provider_evidence" not in row for row in payload["rows"])
+
+
 def test_screening_queue_links_ca_evidence_by_exact_identifiers(db, temp_db):
     from server import _build_screening_queue_payload
 

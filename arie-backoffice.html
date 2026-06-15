@@ -1820,8 +1820,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
   <div class="card" style="margin:12px 0;padding:14px 16px;">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end;">
-      <label style="font-size:11px;font-weight:700;color:var(--text2);">Queue search
-        <input class="form-input" id="screening-queue-search" placeholder="Search screening rows..." oninput="queueScreeningQueueSearch()" style="margin-top:6px;" />
+      <label style="font-size:11px;font-weight:700;color:var(--text2);grid-column:span 2;">Queue search
+        <input class="form-input" id="screening-queue-search" placeholder="Search subject, company, ARF, or Mesh reference" oninput="queueScreeningQueueSearch()" style="margin-top:6px;" />
       </label>
       <label style="font-size:11px;font-weight:700;color:var(--text2);">Status
         <select class="form-select" id="screening-filter-status" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
@@ -1841,10 +1841,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <option value="director">Director</option>
           <option value="ubo">UBO</option>
           <option value="intermediary">Intermediary</option>
-          <option value="individual">Individual</option>
         </select>
       </label>
-      <label style="font-size:11px;font-weight:700;color:var(--text2);">Result Source Filter
+      <label style="font-size:11px;font-weight:700;color:var(--text2);">Source
         <select class="form-select" id="screening-filter-provider" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
           <option value="">All</option>
           <option value="complyadvantage">ComplyAdvantage Mesh screening source</option>
@@ -1861,9 +1860,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <option value="provider_pep_hit">Provider PEP hit</option>
           <option value="na">N/A</option>
         </select>
-      </label>
-      <label style="font-size:11px;font-weight:700;color:var(--text2);">Application reference
-        <input class="form-input" id="screening-filter-application-ref" placeholder="ARF / company" oninput="queueScreeningQueueSearch()" style="margin-top:6px;" />
       </label>
       <button type="button" class="btn btn-outline btn-sm" onclick="resetScreeningQueueFilters()">Reset filters</button>
     </div>
@@ -6780,7 +6776,7 @@ function renderDirectorsUboReport() {
 
 function openDirectorsUboScreening(ref) {
   showView('screening');
-  var input = document.getElementById('screening-filter-application-ref');
+  var input = document.getElementById('screening-queue-search');
   if (input) input.value = ref || '';
   if (typeof applyScreeningQueueFilters === 'function') applyScreeningQueueFilters();
 }
@@ -11195,6 +11191,23 @@ function screeningQueuePageSize() {
     : 50;
 }
 
+function updateScreeningQueueTypeFilterOptions() {
+  var select = document.getElementById('screening-filter-type');
+  if (!select) return;
+  var filters = Array.isArray(SCREENING_QUEUE.available_type_filters) ? SCREENING_QUEUE.available_type_filters : [];
+  var hasOtherPerson = filters.some(function(item) { return item && item.value === 'individual'; });
+  var existingOther = Array.prototype.slice.call(select.options).find(function(option) { return option.value === 'individual'; });
+  if (hasOtherPerson && !existingOther) {
+    var option = document.createElement('option');
+    option.value = 'individual';
+    option.textContent = 'Other person';
+    select.appendChild(option);
+  } else if (!hasOtherPerson && existingOther) {
+    if (select.value === 'individual') select.value = '';
+    existingOther.remove();
+  }
+}
+
 function readScreeningQueueFiltersFromDom() {
   function val(id) {
     var el = document.getElementById(id);
@@ -11205,8 +11218,7 @@ function readScreeningQueueFiltersFromDom() {
     status: val('screening-filter-status'),
     type: val('screening-filter-type'),
     provider: val('screening-filter-provider'),
-    pep: val('screening-filter-pep'),
-    application_ref: val('screening-filter-application-ref')
+    pep: val('screening-filter-pep')
   };
   return SCREENING_QUEUE_FILTERS;
 }
@@ -11237,7 +11249,7 @@ function applyScreeningQueueFilters() {
 }
 
 function resetScreeningQueueFilters() {
-  ['screening-queue-search', 'screening-filter-status', 'screening-filter-type', 'screening-filter-provider', 'screening-filter-pep', 'screening-filter-application-ref'].forEach(function(id) {
+  ['screening-queue-search', 'screening-filter-status', 'screening-filter-type', 'screening-filter-provider', 'screening-filter-pep'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -11338,7 +11350,8 @@ async function loadScreeningProviderStatus(options) {
 async function loadScreeningQueue(options) {
   options = options || {};
   if (!BO_AUTH_TOKEN) {
-    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:'Authentication required', pagination:null, is_loading:false };
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:'Authentication required', pagination:null, is_loading:false, available_type_filters:[] };
+    updateScreeningQueueTypeFilterOptions();
     renderScreeningQueueMeta();
     return false;
   }
@@ -11363,16 +11376,20 @@ async function loadScreeningQueue(options) {
       rows: payload.rows || [],
       generated_at: payload.generated_at || null,
       load_error: null,
+      available_type_filters: payload.available_type_filters || [],
+      evidence_mode: payload.evidence_mode || 'summary',
       pagination: payload.pagination || { limit: screeningQueuePageSize(), offset: offset, returned: (payload.rows || []).length, total_rows: (payload.rows || []).length, has_next: false, has_prev: offset > 0 },
       is_loading: false
     };
     SCREENING_QUEUE_DIRTY = false;
+    updateScreeningQueueTypeFilterOptions();
     renderScreeningQueueMeta();
     return true;
   } catch(e) {
     if (requestId !== SCREENING_QUEUE_ACTIVE_REQUEST_ID) return false;
     console.warn('Failed to load screening queue:', e);
-    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable', pagination: SCREENING_QUEUE.pagination, is_loading:false };
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable', pagination: SCREENING_QUEUE.pagination, is_loading:false, available_type_filters:[] };
+    updateScreeningQueueTypeFilterOptions();
     renderScreeningQueueMeta();
     return false;
   }
@@ -13656,9 +13673,50 @@ function openScreeningReview(ref, subjectType, subjectName) {
   });
 }
 
-function openScreeningReviewByRow(rowKey) {
+function screeningQueueRowHasFullEvidence(row) {
+  if (!row) return false;
+  if (Array.isArray(row.provider_evidence)) return true;
+  return !!(row.screening_evidence && Array.isArray(row.screening_evidence.items));
+}
+
+function screeningQueueRowsMatch(a, b) {
+  a = a || {};
+  b = b || {};
+  return String(a.application_ref || '') === String(b.application_ref || '') &&
+    String(a.subject_type || '') === String(b.subject_type || '') &&
+    String(a.subject_name || '') === String(b.subject_name || '');
+}
+
+async function ensureScreeningQueueRowEvidence(rowKey) {
+  var row = SCREENING_REVIEW_ROWS[rowKey];
+  if (!row || screeningQueueRowHasFullEvidence(row) || !row.evidence_detail_available) return row;
+  if (!BO_AUTH_TOKEN) return row;
+  try {
+    var params = [
+      'limit=100',
+      'offset=0',
+      'include_evidence=1',
+      'search=' + encodeURIComponent(row.application_ref || row.subject_name || row.company_name || '')
+    ];
+    if (row.subject_type) params.push('type=' + encodeURIComponent(row.subject_type));
+    var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, { suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
+    var rows = (payload && payload.rows) || [];
+    var fullRow = rows.find(function(candidate) { return screeningQueueRowsMatch(candidate, row); }) || null;
+    if (fullRow) {
+      SCREENING_REVIEW_ROWS[rowKey] = Object.assign({}, row, fullRow);
+      return SCREENING_REVIEW_ROWS[rowKey];
+    }
+  } catch(e) {
+    console.warn('Could not lazy-load screening evidence details:', e);
+    showToast('Detailed screening evidence could not be loaded. Opening summary view.', 'warning');
+  }
+  return row;
+}
+
+async function openScreeningReviewByRow(rowKey) {
   var row = SCREENING_REVIEW_ROWS[rowKey];
   if (!row) { showToast('Screening row is no longer available', 'error'); return; }
+  row = await ensureScreeningQueueRowEvidence(rowKey);
   openScreeningReview(row.application_ref, row.subject_type, row.subject_name);
 }
 

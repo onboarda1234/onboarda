@@ -1,0 +1,20 @@
+{
+  "fixture": "50 applications / 100 queue subject rows with CA-like provider evidence, first page limit=50",
+  "full_evidence_mode": {
+    "elapsed_ms": 30.29,
+    "payload_bytes": 422208,
+    "returned_rows": 50,
+    "total_rows": 100,
+    "contains_provider_evidence": true,
+    "contains_screening_evidence_items": true
+  },
+  "summary_mode": {
+    "elapsed_ms": 29.22,
+    "payload_bytes": 318596,
+    "returned_rows": 50,
+    "total_rows": 100,
+    "contains_provider_evidence": false,
+    "contains_screening_evidence_items": false
+  },
+  "payload_reduction_percent": 24.54
+}
