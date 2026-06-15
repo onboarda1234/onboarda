@@ -1,0 +1,31 @@
+{
+  "checks": {
+    "login_authenticated": true,
+    "policy_registry_default_visible": true,
+    "edd_sow_visible": true,
+    "change_management_visible": true,
+    "periodic_review_visible": true,
+    "unknown_unclassified_visible": true,
+    "dominant_badge_review_required": true,
+    "routine_file_format_hidden_by_default": true,
+    "material_warning_visible_by_default": true,
+    "technical_details_expand": true,
+    "routine_file_format_visible_after_expand": true,
+    "old_pilot_label_absent": true,
+    "old_overall_result_absent": true,
+    "no_http_500": true,
+    "no_page_errors": true,
+    "no_console_errors": true
+  },
+  "console_errors": [],
+  "page_errors": [],
+  "network_errors": [],
+  "screenshots": [
+    "/tmp/pr-doc2a-onboarda/docs/audits/evidence/remediation_sprints/PR-DOC2A_agent1-evidence-control-policy-registry_20260615T113642Z/screenshots/agent1_policy_registry_default.png",
+    "/tmp/pr-doc2a-onboarda/docs/audits/evidence/remediation_sprints/PR-DOC2A_agent1-evidence-control-policy-registry_20260615T113642Z/screenshots/agent1_policy_registry_edd_sow_filter.png",
+    "/tmp/pr-doc2a-onboarda/docs/audits/evidence/remediation_sprints/PR-DOC2A_agent1-evidence-control-policy-registry_20260615T113642Z/screenshots/agent1_policy_registry_change_management.png",
+    "/tmp/pr-doc2a-onboarda/docs/audits/evidence/remediation_sprints/PR-DOC2A_agent1-evidence-control-policy-registry_20260615T113642Z/screenshots/agent1_policy_registry_unknown_unclassified.png",
+    "/tmp/pr-doc2a-onboarda/docs/audits/evidence/remediation_sprints/PR-DOC2A_agent1-evidence-control-policy-registry_20260615T113642Z/screenshots/application_review_evidence_control_card.png",
+    "/tmp/pr-doc2a-onboarda/docs/audits/evidence/remediation_sprints/PR-DOC2A_agent1-evidence-control-policy-registry_20260615T113642Z/screenshots/application_review_technical_details_expanded.png"
+  ]
+}

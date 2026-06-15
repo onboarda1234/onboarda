@@ -530,7 +530,7 @@ def test_backoffice_workflow_test_evidence_ui_is_staging_only_and_truthful():
     assert "Accept for workflow testing only" in src
     assert "Accept linked synthetic evidence for workflow only" in src
     assert "Verification remains" in src
-    assert "does not count as pilot approval proof" in src
+    assert "does not count as approval proof" in src
 
 
 def test_kyc_submit_blocks_unverified_required_documents(api_server):
