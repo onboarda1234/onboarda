@@ -17146,6 +17146,7 @@ def _screening_media_detail_from_payload(payload):
         payload.get("media") if isinstance(payload.get("media"), dict) else None,
         payload.get("article") if isinstance(payload.get("article"), dict) else None,
         payload.get("source") if isinstance(payload.get("source"), dict) else None,
+        payload.get("source_metadata") if isinstance(payload.get("source_metadata"), dict) else None,
     ]
     media_items = payload.get("media") or payload.get("articles") or payload.get("sources")
     if isinstance(media_items, list):
@@ -17165,6 +17166,26 @@ def _screening_media_detail_from_payload(payload):
             "title": _first_non_empty(candidate.get("media_title"), candidate.get("title"), candidate.get("headline")),
             "url": _first_non_empty(candidate.get("media_url"), candidate.get("url"), canonical_url, candidate.get("source_url")),
             "snippet": _first_non_empty(candidate.get("media_snippet"), candidate.get("snippet"), snippet, candidate.get("summary")),
+            "source_name": _first_non_empty(
+                candidate.get("source_name"),
+                candidate.get("publisher"),
+                candidate.get("publication"),
+                candidate.get("publication_name"),
+                candidate.get("source"),
+            ),
+            "publication_date": _first_non_empty(
+                candidate.get("publication_date"),
+                candidate.get("article_date"),
+                candidate.get("published_at"),
+                candidate.get("date"),
+            ),
+            "match_rationale": _first_non_empty(
+                candidate.get("match_rationale"),
+                candidate.get("rationale"),
+                candidate.get("reason"),
+            ),
+            "relevance": _first_non_empty(candidate.get("relevance"), candidate.get("match_relevance")),
+            "confidence": _first_non_empty(candidate.get("confidence"), candidate.get("match_confidence"), candidate.get("match_score")),
         }
         if any(detail.values()):
             return detail
@@ -17260,6 +17281,15 @@ def _screening_provider_evidence(results):
             "media_title": media_detail.get("title"),
             "media_url": media_detail.get("url"),
             "media_snippet": media_detail.get("snippet"),
+            "source_name": _first_non_empty(result.get("source_name"), media_detail.get("source_name"), source_ref.get("source_name")),
+            "publication_date": _first_non_empty(result.get("publication_date"), media_detail.get("publication_date"), source_ref.get("publication_date")),
+            "match_rationale": _first_non_empty(result.get("match_rationale"), media_detail.get("match_rationale"), source_ref.get("match_rationale")),
+            "relevance": _first_non_empty(result.get("relevance"), media_detail.get("relevance"), source_ref.get("relevance")),
+            "confidence": _first_non_empty(result.get("confidence"), media_detail.get("confidence"), result.get("match_confidence"), result.get("match_score")),
+            "provider_status": _first_non_empty(result.get("provider_status"), result.get("status"), source_ref.get("provider_status")),
+            "risk_status": _first_non_empty(result.get("risk_status"), result.get("risk_state"), source_ref.get("risk_status")),
+            "record_status": _first_non_empty(result.get("record_status"), source_ref.get("record_status")),
+            "provider_decision": _first_non_empty(result.get("provider_decision"), result.get("decision"), source_ref.get("provider_decision")),
             "discovered_at": result.get("discovered_at"),
             "discovered_via": result.get("discovered_via"),
             "authority": _first_non_empty(result.get("authority"), result.get("program"), source_ref.get("authority")),
@@ -17268,7 +17298,7 @@ def _screening_provider_evidence(results):
     return evidence
 
 
-_SCREENING_EVIDENCE_SOURCE_UNAVAILABLE = "Source link not available from provider payload."
+_SCREENING_EVIDENCE_SOURCE_UNAVAILABLE = "Source unavailable from provider payload — verify in Mesh or attach supporting evidence."
 _SCREENING_EVIDENCE_PARTIAL = "Detailed provider evidence is partial or unavailable for this screening result."
 
 _SCREENING_EVIDENCE_REASON_LABELS = {
@@ -17337,7 +17367,7 @@ def _screening_evidence_category(*values):
         return "Sanctions"
     if "watchlist" in text or "warning" in text:
         return "Watchlist"
-    return "Other"
+    return "Unclassified Provider Risk"
 
 
 def _screening_evidence_source_url(item):
@@ -17691,14 +17721,21 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
         "severity": _screening_evidence_text(_first_non_empty(evidence.get("severity"), evidence.get("risk_indicator"))),
         "total_hits": row.get("total_hits"),
         "match_score": _screening_evidence_text(_screening_evidence_score(evidence)),
-        "source_name": _screening_evidence_text(_first_non_empty(evidence.get("source_name"), evidence.get("publisher"), evidence.get("authority"), evidence.get("list_name"))),
+        "source_name": _screening_evidence_text(_first_non_empty(evidence.get("source_name"), evidence.get("media_source"), evidence.get("publisher"), evidence.get("publication_name"), evidence.get("authority"), evidence.get("list_name"))),
         "source_title": _screening_evidence_text(_first_non_empty(evidence.get("source_title"), evidence.get("media_title"), evidence.get("title"))),
         "source_url": source_url,
         "source_url_available": bool(source_url),
         "source_url_unavailable_message": "" if source_url else _SCREENING_EVIDENCE_SOURCE_UNAVAILABLE,
         "provider_case_url": _screening_evidence_text(evidence.get("provider_case_url")),
-        "publication_date": _screening_evidence_text(evidence.get("publication_date")),
-        "snippet": _screening_evidence_text(_first_non_empty(evidence.get("snippet"), evidence.get("media_snippet"), evidence.get("summary"))),
+        "publication_date": _screening_evidence_text(_first_non_empty(evidence.get("publication_date"), evidence.get("media_publication_date"), evidence.get("article_date"), evidence.get("published_at"), evidence.get("date"))),
+        "snippet": _screening_evidence_text(_first_non_empty(evidence.get("snippet"), evidence.get("media_snippet"), evidence.get("summary"), evidence.get("match_rationale"))),
+        "match_rationale": _screening_evidence_text(_first_non_empty(evidence.get("match_rationale"), evidence.get("rationale"), evidence.get("reason"))),
+        "relevance": _screening_evidence_text(_first_non_empty(evidence.get("relevance"), evidence.get("match_relevance"))),
+        "confidence": _screening_evidence_text(_first_non_empty(evidence.get("confidence"), evidence.get("match_confidence"), evidence.get("match_score"))),
+        "provider_status": _screening_evidence_text(_first_non_empty(evidence.get("provider_status"), evidence.get("status"))),
+        "risk_status": _screening_evidence_text(_first_non_empty(evidence.get("risk_status"), evidence.get("risk_state"))),
+        "record_status": _screening_evidence_text(evidence.get("record_status")),
+        "provider_decision": _screening_evidence_text(_first_non_empty(evidence.get("provider_decision"), evidence.get("decision"))),
         "evidence_fetched_at": _screening_evidence_text(_first_non_empty(evidence.get("fetched_at"), evidence.get("discovered_at"))),
         "officer_disposition": row.get("review_disposition"),
         "review_history_summary": _screening_review_summary(row),
@@ -17746,6 +17783,13 @@ def _screening_evidence_provider_shape(item):
         "source_url_available": item.get("source_url_available"),
         "source_url_unavailable_message": item.get("source_url_unavailable_message"),
         "publication_date": item.get("publication_date"),
+        "match_rationale": item.get("match_rationale"),
+        "relevance": item.get("relevance"),
+        "confidence": item.get("confidence"),
+        "provider_status": item.get("provider_status"),
+        "risk_status": item.get("risk_status"),
+        "record_status": item.get("record_status"),
+        "provider_decision": item.get("provider_decision"),
         "match_confidence": item.get("match_score"),
         "evidence_status": item.get("evidence_status"),
         "evidence_quality": item.get("evidence_quality"),
@@ -17800,6 +17844,64 @@ def _screening_evidence_dedup(items):
         seen[key] = len(deduped)
         deduped.append(item)
     return deduped
+
+
+def _screening_evidence_record_state(item):
+    item = item if isinstance(item, dict) else {}
+    text = _screening_evidence_norm(" ".join(_screening_evidence_text(value) for value in [
+        item.get("provider_status"),
+        item.get("risk_status"),
+        item.get("record_status"),
+        item.get("provider_decision"),
+        item.get("evidence_quality"),
+        item.get("evidence_status"),
+    ]))
+    if any(token in text for token in ("stale", "expired")):
+        return "stale"
+    if any(token in text for token in ("archived", "historical", "dismissed", "closed", "inactive", "superseded")):
+        return "historical"
+    if any(token in text for token in ("false positive", "false_positive", "not a match", "not_a_match", "cleared", "resolved")):
+        return "historical"
+    return "current"
+
+
+def _screening_evidence_rollup(items, row, *, raw_count=0):
+    items = [item for item in items or [] if isinstance(item, dict)]
+    states = [_screening_evidence_record_state(item) for item in items]
+    current_items = [item for item, state in zip(items, states, strict=True) if state == "current"]
+    stale_items = [item for item, state in zip(items, states, strict=True) if state == "stale"]
+    historical_items = [item for item, state in zip(items, states, strict=True) if state == "historical"]
+    duplicate_count = max(0, int(raw_count or 0) - len(items))
+    row = row or {}
+    disposition = _screening_evidence_norm(row.get("review_disposition"))
+    status_key = _screening_evidence_norm(_first_non_empty(row.get("canonical_status_key"), row.get("status_key")))
+    review_required = bool(row.get("review_required")) or status_key == "review required"
+    terminal_dispositions = {
+        "cleared",
+        "match",
+        "escalated",
+        "clear false positive",
+        "cleared false positive",
+        "confirm true match",
+        "confirmed true match",
+        "escalate for enhanced review",
+        "escalated to edd",
+    }
+    current_count = len(current_items)
+    unresolved_count = current_count if review_required and disposition not in terminal_dispositions else 0
+    category_counts = {}
+    for item in current_items:
+        category = item.get("category") or "Unclassified Provider Risk"
+        category_counts[category] = category_counts.get(category, 0) + 1
+    return {
+        "current_risk_count": current_count,
+        "current_unresolved_risk_count": unresolved_count,
+        "stale_risk_count": len(stale_items),
+        "historical_risk_count": len(historical_items),
+        "duplicate_provider_record_count": duplicate_count,
+        "risk_category_counts": category_counts,
+        "has_adverse_media_hit": any(_screening_evidence_norm(item.get("category")) == "adverse media" for item in current_items),
+    }
 
 
 def _screening_evidence_reference_summary(items, row=None):
@@ -18098,7 +18200,9 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         linked_provider_evidence.append(_screening_evidence_provider_shape(item))
         link_notes.append(strategy)
 
+    raw_evidence_item_count = len(evidence_items)
     evidence_items = _screening_evidence_dedup(evidence_items)
+    risk_rollup = _screening_evidence_rollup(evidence_items, row, raw_count=raw_evidence_item_count)
     existing_provider_keys = {
         _screening_result_identity(item)
         for item in legacy_provider_evidence
@@ -18156,6 +18260,7 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         "provider_references": provider_references,
         "officer_disposition": row.get("review_disposition"),
         "review_history_summary": _screening_review_summary(row),
+        **risk_rollup,
     }
     row["provider_evidence"] = legacy_provider_evidence
     row["evidence_quality"] = evidence_quality
@@ -18163,6 +18268,7 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
     row["missing_reason"] = missing_reason
     row["missing_reason_label"] = summary["missing_reason_label"]
     row["next_action"] = next_action
+    row.update(risk_rollup)
     row["evidence_summary"] = summary
     row["screening_evidence"] = {
         **summary,

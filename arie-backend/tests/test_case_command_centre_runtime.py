@@ -349,7 +349,7 @@ class TestCaseCommandCentreRuntime:
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "screening-review" in blocker_ids
-        assert "A screening result still needs officer review." in result["html"]
+        assert "Approval blocked: unresolved ComplyAdvantage Mesh match for UBO John Harbor." in result["html"]
         assert "Resolve screening" in result["html"]
 
     def test_uncleared_terminal_match_still_blocks_case_command_centre(self):
@@ -379,8 +379,8 @@ class TestCaseCommandCentreRuntime:
         )
         blocker_ids = [item["id"] for item in result["blockers"]]
         assert "screening-review" in blocker_ids
-        assert "A screening result still needs officer review." in result["html"]
-        assert "company_watchlist:live_terminal_match" in result["html"]
+        assert "Approval blocked: unresolved ComplyAdvantage Mesh match." in result["html"]
+        assert "company_watchlist:live_terminal_match" not in result["html"]
         assert "ready for approval" not in result["html"].lower()
         assert "approval ready" not in result["html"].lower()
 
@@ -408,8 +408,8 @@ class TestCaseCommandCentreRuntime:
                 },
             )
         )
-        assert "A screening result is blocking approval." in result["html"]
-        assert "Resolve the screening gate blocker before approval." in result["html"]
+        assert "Approval blocked: ComplyAdvantage Mesh screening is not configured." in result["html"]
+        assert "Configure live ComplyAdvantage Mesh screening" in result["html"]
         assert "A screening result still needs officer review." not in result["html"]
 
     def test_screening_review_blocker_uses_authoritative_queue_rows(self):

@@ -1,0 +1,44 @@
+{
+  "pr": "PR-CA4",
+  "branch": "codex/pr-ca4-mesh-parity-screening-ui-ux",
+  "base_origin_main_sha": "b83e3052485d432a1e47adbe1f4d9bb1bbea4a58",
+  "created_at_utc": "2026-06-15T02:52:29Z",
+  "updated_at_utc": "2026-06-15T03:09:23Z",
+  "python_runner": "/opt/homebrew/bin/python3.11",
+  "checks": [
+    {
+      "name": "diff_check",
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "name": "py_compile",
+      "command": "/opt/homebrew/bin/python3.11 -m py_compile arie-backend/server.py arie-backend/memo_handler.py",
+      "result": "passed"
+    },
+    {
+      "name": "focused_pr_ca4_tests",
+      "result": "initial run: 19 passed in 2.49s; post-CodeRabbit run: 22 passed in 2.49s"
+    },
+    {
+      "name": "ca1_ca2_ca3_regression_subset",
+      "result": "initial run: 220 passed in 5.65s; post-CodeRabbit run: 220 passed in 5.15s"
+    },
+    {
+      "name": "full_backend_suite",
+      "command": "/opt/homebrew/bin/python3.11 -m pytest arie-backend/tests",
+      "result": "initial run: 5371 passed, 25 skipped, 4 subtests passed in 259.81s; post-CodeRabbit rerun blocked by native WeasyPrint/Pango CFFI segmentation fault during collection"
+    },
+    {
+      "name": "coderabbit_follow_up",
+      "result": "actionable comments addressed locally; pending push and GitHub CI rerun"
+    }
+  ],
+  "staging": {
+    "deployed": false,
+    "api_version_verified": false,
+    "api_smoke_passed": false,
+    "browser_smoke_passed": false
+  },
+  "secrets_redaction": "No secrets, provider credentials, webhook signatures, or personal data are included in this evidence file."
+}
