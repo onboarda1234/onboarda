@@ -17494,7 +17494,7 @@ def _screening_evidence_item_status(item):
     )
     has_url = bool(item.get("source_url"))
     has_score = bool(item.get("match_score"))
-    has_category = item.get("category") not in (None, "", "Other", "Unclassified Provider Risk")
+    has_category = item.get("category") not in (None, "", "Other")
 
     if has_category and has_identifier and has_source_context and (has_url or has_score or item.get("publication_date")):
         return "available"
@@ -17860,21 +17860,33 @@ def _screening_evidence_record_state(item):
         return "stale"
     if any(token in text for token in ("archived", "historical", "dismissed", "closed", "inactive", "superseded")):
         return "historical"
+    if any(token in text for token in ("false positive", "false_positive", "not a match", "not_a_match", "cleared", "resolved")):
+        return "historical"
     return "current"
 
 
 def _screening_evidence_rollup(items, row, *, raw_count=0):
     items = [item for item in items or [] if isinstance(item, dict)]
     states = [_screening_evidence_record_state(item) for item in items]
-    current_items = [item for item, state in zip(items, states) if state == "current"]
-    stale_items = [item for item, state in zip(items, states) if state == "stale"]
-    historical_items = [item for item, state in zip(items, states) if state == "historical"]
+    current_items = [item for item, state in zip(items, states, strict=True) if state == "current"]
+    stale_items = [item for item, state in zip(items, states, strict=True) if state == "stale"]
+    historical_items = [item for item, state in zip(items, states, strict=True) if state == "historical"]
     duplicate_count = max(0, int(raw_count or 0) - len(items))
     row = row or {}
     disposition = _screening_evidence_norm(row.get("review_disposition"))
     status_key = _screening_evidence_norm(_first_non_empty(row.get("canonical_status_key"), row.get("status_key")))
     review_required = bool(row.get("review_required")) or status_key == "review required"
-    terminal_dispositions = {"cleared", "match", "escalated"}
+    terminal_dispositions = {
+        "cleared",
+        "match",
+        "escalated",
+        "clear false positive",
+        "cleared false positive",
+        "confirm true match",
+        "confirmed true match",
+        "escalate for enhanced review",
+        "escalated to edd",
+    }
     current_count = len(current_items)
     unresolved_count = current_count if review_required and disposition not in terminal_dispositions else 0
     category_counts = {}

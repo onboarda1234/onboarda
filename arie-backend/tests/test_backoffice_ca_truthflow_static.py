@@ -29,6 +29,8 @@ def test_backoffice_company_review_uses_monitoring_media_alerts():
 
     media_region = _function_region(html, "companyMonitoringMediaFacts", "declaredPepFromScreeningRecord")
     assert "monitoringAlertSubjectScope(alert) === 'entity'" in media_region
+    assert "ref.media_url || ref.url || ref.source_url" in media_region
+    assert "!ref.media_url && !ref.url && !ref.source_url" in media_region
 
 
 def test_backoffice_company_review_includes_top_level_company_results():
@@ -101,6 +103,7 @@ def test_backoffice_screening_review_adds_declared_vs_provider_comparison():
 def test_backoffice_screening_review_renders_triage_cockpit_layout():
     html = BACKOFFICE_HTML.read_text()
 
+    status_label_region = _function_region(html, "screeningBusinessStatusLabel", "screeningQueueStatusBadge")
     triage_region = _function_region(html, "screeningSubjectTypeLabel", "screeningReviewCard")
     review_region = _function_region(html, "renderScreeningReviewPanel", "openScreeningReview")
 
@@ -111,6 +114,10 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     assert "function screeningSubjectRoleBadge" in html
     assert "function setScreeningReviewFocus" in html
     assert "function buildScreeningTriageSubjects" in html
+    assert "Review Required" in status_label_region
+    assert "Screening In Progress" in status_label_region
+    assert "Provider Check Failed" in status_label_region
+    assert "Screening Stale" in status_label_region
     assert "Second Review Required" in triage_region
     assert "Clear as False Positive" in html
     assert "Declared PEP · No provider matches" in triage_region
@@ -150,12 +157,14 @@ def test_backoffice_audit_trail_has_filtered_ca_mesh_timeline():
     html = BACKOFFICE_HTML.read_text()
 
     activity_region = _function_region(html, "safeParseAuditDetail", "loadNotes")
+    disposition_region = _function_region(html, "screeningAuditDispositionLabel", "screeningAuditFourEyesLabel")
     assert "'CA/Mesh'" in activity_region
     assert "ca_mesh_screening" in activity_region
     assert "ca_screening" in activity_region
     assert "provider_references" in activity_region
     assert "Mesh refs:" in activity_region
     assert "evidence quality:" in activity_region
+    assert "code === 'confirmed_match' || code === 'true_match'" in disposition_region
 
 
 def test_backoffice_pr_b_queue_and_detail_paths_stay_narrow():

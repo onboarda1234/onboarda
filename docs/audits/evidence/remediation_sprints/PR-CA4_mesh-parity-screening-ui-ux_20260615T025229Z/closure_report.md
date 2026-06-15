@@ -33,7 +33,7 @@ RegMind needed Mesh-parity-grade screening/adverse-media display: consistent cur
 
 - Current `origin/main` SHA: `b83e3052485d432a1e47adbe1f4d9bb1bbea4a58`
 - Branch name: `codex/pr-ca4-mesh-parity-screening-ui-ux`
-- Branch commit SHA: pending until commit
+- Branch commit SHA: `649e57ba7825ae1956ea42b083a28a5d7e82fdc8`; follow-up CodeRabbit commit pending at the time this evidence entry was updated
 - Does the issue still exist on current `origin/main`? Yes. The gaps were reproduced by inspecting queue/detail/memo/UI code and by updating regression tests around the missing behavior.
 - Evidence: see `diagnosis.md` and `root_cause.md`.
 
@@ -79,6 +79,7 @@ Officer-facing views still consumed older display projections and ambiguous labe
 - Updated static UI tests for source context, evidence summary, disposition labels, provider refs, and category fallback.
 - Updated runtime rendering tests for inline screening actions and activity/audit labels.
 - Updated Case Command Centre blocker tests for plain-English blocker text.
+- Updated post-CodeRabbit assertions for source URL fallback, internal status key display labels, legacy true-match audit labeling, and cleared provider decisions in risk rollups.
 
 ## Targeted test results
 
@@ -134,4 +135,4 @@ Pending after merge/deploy. See `browser_smoke.md`.
 
 `PARTIALLY FIXED`
 
-Rationale: code and local regression coverage are complete, and the full backend suite passed. Closure still requires PR merge, staging deploy, `/api/version`, staging API smoke, and authenticated browser smoke.
+Rationale: code and local regression coverage are complete; initial full backend suite passed, and post-CodeRabbit focused/regression suites passed. Closure still requires GitHub CI on the follow-up commit, PR merge, staging deploy, `/api/version`, staging API smoke, and authenticated browser smoke.

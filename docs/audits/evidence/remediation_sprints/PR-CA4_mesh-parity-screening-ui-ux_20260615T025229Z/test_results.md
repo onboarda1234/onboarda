@@ -47,7 +47,8 @@ Result: PASS when run with the Python 3.11 interpreter path.
 Result:
 
 ```text
-19 passed in 2.49s
+Initial PR run: 19 passed in 2.49s
+Post-CodeRabbit follow-up run: 22 passed in 2.49s
 ```
 
 ## CA1/CA2/CA3 Regression Subset
@@ -70,5 +71,18 @@ Result:
 Result:
 
 ```text
-220 passed in 5.65s
+Initial PR run: 220 passed in 5.65s
+Post-CodeRabbit follow-up run: 220 passed in 5.15s
 ```
+
+## CodeRabbit Follow-Up
+
+CodeRabbit completed review on PR #495 and raised comments in PR-CA4 scope. The follow-up commit addresses:
+
+- `zip(..., strict=True)` for the evidence rollup invariant.
+- Treating `Unclassified Provider Risk` as a displayable category context.
+- Separating cleared provider decisions from current risks.
+- Recognizing modern and legacy terminal disposition labels in unresolved-count rollups.
+- Mapping additional internal screening status keys to officer-readable labels.
+- Mapping legacy `true_match` audit labels to `Confirmed True Match`.
+- Preserving `source_url` from monitoring source references.

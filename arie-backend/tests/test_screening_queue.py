@@ -866,6 +866,13 @@ def test_screening_queue_rolls_up_current_duplicate_stale_and_historical_risks()
                     "risk_status": "archived",
                     "summary": "Historical risk",
                 },
+                {
+                    "provider": "complyadvantage",
+                    "provider_risk_identifier": "risk-cleared",
+                    "match_category": "Sanctions",
+                    "provider_decision": "false_positive",
+                    "summary": "Provider-cleared risk",
+                },
             ],
         },
         [],
@@ -874,7 +881,7 @@ def test_screening_queue_rolls_up_current_duplicate_stale_and_historical_risks()
     assert row["current_risk_count"] == 1
     assert row["current_unresolved_risk_count"] == 1
     assert row["stale_risk_count"] == 1
-    assert row["historical_risk_count"] == 1
+    assert row["historical_risk_count"] == 2
     assert row["duplicate_provider_record_count"] == 1
     assert row["has_adverse_media_hit"] is True
     assert row["evidence_summary"]["risk_category_counts"] == {"Adverse Media": 1}

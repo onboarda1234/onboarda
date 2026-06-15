@@ -11389,6 +11389,20 @@ function screeningBusinessStatusLabel(label) {
   var raw = String(label || '').trim();
   var key = raw.toLowerCase().replace(/[_-]+/g, ' ');
   if (key === 'no match' || key === 'completed clear' || key === 'screened no match') return 'Clear';
+  if (key === 'clear' || key === 'passed') return 'Clear';
+  if (key === 'review required' || key === 'completed match' || key === 'match' || key === 'hit') return 'Review Required';
+  if (key === 'review confirmed match') return 'Confirmed True Match';
+  if (key === 'review false positive cleared' || key === 'cleared by officer') return 'Cleared False Positive';
+  if (key === 'review escalated' || key === 'escalated') return 'Escalated';
+  if (key === 'pending provider' || key === 'pending' || key === 'screening in progress') return 'Screening In Progress';
+  if (key === 'awaiting screening' || key === 'not started') return 'Not Started';
+  if (key === 'screening not configured') return 'Screening Not Configured';
+  if (key === 'screening unavailable' || key === 'provider error' || key === 'failed') return 'Provider Check Failed';
+  if (key === 'stale' || key === 'requires refresh') return 'Screening Stale — Re-run Required';
+  if (key === 'screening simulated') return 'Simulated Screening';
+  if (key === 'screening sandbox') return 'Sandbox Screening';
+  if (key === 'incomplete record') return 'Incomplete Screening Record';
+  if (key === 'declared pep review') return 'Declared PEP Review';
   if (key === 'match confirmed') return 'Confirmed True Match';
   if (key === 'follow up required') return 'Request More Information';
   return raw;
@@ -12986,13 +13000,13 @@ function companyMonitoringMediaFacts(app) {
         discovered_at: alert.discovered_at || alert.created_at || '',
         summary: alert.summary || '',
         media_title: ref.media_title || ref.title || '',
-        media_url: ref.media_url || ref.url || '',
+        media_url: ref.media_url || ref.url || ref.source_url || '',
         media_snippet: ref.media_snippet || ref.snippet || '',
         source_name: ref.source_name || ref.publisher || ref.publication_name || '',
         publication_date: ref.publication_date || ref.article_date || ref.published_at || '',
         match_rationale: ref.match_rationale || ref.rationale || '',
         relevance: ref.relevance || ref.match_relevance || '',
-        source_url_unavailable_message: ref.source_url_unavailable_message || (!ref.media_url && !ref.url ? SCREENING_SOURCE_UNAVAILABLE_MESSAGE : ''),
+        source_url_unavailable_message: ref.source_url_unavailable_message || (!ref.media_url && !ref.url && !ref.source_url ? SCREENING_SOURCE_UNAVAILABLE_MESSAGE : ''),
         source_reference: alert.source_reference || ''
       };
     })
@@ -20625,10 +20639,10 @@ function screeningAuditSourceLabel(sourceSurface) {
 function screeningAuditDispositionLabel(detail) {
   var code = String(detail && (detail.disposition_code || detail.disposition) || '').trim().toLowerCase();
   if (code === 'false_positive_cleared' || code === 'cleared') return 'Cleared False Positive';
-  if (code === 'confirmed_match') return 'Confirmed True Match';
+  if (code === 'confirmed_match' || code === 'true_match') return 'Confirmed True Match';
   if (code === 'needs_more_information' || code === 'follow_up_required') return 'Request More Information';
   if (code === 'escalated_to_edd') return 'Escalated to EDD';
-  if (code === 'true_match' || code === 'material_concern' || code === 'escalated') return 'Escalated';
+  if (code === 'material_concern' || code === 'escalated') return 'Escalated';
   return code ? code.replace(/_/g, ' ') : 'Reviewed';
 }
 
