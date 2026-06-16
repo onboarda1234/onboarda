@@ -28,7 +28,7 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
     assert "Reliance status" in renderer
     assert "Why review is required" in renderer
     assert "Material issues" in renderer
-    assert "Technical checks and audit details" in renderer
+    assert "Technical / audit details" in renderer
     assert "Full check result list" in renderer
     assert "Agent execution ID" in renderer
     assert "Evidence hash" in renderer
@@ -44,14 +44,15 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
 def test_doc2a_evidence_control_card_surfaces_required_reliance_fields():
     html = _backoffice_html()
 
-    assert "function renderUnifiedKycDocumentCard(app, doc, linkedRequirement)" in html
-    assert "evidence-control-card" in html
+    assert "function renderUnifiedKycDocumentCard(app, doc, linkedRequirement" in html
+    assert "document-review-row" in html
     assert "Lifecycle context" in html
     assert "Policy ID/version" in html
     assert "Last verified" in html
     assert "Uploaded by" in html
-    assert "Required action" in html
-    assert "Material issues and reliance evidence" in html
+    assert "Next action" in html
+    assert "Issue" in html
+    assert "Verification details" in html
     assert "Verified" in html
     assert "Review required" in html
     assert "Failed" in html
@@ -59,12 +60,12 @@ def test_doc2a_evidence_control_card_surfaces_required_reliance_fields():
     assert "Stale" in html
     assert "Manual accepted" in html
     assert "Rejected" in html
-    assert "Request info" in html
+    assert "Request replacement" in html
     assert "warnings.length > 0 || issues.length > 0 || hasWarningCheck" in html
     assert "hasFailedCheck" in html
     assert "Pilot Evidence Classification" not in html
     assert "Pilot evidence classification" not in html
-    assert "Evidence Classification" in html
+    assert "Document type" in html
 
 
 def test_doc2a_agent1_settings_is_lifecycle_policy_registry():
@@ -194,7 +195,7 @@ def test_doc2a_unclassified_documents_are_not_auto_reliable():
     assert "automated reliance blocked" in html
     assert "officer classification required" in html
     assert "blocked from automated reliance until classified and verified or manually accepted with reason" in html
-    assert "Officer must classify this document before it can be relied on automatically." in html
+    assert "Document type required before this evidence can be relied on automatically." in html
 
 
 def test_doc2a_resource_documents_are_library_only_unless_relied_on():

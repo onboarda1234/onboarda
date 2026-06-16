@@ -482,10 +482,11 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "generation_source: 'manual_backoffice_refresh'" in html
     assert "KYC Documents" in html
     assert "KYC Document Taxonomy" not in html
-    assert "Corporate Entity Documents" in html
-    assert "Directors & UBO Identity Documents" in html
+    assert "Action required" in html
+    assert "Missing" in html
+    assert "Verified" in html
+    assert "Optional / additional" in html
     assert "Enhanced Evidence Documents" in html
-    assert "Business Operating Documents" in html
     assert "Portal Disclosures" in html
     assert "Internal Controls" in html
     assert "Document Verification History" in html
@@ -664,13 +665,14 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "KYC Document Taxonomy" not in html
     assert "Corporate documents, identity evidence, enhanced evidence, portal disclosures, and verification results in one onboarding flow." in html
     assert "function renderStandardKycDocumentTaxonomy(app)" in html
-    assert "function renderUnifiedKycDocumentCard(app, doc, linkedRequirement)" in html
+    assert "function renderUnifiedKycDocumentCard(app, doc, linkedRequirement" in html
     assert "function findEnhancedRequirementForDocument(doc, requirements)" in html
     assert "function kycDocumentGroupKey(doc, linkedRequirement)" in html
-    assert "A — Corporate Entity Documents" in html
-    assert "B — Directors & UBO Identity Documents" in html
-    assert "C — Enhanced Evidence Documents" in html
-    assert "D — Business Operating Documents" in html
+    assert "Action required" in html
+    assert "Missing" in html
+    assert "Verified" in html
+    assert "Optional / additional" in html
+    assert "Enhanced Evidence Documents" in html
     assert "E — Portal Disclosures" in html
     assert "F — Internal Controls" in html
     assert "G — Verification History" in html
@@ -693,7 +695,7 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." not in html
     assert "function kycDocumentNeedsAttention(doc)" in html
     assert "function enhancedRequirementNeedsAttention(req)" in html
-    assert "Technical checks and audit details" in html
+    assert "Technical / audit details" in html
     assert "Material issues" in html
     assert "if (result !== 'pass') visibleCheckItems.push(checkHtml);" in html
     assert "allCheckItems.push(checkHtml);" in html

@@ -498,6 +498,10 @@ def _get_postgres_schema() -> str:
         workflow_test_accepted_at TIMESTAMP,
         workflow_test_acceptance_environment TEXT,
         uploaded_by TEXT REFERENCES users(id),
+        uploaded_by_actor_type TEXT,
+        uploaded_by_actor_id TEXT,
+        uploaded_by_display TEXT,
+        upload_source TEXT,
         uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         verified_at TIMESTAMP,
         reviewed_at TIMESTAMP
@@ -1613,6 +1617,10 @@ def _get_sqlite_schema() -> str:
         workflow_test_accepted_at TEXT,
         workflow_test_acceptance_environment TEXT,
         uploaded_by TEXT REFERENCES users(id),
+        uploaded_by_actor_type TEXT,
+        uploaded_by_actor_id TEXT,
+        uploaded_by_display TEXT,
+        upload_source TEXT,
         uploaded_at TEXT DEFAULT (datetime('now')),
         verified_at TEXT,
         reviewed_at TEXT
@@ -3885,8 +3893,16 @@ def _ensure_document_workflow_test_acceptance_schema(db: DBConnection):
 
 def _ensure_document_upload_audit_schema(db: DBConnection):
     """Ensure documents can record who uploaded evidence for officer auditability."""
-    if not _safe_column_exists(db, "documents", "uploaded_by"):
-        db.execute("ALTER TABLE documents ADD COLUMN uploaded_by TEXT REFERENCES users(id)")
+    columns = [
+        ("uploaded_by", "TEXT REFERENCES users(id)"),
+        ("uploaded_by_actor_type", "TEXT"),
+        ("uploaded_by_actor_id", "TEXT"),
+        ("uploaded_by_display", "TEXT"),
+        ("upload_source", "TEXT"),
+    ]
+    for column, definition in columns:
+        if not _safe_column_exists(db, "documents", column):
+            db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
 
 
 def _ensure_document_current_slot_unique_index(db: DBConnection):

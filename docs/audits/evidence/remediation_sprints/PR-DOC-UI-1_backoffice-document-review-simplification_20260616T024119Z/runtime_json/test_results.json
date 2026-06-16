@@ -1,0 +1,24 @@
+{
+  "base_origin_main_sha": "07c992d7716183226d53f70bf0d01bf7e87da874",
+  "branch": "codex/pr-doc-ui-1-backoffice-document-review-simplification",
+  "focused_post_copy": {
+    "command": "pytest arie-backend/tests/test_upload_latency_contracts.py arie-backend/tests/test_pr_doc_ui1_backoffice_document_review.py -q",
+    "result": "13 passed in 2.88s"
+  },
+  "targeted": {
+    "command": "pytest arie-backend/tests/test_upload_latency_contracts.py arie-backend/tests/test_pr_doc_ui1_backoffice_document_review.py arie-backend/tests/test_pr_doc2a_agent1_evidence_control.py arie-backend/tests/test_doc_policy_canonical_registry.py arie-backend/tests/test_pr6_async_verification_foundation.py -q",
+    "result": "42 passed in 4.65s"
+  },
+  "full_backend": {
+    "command": "pytest -q arie-backend/tests",
+    "result": "5420 passed, 17 skipped in 202.68s (0:03:22)"
+  },
+  "scope_exclusions": [
+    "SAR/STR activation",
+    "new enterprise-only checks",
+    "portal upload slot redesign",
+    "approval gate weakening",
+    "unrelated remediation closure"
+  ]
+}
+

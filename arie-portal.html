@@ -7838,7 +7838,15 @@ function renderPersistedVerification(targetEl, documentRecord) {
           : '') +
       '</div>' +
     '</div>';
-  }).join('') : '<div style="margin-top:8px;font-size:11px;color:var(--text3);">No persisted verification checks are stored for this document yet.</div>';
+  }).join('') : (function() {
+    var state = normalizeVerificationRecordState(documentRecord);
+    var message = state === 'in_progress'
+      ? 'Verification is running. This status will update automatically.'
+      : state === 'pending'
+        ? 'Upload received - verification pending.'
+        : 'Verification details are not available. Officer review may be required.';
+    return '<div style="margin-top:8px;font-size:11px;color:var(--text3);">' + escapeHtml(message) + '</div>';
+  })();
 
   card.innerHTML = meta + banners + checksHtml;
   list.appendChild(card);
@@ -9359,22 +9367,21 @@ function handleUpload(docId, input) {
       fd.append('doc_type', apiDocType);
       var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(apiDocType), fd, true);
       if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
-      var verification;
-      try {
-        verification = await apiCall('POST', '/documents/' + resp.id + '/verify');
-      } catch (verifyErr) {
-        verification = {
-          verification_status: 'pending',
-          verification_results: {},
-          verify_error: verifyErr && verifyErr.message ? verifyErr.message : 'Verification failed'
-        };
-      }
-      verification.doc_id = verification.doc_id || resp.id;
-      verification.doc_name = resp.doc_name || file.name;
-      verification.doc_type = resp.doc_type || apiDocType;
-      verification.slot_key = resp.slot_key || getDocumentSlotKey({ doc_type: apiDocType });
-      verification.is_current = resp.is_current !== false;
-      verification.version = resp.version;
+      var verification = {
+        doc_id: resp.id,
+        id: resp.id,
+        doc_name: resp.doc_name || file.name,
+        doc_type: resp.doc_type || apiDocType,
+        slot_key: resp.slot_key || getDocumentSlotKey({ doc_type: apiDocType }),
+        is_current: resp.is_current !== false,
+        version: resp.version,
+        verification_status: resp.verification_status || 'pending',
+        verification_status_label: resp.verification_status_label || 'Pending verification',
+        verification_status_tone: resp.verification_status_tone || 'pending',
+        verification_success: resp.verification_success === true,
+        verification_state: resp.verification_state || resp.verification_status || 'pending',
+        verification_results: resp.verification_results || {}
+      };
       return verification;
     })).then(function(results) {
       var successes = results.filter(function(result) { return result.status === 'fulfilled'; }).map(function(result) { return result.value; });
@@ -10863,29 +10870,23 @@ function handleKYCUpload(personId, docType, input, personType) {
     }).then(function(resp) {
       if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
       uploadedDocId = resp.id;
-      return fetch(API_BASE + '/documents/' + resp.id + '/verify', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
-      }).then(function(r) {
-        return r.json().then(function(data) {
-          if (!r.ok) {
-            return {
-              verification_status: 'pending',
-              verification_results: {},
-              verify_error: data.error || 'Verification failed'
-            };
-          }
-          return data;
-        });
+      return Promise.resolve({
+        doc_id: resp.id,
+        id: resp.id,
+        doc_name: resp.doc_name || fileName,
+        doc_type: resp.doc_type || docType,
+        person_id: personId,
+        person_type: resp.person_type || resolvedPersonType,
+        slot_key: resp.slot_key || getDocumentSlotKey({ doc_type: docType, person_id: personId, person_type: resolvedPersonType }),
+        is_current: resp.is_current !== false,
+        version: resp.version,
+        verification_status: resp.verification_status || 'pending',
+        verification_status_label: resp.verification_status_label || 'Pending verification',
+        verification_status_tone: resp.verification_status_tone || 'pending',
+        verification_success: resp.verification_success === true,
+        verification_state: resp.verification_state || resp.verification_status || 'pending',
+        verification_results: resp.verification_results || {}
       }).then(function(verification) {
-        verification.doc_id = verification.doc_id || resp.id;
-        verification.doc_name = resp.doc_name || fileName;
-        verification.doc_type = resp.doc_type || docType;
-        verification.person_id = personId;
-        verification.person_type = resp.person_type || resolvedPersonType;
-        verification.slot_key = resp.slot_key || getDocumentSlotKey({ doc_type: docType, person_id: personId, person_type: resolvedPersonType });
-        verification.is_current = resp.is_current !== false;
-        verification.version = resp.version;
         if (lbl) lbl.textContent = fileName;
         if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
         updateKYCBadge(personId);

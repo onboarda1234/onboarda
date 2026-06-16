@@ -262,8 +262,12 @@ def test_worker_claim_source_uses_postgres_skip_locked():
     assert "FOR UPDATE SKIP LOCKED" in source
 
 
-def test_server_remains_synchronous_while_async_foundation_is_dark():
+def test_document_verify_remains_synchronous_while_uploads_can_enqueue_status_jobs():
     source = Path(__file__).resolve().parents[1].joinpath("server.py").read_text(encoding="utf-8")
-    assert "/api/documents/([^/]+)/verification-status" not in source
+    assert "/api/documents/([^/]+)/verification-status" in source
     assert 'flags.is_enabled("FF_ASYNC_VERIFY")' not in source
-    assert "enqueue_verification_job" not in source
+    assert "enqueue_verification_job" in source
+    verify_handler = source.split("class DocumentVerifyHandler", 1)[1].split(
+        "class DocumentVerificationStatusHandler", 1
+    )[0]
+    assert "enqueue_verification_job" not in verify_handler
