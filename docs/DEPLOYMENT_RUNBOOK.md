@@ -310,7 +310,7 @@ Attach this ledger to every Day 6 staging deployment note before the deployment 
 | Build provenance | GitHub Actions `deploy-staging.yml` run | Run URL, run number, and actor recorded |
 | ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
 | Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
-| Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, `canonical_view: applications_report_v1`, and expected total/pending/EDD counts |
+| Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, CSV/report `canonical_view: applications_report_v1`, dashboard `canonical_view: dashboard_metrics_v2`, and expected total/pending/EDD counts |
 | Authenticated browser smoke | `arie-backend/scripts/qa/staging_browser_smoke.js` | Real QA login succeeds; required back-office pages/tabs load; screenshots and `report.json` attached; no token injection or auth bypass |
 | Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
 

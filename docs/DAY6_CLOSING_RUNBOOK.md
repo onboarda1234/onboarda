@@ -56,7 +56,8 @@ The smoke output must show:
 - analytics reconciliation holds: `pending + edd_required + approved + rejected + withdrawn == total`;
 - `/api/dashboard` in-progress counts match `/api/reports/analytics.summary.pending`;
 - CSV export row count matches `X-Report-Record-Count`;
-- `canonical_view` is `applications_report_v1`;
+- CSV/report `canonical_view` is `applications_report_v1`;
+- dashboard `canonical_view` is `dashboard_metrics_v2`;
 - application-derived pending/EDD counts match the backend metadata contract.
 
 Do not pass bearer tokens on the command line. Use `BACKOFFICE_TOKEN` or `--token-env`.

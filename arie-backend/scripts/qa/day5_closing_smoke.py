@@ -30,6 +30,8 @@ DEFAULT_FIELDS = (
     "ref,company_name,status,risk_level,risk_score,sector,country,entity_type,"
     "created_at,assigned_to,director_count,ubo_count,document_count"
 )
+REPORT_CANONICAL_VIEW = "applications_report_v1"
+DASHBOARD_CANONICAL_VIEW = "dashboard_metrics_v2"
 
 
 class SmokeFailure(AssertionError):
@@ -146,7 +148,7 @@ def _check_csv_export(api_base: str, token: str | None, show_fixtures: bool) -> 
     _assert_equal("CSV header record count", int(record_count), len(rows) - 1)
     canonical = resp.headers.get("X-Report-Canonical-View")
     if canonical:
-        _assert_equal("CSV canonical view", canonical, "applications_report_v1")
+        _assert_equal("CSV canonical view", canonical, REPORT_CANONICAL_VIEW)
     field_header = resp.headers.get("X-Report-Field-List")
     if field_header:
         _assert_equal("CSV field header", field_header, DEFAULT_FIELDS)
@@ -206,7 +208,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     if dashboard.get("pending_statuses"):
         _assert_equal("dashboard pending_statuses", dashboard["pending_statuses"], pending_statuses)
     if dashboard.get("canonical_view"):
-        _assert_equal("dashboard canonical_view", dashboard["canonical_view"], "applications_report_v1")
+        _assert_equal("dashboard canonical_view", dashboard["canonical_view"], DASHBOARD_CANONICAL_VIEW)
 
     if args.expected_total is not None:
         _assert_equal("analytics total", int(summary.get("total") or 0), args.expected_total)
@@ -237,6 +239,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "early_stage_applications": dashboard.get("early_stage_applications"),
             "in_progress_applications": dashboard.get("in_progress_applications"),
             "edd": dashboard.get("edd"),
+            "canonical_view": dashboard.get("canonical_view"),
         },
         "csv": csv_result,
         "applications_kpi_data": kpi_result,
