@@ -1,0 +1,143 @@
+{
+  "base_url": "http://127.0.0.1:18080",
+  "auth": "officer login via /api/auth/officer/login; token omitted",
+  "checks": [
+    {
+      "path": "/api/version",
+      "status": 200,
+      "content_type": "application/json",
+      "json": {
+        "git_sha": "81a91089b6453420a2fd189e5175242a52aaa051",
+        "git_sha_short": "81a9108",
+        "build_time": "local-pr-pilot-scope-1-rebased",
+        "image_tag": "local-pr-pilot-scope-1-rebased",
+        "environment": "demo",
+        "service": "regmind-backend"
+      },
+      "body_sample": null
+    },
+    {
+      "path": "/api/health",
+      "status": 200,
+      "content_type": "application/json",
+      "json": {
+        "status": "ok",
+        "service": "RegMind API",
+        "platform": "Onboarda",
+        "version": "1.0.0",
+        "environment": "demo",
+        "timestamp": "2026-06-16T11:27:40Z"
+      },
+      "body_sample": null
+    },
+    {
+      "path": "/api/liveness",
+      "status": 200,
+      "content_type": "application/json",
+      "json": {
+        "status": "ok",
+        "service": "regmind-backend",
+        "timestamp": "2026-06-16T11:27:40Z"
+      },
+      "body_sample": null
+    },
+    {
+      "path": "/api/config/environment",
+      "status": 200,
+      "content_type": "application/json",
+      "json": {
+        "environment": "demo",
+        "is_demo": true,
+        "is_production": false,
+        "features": {
+          "ENABLE_DEMO_MODE": true,
+          "ENABLE_DEMO_BANNER": true,
+          "ENABLE_PHASE2_FEATURES": true,
+          "ENABLE_REGULATORY_INTELLIGENCE_FULL": true,
+          "ENABLE_MONITORING_DASHBOARD": true,
+          "ENABLE_SAR_WORKFLOW": true,
+          "ENABLE_AI_SUPERVISOR": true,
+          "ENABLE_KPI_DEMO_DATA": true,
+          "ENABLE_ROLE_SWITCHER": true,
+          "ENABLE_DOCUMENT_AI_ANALYSIS": true,
+          "FF_SIZE_CAP_CLIENT_REJECT": false,
+          "FF_UX_SPLIT_UPLOAD_VERIFY": false
+        },
+        "upload_latency_flags": {
+          "FF_SIZE_CAP_CLIENT_REJECT": false,
+          "FF_UX_SPLIT_UPLOAD_VERIFY": false
+        },
+        "backoffice": {
+          "applications_refresh_ms": 30000,
+          "applications_stale_threshold_s": 60
+        },
+        "version": "1.0.0-pilot"
+      },
+      "body_sample": null
+    },
+    {
+      "path": "/backoffice/regulatory-intelligence",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/reg-intel",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/ai-compliance-supervisor",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/supervisor-dashboard",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/supervisor",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/audit-chain",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/supervisor-audit",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/supervisor-audit-chain",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    },
+    {
+      "path": "/backoffice/ai-agents",
+      "status": 200,
+      "content_type": "text/html",
+      "json": null,
+      "body_sample": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n<title>RegMind \u2014 Back Office</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link r"
+    }
+  ],
+  "passed": true
+}
