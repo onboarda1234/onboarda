@@ -780,6 +780,19 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-details[open] summary { margin-bottom:8px; background:var(--surface); }
 .document-review-details-body { padding:0; }
 .document-review-details-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin:0 0 9px; }
+.verification-coverage-panel { border:1px solid var(--border1); border-radius:10px; background:var(--surface); padding:10px 11px; margin-top:8px; }
+.verification-coverage-header { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap; }
+.verification-coverage-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; }
+.verification-coverage-copy { font-size:12px; color:var(--text2); line-height:1.45; margin-top:4px; }
+.verification-coverage-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.verification-coverage-chip { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:4px 8px; border:1px solid var(--border1); background:var(--surface2); font-size:11px; font-weight:750; color:var(--text2); }
+.verification-coverage-chip.pass { border-color:rgba(22,163,74,.22); background:rgba(22,163,74,.08); color:#166534; }
+.verification-coverage-chip.fail { border-color:rgba(220,38,38,.24); background:rgba(220,38,38,.08); color:#991b1b; }
+.verification-coverage-chip.warn { border-color:rgba(217,119,6,.26); background:rgba(217,119,6,.08); color:#92400e; }
+.verification-coverage-chip.pending { border-color:rgba(37,99,235,.22); background:rgba(37,99,235,.07); color:#1d4ed8; }
+.verification-coverage-chip.system { border-color:rgba(37,99,235,.22); background:rgba(37,99,235,.07); color:#1d4ed8; }
+.verification-coverage-chip.none { color:var(--text3); }
+.verification-coverage-note { font-size:11px; color:var(--text3); line-height:1.45; margin-top:8px; }
 .document-review-empty { padding:14px; border:1px dashed var(--border1); border-radius:10px; background:var(--surface2); color:var(--text3); font-size:12px; text-align:center; }
 .reliance-badge { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:800; border:1px solid transparent; white-space:nowrap; }
 .reliance-badge.verified { background:var(--green-bg); color:var(--green); border-color:rgba(22,163,74,.22); }
@@ -7716,159 +7729,6 @@ function buildPartyDisplayName(person) {
   return firstMeaningfulDetailValue(person.name, person.full_name, combined, person.entity_name, person.id, 'Unnamed party');
 }
 
-function buildVerificationResultsHtml(results) {
-  if (!results || (typeof results === 'object' && !Array.isArray(results) && Object.keys(results).length === 0)) {
-    return '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
-  }
-
-  var items = [];
-  function pushItem(label, value, tone) {
-    var normalized = normalizeDetailValue(value);
-    if (normalized === '—') return;
-    var toneStyle = tone === 'red'
-      ? 'border-color:#dc262644;background:#dc262610;color:#7f1d1d;'
-      : tone === 'amber'
-        ? 'border-color:#d9770644;background:#d9770610;color:#78350f;'
-        : 'border-color:var(--border1);background:var(--surface);color:var(--text2);';
-    items.push('<div class="doc-verification-summary-block" style="border:1px solid var(--border1);' + toneStyle + 'border-radius:8px;padding:8px 10px;margin-top:7px;font-size:12px;line-height:1.45;"><strong style="color:inherit;">' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
-  }
-
-  if (Array.isArray(results)) {
-    results.forEach(function(entry, idx) {
-      if (typeof entry === 'object') {
-        var entryParts = [];
-        Object.keys(entry).forEach(function(key) {
-          if (entry[key] == null || entry[key] === '') return;
-          entryParts.push(key.replace(/_/g, ' ') + ': ' + normalizeDetailValue(entry[key]));
-        });
-        if (entryParts.length) items.push('<div class="doc-meta"><strong>Check ' + (idx + 1) + ':</strong> ' + escapeHtml(entryParts.join(' | ')) + '</div>');
-      } else if (entry != null && entry !== '') {
-        items.push('<div class="doc-meta"><strong>Check ' + (idx + 1) + ':</strong> ' + escapeHtml(String(entry)) + '</div>');
-      }
-    });
-    return items.length ? items.join('') : '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
-  }
-
-  if (typeof results === 'object') {
-    // Finding 9: Show ai_source banner when not live
-    var aiSrc = results.ai_source || '';
-    if (aiSrc && aiSrc !== 'live') {
-      var srcColor = aiSrc === 'mock' ? '#d97706' : aiSrc === 'error' ? '#dc2626' : aiSrc === 'unavailable' ? '#6b7280' : '#2563eb';
-      var srcLabel = aiSrc === 'mock' ? '🧪 Simulated — Not From Live AI' : aiSrc === 'error' ? '❌ AI Error — Manual Review Required' : aiSrc === 'unavailable' ? '⏸️ AI Unavailable — Manual Review Required' : '🔧 AI Source: ' + aiSrc;
-      items.push('<div class="ai-simulated-banner" style="padding:6px 10px;margin-bottom:8px;"><span class="ai-sim-icon" style="font-size:13px;">' + (aiSrc === 'mock' ? '🧪' : aiSrc === 'error' ? '❌' : aiSrc === 'unavailable' ? '⏸️' : '🔧') + '</span><div><div class="ai-sim-text" style="font-size:10px;">' + srcLabel + '</div></div></div>');
-      items.push('<div style="margin-bottom:6px;"><span class="ai-source-tag ' + aiSrc + '">Source: ' + aiSrc.replace(/_/g, ' ') + '</span></div>');
-    } else if (aiSrc === 'live') {
-      items.push('<div style="margin-bottom:6px;"><span class="ai-source-tag live">Source: Live AI</span></div>');
-    }
-    // System warning banner — distinguishes system failures from document failures
-    var sysWarn = results.system_warning || '';
-    if (sysWarn) {
-      var warnMsg = sysWarn === 'file_not_accessible' ? '⚠ System Issue: Document file was not accessible for analysis. Errors below may reflect missing file access, not actual document problems.'
-                  : sysWarn === 'entity_context_missing' ? '⚠ System Issue: Entity/person context was not available. Name-matching checks may be inaccurate.'
-                  : '⚠ System Issue: ' + sysWarn;
-      items.push('<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#92400e;font-weight:600;">' + escapeHtml(warnMsg) + '</div>');
-    }
-    var overallValue = firstMeaningfulDetailValue(results.overall, results.overall_result, results.result, results.status);
-    var overallTone = String(overallValue || '').toLowerCase().indexOf('fail') >= 0 || String(overallValue || '').toLowerCase().indexOf('flag') >= 0 ? 'red'
-      : String(overallValue || '').toLowerCase().indexOf('warn') >= 0 ? 'amber' : '';
-    pushItem('Document status', overallValue, overallTone);
-    pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
-    pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
-    pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
-    pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
-    pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
-    pushItem('Why review is required', Array.isArray(results.warnings) ? results.warnings.join(', ') : '', 'amber');
-    pushItem('Issue', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '', 'red');
-    if (Array.isArray(results.checks)) {
-      var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
-      // EX-11: Check type legend for visual distinction
-      var hasClassifiedChecks = results.checks.some(function(c) { return c && c.classification; });
-      if (hasClassifiedChecks) {
-        items.push('<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>');
-      }
-      var visibleCheckItems = [];
-      var allCheckItems = [];
-      function buildCheckHtml(check, idx) {
-        if (!check || typeof check !== 'object') return;
-        var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
-        var result = (firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
-        var icon = result === 'pass' ? '<span style="color:#16a34a;font-size:14px;margin-right:6px;">&#10003;</span>'
-                 : result === 'fail' ? '<span style="color:#dc2626;font-size:14px;margin-right:6px;">&#10007;</span>'
-                 : result === 'warn' ? '<span style="color:#d97706;font-size:14px;margin-right:6px;">&#9888;</span>'
-                 : '<span style="color:#6b7280;font-size:14px;margin-right:6px;">&#8212;</span>';
-        var resultColor = result === 'pass' ? '#16a34a' : result === 'fail' ? '#dc2626' : result === 'warn' ? '#d97706' : '#6b7280';
-        var resultBadge = result ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + resultColor + ';color:#fff;margin-left:4px;">' + result.toUpperCase() + '</span>' : '';
-
-        // Classification badge — EX-11 enhanced with descriptive labels
-        var classTag = '';
-        if (check.classification) {
-          var cc = check.classification.toLowerCase();
-          var classLabel = cc === 'rule' ? '⚙️ Rule-Based' : cc === 'hybrid' ? '🔀 Hybrid' : cc === 'ai' ? '🤖 AI-Generated' : cc;
-          classTag = '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + (classColors[cc] || '#6b7280') + '22;color:' + (classColors[cc] || '#6b7280') + ';border:1px solid ' + (classColors[cc] || '#6b7280') + ';margin-left:4px;">' + classLabel + '</span>';
-        }
-
-        var meta = '';
-        if (check.ps_field && (check.ps_value != null || check.extracted_value != null)) {
-          meta += '<div style="font-size:11px;color:#6b7280;margin-top:2px;">Pre-screening <em>' + escapeHtml(check.ps_field) + '</em>: <strong>' + escapeHtml(String(check.ps_value ?? '—')) + '</strong>';
-          if (check.extracted_value != null) meta += ' → extracted: <strong>' + escapeHtml(String(check.extracted_value)) + '</strong>';
-          meta += '</div>';
-        }
-        var msg = firstMeaningfulDetailValue(check.message, check.details);
-        if (msg) meta += '<div style="font-size:11px;color:#374151;margin-top:2px;">' + escapeHtml(msg) + '</div>';
-        if (check.confidence != null) meta += '<div style="font-size:11px;color:#6b7280;">Confidence: ' + Math.round(Number(check.confidence) * 100) + '%</div>';
-
-        return '<div style="display:flex;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border2,#e5e7eb);">' + icon + '<div style="flex:1;"><strong style="color:var(--text1);">' + label + '</strong>' + resultBadge + classTag + meta + '</div></div>';
-      }
-      results.checks.forEach(function(check, idx) {
-        var checkHtml = buildCheckHtml(check, idx);
-        if (!checkHtml) return;
-        allCheckItems.push(checkHtml);
-        var result = String(firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
-        if (result !== 'pass') visibleCheckItems.push(checkHtml);
-      });
-      if (visibleCheckItems.length) {
-        items.push('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;color:var(--text1);text-transform:uppercase;letter-spacing:.03em;">Issue</div>' + visibleCheckItems.join('') + '</div>');
-      }
-      if (allCheckItems.length) {
-        var auditFacts = [];
-        function pushAuditFact(label, value) {
-          var normalized = normalizeDetailValue(value);
-          if (normalized === '—') return;
-          auditFacts.push('<div class="verification-audit-fact"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
-        }
-        var policyVersion = firstMeaningfulDetailValue(results.policy_version, results.policyVersion);
-        var policyId = firstMeaningfulDetailValue(results.policy_id, results.policyId);
-        pushAuditFact('Method', firstMeaningfulDetailValue(results.verification_method, results.method, results.check_method));
-        pushAuditFact('Agent execution ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id));
-        pushAuditFact('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash));
-        pushAuditFact('Verification timestamp', firstMeaningfulDetailValue(results.verified_at, results.verification_timestamp, results.completed_at));
-        pushAuditFact('Policy ID/version', policyId && policyVersion ? policyId + ' / ' + policyVersion : firstMeaningfulDetailValue(policyId, policyVersion));
-        var auditHtml = auditFacts.length ? '<div class="verification-audit-grid">' + auditFacts.join('') + '</div>' : '';
-        items.push('<details class="verification-technical-details">' +
-          '<summary>Details</summary>' +
-          '<div style="padding:0 10px 9px;">' +
-            auditHtml +
-            '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:3px 0 5px;">Full check result list</div>' +
-            allCheckItems.join('') +
-          '</div>' +
-        '</details>');
-      }
-    } else {
-      pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
-    }
-    if (!items.length) {
-      Object.keys(results).forEach(function(key) {
-        var value = results[key];
-        if (value == null || value === '' || typeof value === 'object') return;
-        items.push('<div class="doc-meta"><strong>' + escapeHtml(key.replace(/_/g, ' ')) + ':</strong> ' + escapeHtml(String(value)) + '</div>');
-      });
-    }
-    return items.length ? items.join('') : '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
-  }
-
-  return '<div class="doc-meta"><strong>AI Verification Detail:</strong> ' + escapeHtml(String(results)) + '</div>';
-}
-
 function buildStoredRiskComputation(app) {
   if (!app || !app.dims || !Object.keys(app.dims).length) return null;
   var dimMeta = [
@@ -8489,6 +8349,152 @@ function documentShortNextAction(doc, policy, state) {
   return 'Review exception';
 }
 
+function normalizeCoverageCheckLabel(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(the|document|evidence|verification|check|required|review|policy|of|and)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function coverageLabelsMatch(expectedLabel, actualLabel) {
+  var expected = normalizeCoverageCheckLabel(expectedLabel);
+  var actual = normalizeCoverageCheckLabel(actualLabel);
+  if (!expected || !actual) return false;
+  if (expected === actual) return true;
+  return expected.indexOf(actual) >= 0 || actual.indexOf(expected) >= 0;
+}
+
+function documentCoverageStatusBucket(result, message, systemWarning) {
+  var normalizedResult = String(result || '').toLowerCase();
+  var normalizedMessage = String(message || '').toLowerCase();
+  var isSystemBlocked = systemWarning === 'file_not_accessible' || systemWarning === 'async_verification_job_failed' || systemWarning === 'verification_runtime_failed' ||
+    normalizedMessage.indexOf('not accessible') >= 0 ||
+    normalizedMessage.indexOf('system issue') >= 0 ||
+    normalizedMessage.indexOf('runtime failed') >= 0;
+  if (isSystemBlocked) return 'system';
+  if (['pass', 'passed', 'verified', 'success'].indexOf(normalizedResult) >= 0) return 'pass';
+  if (['fail', 'failed', 'flagged', 'blocked', 'error'].indexOf(normalizedResult) >= 0) return 'fail';
+  if (['warn', 'warning', 'review'].indexOf(normalizedResult) >= 0) {
+    return normalizedMessage.indexOf('skipped') >= 0 ? 'skipped' : 'warn';
+  }
+  if (['skip', 'skipped', 'not_run', 'not run', 'not-run', 'pending'].indexOf(normalizedResult) >= 0) return 'skipped';
+  return 'not_run';
+}
+
+function documentPolicyExpectedChecks(policy) {
+  if (!policy) return [];
+  var expected = [];
+  (policy.materialChecks || []).forEach(function(label) {
+    if (label) expected.push(String(label));
+  });
+  (policy.technicalChecks || []).forEach(function(label) {
+    if (label) expected.push(String(label));
+  });
+  return expected.filter(function(label, index, arr) {
+    var normalized = normalizeCoverageCheckLabel(label);
+    if (!normalized) return false;
+    return arr.findIndex(function(candidate) {
+      return normalizeCoverageCheckLabel(candidate) === normalized;
+    }) === index;
+  });
+}
+
+function buildDocumentVerificationCoverage(doc, policy) {
+  var results = (doc && doc.verification_results) || {};
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  var runtimeExpected = !!(policy && policy.backend_executable);
+  var expectedChecks = runtimeExpected ? documentPolicyExpectedChecks(policy) : [];
+  var systemWarning = String(results.system_warning || results.systemWarning || '').toLowerCase();
+  var counts = {
+    pass: 0,
+    fail: 0,
+    warn: 0,
+    skipped: 0,
+    not_run: 0,
+    system: 0
+  };
+  var matchedExpected = {};
+  var actualCheckCount = 0;
+  checks.forEach(function(check) {
+    if (!check || typeof check !== 'object') return;
+    actualCheckCount += 1;
+    var message = firstMeaningfulDetailValue(check.message, check.details, check.reason);
+    var bucket = documentCoverageStatusBucket(firstMeaningfulDetailValue(check.result, check.status), message, systemWarning);
+    counts[bucket] = (counts[bucket] || 0) + 1;
+    var actualLabel = firstMeaningfulDetailValue(check.label, check.name);
+    expectedChecks.forEach(function(expectedLabel) {
+      if (!matchedExpected[expectedLabel] && coverageLabelsMatch(expectedLabel, actualLabel)) {
+        matchedExpected[expectedLabel] = true;
+      }
+    });
+  });
+  var missingExpectedChecks = expectedChecks.filter(function(label) { return !matchedExpected[label]; });
+  var runState = 'completed';
+  var summaryText = 'Verification complete — persisted checks cover the expected policy checks.';
+  if (!policy) {
+    runState = 'incomplete';
+    summaryText = 'Verification incomplete — verification policy missing for this document.';
+  } else if (!runtimeExpected) {
+    runState = 'manual';
+    summaryText = 'Manual review only — automated runtime checks are not expected for this policy.';
+  } else if (systemWarning === 'file_not_accessible') {
+    runState = 'system_issue';
+    summaryText = 'Verification incomplete — file could not be accessed.';
+  } else if (!actualCheckCount) {
+    var verificationState = String((doc && (doc.verification_state || doc.verification_status)) || '').toLowerCase();
+    runState = ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0 ? 'pending' : 'not_run';
+    summaryText = runState === 'pending'
+      ? 'Verification pending — persisted checks are not available yet.'
+      : 'Verification not run — no persisted checks were stored.';
+  } else if (missingExpectedChecks.length) {
+    runState = 'incomplete';
+    summaryText = 'Verification incomplete — expected checks missing.';
+  }
+  return {
+    counts: counts,
+    expectedChecks: expectedChecks,
+    missingExpectedChecks: missingExpectedChecks,
+    actualCheckCount: actualCheckCount,
+    systemWarning: systemWarning,
+    systemBlocked: counts.system > 0 || systemWarning === 'file_not_accessible',
+    runState: runState,
+    summaryText: summaryText
+  };
+}
+
+function renderVerificationCoverageChip(label, value, tone) {
+  return '<span class="verification-coverage-chip ' + escapeHtml(tone || 'none') + '">' + escapeHtml(label) + ': ' + escapeHtml(String(value)) + '</span>';
+}
+
+function renderVerificationCoverageSummary(doc, policy) {
+  var coverage = buildDocumentVerificationCoverage(doc, policy);
+  var chips = [
+    renderVerificationCoverageChip('Checks passed', coverage.counts.pass, 'pass'),
+    renderVerificationCoverageChip('Checks failed', coverage.counts.fail, 'fail'),
+    renderVerificationCoverageChip('Warnings', coverage.counts.warn, 'warn'),
+    renderVerificationCoverageChip('Skipped', coverage.counts.skipped, 'pending'),
+    renderVerificationCoverageChip('Not run', coverage.missingExpectedChecks.length || coverage.counts.not_run, 'pending'),
+    renderVerificationCoverageChip('System-blocked', coverage.systemBlocked ? 'Yes' : 'No', coverage.systemBlocked ? 'system' : 'none')
+  ];
+  var noteBits = [
+    'Expected checks: ' + coverage.expectedChecks.length,
+    'Persisted checks: ' + coverage.actualCheckCount
+  ];
+  if (coverage.missingExpectedChecks.length) {
+    noteBits.push('Missing expected checks: ' + coverage.missingExpectedChecks.join(', '));
+  }
+  return '<div class="verification-coverage-panel">' +
+    '<div class="verification-coverage-header">' +
+      '<div><div class="verification-coverage-title">Verification coverage</div><div class="verification-coverage-copy">' + escapeHtml(coverage.summaryText) + '</div></div>' +
+      renderRelianceBadge({ label: coverage.runState === 'completed' ? 'Complete' : (coverage.runState === 'pending' ? 'Pending' : coverage.runState === 'system_issue' ? 'System issue' : coverage.runState === 'manual' ? 'Manual review only' : 'Incomplete'), tone: coverage.runState === 'completed' ? 'verified' : coverage.runState === 'pending' ? 'pending' : coverage.runState === 'system_issue' ? 'system-issue' : coverage.runState === 'manual' ? 'manual-accepted' : 'review-required' }) +
+    '</div>' +
+    '<div class="verification-coverage-chips">' + chips.join('') + '</div>' +
+    '<div class="verification-coverage-note">' + escapeHtml(noteBits.join(' · ')) + '</div>' +
+  '</div>';
+}
+
 function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
   var chips = [];
   var issueText = normalizeDetailValue(issue);
@@ -8530,13 +8536,115 @@ function renderDocumentDirectActions(app, doc, groupKey, state) {
   return '<div class="document-review-actions">' +
     '<button class="doc-action-btn neutral" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>' +
     '<button class="doc-action-btn neutral" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>' +
+    '<button class="doc-action-btn secondary" onclick="verifyBackofficeDocument(\'' + docId + '\',\'' + appRef + '\')">Re-Verify</button>' +
     reviewActions +
   '</div>';
+}
+
+function buildVerificationResultsHtml(results, coverage) {
+  if (!results || (typeof results === 'object' && !Array.isArray(results) && Object.keys(results).length === 0)) {
+    return '<details class="verification-technical-details"><summary>Technical audit details</summary><div style="padding:0 10px 10px;font-size:12px;color:var(--text3);">No persisted verification payload is stored for this document.</div></details>';
+  }
+
+  var technicalItems = [];
+  var sourceBanner = '';
+  var classificationLegend = '';
+  function pushAuditFact(label, value) {
+    var normalized = normalizeDetailValue(value);
+    if (normalized === '—') return;
+    technicalItems.push('<div class="verification-audit-fact"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
+  }
+
+  if (typeof results === 'object' && !Array.isArray(results)) {
+    var aiSource = String(firstMeaningfulDetailValue(results.ai_source, results.aiSource) || '').toLowerCase();
+    if (aiSource) {
+      var aiSourceLabel = aiSource === 'mock' || aiSource === 'fallback'
+        ? 'Simulated — Not From Live AI'
+        : aiSource === 'demo'
+          ? 'Simulated — Demo Mode Output'
+          : aiSource === 'error'
+            ? 'AI Error — Manual Review Required'
+            : aiSource === 'unavailable'
+              ? 'AI Unavailable — Manual Review Required'
+              : aiSource === 'live'
+                ? 'Live AI'
+                : aiSource;
+      if (aiSource !== 'live') {
+        sourceBanner = '<div class="ai-simulated-banner" style="margin-bottom:8px;"><span class="ai-sim-icon" style="font-size:13px;">🧪</span><div><div class="ai-sim-text" style="font-size:10px;">' + escapeHtml(aiSourceLabel) + '</div></div></div>';
+      }
+      pushAuditFact('AI source', aiSourceLabel);
+    }
+    pushAuditFact('Method', firstMeaningfulDetailValue(results.verification_method, results.method, results.check_method));
+    pushAuditFact('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
+    pushAuditFact('Agent execution ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id));
+    pushAuditFact('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash));
+    pushAuditFact('Verification timestamp', firstMeaningfulDetailValue(results.verified_at, results.verification_timestamp, results.completed_at));
+    pushAuditFact('Policy ID/version', firstMeaningfulDetailValue(results.policy_id, results.policyId) && firstMeaningfulDetailValue(results.policy_version, results.policyVersion)
+      ? firstMeaningfulDetailValue(results.policy_id, results.policyId) + ' / ' + firstMeaningfulDetailValue(results.policy_version, results.policyVersion)
+      : firstMeaningfulDetailValue(results.policy_id, results.policyId, results.policy_version, results.policyVersion));
+    if (coverage && coverage.missingExpectedChecks && coverage.missingExpectedChecks.length) {
+      pushAuditFact('Expected checks missing', coverage.missingExpectedChecks.join(', '));
+    }
+  }
+
+  var checkRows = [];
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  checks.forEach(function(check, idx) {
+    if (!check || typeof check !== 'object') return;
+    var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
+    var result = String(firstMeaningfulDetailValue(check.result, check.status) || 'not_run').toLowerCase();
+    var resultColor = result === 'pass' ? '#16a34a'
+      : result === 'fail' || result === 'failed' ? '#dc2626'
+      : result === 'warn' || result === 'warning' ? '#d97706'
+      : '#6b7280';
+    var classification = String(firstMeaningfulDetailValue(check.classification, check.method) || '').toLowerCase();
+    var classificationLabel = classification === 'rule'
+      ? 'Rule-Based'
+      : classification === 'hybrid'
+        ? 'Hybrid'
+        : classification === 'ai'
+          ? 'AI-Generated'
+          : classification;
+    var message = firstMeaningfulDetailValue(check.message, check.details, check.reason);
+    var meta = [];
+    if (classificationLabel) meta.push('Method: ' + classificationLabel);
+    if (check.confidence != null) meta.push('Confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
+    if (check.ps_field) meta.push('Pre-screening field: ' + check.ps_field);
+    checkRows.push('<div style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border2,#e5e7eb);gap:8px;">' +
+      '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:44px;padding:2px 6px;border-radius:999px;background:' + resultColor + '14;color:' + resultColor + ';font-size:10px;font-weight:800;text-transform:uppercase;">' + escapeHtml(result.replace(/_/g, ' ')) + '</span>' +
+      '<div style="min-width:0;flex:1;"><div style="font-size:12px;font-weight:800;color:var(--text1);">' + label + '</div>' +
+      (message ? '<div style="font-size:12px;color:var(--text2);margin-top:2px;">' + escapeHtml(message) + '</div>' : '') +
+      (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:3px;">' + escapeHtml(meta.join(' · ')) + '</div>' : '') +
+      '</div></div>');
+  });
+
+  var rawDetails = [];
+  var hasClassifiedChecks = checks.some(function(check) { return check && firstMeaningfulDetailValue(check.classification, check.method); });
+  if (hasClassifiedChecks) {
+    classificationLegend = '<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>';
+  }
+  if (results.system_warning || results.systemWarning) rawDetails.push('<div class="verification-audit-fact"><strong>System warning:</strong> ' + escapeHtml(String(results.system_warning || results.systemWarning)) + '</div>');
+  if (Array.isArray(results.warnings) && results.warnings.length) rawDetails.push('<div class="verification-audit-fact"><strong>Warnings:</strong> ' + escapeHtml(results.warnings.join(', ')) + '</div>');
+  if (Array.isArray(results.red_flags) && results.red_flags.length) rawDetails.push('<div class="verification-audit-fact"><strong>Red flags:</strong> ' + escapeHtml(results.red_flags.join(', ')) + '</div>');
+  if (Array.isArray(results.issues) && results.issues.length) rawDetails.push('<div class="verification-audit-fact"><strong>Issues:</strong> ' + escapeHtml(results.issues.join(', ')) + '</div>');
+
+  return '<details class="verification-technical-details">' +
+    '<summary>Technical audit details</summary>' +
+    '<div style="padding:0 10px 10px;">' +
+      sourceBanner +
+      (technicalItems.length ? '<div class="verification-audit-grid">' + technicalItems.join('') + '</div>' : '') +
+      (rawDetails.length ? '<div class="verification-audit-grid" style="margin-top:0;">' + rawDetails.join('') + '</div>' : '') +
+      classificationLegend +
+      '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:4px 0 6px;">Full check result list</div>' +
+      (checkRows.length ? checkRows.join('') : '<div style="font-size:12px;color:var(--text3);">No persisted check rows were stored for this document.</div>') +
+    '</div>' +
+  '</details>';
 }
 
 function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, policy, state, issue, blocker, expectedTypeLabel) {
   if (!doc) return '';
   var results = doc.verification_results || {};
+  var coverage = buildDocumentVerificationCoverage(doc, policy);
   var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
   var reviewComment = doc.review_comment ? doc.review_comment : '';
   var auditFacts = [
@@ -8546,7 +8654,7 @@ function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, p
     renderDocumentReviewField('Document status', (state && state.label) || 'Review required'),
     renderDocumentReviewField('Issue', issue, issue === 'None' ? 'none' : 'issue'),
     renderDocumentReviewField('Blocker', blocker, blocker === 'None' ? 'none' : 'blocking'),
-    renderDocumentReviewField('Policy ID/version', policy ? ((policy.policyId || policy.id || 'Policy') + ' / ' + (policy.version || 'v1')) : 'Document type required'),
+    renderDocumentReviewField('Policy ID/version', policy ? ((policy.policyId || policy.id || 'Policy') + ' / ' + (policy.version || 'v1')) : (expectedSlot ? 'Policy missing for expected type' : 'Document type required')),
     renderDocumentReviewField('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)),
     renderDocumentReviewField('Agent run ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id)),
     renderDocumentReviewField('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash)),
@@ -8566,8 +8674,8 @@ function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, p
       '<div class="document-review-details-grid">' + auditFacts + '</div>' +
       officerHistory +
       typePanel +
-      '<div class="evidence-material-panel"><div class="evidence-material-title">Issue</div>' + buildVerificationResultsHtml(doc.verification_results) + '</div>' +
-      '<div class="document-review-actions"><button class="doc-action-btn secondary" onclick="verifyBackofficeDocument(\'' + escapeHtml(doc.id || doc.document_id || '') + '\',\'' + escapeHtml((app && (app.ref || app.id)) || '') + '\')">Re-Verify</button></div>' +
+      renderVerificationCoverageSummary(doc, policy) +
+      buildVerificationResultsHtml(doc.verification_results, coverage) +
     '</div>' +
   '</details>';
 }

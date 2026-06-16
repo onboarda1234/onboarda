@@ -54,6 +54,7 @@ def test_application_review_default_rows_are_compact_and_not_audit_heavy():
 def test_details_are_collapsed_by_default_and_retain_audit_fields():
     html = _backoffice_html()
     details = _function_region(html, "renderDocumentAuditDetails", "renderUnifiedKycDocumentCard")
+    actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
 
     assert '<details class="document-review-details">' in details
     assert '<details class="document-review-details" open' not in details
@@ -67,9 +68,11 @@ def test_details_are_collapsed_by_default_and_retain_audit_fields():
         "Uploaded by",
         "Officer action history",
         "buildVerificationResultsHtml",
-        "Re-Verify",
     ]:
         assert audit_field in details
+    assert "Re-Verify" in actions
+    assert "renderVerificationCoverageSummary(doc, policy)" in details
+    assert "buildVerificationResultsHtml(doc.verification_results, coverage)" in details
 
 
 def test_large_ai_advisory_banner_is_reduced_in_kyc_documents_tab():

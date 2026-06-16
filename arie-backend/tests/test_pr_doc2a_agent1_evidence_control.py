@@ -17,7 +17,7 @@ def _backend_db_py() -> str:
 
 def _verification_renderer(html: str) -> str:
     start = html.index("function buildVerificationResultsHtml")
-    end = html.index("function buildStoredRiskComputation", start)
+    end = html.index("function renderDocumentAuditDetails", start)
     return html[start:end]
 
 
@@ -25,17 +25,14 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
     html = _backoffice_html()
     renderer = _verification_renderer(html)
 
-    assert "Document status" in renderer
-    assert "Why review is required" in renderer
-    assert "Issue" in renderer
-    assert "<summary>Details</summary>" in renderer
+    assert "Technical audit details" in renderer
     assert "Full check result list" in renderer
     assert "Agent execution ID" in renderer
     assert "Evidence hash" in renderer
     assert "Verification timestamp" in renderer
     assert "Policy ID/version" in renderer
-    assert "if (result !== 'pass') visibleCheckItems.push(checkHtml);" in renderer
-    assert "allCheckItems.push(checkHtml);" in renderer
+    assert "System warning" in renderer
+    assert "Expected checks missing" in renderer
     assert "Failed or warning checks" not in renderer
     assert "Overall Result" not in renderer
     assert "Show technical verification checks" not in renderer

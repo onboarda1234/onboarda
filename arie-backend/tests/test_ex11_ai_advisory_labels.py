@@ -168,7 +168,7 @@ class TestPartB_AdvisoryLabeling:
 
     def test_verification_checks_have_single_top_level_advisory_banner(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
-        fn_end = backoffice_html.index('function buildStoredRiskComputation', fn_start)
+        fn_end = backoffice_html.index('function renderDocumentAuditDetails', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
         kyc_start = backoffice_html.index('id="detail-tab-kyc-docs"')
         kyc_end = backoffice_html.index('id="detail-tab-screening"', kyc_start)
@@ -318,7 +318,7 @@ class TestPartD_MockSimulatedLabeling:
 
     def test_verification_mock_banner_enhanced(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
-        fn_end = backoffice_html.index('function buildStoredRiskComputation', fn_start)
+        fn_end = backoffice_html.index('function renderDocumentAuditDetails', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
         assert 'Simulated — Not From Live AI' in fn_region, \
             "Verification checks must label mock results as simulated"
@@ -355,7 +355,7 @@ class TestPartE_VisualDistinction:
 
     def test_check_type_legend_in_verification(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
-        fn_end_marker = backoffice_html.index('function buildStoredRiskComputation', fn_start)
+        fn_end_marker = backoffice_html.index('function renderDocumentAuditDetails', fn_start)
         fn_region = backoffice_html[fn_start:fn_end_marker]
         assert 'check-type-legend' in fn_region, \
             "Verification results should include a check type legend"
@@ -364,7 +364,7 @@ class TestPartE_VisualDistinction:
 
     def test_classification_badge_enhanced(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
-        fn_end_marker = backoffice_html.index('function buildStoredRiskComputation', fn_start)
+        fn_end_marker = backoffice_html.index('function renderDocumentAuditDetails', fn_start)
         fn_region = backoffice_html[fn_start:fn_end_marker]
         # Classification badges should now say "Rule-Based" instead of just "rule"
         assert "Rule-Based" in fn_region

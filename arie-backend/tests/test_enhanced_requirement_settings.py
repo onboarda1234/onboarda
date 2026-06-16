@@ -696,9 +696,13 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "function kycDocumentNeedsAttention(doc)" in html
     assert "function enhancedRequirementNeedsAttention(req)" in html
     assert "<summary>Details</summary>" in html
+    assert "<summary>Technical audit details</summary>" in html
     assert "Full check result list" in html
-    assert "if (result !== 'pass') visibleCheckItems.push(checkHtml);" in html
-    assert "allCheckItems.push(checkHtml);" in html
+    assert "function buildDocumentVerificationCoverage(doc, policy)" in html
+    assert "function renderVerificationCoverageSummary(doc, policy)" in html
+    assert "Expected checks missing" in html
+    assert "Checks passed" in html
+    assert "System-blocked" in html
 
     assert "C — Additional Required Documents" in portal_html
     assert "Upload requested risk-triggered evidence documents here." not in portal_html
