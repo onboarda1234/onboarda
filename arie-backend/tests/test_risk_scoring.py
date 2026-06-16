@@ -2,7 +2,7 @@
 Forensic Risk Scoring Audit Tests
 Validates that the system's risk scoring engine matches the approved
 Risk Scoring Model Excel, with country risk sourced from the governed
-country-risk snapshot introduced by PR-CR1.
+manual Risk Scoring Model settings restored by PR-CR1R.
 
 Covers:
   1. Dimension weight alignment
@@ -17,7 +17,7 @@ Covers:
   10. Sector risk alignment (spot check 10 sectors)
   11. Escalation rules (VERY_HIGH triggers escalation)
   12. Config propagation (DB config used at runtime)
-  13. Country risk provenance (canonical snapshot wins for known countries)
+  13. Country risk provenance (manual country settings win for known countries)
 """
 import os
 import sys
@@ -742,8 +742,8 @@ class TestConfigDrivenScoring:
         db.commit()
         db.close()
 
-    def test_canonical_country_snapshot_wins_over_legacy_db_scores(self, temp_db):
-        """Known countries come from the canonical snapshot; legacy DB scores are fallback only."""
+    def test_manual_country_risk_config_wins_for_known_countries(self, temp_db):
+        """Known countries come from manual risk_config country scores during pilot."""
         from rule_engine import classify_country, load_risk_config
         from db import get_db
 
@@ -762,7 +762,7 @@ class TestConfigDrivenScoring:
         db.close()
 
         config2 = load_risk_config()
-        assert classify_country("Mauritius", config2.get("country_risk_scores")) == 2
+        assert classify_country("Mauritius", config2.get("country_risk_scores")) == 3
         assert classify_country("Unlisted Testland", config2.get("country_risk_scores")) == 3
 
         # Restore

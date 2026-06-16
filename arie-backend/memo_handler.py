@@ -21,9 +21,8 @@ from rule_engine import (
     ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
     SANCTIONED, FATF_BLACK,
-    classify_risk_level,
+    classify_risk_level, country_risk_details, load_risk_config, normalize_country_key,
 )
-from country_risk import lookup_country_risk
 from environment import ENV, is_demo
 
 logger = logging.getLogger("arie")
@@ -1574,21 +1573,25 @@ def build_compliance_memo(app, directors, ubos, documents):
 
     doc_confidence = round(len(verified_docs) / max(len(documents), 1) * 100) if has_documents else 0
 
-    # Jurisdiction risk classification with source-backed reasoning.
-    country_risk = lookup_country_risk(country)
+    # Jurisdiction risk classification uses manual Risk Scoring Model settings.
+    risk_config = load_risk_config() or {}
+    country_scores_cfg = risk_config.get("country_risk_scores") if isinstance(risk_config, dict) else None
+    country_risk = country_risk_details(country, country_scores_cfg)
     country_risk_score = int(country_risk.get("risk_score") or 2)
     country_risk_status = country_risk.get("fatf_status") or "none"
     country_sanctions_status = country_risk.get("sanctions_status") or "none"
     country_high_risk_status = country_risk.get("high_risk_status") or "none"
+    country_key = country_risk.get("country_key") or normalize_country_key(country)
     is_offshore = (
         country in OFFSHORE_COUNTRIES
+        or country_key in {normalize_country_key(c) for c in OFFSHORE_COUNTRIES}
         or country_high_risk_status in ("secrecy_jurisdiction", "offshore_financial_centre")
     )
     is_sanctioned_country = (
         country_sanctions_status not in ("", "none", None)
         or country_risk_status in ("black", "call_for_action")
-        or country.lower().strip() in SANCTIONED
-        or country.lower().strip() in FATF_BLACK
+        or country_key in SANCTIONED
+        or country_key in FATF_BLACK
     )
     is_high_risk_country = (
         country_risk_score >= 3
@@ -1627,8 +1630,6 @@ def build_compliance_memo(app, directors, ubos, documents):
         jurisdiction_triggers.append("offshore_financial_centre")
     if country_risk.get("is_unknown"):
         jurisdiction_triggers.append("unknown_country_default_medium")
-    if country_risk.get("is_stale"):
-        jurisdiction_triggers.append("country_risk_source_stale")
     if not jurisdiction_triggers:
         jurisdiction_triggers.append("not_on_fatf_or_internal_high_risk_tables")
 
@@ -1659,20 +1660,21 @@ def build_compliance_memo(app, directors, ubos, documents):
     jurisdiction_evidence = {
         "rating": jur_rating,
         "risk_score": country_risk_score,
-        "source": country_risk.get("source_name") or "Country risk snapshot",
+        "source": country_risk.get("source_name") or "Manual Risk Scoring Model country-risk settings",
         "source_url": country_risk.get("source_url") or "",
         "source_publication_date": country_risk.get("source_publication_date") or "",
         "effective_date": country_risk.get("effective_date") or "",
-        "snapshot_id": country_risk.get("snapshot_id") or "",
-        "snapshot_version": country_risk.get("snapshot_version") or "",
-        "snapshot_checksum": country_risk.get("snapshot_checksum") or "",
-        "entry_checksum": country_risk.get("checksum") or "",
+        "source_mode": "manual_settings",
+        "snapshot_id": "",
+        "snapshot_version": "",
+        "snapshot_checksum": "",
+        "entry_checksum": "",
         "last_checked_at": country_risk.get("last_checked_at") or "",
         "fatf_status": country_risk_status,
         "sanctions_status": country_sanctions_status,
         "high_risk_status": country_high_risk_status,
-        "is_stale": bool(country_risk.get("is_stale")),
-        "stale_warning": country_risk.get("stale_warning") or "",
+        "is_stale": False,
+        "stale_warning": "",
         "triggers": jurisdiction_triggers,
         "prose": (
             "Deterministic jurisdiction rating: "
@@ -1682,9 +1684,8 @@ def build_compliance_memo(app, directors, ubos, documents):
             + " based on "
             + ", ".join(jurisdiction_triggers)
             + ". Source: "
-            + str(country_risk.get("source_name") or "country-risk snapshot")
-            + " effective "
-            + str(country_risk.get("effective_date") or "not recorded")
+            + str(country_risk.get("source_name") or "manual Risk Scoring Model settings")
+            + " (manual settings active for pilot)."
             + "."
         ),
     }

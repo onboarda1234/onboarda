@@ -1,6 +1,6 @@
--- PR-CR1: Canonical country-risk source governance snapshots.
--- Seed data is inserted by db._ensure_country_risk_governance so checksums
--- are generated from the same canonical Python source used by runtime tests.
+-- PR-CR1R: Dormant country-risk source governance snapshot schema.
+-- The PR-CR1 imported snapshot is not active for pilot. Manual
+-- risk_config.country_risk_scores is the operational source of truth.
 
 CREATE TABLE IF NOT EXISTS country_risk_snapshots (
     id TEXT PRIMARY KEY,
