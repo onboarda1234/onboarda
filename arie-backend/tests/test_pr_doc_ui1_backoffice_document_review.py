@@ -18,12 +18,37 @@ def test_application_review_documents_are_grouped_by_officer_action():
     html = _backoffice_html()
     renderer = _function_region(html, "renderStandardKycDocumentTaxonomy", "buildEnhancedRequirementsPanelSummary")
 
-    assert "Action required" in renderer
-    assert "Missing" in renderer
-    assert "Verified" in renderer
-    assert "Optional / additional" in renderer
+    assert "renderDocumentReviewActionGroups(sections.entity)" in renderer
+    assert "Action required" in html
+    assert "Missing" in html
+    assert "Verified" in html
+    assert "Optional / additional" in html
     assert "renderDocumentActionGroupShell" in html
     assert "document-action-groups" in html
+
+
+def test_application_review_preserves_backoffice_kyc_taxonomy_sections():
+    html = _backoffice_html()
+    renderer = _function_region(html, "renderStandardKycDocumentTaxonomy", "buildEnhancedRequirementsPanelSummary")
+
+    for section in [
+        "A — Corporate Entity Documents",
+        "B — Directors & UBO Identity Documents",
+        "D — Other Documents",
+    ]:
+        assert section in renderer
+
+    assert "C — Enhanced Evidence Documents" in html
+    assert "renderEnhancedEvidenceDocumentsGroupHtml(requirements)" in renderer
+    assert "E — Portal Disclosures" in html
+    assert "F — Internal Controls" in html
+    assert "G — Verification History" in html
+    assert "renderDocumentReviewActionGroups(sections.entity)" in renderer
+    assert "renderDocumentReviewActionGroups(sections.person)" in renderer
+    assert "renderDocumentReviewActionGroups(sections.other)" in renderer
+    assert renderer.index("A — Corporate Entity Documents") < renderer.index("B — Directors & UBO Identity Documents")
+    assert renderer.index("B — Directors & UBO Identity Documents") < renderer.index("renderEnhancedEvidenceDocumentsGroupHtml")
+    assert renderer.index("renderEnhancedEvidenceDocumentsGroupHtml") < renderer.index("D — Other Documents")
 
 
 def test_portal_slot_document_shows_expected_type_not_unclassified():

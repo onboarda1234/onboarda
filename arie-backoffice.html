@@ -8290,7 +8290,7 @@ function enhancedRequirementNeedsAttention(req) {
 }
 
 function kycTaxonomyGroupShell(title, subtitle, bodyHtml, tone, expanded) {
-  var borderColor = tone === 'purple' ? '#7c3aed' : tone === 'amber' ? 'var(--amber)' : tone === 'green' ? 'var(--green)' : 'var(--border1)';
+  var borderColor = tone === 'purple' ? '#7c3aed' : tone === 'amber' ? 'var(--amber)' : tone === 'green' ? 'var(--green)' : tone === 'brand' ? 'var(--brand)' : 'var(--border1)';
   return '<details class="kyc-taxonomy-group" ' + (expanded ? 'open' : '') + ' style="border:1px solid var(--border1);border-left:4px solid ' + borderColor + ';border-radius:10px;background:var(--surface);margin-bottom:12px;overflow:hidden;">' +
     '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid var(--border1);background:var(--surface2);list-style-position:inside;">' +
       '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(title) + '</div>' +
@@ -8624,29 +8624,29 @@ function renderIdentityEnhancedRequirementCard(req) {
 
 function buildExpectedKycDocumentSlots(app) {
   var expected = [
-    { doc_type: 'cert_inc', label: 'Certificate of Incorporation' },
-    { doc_type: 'memarts', label: 'Memorandum & Articles' },
-    { doc_type: 'reg_sh', label: 'Register of Shareholders' },
-    { doc_type: 'reg_dir', label: 'Register of Directors' },
-    { doc_type: 'fin_stmt', label: 'Financial Statements / Management Accounts' },
-    { doc_type: 'poa', label: 'Proof of Registered Address', person_id: null },
-    { doc_type: 'board_res', label: 'Board Resolution' },
-    { doc_type: 'structure_chart', label: 'Company Structure Chart' }
+    { doc_type: 'cert_inc', label: 'Certificate of Incorporation', taxonomy_section: 'entity' },
+    { doc_type: 'memarts', label: 'Memorandum & Articles', taxonomy_section: 'entity' },
+    { doc_type: 'reg_sh', label: 'Register of Shareholders', taxonomy_section: 'entity' },
+    { doc_type: 'reg_dir', label: 'Register of Directors', taxonomy_section: 'entity' },
+    { doc_type: 'fin_stmt', label: 'Financial Statements / Management Accounts', taxonomy_section: 'entity' },
+    { doc_type: 'poa', label: 'Proof of Registered Address', person_id: null, taxonomy_section: 'entity' },
+    { doc_type: 'board_res', label: 'Board Resolution', taxonomy_section: 'entity' },
+    { doc_type: 'structure_chart', label: 'Company Structure Chart', taxonomy_section: 'entity' }
   ];
   (app.directors || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
-    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: owner });
-    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: owner });
+    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: owner, taxonomy_section: 'person' });
+    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: owner, taxonomy_section: 'person' });
   });
   (app.ubos || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
-    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: owner });
-    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: owner });
+    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: owner, taxonomy_section: 'person' });
+    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: owner, taxonomy_section: 'person' });
   });
   (app.intermediaries || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
     ['cert_inc', 'reg_dir', 'reg_sh', 'cert_gs', 'fin_stmt'].forEach(function(docType) {
-      expected.push({ doc_type: docType, label: KYC_DOCUMENT_SLOT_LABELS[docType] || docType, person_id: person.person_key || person.id, owner: owner });
+      expected.push({ doc_type: docType, label: KYC_DOCUMENT_SLOT_LABELS[docType] || docType, person_id: person.person_key || person.id, owner: owner, taxonomy_section: 'person' });
     });
   });
   return expected;
@@ -8706,6 +8706,37 @@ function renderDocumentActionGroupShell(title, subtitle, items) {
   '</section>';
 }
 
+function emptyDocumentReviewGroups() {
+  return { action: [], missing: [], verified: [], optional: [] };
+}
+
+function documentReviewGroupsNeedAttention(groups) {
+  groups = groups || emptyDocumentReviewGroups();
+  return !!((groups.action && groups.action.length) || (groups.missing && groups.missing.length));
+}
+
+function renderDocumentReviewActionGroups(groups) {
+  groups = groups || emptyDocumentReviewGroups();
+  return '<div class="document-action-groups">' +
+    renderDocumentActionGroupShell('Action required', 'Documents that need officer action before reliance or approval.', groups.action || []) +
+    renderDocumentActionGroupShell('Missing', 'Required portal slots with no uploaded document yet.', groups.missing || []) +
+    renderDocumentActionGroupShell('Verified', 'Documents currently reliance-ready or manually accepted with audit rationale.', groups.verified || []) +
+    renderDocumentActionGroupShell('Optional / additional', 'Supporting or ad hoc uploads that are not required slots for this case.', groups.optional || []) +
+  '</div>';
+}
+
+function pushDocumentReviewGroup(groups, key, rowHtml) {
+  groups = groups || emptyDocumentReviewGroups();
+  var normalized = ['action', 'missing', 'verified', 'optional'].indexOf(key) >= 0 ? key : 'optional';
+  groups[normalized].push(rowHtml);
+}
+
+function kycExpectedSlotSection(expectedSlot) {
+  if (!expectedSlot) return 'other';
+  if (expectedSlot.taxonomy_section) return expectedSlot.taxonomy_section;
+  return expectedSlot.person_id == null ? 'entity' : 'person';
+}
+
 function renderStandardKycDocumentTaxonomy(app) {
   var options = arguments[1] || {};
   var includeIdv = options.includeIdv !== false;
@@ -8713,19 +8744,20 @@ function renderStandardKycDocumentTaxonomy(app) {
   var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
   var expectedSlots = buildExpectedKycDocumentSlots(app || {});
   var usedDocIds = {};
-  var groups = {
-    action: [],
-    missing: [],
-    verified: [],
-    optional: []
+  var sections = {
+    entity: emptyDocumentReviewGroups(),
+    person: emptyDocumentReviewGroups(),
+    other: emptyDocumentReviewGroups()
   };
   expectedSlots.forEach(function(expectedSlot) {
     var doc = docs.find(function(candidate) {
       if (usedDocIds[candidate.id || candidate.document_id || candidate.doc_name]) return false;
       return documentMatchesExpectedSlot(candidate, expectedSlot);
     });
+    var sectionKey = kycExpectedSlotSection(expectedSlot);
+    var targetGroups = sections[sectionKey] || sections.other;
     if (!doc) {
-      groups.missing.push(renderMissingKycDocumentRow(app, expectedSlot));
+      targetGroups.missing.push(renderMissingKycDocumentRow(app, expectedSlot));
       return;
     }
     usedDocIds[doc.id || doc.document_id || doc.doc_name] = true;
@@ -8733,25 +8765,46 @@ function renderStandardKycDocumentTaxonomy(app) {
     var policy = agent1PolicyForDocument(doc, linkedRequirement);
     var state = documentRelianceDisplayState(doc, policy);
     var key = documentReviewGroupKey(doc, policy, state, expectedSlot, linkedRequirement);
-    groups[key === 'missing' ? 'action' : key].push(renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot));
+    pushDocumentReviewGroup(targetGroups, key === 'missing' ? 'action' : key, renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot));
   });
   docs.forEach(function(doc) {
     var docKey = doc.id || doc.document_id || doc.doc_name;
     if (usedDocIds[docKey]) return;
     var linkedRequirement = findEnhancedRequirementForDocument(doc, requirements);
+    if (linkedRequirement && enhancedRequirementPresentationType(linkedRequirement) === 'evidence' && enhancedRequirementBackOfficeGroup(linkedRequirement) !== 'identity') {
+      return;
+    }
     var policy = agent1PolicyForDocument(doc, linkedRequirement);
     var state = documentRelianceDisplayState(doc, policy);
     var groupKey = documentReviewGroupKey(doc, policy, state, null, linkedRequirement);
-    groups[groupKey === 'missing' ? 'optional' : groupKey].push(renderUnifiedKycDocumentCard(app, doc, linkedRequirement, null));
+    var sectionKey = (doc && doc.person_id) || (linkedRequirement && enhancedRequirementBackOfficeGroup(linkedRequirement) === 'identity') ? 'person' : 'other';
+    pushDocumentReviewGroup(sections[sectionKey], groupKey === 'missing' ? 'optional' : groupKey, renderUnifiedKycDocumentCard(app, doc, linkedRequirement, null));
   });
-  var html = '<div class="document-action-groups">' +
-    renderDocumentActionGroupShell('Action required', 'Documents that need officer action before reliance or approval.', groups.action) +
-    renderDocumentActionGroupShell('Missing', 'Required portal slots with no uploaded document yet.', groups.missing) +
-    renderDocumentActionGroupShell('Verified', 'Documents currently reliance-ready or manually accepted with audit rationale.', groups.verified) +
-    renderDocumentActionGroupShell('Optional / additional', 'Supporting or ad hoc uploads that are not required slots for this case.', groups.optional) +
-  '</div>';
-  if (includeIdv) html += renderSumsubIdvPanel(app);
+  var personBody = renderDocumentReviewActionGroups(sections.person);
+  if (includeIdv) personBody += renderSumsubIdvPanel(app);
+  var html =
+    kycTaxonomyGroupShell(
+      'A — Corporate Entity Documents',
+      'Corporate registry, ownership, address, financial, and authority evidence submitted through portal entity slots.',
+      renderDocumentReviewActionGroups(sections.entity),
+      'brand',
+      documentReviewGroupsNeedAttention(sections.entity)
+    ) +
+    kycTaxonomyGroupShell(
+      'B — Directors & UBO Identity Documents',
+      'Director, UBO, intermediary, and identity-provider evidence linked to individuals on the application.',
+      personBody,
+      'purple',
+      documentReviewGroupsNeedAttention(sections.person)
+    );
   html += renderEnhancedEvidenceDocumentsGroupHtml(requirements);
+  html += kycTaxonomyGroupShell(
+    'D — Other Documents',
+    'Supporting, miscellaneous, or ad hoc uploads that are not mapped to required portal slots or enhanced evidence requirements.',
+    renderDocumentReviewActionGroups(sections.other),
+    '',
+    documentReviewGroupsNeedAttention(sections.other)
+  );
   return renderPilotEvidenceSummaryBanner(app) + html;
 }
 
