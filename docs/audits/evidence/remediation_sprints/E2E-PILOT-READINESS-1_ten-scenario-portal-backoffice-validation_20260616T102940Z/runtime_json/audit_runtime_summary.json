@@ -1,0 +1,16 @@
+{
+  "run_id": "20260616T102940Z",
+  "origin_main_sha": "e127b971e3678d3041fe2514186f58f3d4aa39b3",
+  "staging_git_sha": "b8deec2ed4ba89fea6630f1339cb650ec56f4a94",
+  "staging_build_time": "2026-06-16T10:12:39Z",
+  "final_pilot_readiness_verdict": "not ready",
+  "audit_status": "BLOCKED - VERSION MISMATCH",
+  "portal_applications_created": 0,
+  "scenario_count_executed": 0,
+  "submit_delay_ms": 13000,
+  "submit_max_attempts": 2,
+  "credentials_used_without_secrets": {
+    "portal": "asudally@gmail.com",
+    "backoffice": "asudally@ariefinance.mu"
+  }
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "severity": "P0",
+    "key": "staging_version_mismatch",
+    "description": "Staging /api/version does not match current origin/main, blocking compliant pilot-readiness validation.",
+    "origin_main_sha": "e127b971e3678d3041fe2514186f58f3d4aa39b3",
+    "staging_git_sha": "b8deec2ed4ba89fea6630f1339cb650ec56f4a94"
+  }
+]

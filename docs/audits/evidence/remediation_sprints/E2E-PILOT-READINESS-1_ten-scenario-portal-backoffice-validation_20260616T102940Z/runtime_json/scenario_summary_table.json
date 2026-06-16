@@ -1,0 +1,12 @@
+[
+  {"scenario": "S01", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S02", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S03", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S04", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S05", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S06", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S07", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S08", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S09", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]},
+  {"scenario": "S10", "portal_created": false, "verdict": "BLOCKED", "defects": ["staging_version_mismatch"]}
+]

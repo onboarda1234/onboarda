@@ -1,0 +1,5 @@
+{
+  "error": "Version mismatch: origin/main e127b971e3678d3041fe2514186f58f3d4aa39b3 staging b8deec2ed4ba89fea6630f1339cb650ec56f4a94",
+  "stack": "Error: Version mismatch: origin/main e127b971e3678d3041fe2514186f58f3d4aa39b3 staging b8deec2ed4ba89fea6630f1339cb650ec56f4a94\n    at main (/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T102940Z/runtime_json/audit_runner.js:1516:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+  "time": "2026-06-16T10:31:35.459Z"
+}
