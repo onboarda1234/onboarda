@@ -1,158 +1,132 @@
 """
-PR-CR1 country-risk source governance tests.
+PR-CR1R country-risk rollback tests.
 
-Country risk must be source-backed, versioned, freshness-aware, and shared by
-risk scoring and memo evidence.
+For pilot, manual Risk Scoring Model settings are the active source of truth.
+The PR-CR1 imported country-risk snapshot remains dormant and must not drive
+scoring, memo evidence, approval gates, or UI grouping.
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from country_risk import (
-    ACTIVE_SNAPSHOT_ID,
-    ACTIVE_SNAPSHOT_VERSION,
-    FATF_CALL_FOR_ACTION_URL,
-    FATF_INCREASED_MONITORING_URL,
-    list_country_risk_entries,
-    lookup_country_risk,
-)
 from memo_handler import build_compliance_memo
-from rule_engine import classify_country, compute_risk_score, _is_elevated_jurisdiction
+from rule_engine import (
+    country_risk_details,
+    classify_country,
+    compute_risk_score,
+    _get_risk_config_version,
+    _is_elevated_jurisdiction,
+)
 
 
-def test_seeded_country_risk_snapshot_has_source_metadata(temp_db):
-    from db import get_db
-
-    db = get_db()
-    try:
-        payload = list_country_risk_entries(db)
-        snapshot = payload["snapshot"]
-        entries = payload["entries"]
-    finally:
-        db.close()
-
-    assert snapshot["id"] == ACTIVE_SNAPSHOT_ID
-    assert snapshot["version"] == ACTIVE_SNAPSHOT_VERSION
-    assert snapshot["source_url"] == FATF_INCREASED_MONITORING_URL
-    assert snapshot["effective_date"] == "2026-02-13"
-    assert snapshot["checksum"]
-    assert len(entries) > 50
+def _manual_config(**overrides):
+    scores = {
+        "france": 1,
+        "mauritius": 2,
+        "kuwait": 2,
+        "nigeria": 3,
+        "iran": 4,
+    }
+    scores.update(overrides)
+    return scores
 
 
-def test_fatf_statuses_are_source_backed(temp_db):
-    from db import get_db
+def test_manual_country_risk_scores_are_authoritative_for_known_countries(temp_db):
+    scores = _manual_config(mauritius=4, kuwait=3)
 
-    db = get_db()
-    try:
-        iran = lookup_country_risk("Iran", db=db)
-        kuwait = lookup_country_risk("Kuwait", db=db)
-    finally:
-        db.close()
-
-    assert iran["risk_score"] == 4
-    assert iran["fatf_status"] == "call_for_action"
-    assert iran["source_url"] == FATF_CALL_FOR_ACTION_URL
-    assert iran["snapshot_version"] == ACTIVE_SNAPSHOT_VERSION
-    assert kuwait["risk_score"] == 3
-    assert kuwait["fatf_status"] == "increased_monitoring"
-    assert kuwait["source_url"] == FATF_INCREASED_MONITORING_URL
+    assert classify_country("Mauritius", scores) == 4
+    assert classify_country("Kuwait", scores) == 3
+    assert classify_country("Unlisted Testland", {"unlisted testland": 3}) == 3
 
 
-def test_unknown_country_fails_safe_to_medium_with_warning(temp_db):
-    country_risk = lookup_country_risk("Atlantis")
+def test_unknown_country_defaults_to_medium_not_low(temp_db):
+    details = country_risk_details("Atlantis", _manual_config())
 
-    assert country_risk["risk_score"] == 2
-    assert country_risk["risk_rating"] == "MEDIUM"
-    assert country_risk["is_unknown"] is True
-    assert country_risk["defaulted"] is True
-    assert "never LOW" in country_risk["notes"]
-    assert country_risk["stale_warning"]
-
-
-def test_canonical_snapshot_overrides_legacy_country_config_for_known_countries(temp_db):
-    config = {"mauritius": 4, "unlisted testland": 4}
-
-    assert classify_country("Mauritius", config) == 2
-    assert classify_country("Unlisted Testland", config) == 4
+    assert details["risk_score"] == 2
+    assert details["risk_rating"] == "MEDIUM"
+    assert details["is_unknown"] is True
+    assert details["defaulted"] is True
+    assert details["active_source"] == "manual_settings"
 
 
-def test_pakistan_uses_canonical_current_status_not_stale_legacy_fatf_entry(temp_db):
-    pakistan = lookup_country_risk("Pakistan")
+def test_manual_country_settings_override_stale_legacy_fatf_membership(temp_db):
+    scores = _manual_config(pakistan=2)
+    details = country_risk_details("Pakistan", scores)
 
-    assert pakistan["found"] is True
-    assert pakistan["risk_score"] == 2
-    assert pakistan["fatf_status"] == "none"
-    assert _is_elevated_jurisdiction("Pakistan") is False
+    assert classify_country("Pakistan", scores) == 2
+    assert details["fatf_status"] == "none"
+    assert _is_elevated_jurisdiction("Pakistan", scores) is False
 
 
-def test_risk_scoring_returns_country_risk_provenance(temp_db):
-    result = compute_risk_score({
-        "entity_type": "SME",
-        "country": "Kuwait",
-        "sector": "Technology",
-        "directors": [{"full_name": "Jane Director", "nationality": "Kuwaiti", "is_pep": "No"}],
-        "ubos": [{"full_name": "Jane UBO", "nationality": "Kuwaiti", "ownership_pct": "100", "is_pep": "No"}],
-    })
+def test_risk_scoring_returns_manual_country_risk_provenance(temp_db):
+    result = compute_risk_score(
+        {
+            "entity_type": "SME",
+            "country": "Kuwait",
+            "sector": "Technology",
+            "directors": [{"full_name": "Jane Director", "nationality": "Kuwaiti", "is_pep": "No"}],
+            "ubos": [{"full_name": "Jane UBO", "nationality": "Kuwaiti", "ownership_pct": "100", "is_pep": "No"}],
+        },
+        config_override={
+            "dimensions": None,
+            "thresholds": None,
+            "country_risk_scores": _manual_config(kuwait=2),
+            "sector_risk_scores": {"technology": 2},
+            "entity_type_scores": {"sme": 2},
+        },
+    )
 
     provenance = result["country_risk_provenance"]
     assert provenance["country_key"] == "kuwait"
-    assert provenance["risk_score"] == 3
-    assert provenance["fatf_status"] == "increased_monitoring"
-    assert provenance["snapshot_version"] == ACTIVE_SNAPSHOT_VERSION
+    assert provenance["risk_score"] == 2
+    assert provenance["source"] == "risk_config.country_risk_scores"
+    assert provenance["active_source"] == "manual_settings"
+    assert "snapshot_version" not in provenance
 
 
-def test_memo_uses_same_country_risk_snapshot_as_scoring(temp_db):
+def test_memo_uses_manual_country_risk_source_not_snapshot(temp_db):
     app = {
-        "id": "app-cr1-memo",
-        "ref": "ARF-CR1-MEMO",
-        "reference_number": "ARF-CR1-MEMO",
-        "company_name": "CR1 Memo Test Ltd",
-        "brn": "CR1001",
+        "id": "app-cr1r-memo",
+        "ref": "ARF-CR1R-MEMO",
+        "reference_number": "ARF-CR1R-MEMO",
+        "company_name": "CR1R Memo Test Ltd",
+        "brn": "CR1R001",
         "entity_type": "SME",
-        "country": "Kuwait",
+        "country": "Mauritius",
         "sector": "Technology",
         "ownership_structure": "simple",
         "source_of_funds": "Operating revenue",
         "expected_volume": "USD 100,000 monthly",
-        "risk_level": "HIGH",
-        "risk_score": 64,
+        "risk_level": "MEDIUM",
+        "risk_score": 50,
         "assigned_to": "admin001",
-        "operating_countries": "Kuwait",
+        "operating_countries": "Mauritius",
         "incorporation_date": "2024-01-01",
         "business_activity": "Technology services",
     }
-    directors = [{"full_name": "Jane Director", "nationality": "Kuwaiti", "is_pep": "No"}]
-    ubos = [{"full_name": "Jane UBO", "nationality": "Kuwaiti", "ownership_pct": 100, "is_pep": "No"}]
+    directors = [{"full_name": "Jane Director", "nationality": "Mauritian", "is_pep": "No"}]
+    ubos = [{"full_name": "Jane UBO", "nationality": "Mauritian", "ownership_pct": 100, "is_pep": "No"}]
 
     memo, _, _, _ = build_compliance_memo(app, directors, ubos, [])
     jurisdiction = memo["metadata"]["risk_evidence"]["jurisdiction"]
 
-    assert jurisdiction["rating"] == "HIGH"
-    assert jurisdiction["risk_score"] == 3
-    assert jurisdiction["fatf_status"] == "increased_monitoring"
-    assert jurisdiction["snapshot_version"] == ACTIVE_SNAPSHOT_VERSION
-    assert jurisdiction["source_url"] == FATF_INCREASED_MONITORING_URL
+    assert jurisdiction["source"] == "Manual Risk Scoring Model country_risk_scores"
+    assert jurisdiction["source_mode"] == "manual_settings"
+    assert jurisdiction["risk_score"] == 2
+    assert jurisdiction["snapshot_version"] == ""
+    assert "manual settings active for pilot" in jurisdiction["prose"]
 
 
-def test_stale_snapshot_is_reported_on_lookup(temp_db):
+def test_risk_config_version_no_longer_depends_on_country_risk_snapshot(temp_db):
     from db import get_db
 
     db = get_db()
     try:
-        db.execute(
-            """
-            UPDATE country_risk_snapshots
-               SET last_checked_at='2025-01-01T00:00:00+00:00',
-                   freshness_days=1
-             WHERE id=?
-            """,
-            (ACTIVE_SNAPSHOT_ID,),
-        )
-        db.commit()
-        kuwait = lookup_country_risk("Kuwait", db=db)
+        version = _get_risk_config_version(db)
+        row = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
     finally:
         db.close()
 
-    assert kuwait["is_stale"] is True
-    assert "freshness has expired" in kuwait["stale_warning"]
+    assert version == (f"risk_config:{row['updated_at']}" if row else None)
+    assert not version or "country_risk:" not in version

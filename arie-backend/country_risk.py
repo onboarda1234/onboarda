@@ -1,9 +1,9 @@
 """
-Canonical country-risk snapshot service.
+Reference-only country-risk snapshot service.
 
-PR-CR1 moves jurisdiction risk away from hidden static lookup tables and into
-source-backed snapshot records. This module is intentionally read-only for
-PR-CR1; maker/checker publishing is handled in PR-CR2.
+PR-CR1R restores manual Risk Scoring Model settings as the active pilot source
+of truth. This module remains only as dormant scaffolding for future governed
+country-risk work; scoring, memo evidence, gates, and UI do not use it.
 """
 import hashlib
 import json
@@ -226,7 +226,7 @@ DEFAULT_COUNTRY_RISK_ENTRIES = _entries()
 DEFAULT_COUNTRY_RISK_SNAPSHOT = {
     "id": ACTIVE_SNAPSHOT_ID,
     "version": ACTIVE_SNAPSHOT_VERSION,
-    "status": "active",
+    "status": "superseded",
     "source_name": "FATF February 2026 public statements + RegMind internal country-risk policy v1",
     "source_url": FATF_INCREASED_MONITORING_URL,
     "source_publication_date": SOURCE_PUBLICATION_DATE,
@@ -235,16 +235,18 @@ DEFAULT_COUNTRY_RISK_SNAPSHOT = {
     "checksum": _checksum({"entries": DEFAULT_COUNTRY_RISK_ENTRIES, "version": ACTIVE_SNAPSHOT_VERSION}),
     "freshness_days": DEFAULT_FRESHNESS_DAYS,
     "notes": (
-        "PR-CR1 seed snapshot. FATF statuses are sourced from FATF public "
+        "Reference-only PR-CR1 seed snapshot. FATF statuses are sourced from FATF public "
         "statements dated 2026-02-13; non-FATF ratings are RegMind internal "
-        "pilot policy classifications."
+        "pilot policy classifications. PR-CR1R disables this snapshot as an "
+        "operational scoring/memo/gate source."
     ),
 }
 
 
 def seed_default_country_risk_snapshot(db):
     existing = db.execute(
-        "SELECT id FROM country_risk_snapshots WHERE status='active' ORDER BY imported_at DESC LIMIT 1"
+        "SELECT id FROM country_risk_snapshots WHERE id=? LIMIT 1",
+        (ACTIVE_SNAPSHOT_ID,),
     ).fetchone()
     if existing:
         return False

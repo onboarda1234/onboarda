@@ -417,7 +417,7 @@ class TestDBDrivenScoring:
     """Verify that compute_risk_score uses DB config, not hardcoded fallback."""
 
     def test_compute_uses_db_country_scores_for_unknown_fallback_only(self, temp_db):
-        """Legacy DB country config remains a fallback for countries outside the governed snapshot."""
+        """Manual DB country config is active source for country-risk scoring."""
         config = {
             "dimensions": None,
             "thresholds": None,
@@ -428,7 +428,7 @@ class TestDBDrivenScoring:
         app_data = {"country": "Unlisted Testland", "sector": "Technology", "entity_type": "SME"}
         result = compute_risk_score(app_data, config_override=config)
         assert result["score"] > 0
-        # D2 should use the fallback score 4 because Testland is not in the governed snapshot.
+        # D2 should use the manual score 4.
         assert result["dimensions"]["d2"] > 2.5  # Should be elevated due to high country score
 
     def test_compute_uses_db_entity_scores(self, temp_db):

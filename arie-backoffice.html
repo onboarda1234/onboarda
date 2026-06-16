@@ -2759,9 +2759,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="card" style="margin-top:24px;">
     <div class="card-header">
       <div class="card-title">Country Risk Classifications</div>
-      <button class="btn btn-outline btn-sm" id="btn-edit-countries" disabled title="Country risk is governed by canonical snapshots. Maker/checker changes are handled in the country-risk governance workflow.">Governed Source</button>
+      <button class="btn btn-outline btn-sm" id="btn-edit-countries" onclick="toggleCountryEdit()">✏️ Edit</button>
     </div>
-    <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Country risk is sourced from the canonical country-risk snapshot used by scoring and memo evidence. The legacy lists below are fallback reference only.</p>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Manual Risk Scoring Model settings are the active source of truth for pilot country-risk scoring and memo reasoning. Imported PR-CR1 FATF snapshot data is reference only and is not operational.</p>
     <div id="country-risk-source-container" style="margin-bottom:14px;"></div>
     <div id="country-lists-container"></div>
   </div>
@@ -4872,7 +4872,9 @@ async function loadFromAPI() {
         }
       });
     }
-    await loadCountryRiskGovernanceFromAPI({ suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
+    if (riskResp.country_risk_scores) {
+      COUNTRY_RISK_LISTS = countryScoreMapToCountryRiskLists(riskResp.country_risk_scores);
+    }
   }, failures);
 
   await safeLoadModule('AI agents', async function() {
@@ -5130,6 +5132,9 @@ async function loadRiskConfigFromAPI(options) {
       }
     });
   }
+  if (riskResp.country_risk_scores) {
+    COUNTRY_RISK_LISTS = countryScoreMapToCountryRiskLists(riskResp.country_risk_scores);
+  }
 }
 
 function applyCountryRiskGovernancePayload(payload) {
@@ -5139,26 +5144,11 @@ function applyCountryRiskGovernancePayload(payload) {
     loading: false,
     error: null,
     snapshot: payload && payload.snapshot ? payload.snapshot : null,
-    entries: entries
+    entries: entries,
+    active_for_scoring: false
   };
-
-  if (entries.length > 0) {
-    var grouped = { FATF_BLACK: [], FATF_GREY: [], SANCTIONED: [], LOW_RISK: [] };
-    entries.forEach(function(entry) {
-      var country = entry && (entry.country || entry.country_name || entry.country_key);
-      if (!country) return;
-      var fatf = String(entry.fatf_status || 'none').toLowerCase();
-      var sanctions = String(entry.sanctions_status || 'none').toLowerCase();
-      if (fatf === 'call_for_action' || fatf === 'black') grouped.FATF_BLACK.push(country);
-      if (fatf === 'increased_monitoring' || fatf === 'grey') grouped.FATF_GREY.push(country);
-      if (sanctions !== 'none') grouped.SANCTIONED.push(country);
-      if (Number(entry.risk_score) === 1) grouped.LOW_RISK.push(country);
-    });
-    Object.keys(grouped).forEach(function(key) {
-      grouped[key].sort(function(a, b) { return a.localeCompare(b); });
-    });
-    COUNTRY_RISK_LISTS = grouped;
-  }
+  // PR-CR1R: the imported snapshot is reference-only and must not mutate
+  // active manual country risk settings.
 }
 
 async function loadCountryRiskGovernanceFromAPI(options) {
@@ -5222,7 +5212,6 @@ function loadSupportReferenceData(sessionId) {
   var role = (currentUser && currentUser.role) || (BO_AUTH_USER && BO_AUTH_USER.role) || '';
   var supportLoads = [
     loadRiskConfigFromAPI(options).catch(function(e) { console.warn('Could not load risk config:', e); }),
-    loadCountryRiskGovernanceFromAPI(options).catch(function(e) { console.warn('Could not load country risk governance:', e); }),
     loadAIAgentsFromAPI(options).catch(function(e) { console.warn('Could not load AI agents:', e); }),
     loadVerificationChecksFromAPI(options).catch(function(e) { console.warn('Could not load verification checks:', e); })
   ];
@@ -24853,11 +24842,92 @@ var COUNTRY_RISK_LISTS = {
   FATF_BLACK: ['Iran','Myanmar','North Korea (DPRK)'],
   FATF_GREY: ['Bulgaria','Burkina Faso','Cameroon','Croatia','DR Congo','Haiti','Kenya','Mali','Monaco','Mozambique','Namibia','Nigeria','Philippines','Senegal','South Africa','South Sudan','Syria','Tanzania','Venezuela','Vietnam','Yemen'],
   SANCTIONED: ['Afghanistan','Belarus','Central African Republic','Cuba','Eritrea','Iraq','Lebanon','Libya','North Korea (DPRK)','Russia','Somalia','South Sudan','Sudan','Syria','Ukraine (Crimea/Donetsk/Luhansk)','Venezuela','Yemen','Zimbabwe'],
+  MEDIUM_RISK: ['Bahrain','Botswana','Brazil','Chile','China','Estonia','Ghana','Guernsey','India','Indonesia','Isle of Man','Jersey','Jordan','Kuwait','Liechtenstein','Malaysia','Mauritius','Mexico','Morocco','Oman','Pakistan','Qatar','Rwanda','Saudi Arabia','Seychelles','Sri Lanka','Tunisia','Turkey','Uganda','United Arab Emirates'],
   LOW_RISK: ['Australia','Austria','Belgium','Canada','Denmark','Finland','France','Germany','Hong Kong','Iceland','Ireland','Israel','Italy','Japan','Luxembourg','Netherlands','New Zealand','Norway','Portugal','Singapore','South Korea','Spain','Sweden','Switzerland','Taiwan','United Kingdom','United States']
 };
 
-var COUNTRY_RISK_GOVERNANCE = { loaded:false, loading:false, error:null, snapshot:null, entries:[] };
+var COUNTRY_RISK_GOVERNANCE = { loaded:false, loading:false, error:null, snapshot:null, entries:[], active_for_scoring:false };
 var COUNTRY_RISK_GOVERNANCE_LOAD_PROMISE = null;
+
+var COUNTRY_RISK_LIST_ORDER = ['FATF_BLACK', 'SANCTIONED', 'FATF_GREY', 'MEDIUM_RISK', 'LOW_RISK'];
+var COUNTRY_RISK_LIST_SCORES = { FATF_BLACK:4, SANCTIONED:4, FATF_GREY:3, MEDIUM_RISK:2, LOW_RISK:1 };
+
+function normalizeCountryRiskName(name) {
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function displayCountryRiskName(key) {
+  var special = {
+    'bvi':'BVI',
+    'uae':'UAE',
+    'uk':'UK',
+    'usa':'USA',
+    'north korea':'North Korea (DPRK)',
+    'democratic republic of congo':'DR Congo',
+    'united states':'United States',
+    'united kingdom':'United Kingdom',
+    'united arab emirates':'United Arab Emirates',
+    'hong kong':'Hong Kong',
+    'south korea':'South Korea',
+    'isle of man':'Isle of Man'
+  };
+  var normalized = normalizeCountryRiskName(key);
+  if (special[normalized]) return special[normalized];
+  return normalized.split(' ').map(function(part) {
+    return part ? part.charAt(0).toUpperCase() + part.slice(1) : part;
+  }).join(' ');
+}
+
+function emptyCountryRiskLists() {
+  return { FATF_BLACK: [], SANCTIONED: [], FATF_GREY: [], MEDIUM_RISK: [], LOW_RISK: [] };
+}
+
+function countryRiskListsToScoreMap(lists) {
+  var scoreMap = {};
+  COUNTRY_RISK_LIST_ORDER.forEach(function(key) {
+    var score = COUNTRY_RISK_LIST_SCORES[key];
+    (lists && lists[key] || []).forEach(function(country) {
+      var normalized = normalizeCountryRiskName(country);
+      if (!normalized) return;
+      if (scoreMap[normalized] === undefined || score > scoreMap[normalized]) {
+        scoreMap[normalized] = score;
+      }
+    });
+  });
+  return scoreMap;
+}
+
+function countryScoreMapToCountryRiskLists(scores) {
+  var grouped = emptyCountryRiskLists();
+  var existingCategories = countryRiskListsToScoreMap(COUNTRY_RISK_LISTS);
+  Object.keys(scores || {}).forEach(function(countryKey) {
+    var score = Number(scores[countryKey]);
+    var normalized = normalizeCountryRiskName(countryKey);
+    if (!normalized || !score) return;
+    var displayName = displayCountryRiskName(normalized);
+    if (score >= 4) {
+      var current = existingCategories[normalized];
+      if (current === 4 && (COUNTRY_RISK_LISTS.FATF_BLACK || []).map(normalizeCountryRiskName).indexOf(normalized) >= 0) {
+        grouped.FATF_BLACK.push(displayName);
+      } else {
+        grouped.SANCTIONED.push(displayName);
+      }
+    } else if (score === 3) {
+      grouped.FATF_GREY.push(displayName);
+    } else if (score === 2) {
+      grouped.MEDIUM_RISK.push(displayName);
+    } else {
+      grouped.LOW_RISK.push(displayName);
+    }
+  });
+  COUNTRY_RISK_LIST_ORDER.forEach(function(key) {
+    grouped[key] = grouped[key].filter(function(country, idx, arr) {
+      var normalized = normalizeCountryRiskName(country);
+      return arr.map(normalizeCountryRiskName).indexOf(normalized) === idx;
+    }).sort(function(a, b) { return a.localeCompare(b); });
+  });
+  return grouped;
+}
 
 var SECTOR_RISK_CONFIG = [
   { sector:'Banking / Financial Services', score:2 },
@@ -25074,8 +25144,7 @@ function renderRiskModel() {
   dc.innerHTML = dhtml;
 
   // Render country, sector, entity lists
-  requestCountryRiskGovernanceLoad();
-  renderCountryRiskGovernance();
+  renderCountryManualSourceNotice();
   renderCountryLists();
   renderSectorScores();
   renderEntityScores();
@@ -25086,78 +25155,26 @@ function renderRiskModel() {
 // ═══════════════════════════════════════════════════════════
 var countryEditMode = false, sectorEditMode = false, entityEditMode = false;
 
-function renderCountryRiskGovernance() {
+function renderCountryManualSourceNotice() {
   var c = document.getElementById('country-risk-source-container');
   if (!c) return;
-  var state = COUNTRY_RISK_GOVERNANCE || {};
-  var snapshot = state.snapshot || {};
-  var entries = Array.isArray(state.entries) ? state.entries : [];
-  var snapshotVersion = snapshot.snapshot_version || snapshot.version || snapshot.snapshot_id || snapshot.id || 'Unknown';
-  var warning = state.error || snapshot.stale_warning || '';
-  var statusColor = warning ? 'var(--amber)' : 'var(--green)';
-  var statusBg = warning ? 'var(--amber-bg)' : 'var(--green-bg)';
-
-  if (state.loading && !state.loaded) {
-    c.innerHTML = '<div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--text3);">Loading governed country-risk source...</div>';
-    return;
-  }
-
-  if (state.error) {
-    c.innerHTML = '<div style="padding:12px 14px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:8px;font-size:12px;color:var(--amber);font-weight:600;">Country-risk source could not be loaded: ' + escapeHtml(state.error) + '</div>';
-    return;
-  }
-
-  if (!state.loaded) {
-    c.innerHTML = '<div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--text3);">Governed source will load when the API is available.</div>';
-    return;
-  }
-
-  var fatfRows = entries.filter(function(entry) {
-    var fatf = String(entry.fatf_status || 'none').toLowerCase();
-    var sanctions = String(entry.sanctions_status || 'none').toLowerCase();
-    return fatf !== 'none' || sanctions !== 'none' || Number(entry.risk_score) >= 3;
-  }).slice(0, 18);
-
-  var html = '<div style="border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow-x:auto;">' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border-bottom:1px solid var(--line);min-width:0;">' +
-      '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Source</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.source_name || 'Unknown') + '</div></div>' +
-      '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Version</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshotVersion) + '</div></div>' +
-      '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Effective</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.effective_date || 'Unknown') + '</div></div>' +
-      '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Last Checked</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.last_checked_at || snapshot.imported_at || 'Unknown') + '</div></div>' +
-      '<div style="padding:10px 12px;background:' + statusBg + ';"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Freshness</div><div style="font-size:12px;font-weight:700;color:' + statusColor + ';">' + (warning ? 'Warning' : 'Current') + '</div></div>' +
-    '</div>';
-
-  if (warning) {
-    html += '<div style="padding:10px 12px;background:var(--amber-bg);color:var(--amber);font-size:12px;font-weight:600;border-bottom:1px solid var(--line);">' + escapeHtml(warning) + '</div>';
-  }
-
-  if (snapshot.source_url) {
-    html += '<div style="padding:10px 12px;font-size:12px;color:var(--text3);border-bottom:1px solid var(--line);">Source reference: <a href="' + escapeHtml(snapshot.source_url) + '" target="_blank" rel="noopener" style="color:var(--brand);font-weight:600;">' + escapeHtml(snapshot.source_url) + '</a></div>';
-  }
-
-  html += '<table class="subcrit-table" style="margin:0;border:0;border-radius:0;">' +
-    '<thead><tr><th>Country</th><th>Risk</th><th>FATF Status</th><th>Sanctions / High-Risk</th><th>Source Evidence</th></tr></thead><tbody>';
-  fatfRows.forEach(function(entry) {
-    var countryName = entry.country || entry.country_name || entry.country_key || '';
-    var rating = escapeHtml(entry.risk_rating || 'UNKNOWN') + ' (' + escapeHtml(String(entry.risk_score || '')) + ')';
-    var fatf = String(entry.fatf_status || 'none').replace(/_/g, ' ');
-    var statusBits = [];
-    if (entry.sanctions_status && entry.sanctions_status !== 'none') statusBits.push(entry.sanctions_status);
-    if (entry.high_risk_status && entry.high_risk_status !== 'none') statusBits.push(entry.high_risk_status);
-    var entryChecksum = entry.entry_checksum || entry.checksum || '';
-    html += '<tr>' +
-      '<td style="font-weight:700;">' + escapeHtml(countryName) + '</td>' +
-      '<td>' + rating + '</td>' +
-      '<td>' + escapeHtml(fatf) + '</td>' +
-      '<td>' + escapeHtml(statusBits.length ? statusBits.join(', ') : 'none') + '</td>' +
-      '<td style="font-size:11px;color:var(--text3);">' + escapeHtml(entry.source_name || snapshot.source_name || 'Unknown') + '<br><span style="font-family:monospace;">' + escapeHtml(entryChecksum.slice(0, 12)) + '</span></td>' +
-    '</tr>';
-  });
-  if (fatfRows.length === 0) {
-    html += '<tr><td colspan="5" style="color:var(--text3);font-size:12px;">No FATF or high-risk rows returned by the governed source.</td></tr>';
-  }
-  html += '</tbody></table></div>';
+  var configuredCount = Object.keys(countryRiskListsToScoreMap(COUNTRY_RISK_LISTS)).length;
+  var html = '<div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;padding:12px 14px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;">' +
+    '<div>' +
+      '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;font-weight:800;letter-spacing:0;">Active source</div>' +
+      '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-top:2px;">Manual Risk Scoring Model settings</div>' +
+      '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Imported PR-CR1 FATF snapshot data is reference only / not active for pilot.</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      '<span class="badge" style="background:var(--blue-bg);color:var(--blue);">Editable by admin</span>' +
+      '<span class="badge" style="background:var(--green-bg);color:var(--green);">' + configuredCount + ' configured countries</span>' +
+    '</div>' +
+  '</div>';
   c.innerHTML = html;
+}
+
+function renderCountryRiskGovernance() {
+  renderCountryManualSourceNotice();
 }
 
 function toggleCountryEdit() {
@@ -25165,7 +25182,7 @@ function toggleCountryEdit() {
   document.getElementById('btn-edit-countries').innerHTML = countryEditMode ? '💾 Save' : '✏️ Edit';
   renderCountryLists();
   if (!countryEditMode) {
-    boApiCall('PUT', '/config/risk-model', { country_risk_scores: COUNTRY_RISK_LISTS })
+    boApiCall('PUT', '/config/risk-model', { country_risk_scores: countryRiskListsToScoreMap(COUNTRY_RISK_LISTS) })
       .then(function() {
         refreshAdminAuditEvidence();
         showToast('Country risk lists saved');
@@ -25225,11 +25242,19 @@ function renderCountryLists() {
     { key:'FATF_BLACK', label:'FATF Blacklist', score:4, color:'var(--red)', bg:'var(--red-bg)' },
     { key:'SANCTIONED', label:'Sanctioned Countries', score:4, color:'var(--red)', bg:'var(--red-bg)' },
     { key:'FATF_GREY', label:'FATF Grey List', score:3, color:'var(--amber)', bg:'var(--amber-bg)' },
+    { key:'MEDIUM_RISK', label:'Medium / Standard Countries', score:2, color:'var(--blue)', bg:'var(--blue-bg)' },
     { key:'LOW_RISK', label:'Low-Risk Countries', score:1, color:'var(--green)', bg:'var(--green-bg)' }
   ];
   var html = '';
+  var displayed = {};
   lists.forEach(function(list) {
-    var countries = COUNTRY_RISK_LISTS[list.key];
+    var countries = (COUNTRY_RISK_LISTS[list.key] || []).filter(function(country) {
+      var normalized = normalizeCountryRiskName(country);
+      if (!normalized) return false;
+      if (displayed[normalized]) return false;
+      displayed[normalized] = true;
+      return true;
+    });
     html += '<div class="config-panel' + (countryEditMode ? ' open' : '') + '" id="country-panel-' + list.key + '" style="margin-bottom:8px;">' +
       '<div class="config-panel-header" onclick="toggleConfigPanel(\'country-panel-' + list.key + '\')">' +
         '<div class="config-panel-title">' +

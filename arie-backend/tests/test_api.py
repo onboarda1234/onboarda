@@ -6188,22 +6188,28 @@ class TestRiskModelAdminConfigSafety:
         assert after_body["sector_risk_scores"] == before_body["sector_risk_scores"]
         assert after_body["entity_type_scores"] == before_body["entity_type_scores"]
 
-    def test_country_risk_endpoint_exposes_snapshot_provenance(self, api_server):
-        from country_risk import ACTIVE_SNAPSHOT_VERSION, FATF_INCREASED_MONITORING_URL
-
+    def test_country_risk_endpoint_exposes_manual_settings_source(self, api_server):
         headers = self._admin_headers()
+        seed_resp = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json={"country_risk_scores": {"mauritius": 2, "nigeria": 3, "france": 1}},
+            timeout=5,
+        )
+        assert seed_resp.status_code == 200, seed_resp.text
+
         resp = http_requests.get(
-            f"{api_server}/api/config/country-risk?country=Kuwait",
+            f"{api_server}/api/config/country-risk?country=Mauritius",
             headers=headers,
             timeout=5,
         )
         assert resp.status_code == 200, resp.text
         country_risk = resp.json()["country_risk"]
-        assert country_risk["country_key"] == "kuwait"
-        assert country_risk["risk_score"] == 3
-        assert country_risk["fatf_status"] == "increased_monitoring"
-        assert country_risk["source_url"] == FATF_INCREASED_MONITORING_URL
-        assert country_risk["snapshot_version"] == ACTIVE_SNAPSHOT_VERSION
+        assert country_risk["country_key"] == "mauritius"
+        assert country_risk["risk_score"] == 2
+        assert country_risk["mode"] == "manual_settings"
+        assert country_risk["active_for_scoring"] is True
+        assert country_risk["source"] == "risk_config.country_risk_scores"
 
         list_resp = http_requests.get(
             f"{api_server}/api/config/country-risk",
@@ -6212,8 +6218,42 @@ class TestRiskModelAdminConfigSafety:
         )
         assert list_resp.status_code == 200, list_resp.text
         body = list_resp.json()
-        assert body["snapshot"]["version"] == ACTIVE_SNAPSHOT_VERSION
-        assert any(entry["country_key"] == "kuwait" for entry in body["entries"])
+        assert body["mode"] == "manual_settings"
+        assert body["active_source"] == "risk_config.country_risk_scores"
+        assert body["snapshot"] is None
+        assert body["reference_snapshot_active_for_scoring"] is False
+        assert any(entry["country_key"] == "mauritius" for entry in body["entries"])
+
+    def test_grouped_manual_country_payload_is_saved_as_score_map(self, api_server):
+        headers = self._admin_headers()
+        payload = {
+            "country_risk_scores": {
+                "FATF_BLACK": ["Iran"],
+                "SANCTIONED": ["Syria"],
+                "FATF_GREY": ["Nigeria", "Syria"],
+                "MEDIUM_RISK": ["Mauritius"],
+                "LOW_RISK": ["France"],
+            }
+        }
+        resp = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json=payload,
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+
+        config_resp = http_requests.get(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            timeout=5,
+        )
+        scores = config_resp.json()["country_risk_scores"]
+        assert scores["mauritius"] == 2
+        assert scores["nigeria"] == 3
+        assert scores["syria"] == 4
+        assert scores["france"] == 1
+        assert all(not isinstance(value, list) for value in scores.values())
 
     def test_incomplete_dimension_payload_is_rejected_without_mutation(self, api_server):
         self._assert_risk_rejected_unchanged(

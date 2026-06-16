@@ -11277,6 +11277,40 @@ def _validate_admin_score_map(name, value, errors):
             errors.append({"code": "risk_score_out_of_range", "field": name, "message": f"{name}.{key} must be numeric between 1 and 4"})
 
 
+COUNTRY_RISK_GROUP_SCORE = {
+    "FATF_BLACK": 4,
+    "SANCTIONED": 4,
+    "FATF_GREY": 3,
+    "HIGH_RISK": 3,
+    "MEDIUM_RISK": 2,
+    "LOW_RISK": 1,
+}
+
+
+def _country_risk_payload_to_score_map(value):
+    """Accept the manual UI grouped-list shape or a direct numeric score map."""
+    if not isinstance(value, dict):
+        return value
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value.values()):
+        return value
+    score_map = {}
+    for group, score in COUNTRY_RISK_GROUP_SCORE.items():
+        countries = value.get(group)
+        if countries is None:
+            continue
+        if not isinstance(countries, list):
+            return value
+        for country in countries:
+            key = str(country or "").strip().lower()
+            if not key:
+                continue
+            # Higher-risk groups win if a country is duplicated in the UI payload.
+            existing = score_map.get(key)
+            if existing is None or score > existing:
+                score_map[key] = score
+    return score_map if score_map else value
+
+
 def _validate_system_settings_payload(data, current=None):
     current = current or {}
     errors = []
@@ -11803,7 +11837,9 @@ class RiskConfigHandler(BaseHandler):
         user = self.require_auth(roles=["admin"])
         if not user:
             return
-        data = self.get_json()
+        data = dict(self.get_json() or {})
+        if "country_risk_scores" in data:
+            data["country_risk_scores"] = _country_risk_payload_to_score_map(data.get("country_risk_scores"))
         db = get_db()
 
         old_cfg = db.execute(
@@ -11907,7 +11943,7 @@ class RiskConfigHandler(BaseHandler):
 
 
 class CountryRiskConfigHandler(BaseHandler):
-    """GET /api/config/country-risk — source-backed country-risk snapshot."""
+    """GET /api/config/country-risk - active manual country-risk settings."""
 
     def get(self):
         user = self.require_auth()
@@ -11916,20 +11952,37 @@ class CountryRiskConfigHandler(BaseHandler):
         country = (self.get_argument("country", "") or "").strip()
         db = None
         try:
-            from country_risk import list_country_risk_entries, lookup_country_risk
+            from rule_engine import country_risk_details, load_risk_config
             db = get_db()
+            config = load_risk_config() or {}
+            scores = config.get("country_risk_scores") if isinstance(config, dict) else {}
+            if not isinstance(scores, dict):
+                scores = {}
             if country:
-                self.success({"country_risk": lookup_country_risk(country, db=db)})
+                country_risk = country_risk_details(country, scores)
+                country_risk["active_for_scoring"] = True
+                country_risk["mode"] = "manual_settings"
+                self.success({"country_risk": country_risk})
                 return
-            data = list_country_risk_entries(db=db)
+            entries = []
+            for country_key in sorted(scores):
+                entry = country_risk_details(country_key, scores)
+                entry["active_for_scoring"] = True
+                entry["mode"] = "manual_settings"
+                entries.append(entry)
             self.success({
-                "snapshot": data.get("snapshot"),
-                "entries": data.get("entries") or [],
-                "entry_count": len(data.get("entries") or []),
+                "mode": "manual_settings",
+                "active_source": "risk_config.country_risk_scores",
+                "active_for_scoring": True,
+                "snapshot": None,
+                "reference_snapshot_active_for_scoring": False,
+                "message": "Manual Risk Scoring Model country_risk_scores are active for pilot; PR-CR1 snapshot data is not operational.",
+                "entries": entries,
+                "entry_count": len(entries),
             })
         except Exception:
             logger.exception("country_risk_config_lookup_failed")
-            self.error("Failed to load country risk source governance", 500)
+            self.error("Failed to load manual country risk settings", 500)
         finally:
             if db is not None:
                 db.close()

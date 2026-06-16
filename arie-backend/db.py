@@ -3193,7 +3193,12 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
 
 
 def _ensure_country_risk_governance(db: DBConnection):
-    """Create and seed PR-CR1 canonical country-risk snapshot tables."""
+    """Create dormant country-risk snapshot tables.
+
+    PR-CR1R restores manual risk_config.country_risk_scores as the active pilot
+    source of truth. Snapshot tables remain for future remediation but are not
+    seeded or used operationally.
+    """
     db.executescript("""
     CREATE TABLE IF NOT EXISTS country_risk_snapshots (
         id TEXT PRIMARY KEY,
@@ -3243,13 +3248,7 @@ def _ensure_country_risk_governance(db: DBConnection):
     CREATE INDEX IF NOT EXISTS idx_country_risk_entries_fatf
         ON country_risk_entries(fatf_status, status);
     """)
-    try:
-        from country_risk import seed_default_country_risk_snapshot
-        if seed_default_country_risk_snapshot(db):
-            logger.info("PR-CR1: seeded canonical country-risk snapshot")
-    except Exception as exc:
-        logger.exception("PR-CR1: country-risk snapshot seed failed")
-        raise
+    logger.info("PR-CR1R: country-risk snapshot tables ensured as dormant reference schema")
 
 
 def _ensure_verification_jobs_schema(db: DBConnection) -> None:

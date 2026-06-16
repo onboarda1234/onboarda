@@ -81,9 +81,8 @@ def test_memo_has_deterministic_risk_evidence_and_no_false_adverse_clear():
 
     evidence = memo["metadata"]["risk_evidence"]
     assert evidence["jurisdiction"]["source"]
-    assert evidence["jurisdiction"]["source_url"]
-    assert evidence["jurisdiction"]["effective_date"]
-    assert evidence["jurisdiction"]["snapshot_version"]
+    assert evidence["jurisdiction"]["source_mode"] == "manual_settings"
+    assert evidence["jurisdiction"]["snapshot_version"] == ""
     assert evidence["business"]["rating"] == "HIGH"
     assert evidence["business"]["matched_keywords"] == ["crypto"]
     assert "high_risk_keyword:crypto" in evidence["business"]["triggers"]
