@@ -12,4 +12,8 @@ def test_backoffice_country_risk_settings_show_governed_source():
     assert "/config/country-risk" in html
     assert "renderCountryRiskGovernance" in html
     assert "snapshot_version" in html
+    assert "snapshot.version" in html
+    assert "snapshot.id" in html
+    assert "country_name" in html
+    assert "entry.checksum" in html
     assert "stale_warning" in html
