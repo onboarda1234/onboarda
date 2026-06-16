@@ -6,6 +6,7 @@ latency refactor work starts. They should fail if a later change quietly alters
 the upload response shape, audit trail, size cap behavior, or duplicate gate.
 """
 import hashlib
+import json
 import os
 import socket
 import sys
@@ -162,6 +163,13 @@ def test_upload_201_response_document_row_and_audit_shape(
         "is_current",
         "version",
         "replaced_document_ids",
+        "verification_status",
+        "verification_state",
+        "verification_status_label",
+        "verification_status_tone",
+        "verification_success",
+        "verification_terminal",
+        "verification_queued",
     }
     assert body["doc_name"] == "passport.pdf"
     assert body["doc_type"] == "passport"
@@ -172,6 +180,10 @@ def test_upload_201_response_document_row_and_audit_shape(
     assert body["is_current"] is True
     assert body["version"] == 1
     assert body["replaced_document_ids"] == []
+    assert body["verification_status"] == "pending"
+    assert body["verification_state"] == "pending"
+    assert body["verification_success"] is False
+    assert body["verification_queued"] is True
 
     from db import get_db
 
@@ -179,7 +191,9 @@ def test_upload_201_response_document_row_and_audit_shape(
     doc = conn.execute(
         """
         SELECT id, application_id, doc_type, doc_name, file_size, mime_type,
-               file_sha256, verification_status, review_status
+               file_sha256, verification_status, verification_results, review_status,
+               uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id,
+               uploaded_by_display, upload_source
         FROM documents
         WHERE id = ?
         """,
@@ -194,8 +208,36 @@ def test_upload_201_response_document_row_and_audit_shape(
         "mime_type": "application/pdf",
         "file_sha256": hashlib.sha256(PDF_BYTES).hexdigest(),
         "verification_status": "pending",
+        "verification_results": doc["verification_results"],
         "review_status": "pending",
+        "uploaded_by": None,
+        "uploaded_by_actor_type": "client",
+        "uploaded_by_actor_id": CLIENT_ID,
+        "uploaded_by_display": "Upload Contract Ltd",
+        "upload_source": "client_portal",
     }
+    verification_results = json.loads(doc["verification_results"])
+    assert verification_results["client_submitted"] is True
+    assert verification_results["upload_source"] == "client_portal"
+    assert verification_results["verification_queued"] is True
+
+    job = conn.execute(
+        "SELECT status, created_by FROM verification_jobs WHERE document_id=?",
+        (body["id"],),
+    ).fetchone()
+    assert dict(job) == {"status": "pending", "created_by": CLIENT_ID}
+
+    status_resp = http_requests.get(
+        f"{upload_contract_server}/api/documents/{body['id']}/verification-status",
+        headers={"Authorization": f"Bearer {upload_contract_application['token']}"},
+        timeout=5,
+    )
+    assert status_resp.status_code == 200
+    status_body = status_resp.json()
+    assert status_body["verification_status"] == "pending"
+    assert status_body["verification_terminal"] is False
+    assert status_body["verification_job"]["status"] == "pending"
+    assert status_body["uploaded_by_name"] == "Upload Contract Ltd"
 
     audit = conn.execute(
         """
@@ -232,6 +274,133 @@ def test_upload_201_response_document_row_and_audit_shape(
     assert audit["ip_address"] == "127.0.0.1"
     assert audit["before_state"] is None
     assert audit["after_state"] is None
+
+
+def test_upload_does_not_run_full_verification_inline(
+    upload_contract_server,
+    upload_contract_application,
+    monkeypatch,
+):
+    import server
+
+    def fail_if_inline_verify(*_args, **_kwargs):
+        raise AssertionError("portal upload must not run DocumentVerifyHandler inline")
+
+    monkeypatch.setattr(server.DocumentVerifyHandler, "_post_with_db", fail_if_inline_verify)
+
+    resp = http_requests.post(
+        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {upload_contract_application['token']}"},
+        files={"file": ("coi.pdf", PDF_BYTES, "application/pdf")},
+        timeout=5,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["verification_status"] == "pending"
+    assert body["verification_queued"] is True
+
+
+def test_backoffice_upload_stores_valid_officer_uploaded_by(
+    upload_contract_server,
+    upload_contract_application,
+):
+    from auth import create_token
+    from db import get_db
+
+    token = create_token("admin001", "admin", "Test Admin", "officer")
+    resp = http_requests.post(
+        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("officer-coi.pdf", PDF_BYTES, "application/pdf")},
+        timeout=5,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    conn = get_db()
+    try:
+        doc = conn.execute(
+            """
+            SELECT uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id,
+                   uploaded_by_display, upload_source
+            FROM documents
+            WHERE id=?
+            """,
+            (body["id"],),
+        ).fetchone()
+        job_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM verification_jobs WHERE document_id=?",
+            (body["id"],),
+        ).fetchone()["c"]
+    finally:
+        conn.close()
+
+    assert dict(doc) == {
+        "uploaded_by": "admin001",
+        "uploaded_by_actor_type": "user",
+        "uploaded_by_actor_id": "admin001",
+        "uploaded_by_display": "Test Admin",
+        "upload_source": "back_office_upload",
+    }
+    assert job_count == 0
+
+
+def test_portal_upload_persists_checks_after_async_verification_completes(
+    upload_contract_server,
+    upload_contract_application,
+):
+    from db import get_db
+    from verification_worker import run_once
+
+    upload = http_requests.post(
+        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {upload_contract_application['token']}"},
+        files={"file": ("async-coi.pdf", PDF_BYTES, "application/pdf")},
+        timeout=5,
+    )
+    assert upload.status_code == 201, upload.text
+    doc_id = upload.json()["id"]
+
+    def deterministic_executor(_db, job, _worker_id):
+        assert job["document_id"] == doc_id
+        return {
+            "verification_status": "verified",
+            "verification_results": {
+                "overall": "verified",
+                "checks": [
+                    {
+                        "label": "Entity Name Match",
+                        "result": "pass",
+                        "message": "Matched expected entity.",
+                    }
+                ],
+            },
+        }
+
+    conn = get_db()
+    try:
+        result = run_once(
+            db=conn,
+            worker_id="worker-upload-contract",
+            verification_executor=deterministic_executor,
+        )
+    finally:
+        conn.close()
+
+    assert result["outcome"] == "succeeded"
+
+    status_resp = http_requests.get(
+        f"{upload_contract_server}/api/documents/{doc_id}/verification-status",
+        headers={"Authorization": f"Bearer {upload_contract_application['token']}"},
+        timeout=5,
+    )
+    assert status_resp.status_code == 200
+    status = status_resp.json()
+    assert status["verification_status"] == "verified"
+    assert status["verification_success"] is True
+    assert status["verification_results"]["checks"][0]["label"] == "Entity Name Match"
+    assert status["verification_job"]["status"] == "succeeded"
 
 
 def test_upload_size_cap_rejects_before_validation(

@@ -2218,6 +2218,41 @@ def resolve_user_display_name(db, user_id):
     return row.get("full_name") or row.get("email") or str(user_id)
 
 
+def _document_upload_actor_metadata(user):
+    """Return document upload actor fields without writing portal actors into users FK columns."""
+    user = user or {}
+    actor_id = str(user.get("sub") or user.get("id") or "")
+    actor_type = "client" if user.get("type") == "client" else "user"
+    display = (
+        user.get("name")
+        or user.get("full_name")
+        or user.get("company_name")
+        or ("Uploaded by client" if actor_type == "client" else actor_id)
+    )
+    return {
+        "uploaded_by": None if actor_type == "client" else actor_id,
+        "uploaded_by_actor_type": actor_type,
+        "uploaded_by_actor_id": actor_id,
+        "uploaded_by_display": str(display or ("Uploaded by client" if actor_type == "client" else "")),
+        "upload_source": "client_portal" if actor_type == "client" else "back_office_upload",
+    }
+
+
+def _decorate_document_upload_actor(db, doc):
+    if doc is None:
+        return doc
+    uploaded_by = doc.get("uploaded_by")
+    display = doc.get("uploaded_by_display") or ""
+    actor_type = str(doc.get("uploaded_by_actor_type") or "").lower()
+    upload_source = str(doc.get("upload_source") or "").lower()
+    if uploaded_by:
+        display = resolve_user_display_name(db, uploaded_by)
+    elif not display and (actor_type == "client" or upload_source in {"client_portal", "portal"}):
+        display = "Uploaded by client"
+    doc["uploaded_by_name"] = display
+    return doc
+
+
 # ── Prometheus Metrics (optional) ──────────────────────────
 try:
     from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
@@ -3493,7 +3528,8 @@ class ApplicationsHandler(BaseHandler):
                 "review_comment, reviewed_by, reviewer_role, reviewed_at, application_id, "
                 "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
                 "evidence_class, evidence_classification_note, evidence_classified_by, evidence_classified_at, "
-                "uploaded_at, uploaded_by, file_sha256 "
+                "uploaded_at, uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id, "
+                "uploaded_by_display, upload_source, file_sha256 "
                 f"FROM documents WHERE application_id IN ({doc_placeholders}) "
                 f"AND {ACTIVE_DOCUMENT_SQL}",
                 app_ids,
@@ -3501,7 +3537,7 @@ class ApplicationsHandler(BaseHandler):
             for d in doc_rows:
                 doc = dict(d)
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
-                doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
+                _decorate_document_upload_actor(db, doc)
                 decorate_document_verification_state(doc)
                 _decorate_document_evidence_classification(db, doc)
                 docs_by_app.setdefault(d["application_id"], []).append(doc)
@@ -5532,7 +5568,7 @@ class ApplicationDetailHandler(BaseHandler):
         for doc in result["documents"]:
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
-            doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
+            _decorate_document_upload_actor(db, doc)
             decorate_document_verification_state(doc)
             _decorate_document_evidence_classification(db, doc)
         if include_history:
@@ -5543,7 +5579,7 @@ class ApplicationDetailHandler(BaseHandler):
             for doc in result["document_history"]:
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
-                doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
+                _decorate_document_upload_actor(db, doc)
                 decorate_document_verification_state(doc)
                 _decorate_document_evidence_classification(db, doc)
         result["pilot_evidence_summary"] = _pilot_evidence_classification_summary(
@@ -8625,7 +8661,8 @@ class DocumentUploadHandler(BaseHandler):
             "verification_status, verification_results, verified_at, review_status, "
             "review_comment, reviewed_by, reviewed_at, evidence_class, "
             "evidence_classification_note, evidence_classified_by, evidence_classified_at, "
-            "uploaded_at, uploaded_by, file_sha256 "
+            "uploaded_at, uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id, "
+            "uploaded_by_display, upload_source, file_sha256 "
             f"FROM documents WHERE application_id = ?{where_active} "
             "ORDER BY uploaded_at DESC, id DESC",
             (app["id"],)).fetchall()]
@@ -8638,7 +8675,7 @@ class DocumentUploadHandler(BaseHandler):
                 except (json.JSONDecodeError, TypeError):
                     pass
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
-            doc["uploaded_by_name"] = resolve_user_display_name(db, doc.get("uploaded_by"))
+            _decorate_document_upload_actor(db, doc)
             decorate_document_verification_state(doc)
             _decorate_document_evidence_classification(db, doc)
 
@@ -8857,6 +8894,19 @@ class DocumentUploadHandler(BaseHandler):
             f"file={filename} size={len(body)} s3={'yes' if s3_key else 'no'}"
         )
 
+        upload_actor = _document_upload_actor_metadata(user)
+        verification_metadata = {
+            "source": "document_upload",
+            "source_surface": "portal_onboarding_upload" if user.get("type") == "client" else "backoffice_document_upload",
+            "upload_source": upload_actor["upload_source"],
+            "client_submitted": user.get("type") == "client",
+            "officer_uploaded": user.get("type") != "client",
+            "verification_queued": user.get("type") == "client",
+            "verification_triggered": False,
+            "verification_trigger_path": "/api/documents/{document_id}/verify",
+        }
+        verification_queue = None
+
         try:
             slot_key = _document_slot_key(
                 doc_type,
@@ -8881,12 +8931,16 @@ class DocumentUploadHandler(BaseHandler):
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version, verification_status,
-                 verification_results, file_sha256, uploaded_by)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 verification_results, file_sha256, uploaded_by, uploaded_by_actor_type,
+                 uploaded_by_actor_id, uploaded_by_display, upload_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
                 len(body), content_type, replacement["slot_key"], True, replacement["version"],
-                STATE_PENDING, "{}", file_sha256, user.get("sub"),
+                STATE_PENDING, json.dumps(verification_metadata, sort_keys=True), file_sha256,
+                upload_actor["uploaded_by"], upload_actor["uploaded_by_actor_type"],
+                upload_actor["uploaded_by_actor_id"], upload_actor["uploaded_by_display"],
+                upload_actor["upload_source"],
             ))
             _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
 
@@ -8941,6 +8995,31 @@ class DocumentUploadHandler(BaseHandler):
                 before_state={"documents": previous_documents} if previous_documents else None,
                 after_state={"document_id": doc_id, "doc_type": doc_type, "version": replacement["version"]},
             )
+            if user.get("type") == "client":
+                try:
+                    from verification_jobs import enqueue_verification_job
+
+                    queued_doc = dict(db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
+                    verification_queue = enqueue_verification_job(
+                        db,
+                        queued_doc,
+                        dict(app),
+                        user,
+                        request_id=self.request.headers.get("X-Request-ID", ""),
+                        ip_address=self.get_client_ip(),
+                    )
+                except Exception as queue_err:
+                    logger.exception("Portal document verification enqueue failed for doc=%s", doc_id)
+                    verification_metadata.update({
+                        "verification_queued": False,
+                        "system_warning": "verification_queue_unavailable",
+                        "requires_review": True,
+                        "queue_error": type(queue_err).__name__,
+                    })
+                    db.execute(
+                        "UPDATE documents SET verification_results=? WHERE id=?",
+                        (json.dumps(verification_metadata, sort_keys=True), doc_id),
+                    )
             db.commit()
         except Exception as db_err:
             try:
@@ -8968,6 +9047,9 @@ class DocumentUploadHandler(BaseHandler):
             "is_current": True,
             "version": replacement["version"],
             "replaced_document_ids": [row["id"] for row in previous_documents],
+            "verification_status": STATE_PENDING,
+            **verification_state_payload(STATE_PENDING),
+            "verification_queued": bool(verification_queue and verification_queue.get("job")),
         }
         if rmi_fulfilled_item_id:
             response["rmi_item_id"] = rmi_fulfilled_item_id
@@ -9776,6 +9858,38 @@ class DocumentVerifyHandler(BaseHandler):
             "verification_results": layered_results,
             "verified_at": layered_results.get("verified_at"),
         })
+
+
+class DocumentVerificationStatusHandler(BaseHandler):
+    """GET /api/documents/:id/verification-status — authoritative persisted verification state."""
+    def get(self, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+            if not doc:
+                return self.error("Document not found", 404)
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id=?",
+                (doc["application_id"],),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found for document", 404)
+            if not self.check_app_ownership(user, app):
+                return
+
+            from verification_jobs import verification_status_for_document
+
+            payload = verification_status_for_document(db, doc_id)
+            if not payload:
+                return self.error("Document not found", 404)
+            _decorate_document_upload_actor(db, payload)
+            self.success(payload)
+        finally:
+            db.close()
 
 
 class DocumentReviewHandler(BaseHandler):
@@ -30647,6 +30761,7 @@ def make_app():
 
         # Documents
         (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
+        (r"/api/documents/([^/]+)/verification-status", DocumentVerificationStatusHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
         (r"/api/documents/([^/]+)/evidence-classification", DocumentEvidenceClassificationHandler),

@@ -682,13 +682,18 @@ a { color:var(--brand); text-decoration:none; }
 
 /* ── Document Review Actions ── */
 .doc-actions { display:flex; gap:4px; margin-top:6px; }
-.doc-action-btn { padding:3px 8px; border-radius:4px; font-size:10px; font-weight:600; cursor:pointer; border:1px solid transparent; transition:all 0.15s; }
+.doc-action-btn { padding:5px 9px; border-radius:6px; font-size:11px; font-weight:700; cursor:pointer; border:1px solid transparent; transition:all 0.15s; line-height:1.2; background:var(--surface); }
 .doc-action-btn.accept { background:var(--green-bg); color:var(--green); border-color:rgba(22,163,74,0.2); }
 .doc-action-btn.accept:hover { background:var(--green); color:#fff; }
 .doc-action-btn.reject { background:var(--red-bg); color:var(--red); border-color:rgba(220,38,38,0.2); }
 .doc-action-btn.reject:hover { background:var(--red); color:#fff; }
 .doc-action-btn.info { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,0.2); }
 .doc-action-btn.info:hover { background:var(--amber); color:#fff; }
+.doc-action-btn.neutral { background:var(--surface); color:var(--brand); border-color:rgba(43,47,143,0.22); }
+.doc-action-btn.neutral:hover { background:var(--brand-dim); border-color:var(--brand); }
+.doc-action-btn.secondary { background:var(--surface2); color:var(--text2); border-color:var(--border1); }
+.doc-action-btn.secondary:hover { background:var(--surface3); color:var(--text1); }
+.doc-action-btn.disabled, .doc-action-btn:disabled { cursor:not-allowed; opacity:.52; background:var(--surface2); color:var(--text3); border-color:var(--border1); pointer-events:none; }
 .doc-action-btn.active { font-weight:700; box-shadow:0 0 0 2px rgba(43,47,143,0.2); }
 .doc-status-accepted { color:var(--green); font-size:11px; font-weight:600; margin-top:4px; }
 .doc-status-rejected { color:var(--red); font-size:11px; font-weight:600; margin-top:4px; }
@@ -710,6 +715,36 @@ a { color:var(--brand); text-decoration:none; }
 .evidence-action-copy { font-size:12px; color:var(--text1); font-weight:650; line-height:1.45; }
 .evidence-material-panel { border:1px solid var(--border1); border-radius:10px; background:var(--surface2); padding:10px 11px; margin-top:8px; }
 .evidence-material-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
+.document-action-groups { display:grid; gap:12px; }
+.document-action-group { border:1px solid #dfe7f2; border-radius:14px; background:var(--surface); box-shadow:0 8px 18px rgba(16,24,40,0.045); overflow:hidden; }
+.document-action-group-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:13px 15px; background:#fbfcff; border-bottom:1px solid var(--border1); }
+.document-action-group-title { font-size:13px; font-weight:800; color:var(--text1); }
+.document-action-group-subtitle { font-size:11px; color:var(--text3); margin-top:3px; line-height:1.4; }
+.document-action-group-count { font-size:10px; font-weight:800; color:var(--brand); background:var(--brand-dim); border:1px solid rgba(43,47,143,.18); border-radius:999px; padding:4px 8px; white-space:nowrap; }
+.document-action-group-body { display:grid; gap:9px; padding:12px; }
+.document-review-row { border:1px solid var(--border1); border-left:4px solid #cbd5e1; border-radius:12px; background:var(--surface); padding:12px; box-shadow:0 4px 10px rgba(16,24,40,0.035); }
+.document-review-row.action-required { border-left-color:#d97706; background:linear-gradient(90deg,rgba(217,119,6,.06),#fff 44%); }
+.document-review-row.missing, .document-review-row.failed, .document-review-row.stale { border-left-color:#dc2626; background:linear-gradient(90deg,rgba(220,38,38,.055),#fff 44%); }
+.document-review-row.verified { border-left-color:#16a34a; }
+.document-review-row.optional { border-left-color:#64748b; }
+.document-review-main { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+.document-review-title-wrap { min-width:0; flex:1; }
+.document-review-title { font-size:14px; font-weight:800; color:var(--text1); line-height:1.28; overflow-wrap:anywhere; }
+.document-review-subtitle { font-size:11px; color:var(--text3); margin-top:3px; line-height:1.4; overflow-wrap:anywhere; }
+.document-review-file { font-size:11px; color:var(--text2); margin-top:4px; overflow-wrap:anywhere; }
+.document-review-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin-top:10px; }
+.document-review-field { border:1px solid var(--border1); border-radius:9px; background:var(--surface2); padding:7px 8px; min-width:0; }
+.document-review-field-label { font-size:9px; font-weight:800; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:3px; }
+.document-review-field-value { font-size:12px; font-weight:700; color:var(--text1); line-height:1.35; overflow-wrap:anywhere; }
+.document-review-field-value.issue { color:#92400e; font-weight:750; }
+.document-review-field-value.blocking { color:#991b1b; }
+.document-review-field-value.none { color:var(--text3); font-weight:650; }
+.document-review-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:11px; align-items:center; }
+.document-review-details { margin-top:10px; border:1px solid var(--border1); border-radius:10px; background:var(--surface2); overflow:hidden; }
+.document-review-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
+.document-review-details-body { padding:0 10px 10px; }
+.document-review-details-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin:0 0 9px; }
+.document-review-empty { padding:14px; border:1px dashed var(--border1); border-radius:10px; background:var(--surface2); color:var(--text3); font-size:12px; text-align:center; }
 .reliance-badge { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:800; border:1px solid transparent; white-space:nowrap; }
 .reliance-badge.verified { background:var(--green-bg); color:var(--green); border-color:rgba(22,163,74,.22); }
 .reliance-badge.review-required, .reliance-badge.request-info { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
@@ -7917,7 +7952,7 @@ function buildVerificationResultsHtml(results) {
         pushAuditFact('Policy ID/version', policyId && policyVersion ? policyId + ' / ' + policyVersion : firstMeaningfulDetailValue(policyId, policyVersion));
         var auditHtml = auditFacts.length ? '<div class="verification-audit-grid">' + auditFacts.join('') + '</div>' : '';
         items.push('<details class="verification-technical-details">' +
-          '<summary>Technical checks and audit details</summary>' +
+          '<summary>Technical / audit details</summary>' +
           '<div style="padding:0 10px 9px;">' +
             auditHtml +
             '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:3px 0 5px;">Full check result list</div>' +
@@ -8368,9 +8403,10 @@ function documentRelianceDisplayState(doc, policy) {
     return ['warn', 'warning', 'review'].indexOf(result) >= 0;
   });
   if (reviewStatus === 'rejected') return { label: 'Rejected', tone: 'rejected' };
-  if (reviewStatus === 'info_requested') return { label: 'Request info', tone: 'request-info' };
+  if (reviewStatus === 'info_requested') return { label: 'Request replacement', tone: 'request-info' };
   if (!policy) return { label: 'Review required', tone: 'review-required' };
   if (relianceState === 'manual_accepted') return { label: 'Manual accepted', tone: 'manual-accepted' };
+  if (verificationState === 'expired' || relianceState === 'expired' || (doc && (doc.is_expired === true || doc.expired === true))) return { label: 'Expired', tone: 'failed' };
   if (relianceState === 'stale' || verificationState === 'stale' || (doc && doc.is_current === false)) return { label: 'Stale', tone: 'stale' };
   if (['pending', 'uploaded'].indexOf(relianceState) >= 0 || ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0) return { label: 'Pending verification', tone: 'pending' };
   if (['failed', 'flagged', 'skipped', 'blocked'].indexOf(relianceState) >= 0 || ['failed', 'flagged', 'skipped'].indexOf(verificationState) >= 0 || ['failed', 'flagged'].indexOf(overall) >= 0 || redFlags.length > 0 || hasFailedCheck) return { label: 'Failed', tone: 'failed' };
@@ -8386,13 +8422,14 @@ function renderRelianceBadge(state) {
 function documentRequiredAction(doc, policy, state) {
   var label = (state && state.label) || 'Review required';
   var blockers = Array.isArray(doc && doc.document_reliance_blockers) ? doc.document_reliance_blockers : [];
-  if (!policy) return 'Officer must classify this document before it can be relied on automatically.';
+  if (!policy) return 'Document type required before this evidence can be relied on automatically.';
   if (label === 'Verified') return 'No officer action required unless case context changes or the document becomes stale.';
   if (label === 'Pending verification') return 'Wait for Agent 1 verification or re-run verification before using this document as compliance evidence.';
   if (label === 'Failed') return 'Reject, request corrected evidence, or manually accept only with the required senior-approved rationale where policy allows.';
+  if (label === 'Expired') return 'Request a current replacement document before relying on this evidence.';
   if (label === 'Stale') return 'Request a refreshed document or re-verify the current evidence before relying on it.';
   if (label === 'Rejected') return 'Rejected evidence cannot support memo, approval, or closure decisions.';
-  if (label === 'Request info') return 'Client remediation or officer follow-up is required before reliance.';
+  if (label === 'Request replacement') return 'Client remediation or officer follow-up is required before reliance.';
   if (label === 'Manual accepted') return 'Manual acceptance is recorded; retain rationale and audit evidence for decision review.';
   if (blockers.length) return 'Resolve document reliance blockers before this evidence supports a decision.';
   return 'Officer review required before automated reliance.';
@@ -8409,68 +8446,197 @@ function renderEvidenceMetaChip(label, value) {
   return '<div class="evidence-meta-chip"><div class="evidence-meta-label">' + escapeHtml(label) + '</div><div class="evidence-meta-value">' + escapeHtml(normalized) + '</div></div>';
 }
 
-function renderUnifiedKycDocumentCard(app, doc, linkedRequirement) {
-  var officerReview = normalizeDetailValue(doc.review_status || 'pending');
-  var reviewBadgeColor = officerReview === 'accepted' ? '#16a34a' : officerReview === 'rejected' ? '#dc2626' : officerReview === 'info_requested' ? '#d97706' : '#6b7280';
-  var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status);
-  var verLabel = normalizeDetailValue(doc.verification_status_label || verStatus);
+function documentHasUploadedFile(doc) {
+  return !!(doc && (doc.id || doc.document_id || doc.doc_name || doc.file_name || doc.filename || doc.file_path || doc.storage_key || doc.s3_key || doc.download_url));
+}
+
+function documentFileName(doc) {
+  return normalizeDetailValue(doc && (doc.doc_name || doc.file_name || doc.filename || doc.original_filename));
+}
+
+function documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot) {
+  if (!doc) return false;
+  if (expectedSlot || linkedRequirement) return false;
+  var typeKey = normalizePolicyDocTypeKey(doc.doc_type || doc.slot_key);
+  if (policy && policy.policyId !== 'DOC-UNKNOWN-UNCLASSIFIED-v1') return false;
+  return !typeKey || ['general', 'supporting_document', 'unknown', 'unclassified', 'other'].indexOf(typeKey) >= 0;
+}
+
+function documentExpectedTypeLabel(doc, linkedRequirement, policy, expectedSlot) {
+  if (expectedSlot && expectedSlot.label) return expectedSlot.label;
+  if (linkedRequirement && (linkedRequirement.requirement_label || linkedRequirement.requirement_key)) {
+    return linkedRequirement.requirement_label || linkedRequirement.requirement_key;
+  }
+  if (documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot)) return 'Needs document type';
+  if (policy && policy.family) return policy.family;
+  return kycDocumentSlotLabel(doc || {}, linkedRequirement);
+}
+
+function documentPrimaryIssue(doc, state, policy, expectedSlot) {
+  if (!doc) return 'No document uploaded.';
+  var label = (state && state.label) || 'Review required';
+  if (label === 'Verified' || label === 'Manual accepted') return 'None';
+  if (!policy) return expectedSlot ? 'Verification policy is not mapped for this expected document type.' : 'Document type required before reliance.';
+  if (label === 'Pending verification') return 'Verification not completed. Officer must review before relying on this document.';
+  if (label === 'Expired') {
+    var expiry = firstMeaningfulDetailValue(doc.expiry_date, doc.expires_at, doc.valid_until);
+    return expiry ? 'Document expired on ' + expiry + '.' : 'Document is expired and must be replaced.';
+  }
+  if (label === 'Stale') return 'Document is stale and must be refreshed or re-verified before reliance.';
+  if (label === 'Rejected') return doc.review_comment || 'Document was rejected by an officer.';
+  if (label === 'Request replacement') return doc.review_comment || 'Replacement or clarification has been requested.';
+  var results = doc.verification_results || {};
+  var issueArrays = [results.red_flags, results.issues, results.warnings, results.flags];
+  for (var i = 0; i < issueArrays.length; i++) {
+    if (Array.isArray(issueArrays[i]) && issueArrays[i].length) return String(issueArrays[i][0]);
+  }
+  if (Array.isArray(results.checks)) {
+    for (var j = 0; j < results.checks.length; j++) {
+      var check = results.checks[j] || {};
+      var result = String(firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
+      if (['fail', 'failed', 'warn', 'warning', 'review', 'flagged', 'blocked'].indexOf(result) >= 0) {
+        return firstMeaningfulDetailValue(check.message, check.details, check.label, check.name) || 'Verification check requires review.';
+      }
+    }
+  }
+  return documentRequiredAction(doc, policy, state);
+}
+
+function documentBlocksDisplay(doc, policy, state, expectedSlot) {
+  if (!doc && expectedSlot) return 'Approval';
+  var label = (state && state.label) || '';
+  if (label === 'Verified' || label === 'Manual accepted') return 'None';
+  var gate = String((policy && policy.gateBehavior) || '').toLowerCase();
+  if (gate.indexOf('change completion') >= 0) return 'Change completion';
+  if (gate.indexOf('edd closure') >= 0) return 'EDD closure';
+  if (gate.indexOf('periodic review') >= 0 || gate.indexOf('review completion') >= 0) return 'Review completion';
+  if (gate.indexOf('memo') >= 0 && gate.indexOf('approval') >= 0) return 'Memo and approval';
+  if (gate.indexOf('approval') >= 0) return label === 'Review required' ? 'Approval unless accepted with reason' : 'Approval';
+  if (gate.indexOf('block') >= 0) return policy.gateBehavior;
+  return label && label !== 'Verified' ? 'Automated reliance' : 'None';
+}
+
+function documentReviewGroupKey(doc, policy, state, expectedSlot, linkedRequirement) {
+  if (!doc) return 'missing';
+  var label = (state && state.label) || 'Review required';
+  if (label === 'Verified' || label === 'Manual accepted') return 'verified';
+  if (documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot)) return 'action';
+  if (['Review required', 'Pending verification', 'Failed', 'Expired', 'Stale', 'Rejected', 'Request replacement'].indexOf(label) >= 0) return 'action';
+  return 'optional';
+}
+
+function documentReviewRowClass(groupKey, state) {
+  if (groupKey === 'missing') return 'missing';
+  if (groupKey === 'verified') return 'verified';
+  var label = String((state && state.label) || '').toLowerCase();
+  if (label === 'failed' || label === 'rejected') return 'failed';
+  if (label === 'expired' || label === 'stale') return 'stale';
+  if (groupKey === 'optional') return 'optional';
+  return 'action-required';
+}
+
+function renderDocumentReviewField(label, value, tone) {
+  var normalized = normalizeDetailValue(value);
+  var toneClass = tone ? ' ' + tone : '';
+  return '<div class="document-review-field"><div class="document-review-field-label">' + escapeHtml(label) + '</div><div class="document-review-field-value' + toneClass + '">' + escapeHtml(normalized) + '</div></div>';
+}
+
+function renderDocumentDirectActions(app, doc, groupKey, state) {
+  var hasFile = documentHasUploadedFile(doc);
+  if (!hasFile) {
+    return '<div class="document-review-actions">' +
+      '<button class="doc-action-btn disabled" disabled>No document uploaded</button>' +
+      '<button class="doc-action-btn disabled" disabled>View</button>' +
+      '<button class="doc-action-btn disabled" disabled>Download</button>' +
+    '</div>';
+  }
+  var appRef = escapeHtml((app && (app.ref || app.id)) || '');
+  var docId = escapeHtml(doc.id || doc.document_id || '');
+  var label = (state && state.label) || '';
+  var reviewActions = label === 'Verified' || label === 'Manual accepted'
+    ? ''
+    : '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'accepted\')">Accept with reason</button>' +
+      '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'info_requested\')">Request replacement</button>' +
+      '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'rejected\')">Reject</button>';
+  return '<div class="document-review-actions">' +
+    '<button class="doc-action-btn neutral" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>' +
+    '<button class="doc-action-btn neutral" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>' +
+    reviewActions +
+  '</div>';
+}
+
+function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, policy, state, issue, blocker, expectedTypeLabel) {
+  if (!doc) return '';
+  var results = doc.verification_results || {};
   var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
-  var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
-    ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Reviewed by: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
+  var reviewComment = doc.review_comment ? doc.review_comment : '';
+  var auditFacts = [
+    renderDocumentReviewField('Document name', documentFileName(doc)),
+    renderDocumentReviewField('Document type', expectedTypeLabel),
+    renderDocumentReviewField('Expected from portal slot', expectedSlot ? expectedSlot.label : (linkedRequirement ? expectedTypeLabel : 'Not portal-slot based')),
+    renderDocumentReviewField('Status', (state && state.label) || 'Review required'),
+    renderDocumentReviewField('Issue', issue, issue === 'None' ? 'none' : 'issue'),
+    renderDocumentReviewField('Blocker', blocker, blocker === 'None' ? 'none' : 'blocking'),
+    renderDocumentReviewField('Policy ID/version', policy ? ((policy.policyId || policy.id || 'Policy') + ' / ' + (policy.version || 'v1')) : 'Document type required'),
+    renderDocumentReviewField('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)),
+    renderDocumentReviewField('Agent run ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id)),
+    renderDocumentReviewField('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash)),
+    renderDocumentReviewField('Timestamp', firstMeaningfulDetailValue(doc.verified_at, results.verified_at, results.verification_timestamp, results.completed_at)),
+    renderDocumentReviewField('Uploaded by', normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by))
+  ].join('');
+  var officerHistory = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—' || reviewComment
+    ? '<div class="evidence-action-panel" style="margin-top:9px;"><div class="evidence-action-label">Officer action history</div><div class="evidence-action-copy">' +
+      escapeHtml('Reviewed by: ' + reviewerLabel + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + normalizeDetailValue(doc.reviewed_at) : '') + (reviewComment ? ' | Comment: ' + reviewComment : '')) +
+      '</div></div>'
     : '';
-  var reviewComment = doc.review_comment ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
-  var slotLabel = kycDocumentSlotLabel(doc, linkedRequirement);
-  var linkedMeta = linkedRequirement
-    ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Linked enhanced requirement: ' + escapeHtml(linkedRequirement.requirement_key || linkedRequirement.id || '') + '</div>'
-    : '';
+  var typePanel = documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot) ? renderEvidenceClassificationPanel(doc) : '';
+  return '<details class="document-review-details">' +
+    '<summary>Details</summary>' +
+    '<div class="document-review-details-body">' +
+      '<div class="evidence-material-title">Verification details</div>' +
+      '<div class="document-review-details-grid">' + auditFacts + '</div>' +
+      officerHistory +
+      typePanel +
+      '<div class="evidence-material-panel"><div class="evidence-material-title">Issue</div>' + buildVerificationResultsHtml(doc.verification_results) + '</div>' +
+      '<div class="document-review-actions"><button class="doc-action-btn secondary" onclick="verifyBackofficeDocument(\'' + escapeHtml(doc.id || doc.document_id || '') + '\',\'' + escapeHtml((app && (app.ref || app.id)) || '') + '\')">Re-Verify</button></div>' +
+    '</div>' +
+  '</details>';
+}
+
+function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot) {
   var policy = agent1PolicyForDocument(doc, linkedRequirement);
   var relianceState = documentRelianceDisplayState(doc, policy);
-  var policyLabel = policy ? (policy.policyId || policy.id) : 'Unclassified';
-  var policyVersion = policy ? (policy.version || 'v1') : 'Officer classification required';
-  var evidenceClass = doc.evidence_class_label || EVIDENCE_CLASS_LABELS[doc.evidence_class] || 'Unclassified';
+  var expectedTypeLabel = documentExpectedTypeLabel(doc, linkedRequirement, policy, expectedSlot);
+  var issue = documentPrimaryIssue(doc, relianceState, policy, expectedSlot);
+  var blocker = documentBlocksDisplay(doc, policy, relianceState, expectedSlot);
+  var groupKey = documentReviewGroupKey(doc, policy, relianceState, expectedSlot, linkedRequirement);
+  var rowClass = documentReviewRowClass(groupKey, relianceState);
+  var typePrefix = (expectedSlot || linkedRequirement) ? 'Expected from portal slot' : 'Document type';
+  var ownerLabel = findDocumentOwnerLabelForApp(app, doc);
+  var fileName = documentFileName(doc);
   var uploadedBy = normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by);
-  return '<div class="evidence-control-card">' +
-    '<div class="evidence-control-header">' +
-      '<div class="evidence-control-title-row">' +
-        '<span class="evidence-control-icon">📄</span>' +
-        '<div style="min-width:0;">' +
-          '<div class="evidence-control-title">' + escapeHtml(slotLabel) + '</div>' +
-          '<div class="evidence-control-subtitle">File: ' + escapeHtml(doc.doc_name || '—') + ' · Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + ' · Owner: ' + escapeHtml(findDocumentOwnerLabelForApp(app, doc)) + '</div>' +
-          linkedMeta +
-        '</div>' +
+  var lastVerified = firstMeaningfulDetailValue(doc.verified_at, doc.verification_results && doc.verification_results.verified_at, doc.verification_results && doc.verification_results.completed_at);
+  var issueTone = issue === 'None' ? 'none' : 'issue';
+  var blockerTone = blocker === 'None' ? 'none' : 'blocking';
+  return '<div class="document-review-row ' + rowClass + '">' +
+    '<div class="document-review-main">' +
+      '<div class="document-review-title-wrap">' +
+        '<div class="document-review-title">' + escapeHtml(expectedTypeLabel) + '</div>' +
+        '<div class="document-review-subtitle">' + escapeHtml(typePrefix) + ': ' + escapeHtml(expectedTypeLabel) + ' · Owner: ' + escapeHtml(ownerLabel) + '</div>' +
+        '<div class="document-review-file">File: ' + escapeHtml(fileName) + '</div>' +
       '</div>' +
-      '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">' +
-        '<span class="agent1-chip">' + escapeHtml(evidenceClass) + '</span>' +
-        renderRelianceBadge(relianceState) +
-      '</div>' +
+      renderRelianceBadge(relianceState) +
     '</div>' +
-    '<div class="evidence-meta-grid">' +
-      renderEvidenceMetaChip('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)) +
-      renderEvidenceMetaChip('Blocks', policy && policy.gateBehavior ? policy.gateBehavior : 'Officer review / reliance') +
-      renderEvidenceMetaChip('Last verified', firstMeaningfulDetailValue(doc.verified_at, doc.verification_results && doc.verification_results.verified_at)) +
-      renderEvidenceMetaChip('Uploaded by', uploadedBy) +
-      renderEvidenceMetaChip('Verification status', verLabel) +
-      renderEvidenceMetaChip('Officer review', officerReview) +
+    '<div class="document-review-fields">' +
+      renderDocumentReviewField('Status', (relianceState && relianceState.label) || 'Review required') +
+      renderDocumentReviewField('Issue', issue, issueTone) +
+      renderDocumentReviewField('Blocks', blocker, blockerTone) +
+      renderDocumentReviewField('Next action', documentRequiredAction(doc, policy, relianceState), issueTone) +
+      renderDocumentReviewField('Last verified', lastVerified) +
+      renderDocumentReviewField('Uploaded by', uploadedBy) +
     '</div>' +
-    '<div class="evidence-action-panel">' +
-      '<div class="evidence-action-label">Required action</div>' +
-      '<div class="evidence-action-copy">' + escapeHtml(documentRequiredAction(doc, policy, relianceState)) + '</div>' +
-    '</div>' +
-    '<div class="evidence-material-panel">' +
-      '<div class="evidence-material-title">Material issues and reliance evidence</div>' +
-      buildVerificationResultsHtml(doc.verification_results) +
-    '</div>' +
-    reviewMeta +
-    reviewComment +
-    renderEvidenceClassificationPanel(doc) +
-    '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
-      '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">Details</button>' +
-      '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
-      '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
-      '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">Accept with reason</button>' +
-      '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">Reject</button>' +
-      '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">Request replacement</button>' +
-    '</div>' +
+    renderDocumentDirectActions(app, doc, groupKey, relianceState) +
+    renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, policy, relianceState, issue, blocker, expectedTypeLabel) +
   '</div>';
 }
 
@@ -8517,48 +8683,136 @@ function renderIdentityEnhancedRequirementCard(req) {
   '</div>';
 }
 
+function buildExpectedKycDocumentSlots(app) {
+  var expected = [
+    { doc_type: 'cert_inc', label: 'Certificate of Incorporation' },
+    { doc_type: 'memarts', label: 'Memorandum & Articles' },
+    { doc_type: 'reg_sh', label: 'Register of Shareholders' },
+    { doc_type: 'reg_dir', label: 'Register of Directors' },
+    { doc_type: 'fin_stmt', label: 'Financial Statements / Management Accounts' },
+    { doc_type: 'poa', label: 'Proof of Registered Address', person_id: null },
+    { doc_type: 'board_res', label: 'Board Resolution' },
+    { doc_type: 'structure_chart', label: 'Company Structure Chart' }
+  ];
+  (app.directors || []).forEach(function(person) {
+    var owner = buildPartyDisplayName(person);
+    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: owner });
+    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: owner });
+  });
+  (app.ubos || []).forEach(function(person) {
+    var owner = buildPartyDisplayName(person);
+    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: owner });
+    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: owner });
+  });
+  (app.intermediaries || []).forEach(function(person) {
+    var owner = buildPartyDisplayName(person);
+    ['cert_inc', 'reg_dir', 'reg_sh', 'cert_gs', 'fin_stmt'].forEach(function(docType) {
+      expected.push({ doc_type: docType, label: KYC_DOCUMENT_SLOT_LABELS[docType] || docType, person_id: person.person_key || person.id, owner: owner });
+    });
+  });
+  return expected;
+}
+
+function documentMatchesExpectedSlot(doc, expectedSlot) {
+  if (!doc || !expectedSlot) return false;
+  var docType = normalizePolicyDocTypeKey(doc.doc_type);
+  var expectedType = normalizePolicyDocTypeKey(expectedSlot.doc_type);
+  var typeMatches = docType === expectedType;
+  if (!typeMatches && expectedType === 'poa' && doc.person_id) {
+    typeMatches = ['poa', 'poa_person', 'personal_poa', 'residential_address_proof'].indexOf(docType) >= 0;
+  }
+  if (!typeMatches) return false;
+  if (expectedSlot.person_id == null) return !doc.person_id;
+  return String(doc.person_id || '') === String(expectedSlot.person_id);
+}
+
+function renderMissingKycDocumentRow(app, expectedSlot) {
+  var pseudoDoc = {
+    doc_type: expectedSlot.doc_type,
+    person_id: expectedSlot.person_id || null,
+    review_status: 'pending',
+    verification_status: 'missing',
+    verification_results: {}
+  };
+  var owner = expectedSlot.owner || 'Application-level document';
+  return '<div class="document-review-row missing">' +
+    '<div class="document-review-main">' +
+      '<div class="document-review-title-wrap">' +
+        '<div class="document-review-title">' + escapeHtml(expectedSlot.label) + '</div>' +
+        '<div class="document-review-subtitle">Expected from portal slot: ' + escapeHtml(expectedSlot.label) + ' · Owner: ' + escapeHtml(owner) + '</div>' +
+        '<div class="document-review-file">No document uploaded</div>' +
+      '</div>' +
+      '<span class="reliance-badge failed">Missing</span>' +
+    '</div>' +
+    '<div class="document-review-fields">' +
+      renderDocumentReviewField('Status', 'Missing', 'blocking') +
+      renderDocumentReviewField('Issue', 'No document uploaded.', 'issue') +
+      renderDocumentReviewField('Blocks', 'Approval', 'blocking') +
+      renderDocumentReviewField('Next action', 'Request the missing required document before approval.') +
+    '</div>' +
+    renderDocumentDirectActions(app, null, 'missing', { label: 'Missing', tone: 'failed' }) +
+  '</div>';
+}
+
+function renderDocumentActionGroupShell(title, subtitle, items) {
+  var body = items.length
+    ? items.join('')
+    : '<div class="document-review-empty">No documents in this group.</div>';
+  return '<section class="document-action-group">' +
+    '<div class="document-action-group-header">' +
+      '<div><div class="document-action-group-title">' + escapeHtml(title) + '</div><div class="document-action-group-subtitle">' + escapeHtml(subtitle) + '</div></div>' +
+      '<span class="document-action-group-count">' + items.length + '</span>' +
+    '</div>' +
+    '<div class="document-action-group-body">' + body + '</div>' +
+  '</section>';
+}
+
 function renderStandardKycDocumentTaxonomy(app) {
   var options = arguments[1] || {};
   var includeIdv = options.includeIdv !== false;
   var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
   var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
+  var expectedSlots = buildExpectedKycDocumentSlots(app || {});
+  var usedDocIds = {};
   var groups = {
-    corporate: { title: 'A — Corporate Entity Documents', subtitle: 'Core corporate identity and ownership records.', items: [], tone: '' },
-    identity: { title: 'B — Directors & UBO Identity Documents', subtitle: 'Person-level identity and address evidence for directors, UBOs, and intermediaries.', items: [], tone: 'green' },
-    business: { title: 'D — Business Operating Documents', subtitle: 'Operating, financial, licensing, and commercial support documents.', items: [], tone: 'amber' }
+    action: [],
+    missing: [],
+    verified: [],
+    optional: []
   };
-  docs.forEach(function(doc) {
-    var linkedRequirement = findEnhancedRequirementForDocument(doc, requirements);
-    var key = kycDocumentGroupKey(doc, linkedRequirement);
-    if (key === 'enhanced') return;
-    if (!groups[key]) key = 'corporate';
-    groups[key].items.push({ doc: doc, linkedRequirement: linkedRequirement });
-  });
-  requirements.forEach(function(req) {
-    if (enhancedRequirementPresentationType(req) !== 'evidence') return;
-    if (enhancedRequirementBackOfficeGroup(req) !== 'identity') return;
-    if (req.linked_document_id) return;
-    groups.identity.items.push({ requirement: req });
-  });
-  var orderedKeys = ['corporate', 'identity', 'enhanced', 'business'];
-  var html = orderedKeys.map(function(key) {
-    if (key === 'enhanced') return renderEnhancedEvidenceDocumentsGroupHtml(requirements);
-    var group = groups[key];
-    var body = group.items.length
-      ? group.items.map(function(item) {
-          return item.requirement
-            ? renderIdentityEnhancedRequirementCard(item.requirement)
-            : renderUnifiedKycDocumentCard(app, item.doc, item.linkedRequirement);
-        }).join('')
-      : '<div style="font-size:12px;color:var(--text3);text-align:center;padding:12px;">No uploaded documents in this group yet.</div>';
-    if (key === 'identity' && includeIdv) {
-      body += renderSumsubIdvPanel(app);
-    }
-    var expanded = group.items.some(function(item) {
-      return item.requirement ? enhancedRequirementNeedsAttention(item.requirement) : kycDocumentNeedsAttention(item.doc);
+  expectedSlots.forEach(function(expectedSlot) {
+    var doc = docs.find(function(candidate) {
+      if (usedDocIds[candidate.id || candidate.document_id || candidate.doc_name]) return false;
+      return documentMatchesExpectedSlot(candidate, expectedSlot);
     });
-    return kycTaxonomyGroupShell(group.title, group.subtitle, body, group.tone, expanded);
-  }).join('');
+    if (!doc) {
+      groups.missing.push(renderMissingKycDocumentRow(app, expectedSlot));
+      return;
+    }
+    usedDocIds[doc.id || doc.document_id || doc.doc_name] = true;
+    var linkedRequirement = findEnhancedRequirementForDocument(doc, requirements);
+    var policy = agent1PolicyForDocument(doc, linkedRequirement);
+    var state = documentRelianceDisplayState(doc, policy);
+    var key = documentReviewGroupKey(doc, policy, state, expectedSlot, linkedRequirement);
+    groups[key === 'missing' ? 'action' : key].push(renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot));
+  });
+  docs.forEach(function(doc) {
+    var docKey = doc.id || doc.document_id || doc.doc_name;
+    if (usedDocIds[docKey]) return;
+    var linkedRequirement = findEnhancedRequirementForDocument(doc, requirements);
+    var policy = agent1PolicyForDocument(doc, linkedRequirement);
+    var state = documentRelianceDisplayState(doc, policy);
+    var groupKey = documentReviewGroupKey(doc, policy, state, null, linkedRequirement);
+    groups[groupKey === 'missing' ? 'optional' : groupKey].push(renderUnifiedKycDocumentCard(app, doc, linkedRequirement, null));
+  });
+  var html = '<div class="document-action-groups">' +
+    renderDocumentActionGroupShell('Action required', 'Documents that need officer action before reliance or approval.', groups.action) +
+    renderDocumentActionGroupShell('Missing', 'Required portal slots with no uploaded document yet.', groups.missing) +
+    renderDocumentActionGroupShell('Verified', 'Documents currently reliance-ready or manually accepted with audit rationale.', groups.verified) +
+    renderDocumentActionGroupShell('Optional / additional', 'Supporting or ad hoc uploads that are not required slots for this case.', groups.optional) +
+  '</div>';
+  if (includeIdv) html += renderSumsubIdvPanel(app);
+  html += renderEnhancedEvidenceDocumentsGroupHtml(requirements);
   return renderPilotEvidenceSummaryBanner(app) + html;
 }
 
@@ -8588,7 +8842,7 @@ function evidenceClassDomId(docId, suffix) {
 
 function renderEvidenceClassificationPanel(doc) {
   var selected = doc.evidence_class || '';
-  var label = doc.evidence_class_label || EVIDENCE_CLASS_LABELS[selected] || 'Unclassified';
+  var label = doc.evidence_class_label || EVIDENCE_CLASS_LABELS[selected] || 'Needs document type';
   var classifiedBy = normalizeDetailValue(doc.evidence_classified_by_name || doc.evidence_classified_by);
   var classifiedAt = normalizeDetailValue(doc.evidence_classified_at);
   var note = doc.evidence_classification_note || '';
@@ -8598,14 +8852,14 @@ function renderEvidenceClassificationPanel(doc) {
   var canWorkflowAccept = canAcceptWorkflowTestEvidence() && selected === 'test_only_synthetic';
   var classId = evidenceClassDomId(doc.id, 'class');
   var noteId = evidenceClassDomId(doc.id, 'note');
-  var options = '<option value="">Unclassified</option>' + Object.keys(EVIDENCE_CLASS_LABELS).map(function(key) {
+  var options = '<option value="">Needs document type</option>' + Object.keys(EVIDENCE_CLASS_LABELS).map(function(key) {
     return '<option value="' + key + '"' + (key === selected ? ' selected' : '') + '>' + escapeHtml(EVIDENCE_CLASS_LABELS[key]) + '</option>';
   }).join('');
   var editControls = canEdit
     ? '<div style="display:grid;grid-template-columns:minmax(190px,1fr) minmax(180px,1fr) auto;gap:8px;align-items:center;margin-top:8px;">' +
         '<select class="form-input" id="' + classId + '" style="font-size:12px;padding:7px 9px;">' + options + '</select>' +
         '<input class="form-input" id="' + noteId + '" value="' + escapeHtml(note) + '" placeholder="Classification note (optional)" style="font-size:12px;padding:7px 9px;" />' +
-        '<button class="btn btn-outline btn-sm" onclick="saveDocumentEvidenceClassification(\'' + doc.id + '\')">Save class</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="saveDocumentEvidenceClassification(\'' + doc.id + '\')">Save document type</button>' +
       '</div>'
     : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Compliance officer, SCO, or admin access is required to classify evidence.</div>';
   var workflowBanner = workflowAccepted
@@ -8625,7 +8879,7 @@ function renderEvidenceClassificationPanel(doc) {
         : '');
   return '<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
     '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">' +
-      '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;">Evidence Classification</div>' +
+      '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;">Document type</div>' +
       '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:#64748b18;color:#475569;border:1px solid #64748b33;font-weight:600;">' + escapeHtml(label) + '</span>' +
     '</div>' +
     (note ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Note: ' + escapeHtml(note) + '</div>' : '') +
@@ -27615,7 +27869,7 @@ async function reviewBackofficeDocument(docId, appRef, status) {
   var labels = {
     accepted: { title: 'Accept Document', label: 'Acceptance Note (Optional)', placeholder: 'Add context for accepting this document...' },
     rejected: { title: 'Reject Document', label: 'Rejection Reason (Optional)', placeholder: 'Add the reason this document is being rejected...' },
-    info_requested: { title: 'Request Document Information', label: 'Information Request (Optional)', placeholder: 'Describe what information or replacement document is needed...' }
+    info_requested: { title: 'Request Replacement', label: 'Replacement Request (Optional)', placeholder: 'Describe what replacement document or clarification is needed...' }
   };
   var cfg = labels[status] || { title: 'Review Document', label: 'Comment (Optional)', placeholder: 'Add context for the document review...' };
   document.getElementById('document-review-doc-id').value = docId;
