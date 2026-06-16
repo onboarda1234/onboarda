@@ -9,6 +9,7 @@
 - `/api/config/country-risk` now reports active manual settings, `snapshot=null`, and `reference_snapshot_active_for_scoring=false`.
 - Grouped UI country-risk payloads are normalised into numeric score maps before validation/storage.
 - Country-risk snapshot tables remain as dormant schema; startup no longer seeds the flawed PR-CR1 snapshot.
+- Follow-up corrective repair: startup now runs a one-time data repair that backfills missing default manual country/sector/entity scoring keys into existing `risk_config` rows while preserving manual overrides. Completion is recorded in `data_migration_markers` so later deliberate manual removals are not re-added every startup. This closes the staging validation gap where a stored manual score map could omit Mauritius even though the single-country fallback remained safe.
 
 ## UI
 
@@ -21,3 +22,5 @@
 ## Tests
 
 - Added/updated regression coverage for manual lookup, memo source, API payload, grouped-list save normalisation, UI manual mode, duplicate display guard, and risk config versioning.
+- Added regression coverage that existing partial manual score maps are repaired by adding missing defaults without overwriting manually changed values.
+- Fixed mutating API tests to restore the shared test DB risk-model row after intentional update scenarios.

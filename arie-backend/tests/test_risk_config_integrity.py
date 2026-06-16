@@ -82,6 +82,112 @@ class TestSeededConfigShape:
         assert scores.get("united kingdom") == 1
         assert scores.get("mauritius") == 2
 
+    def test_existing_country_scores_backfill_missing_manual_defaults(self, temp_db):
+        """Startup repair preserves manual values but restores missing default countries."""
+        from db import get_db, _populate_default_scoring_config
+        db = get_db()
+        original = db.execute(
+            "SELECT country_risk_scores, sector_risk_scores, entity_type_scores FROM risk_config WHERE id=1"
+        ).fetchone()
+        try:
+            db.execute(
+                "UPDATE risk_config SET country_risk_scores=?, sector_risk_scores=?, entity_type_scores=? WHERE id=1",
+                (
+                    json.dumps({"iran": 4, "mauritius": 3, "france": 1}),
+                    json.dumps({"crypto": 4}),
+                    json.dumps({"sme": 2}),
+                ),
+            )
+            db.commit()
+
+            _populate_default_scoring_config(db)
+
+            row = db.execute("SELECT country_risk_scores, sector_risk_scores, entity_type_scores FROM risk_config WHERE id=1").fetchone()
+            countries = json.loads(row["country_risk_scores"])
+            sectors = json.loads(row["sector_risk_scores"])
+            entities = json.loads(row["entity_type_scores"])
+            assert countries["mauritius"] == 3  # existing manual override preserved
+            assert countries["united kingdom"] == 1
+            assert countries["bahrain"] == 2
+            assert countries["iran"] == 4
+            assert sectors["crypto"] == 4
+            assert sectors["banking"] == 2
+            assert entities["sme"] == 2
+            assert entities["listed company"] == 1
+        finally:
+            db.execute(
+                "UPDATE risk_config SET country_risk_scores=?, sector_risk_scores=?, entity_type_scores=? WHERE id=1",
+                (original["country_risk_scores"], original["sector_risk_scores"], original["entity_type_scores"]),
+            )
+            db.commit()
+            db.close()
+
+    def test_pr_cr1r_manual_defaults_repair_runs_once(self, temp_db):
+        """One-time repair backfills deployed gaps but does not undo later manual removals."""
+        from db import (
+            get_db,
+            _apply_pr_cr1r_manual_score_defaults_once,
+            _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY,
+        )
+        db = get_db()
+        original = db.execute(
+            "SELECT country_risk_scores, sector_risk_scores, entity_type_scores FROM risk_config WHERE id=1"
+        ).fetchone()
+        try:
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS data_migration_markers (
+                    marker_key TEXT PRIMARY KEY,
+                    description TEXT,
+                    applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            db.execute(
+                "DELETE FROM data_migration_markers WHERE marker_key=?",
+                (_PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY,),
+            )
+            db.execute(
+                "UPDATE risk_config SET country_risk_scores=?, sector_risk_scores=?, entity_type_scores=? WHERE id=1",
+                (
+                    json.dumps({"iran": 4, "france": 1}),
+                    json.dumps({"crypto": 4}),
+                    json.dumps({"sme": 2}),
+                ),
+            )
+            db.commit()
+
+            assert _apply_pr_cr1r_manual_score_defaults_once(db) is True
+            first = db.execute("SELECT country_risk_scores FROM risk_config WHERE id=1").fetchone()
+            first_countries = json.loads(first["country_risk_scores"])
+            assert first_countries["mauritius"] == 2
+            assert first_countries["iran"] == 4
+
+            first_countries.pop("mauritius")
+            db.execute(
+                "UPDATE risk_config SET country_risk_scores=? WHERE id=1",
+                (json.dumps(first_countries),),
+            )
+            db.commit()
+
+            assert _apply_pr_cr1r_manual_score_defaults_once(db) is False
+            second = db.execute("SELECT country_risk_scores FROM risk_config WHERE id=1").fetchone()
+            assert "mauritius" not in json.loads(second["country_risk_scores"])
+        finally:
+            db.execute(
+                "UPDATE risk_config SET country_risk_scores=?, sector_risk_scores=?, entity_type_scores=? WHERE id=1",
+                (original["country_risk_scores"], original["sector_risk_scores"], original["entity_type_scores"]),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO data_migration_markers (marker_key, description) VALUES (?, ?)",
+                (
+                    _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY,
+                    "Backfill missing default manual country/sector/entity score keys after PR-CR1R",
+                ),
+            )
+            db.commit()
+            db.close()
+
     def test_seeded_sector_risk_scores_is_dict(self, temp_db):
         from db import get_db
         db = get_db()

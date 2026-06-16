@@ -39,6 +39,8 @@ FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     "020",
 })
 
+_PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY = "pr_cr1r_manual_defaults"
+
 # Try to import psycopg2 for PostgreSQL support
 try:
     import psycopg2
@@ -2712,6 +2714,11 @@ def init_db():
         _run_migrations(db)
         db.commit()
         logger.info("startup: completed _run_migrations (inline)")
+
+        logger.info("startup: entering _apply_pr_cr1r_manual_score_defaults_once")
+        _apply_pr_cr1r_manual_score_defaults_once(db)
+        db.commit()
+        logger.info("startup: completed _apply_pr_cr1r_manual_score_defaults_once")
 
         logger.info("startup: entering _ensure_supervisor_audit_log_schema")
         _ensure_supervisor_audit_log_schema(db)
@@ -6616,10 +6623,11 @@ def _repair_risk_config_shapes(db: 'DBConnection'):
 
 def _populate_default_scoring_config(db: 'DBConnection'):
     """Populate default country/sector/entity scores for existing risk_config rows."""
-    existing = db.execute("SELECT country_risk_scores FROM risk_config WHERE id=1").fetchone()
-    if existing and existing["country_risk_scores"] and existing["country_risk_scores"] != '{}':
-        return  # Already populated
-    default_country = json.dumps({
+    existing = db.execute(
+        "SELECT country_risk_scores, sector_risk_scores, entity_type_scores "
+        "FROM risk_config WHERE id=1"
+    ).fetchone()
+    default_country_scores = {
         "australia": 1, "canada": 1, "france": 1, "germany": 1, "hong kong": 1,
         "ireland": 1, "japan": 1, "luxembourg": 1, "netherlands": 1, "new zealand": 1,
         "singapore": 1, "switzerland": 1, "united kingdom": 1, "united states": 1,
@@ -6641,8 +6649,8 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "iran": 4, "north korea": 4, "myanmar": 4, "russia": 4, "syria": 4, "belarus": 4,
         "cuba": 4, "crimea": 4, "afghanistan": 4, "somalia": 4, "libya": 4, "eritrea": 4, "sudan": 4,
         "bvi": 4, "british virgin islands": 4, "cayman islands": 4, "panama": 4
-    })
-    default_sector = json.dumps({
+    }
+    default_sector_scores = {
         "regulated financial": 1, "government": 1, "bank": 1, "listed company": 1,
         "agriculture": 1, "education": 1,
         "healthcare": 2, "technology": 2, "software": 2, "saas": 2, "manufacturing": 2,
@@ -6656,8 +6664,8 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "crypto": 4, "virtual asset": 4, "gambling": 4, "gaming": 4, "betting": 4,
         "arms": 4, "defence": 4, "military": 4, "shell company": 4, "nominee": 4,
         "precious metals": 4
-    })
-    default_entity = json.dumps({
+    }
+    default_entity_scores = {
         "listed company": 1, "regulated financial institution": 1, "regulated fi": 1,
         "regulated entity": 1, "government": 1, "government body": 1, "public sector": 1,
         "listed": 1, "regulated": 1,
@@ -6665,11 +6673,93 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "regulated fund": 2,
         "newly incorporated": 3, "trust": 3, "foundation": 3, "ngo": 3, "non-profit": 3,
         "unregulated fund": 4, "spv": 4, "shell company": 4, "shell": 4
-    })
+    }
+
+    def _merge_missing_defaults(raw, defaults):
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        except Exception:
+            parsed = {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        merged = dict(parsed)
+        changed = not parsed
+        for key, score in defaults.items():
+            if key not in merged:
+                merged[key] = score
+                changed = True
+        return merged, changed
+
+    if existing:
+        country_scores, country_changed = _merge_missing_defaults(existing["country_risk_scores"], default_country_scores)
+        sector_scores, sector_changed = _merge_missing_defaults(existing["sector_risk_scores"], default_sector_scores)
+        entity_scores, entity_changed = _merge_missing_defaults(existing["entity_type_scores"], default_entity_scores)
+        if country_changed or sector_changed or entity_changed:
+            db.execute(
+                "UPDATE risk_config SET country_risk_scores=?, sector_risk_scores=?, entity_type_scores=? WHERE id=1",
+                (
+                    json.dumps(country_scores, sort_keys=True),
+                    json.dumps(sector_scores, sort_keys=True),
+                    json.dumps(entity_scores, sort_keys=True),
+                )
+            )
+        return
+
     db.execute(
         "UPDATE risk_config SET country_risk_scores=?, sector_risk_scores=?, entity_type_scores=? WHERE id=1",
-        (default_country, default_sector, default_entity)
+        (
+            json.dumps(default_country_scores, sort_keys=True),
+            json.dumps(default_sector_scores, sort_keys=True),
+            json.dumps(default_entity_scores, sort_keys=True),
+        )
     )
+
+
+def _apply_pr_cr1r_manual_score_defaults_once(db: 'DBConnection') -> bool:
+    """One-time PR-CR1R data repair for incomplete manual scoring maps.
+
+    PR-CR1R restored `risk_config.country_risk_scores` as the active country
+    risk source. Some long-lived environments already had partial manual maps
+    persisted after the snapshot UI was removed. This repair adds missing
+    default manual keys once, then records a data_migration_markers marker so
+    future deliberate manual removals are not silently undone at every startup.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_migration_markers (
+            marker_key TEXT PRIMARY KEY,
+            description TEXT,
+            applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    existing_marker = db.execute(
+        "SELECT marker_key FROM data_migration_markers WHERE marker_key=?",
+        (_PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY,),
+    ).fetchone()
+    if existing_marker:
+        return False
+
+    _populate_default_scoring_config(db)
+    marker_values = (
+        "Backfill missing default manual country/sector/entity score keys after PR-CR1R",
+    )
+    if getattr(db, "is_postgres", False):
+        db.execute(
+            """
+            INSERT INTO data_migration_markers (marker_key, description)
+            VALUES (?, ?)
+            ON CONFLICT (marker_key) DO NOTHING
+            """,
+            (_PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY, *marker_values),
+        )
+    else:
+        db.execute(
+            "INSERT OR IGNORE INTO data_migration_markers (marker_key, description) VALUES (?, ?)",
+            (_PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY, *marker_values),
+        )
+    logger.info("PR-CR1R manual score defaults repair marked as applied")
+    return True
 
 
 # ============================================================================
