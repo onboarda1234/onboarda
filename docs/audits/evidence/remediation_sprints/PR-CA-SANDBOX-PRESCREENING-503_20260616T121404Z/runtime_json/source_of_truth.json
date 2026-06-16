@@ -1,0 +1,7 @@
+{
+  "base_origin_main_sha": "c40025b17daa80a35466a55b688fe7e571110cb3",
+  "original_failing_staging_sha": "3c093d6fec18dc8331ceb8be701360bbddb198d8",
+  "branch": "codex/pr-ca-sandbox-prescreening-503",
+  "repository": "onboarda1234/onboarda",
+  "default_branch": "main"
+}

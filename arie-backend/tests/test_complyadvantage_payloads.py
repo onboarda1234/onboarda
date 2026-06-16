@@ -88,8 +88,10 @@ def test_build_customer_person_strict_vs_relaxed():
     assert "customer_reference" not in strict
     assert strict["nationality"] == ["MU"]
     assert strict["country_of_birth"] == "MU"
-    assert strict["addresses"][0]["full_address"] == "1 Road"
-    assert strict["contact_information"]["email"] == "jane@example.test"
+    assert "addresses" not in strict
+    assert "contact_information" not in strict
+    assert "occupation" not in strict
+    assert "source_of_funds" not in strict
     assert "metadata" not in strict
     assert relaxed["full_name"] == "Jane Doe"
     assert "first_name" not in strict
@@ -142,17 +144,13 @@ def test_build_customer_company_strict_vs_relaxed():
     assert "external_identifier" not in strict
     assert "customer_reference" not in strict
     assert strict["legal_name"] == "Acme Ltd"
-    assert strict["registration_number"] == "C123"
-    assert strict["jurisdiction"] == "MU"
     assert strict["industry"] == "Payments"
-    assert strict["entity_type"] == "Private Company"
-    assert strict["incorporation_date"] == "2020-05-04"
-    assert strict["addresses"][0]["full_address"] == "1 Company Road, Port Louis"
-    assert strict["addresses"][0]["country_code"] == "MU"
-    assert strict["custom_fields"] == {
-        "source_system": "regmind",
-        "application_reference": "ARF-1",
-    }
+    assert "registration_number" not in strict
+    assert "jurisdiction" not in strict
+    assert "entity_type" not in strict
+    assert "incorporation_date" not in strict
+    assert "addresses" not in strict
+    assert "custom_fields" not in strict
     assert relaxed == {"legal_name": "Acme Ltd"}
     assert relaxed_customer["reference"] == "app-1"
 
@@ -220,9 +218,52 @@ def test_build_customer_company_safely_omits_unavailable_fields_and_fake_address
 
     assert validated.company.legal_name == "Sparse Co"
     assert company["legal_name"] == "Sparse Co"
-    assert company["jurisdiction"] == "MU"
+    assert "jurisdiction" not in company
     assert "registration_number" not in company
     assert "incorporation_date" not in company
     assert "entity_type" not in company
     assert "industry" not in company
     assert "addresses" not in company
+
+
+def test_strict_company_payload_uses_ca_sandbox_compatible_fields_only():
+    customer = build_customer_company(
+        {
+            "legal_name": "Sandbox Safe Ltd",
+            "application_id": "app-3",
+            "registration_number": "R123",
+            "country": "Mauritius",
+            "incorporation_date": "2020-01-01",
+            "entity_type": "Private Company",
+            "industry": "Payments",
+            "website": "https://example.test",
+            "registered_address": {"full_address": "1 Road", "country_code": "MU"},
+            "application_ref": "ARF-3",
+        },
+        strict=True,
+    )
+
+    assert customer["company"] == {"legal_name": "Sandbox Safe Ltd", "industry": "Payments"}
+
+
+def test_strict_person_payload_omits_ca_sandbox_rejected_address_and_contact_fields():
+    customer = build_customer_person(
+        {
+            "person_key": "p-3",
+            "full_name": "Jane Doe",
+            "date_of_birth": "1980-01-31",
+            "nationality": "Mauritius",
+            "country_of_birth": "Mauritius",
+            "email": "jane@example.test",
+            "phone": "+230000000",
+            "address": {"full_address": "1 Road", "country_code": "MU"},
+        },
+        strict=True,
+    )
+
+    assert customer["person"] == {
+        "date_of_birth": {"day": 31, "month": 1, "year": 1980},
+        "full_name": "Jane Doe",
+        "nationality": ["MU"],
+        "country_of_birth": "MU",
+    }

@@ -124,6 +124,34 @@ def test_exception_mapping(response, expected):
         client.get("/cases")
 
 
+def test_bad_request_preserves_sanitized_provider_context():
+    from screening_complyadvantage.exceptions import CABadRequest
+
+    response = FakeResponse(
+        status_code=400,
+        payload={
+            "type": "about:blank",
+            "title": "Invalid JSON Request",
+            "detail": "Unexpected error during json parsing",
+            "identifier": "provider-error-123",
+            "properties": {"errors": []},
+        },
+    )
+    client = make_client([response])
+
+    with pytest.raises(CABadRequest) as raised:
+        client.post("/v2/workflows/create-and-screen", json_body={"customer": {}})
+
+    assert raised.value.context == {
+        "status_code": "400",
+        "path": "/v2/workflows/create-and-screen",
+        "provider_error_type": "about:blank",
+        "provider_error_title": "Invalid JSON Request",
+        "provider_error_detail": "Unexpected error during json parsing",
+        "provider_error_identifier": "provider-error-123",
+    }
+
+
 def test_timeout_and_network_mapping():
     from screening_complyadvantage.exceptions import CATimeout, CAUnexpectedResponse
 

@@ -151,8 +151,8 @@ def test_screen_company_delegates_to_entity_context():
     assert call["application_context"].screening_subject_kind == "entity"
     strict_company = call["strict_customer"]["company"]
     assert strict_company["legal_name"] == "Acme Ltd"
-    assert strict_company["jurisdiction"] == "MU"
-    assert strict_company["custom_fields"] == {"source_system": "regmind"}
+    assert "jurisdiction" not in strict_company
+    assert "custom_fields" not in strict_company
     assert call["screening_configuration_identifier"] == "cfg-123"
 
 
@@ -244,8 +244,8 @@ def test_run_full_screening_includes_intermediaries_with_entity_payload():
     assert intermediary_call["application_context"].screening_subject_name == "HoldCo Ltd"
     assert ":intermediary:key-i-1:strict" in intermediary_call["strict_external_identifier"]
     assert intermediary_call["strict_customer"]["company"]["legal_name"] == "HoldCo Ltd"
-    assert intermediary_call["strict_customer"]["company"]["registration_number"] == "H123"
-    assert intermediary_call["strict_customer"]["company"]["jurisdiction"] == "MU"
+    assert "registration_number" not in intermediary_call["strict_customer"]["company"]
+    assert "jurisdiction" not in intermediary_call["strict_customer"]["company"]
     assert result["intermediary_screenings"][0]["person_type"] == "intermediary"
     assert result["intermediary_screenings"][0]["person_name"] == "HoldCo Ltd"
     assert result["intermediary_screenings"][0]["requires_review"] is True
