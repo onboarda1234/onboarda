@@ -2540,6 +2540,40 @@ from screening_state import (
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
 from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler
 
+ENTERPRISE_ROADMAP_AGENT_IDS = {8, 9, 10}
+
+
+def _feature_enabled(flag_name):
+    return bool(flags.is_enabled(flag_name))
+
+
+def _sar_str_enabled():
+    return _feature_enabled("ENABLE_SAR_WORKFLOW") and _feature_enabled("ENABLE_SAR_STR")
+
+
+def _regulatory_intelligence_enabled():
+    return _feature_enabled("ENABLE_REGULATORY_INTELLIGENCE_FULL")
+
+
+def _ai_supervisor_enabled():
+    return _feature_enabled("ENABLE_AI_SUPERVISOR")
+
+
+def _supervisor_audit_enabled():
+    return _ai_supervisor_enabled() and _feature_enabled("ENABLE_SUPERVISOR_AUDIT")
+
+
+def _enterprise_module_disabled(handler, module_name, status=403):
+    handler.set_status(status)
+    handler.write({
+        "error": f"{module_name} is an Enterprise module and is not active in the pilot environment.",
+        "code": "enterprise_module_inactive",
+        "module": module_name,
+        "availability": "Not active in pilot",
+        "release": "Future release",
+    })
+    handler.finish()
+
 # Public API v1 — versioned external endpoints
 from public_api import (
     PublicHealthHandler,
@@ -10854,6 +10888,8 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
+        if not _regulatory_intelligence_enabled():
+            return _enterprise_module_disabled(self, "Regulatory Intelligence")
 
         db = get_db()
         rows = db.execute("""
@@ -10887,6 +10923,8 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _regulatory_intelligence_enabled():
+            return _enterprise_module_disabled(self, "Regulatory Intelligence")
 
         if not self.check_rate_limit("regulatory_upload", max_attempts=10, window_seconds=60):
             return
@@ -11077,6 +11115,8 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _regulatory_intelligence_enabled():
+            return _enterprise_module_disabled(self, "Regulatory Intelligence")
 
         data = self.get_json()
         suggestion_id = (data.get("suggestion_id") or "").strip()
@@ -11147,6 +11187,8 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _regulatory_intelligence_enabled():
+            return _enterprise_module_disabled(self, "Regulatory Intelligence")
 
         data = self.get_json()
         source_text = (data.get("source_text") or "").strip()
@@ -11239,6 +11281,8 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
+        if not _regulatory_intelligence_enabled():
+            return _enterprise_module_disabled(self, "Regulatory Intelligence")
 
         db = get_db()
         row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
@@ -11483,6 +11527,12 @@ def _validate_ai_agent_payload(data, db, existing_id=None):
         errors.append({"code": "invalid_stage", "field": "stage", "message": "stage is not an allowed AI agent stage"})
 
     enabled = _bool_from_payload(data.get("enabled", True), "enabled", errors)
+    if agent_number in ENTERPRISE_ROADMAP_AGENT_IDS and enabled:
+        errors.append({
+            "code": "enterprise_agent_inactive",
+            "field": "enabled",
+            "message": "Agents 8, 9, and 10 are Enterprise roadmap agents and are not active in pilot.",
+        })
     checks = data.get("checks", [])
     if not isinstance(checks, list):
         errors.append({"code": "invalid_type", "field": "checks", "message": "checks must be a list"})
@@ -13246,6 +13296,11 @@ class AIAgentsHandler(BaseHandler):
             a = dict(r)
             a["checks"] = safe_json_loads(a["checks"]) if a["checks"] else []
             a["enabled"] = bool(a["enabled"])
+            if a.get("agent_number") in ENTERPRISE_ROADMAP_AGENT_IDS:
+                a["enabled"] = False
+                a["scope"] = "Enterprise roadmap"
+                a["availability"] = "Not active in pilot"
+                a["status"] = "Coming Soon"
             agents.append(a)
         self.success({"agents": agents})
 
@@ -16043,6 +16098,8 @@ class SupervisorAuditExportHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco"])
         if not user:
             return
+        if not _supervisor_audit_enabled():
+            return _enterprise_module_disabled(self, "AI Compliance Supervisor Audit")
 
         fmt = self.get_argument("format", "json").lower()
         if fmt not in ("json", "csv"):
@@ -22702,6 +22759,8 @@ class SupervisorRunHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _ai_supervisor_enabled():
+            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
@@ -22802,6 +22861,8 @@ class SupervisorResultHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
+        if not _ai_supervisor_enabled():
+            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
@@ -28167,6 +28228,8 @@ class SARListHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _sar_str_enabled():
+            return _enterprise_module_disabled(self, "SAR/STR")
 
         status_filter = self.get_argument("status", None)
         db = get_db()
@@ -28195,6 +28258,8 @@ class SARListHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _sar_str_enabled():
+            return _enterprise_module_disabled(self, "SAR/STR")
 
         data = self.get_json()
         subject_name = data.get("subject_name", "").strip()
@@ -28250,6 +28315,8 @@ class SARDetailHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _sar_str_enabled():
+            return _enterprise_module_disabled(self, "SAR/STR")
 
         db = get_db()
         sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
@@ -28270,6 +28337,8 @@ class SARDetailHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _sar_str_enabled():
+            return _enterprise_module_disabled(self, "SAR/STR")
 
         data = self.get_json()
         db = get_db()
@@ -28311,6 +28380,8 @@ class SARWorkflowHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco"])
         if not user:
             return
+        if not _sar_str_enabled():
+            return _enterprise_module_disabled(self, "SAR/STR")
 
         data = self.get_json()
         action = data.get("action")
@@ -28393,6 +28464,8 @@ class SARAutoTriggerHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        if not _sar_str_enabled():
+            return _enterprise_module_disabled(self, "SAR/STR")
 
         data = self.get_json()
         alert_id = data.get("alert_id")

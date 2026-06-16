@@ -32,7 +32,10 @@ _REQUIRED_CLIENT_FLAGS = [
     "ENABLE_REGULATORY_INTELLIGENCE_FULL",
     "ENABLE_MONITORING_DASHBOARD",
     "ENABLE_SAR_WORKFLOW",
+    "ENABLE_SAR_STR",
     "ENABLE_AI_SUPERVISOR",
+    "ENABLE_SUPERVISOR_DASHBOARD",
+    "ENABLE_SUPERVISOR_AUDIT",
     "ENABLE_KPI_DASHBOARD",
     "ENABLE_KPI_DEMO_DATA",
     "ENABLE_ROLE_SWITCHER",
@@ -148,3 +151,20 @@ class TestDefaultFlagConsistency:
         """Enterprise KPI analytics must be opt-in for staging and production pilot."""
         for env in ("staging", "production"):
             assert _DEFAULT_FLAGS[env]["ENABLE_KPI_DASHBOARD"] is False
+            assert _DEFAULT_FLAGS[env]["ENABLE_KPI_DEMO_DATA"] is False
+
+    def test_enterprise_modules_are_default_off_for_pilot_environments(self):
+        """Enterprise modules must not be active by default in staging/production pilot."""
+        required_off = [
+            "ENABLE_REGULATORY_INTELLIGENCE_FULL",
+            "ENABLE_SAR_WORKFLOW",
+            "ENABLE_SAR_STR",
+            "ENABLE_AI_SUPERVISOR",
+            "ENABLE_SUPERVISOR_DASHBOARD",
+            "ENABLE_SUPERVISOR_AUDIT",
+            "ENABLE_KPI_DASHBOARD",
+            "ENABLE_KPI_DEMO_DATA",
+        ]
+        for env in ("staging", "production"):
+            enabled = [flag for flag in required_off if _DEFAULT_FLAGS[env].get(flag) is not False]
+            assert enabled == [], f"{env} enables enterprise pilot-scope flags by default: {enabled}"

@@ -1015,11 +1015,14 @@ class TestCaseCommandCentreRuntime:
         assert "AI Agent Pipeline Results" not in overview_region
         assert "Business Profile" not in html
         assert 'id="detail-application-data" style="display:none;"' in html
-        assert 'details id="detail-ai-governance-evidence-details"' in supervisor_region
-        assert 'AI Governance &amp; Evidence Trail' in supervisor_region
+        assert 'Coming Soon — Enterprise Module' in supervisor_region
+        assert 'The AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
+        assert 'Not active in pilot' in supervisor_region
+        assert 'btn-run-supervisor' not in supervisor_region
+        assert 'Run Analysis' not in supervisor_region
         assert 'AI Explainability Layer' not in overview_region
-        assert 'AI Explainability Layer' in supervisor_region
-        assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in html
+        assert 'AI Explainability Layer' not in supervisor_region
+        assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' not in supervisor_region
         assert 'details id="detail-prescreen-summary-details" open' in html
         assert 'Pre-Screening Summary' in html
         assert 'overview-top-layout' not in html

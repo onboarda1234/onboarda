@@ -101,13 +101,10 @@ class TestPartB_AdvisoryLabeling:
             "Validation panel should have advisory badge"
 
     def test_supervisor_tab_has_advisory_banner(self, backoffice_html):
-        sv_match = re.search(
-            r'AI Governance &amp; Evidence Trail.*?AI-generated content is advisory only.*?Officer review is required before any compliance decision',
-            backoffice_html,
-            re.DOTALL
-        )
-        assert sv_match is not None, \
-            "Supervisor tab should have the compact AI advisory notice"
+        supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
+        assert 'Coming Soon — Enterprise Module' in supervisor_region
+        assert 'The AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
+        assert 'Not active in pilot' in supervisor_region
 
     def test_ai_explainability_layer_moved_to_supervisor_tab(self, backoffice_html):
         overview_region = _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
@@ -129,18 +126,18 @@ class TestPartB_AdvisoryLabeling:
             "Overview score computation should keep the CSV export action"
         assert 'downloadRiskPDF()' in overview_region, \
             "Overview score computation should keep the PDF export action"
-        assert 'AI Governance &amp; Evidence Trail' in supervisor_region, \
-            "Supervisor tab should contain the AI Governance & Evidence Trail"
+        assert 'Coming Soon — Enterprise Module' in supervisor_region, \
+            "Supervisor tab should show the enterprise Coming Soon state"
         assert 'Rule-Based Score Computation' not in supervisor_region, \
             "Supervisor tab should not contain deterministic rule-based score computation"
-        assert 'AI Explainability Layer' in supervisor_region, \
-            "Supervisor tab should expose the AI Explainability Layer"
-        assert 'Risk drivers, AI reasoning, validation context, and supervisor signals.' in backoffice_html, \
-            "AI Explainability Layer should describe the explainability context"
+        assert 'AI Explainability Layer' not in supervisor_region, \
+            "Supervisor tab should not expose operational explainability UI in pilot"
+        assert 'btn-run-supervisor' not in supervisor_region, \
+            "Supervisor tab should not expose a runnable supervisor control in pilot"
         assert 'AI Agent Pipeline Results' not in overview_region, \
             "Legacy AI Agent Pipeline Results summary should not return to the Overview UI"
-        assert 'AI Agent Pipeline Results' in supervisor_region, \
-            "AI Agent Pipeline Results should live under the supervisor tab"
+        assert 'AI Agent Pipeline Results' not in supervisor_region, \
+            "AI Agent Pipeline Results should not appear operational in pilot"
 
     def test_supervisor_tab_renamed_to_ai_compliance_supervisor(self, backoffice_html):
         detail_nav_start = backoffice_html.index('id="tab-overview"')
@@ -152,10 +149,9 @@ class TestPartB_AdvisoryLabeling:
     def test_ai_governance_evidence_trail_is_collapsible(self, backoffice_html):
         supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
 
-        assert 'id="detail-ai-governance-evidence-details"' in supervisor_region
-        assert 'Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability' in supervisor_region
-        assert 'updateGovernanceEvidenceTrailState' in backoffice_html
-        assert "setDetailsExpandedState('detail-ai-governance-evidence-details'" in backoffice_html
+        assert 'Coming Soon — Enterprise Module' in supervisor_region
+        assert 'id="detail-ai-governance-evidence-details"' not in supervisor_region
+        assert 'Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability' not in supervisor_region
 
     def test_kyc_documents_tab_has_advisory(self, backoffice_html):
         kyc_match = re.search(
@@ -193,19 +189,12 @@ class TestPartB_AdvisoryLabeling:
             "Supervisor verdict panel must have advisory badge"
 
     def test_supervisor_sub_panels_have_advisory(self, backoffice_html):
-        """Case Aggregate, Agent Results, Contradictions panels have advisory badges."""
-        assert re.search(
-            r'Case Aggregate.*?ai-advisory-badge.*?Advisory',
-            backoffice_html, re.DOTALL
-        ), "Case Aggregate panel should have advisory badge"
-        assert re.search(
-            r'AI Agent Pipeline Results.*?ai-advisory-badge.*?Advisory',
-            backoffice_html, re.DOTALL
-        ), "AI Agent Pipeline Results panel should have advisory badge"
-        assert re.search(
-            r'Contradictions Detected.*?ai-advisory-badge.*?Advisory',
-            backoffice_html, re.DOTALL
-        ), "Contradictions panel should have advisory badge"
+        """Operational supervisor panels are not shown in pilot."""
+        supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
+        assert 'Case Aggregate' not in supervisor_region
+        assert 'AI Agent Pipeline Results' not in supervisor_region
+        assert 'Contradictions Detected' not in supervisor_region
+        assert 'Coming Soon — Enterprise Module' in supervisor_region
 
 
 # ═══════════════════════════════════════════════════
@@ -380,13 +369,9 @@ class TestPartE_VisualDistinction:
             "Rule Engine panel should be labeled as Deterministic"
 
     def test_rules_triggered_panel_labeled_rule_based(self, backoffice_html):
-        match = re.search(
-            r'Compliance Rules Triggered.*?Rule-Based',
-            backoffice_html,
-            re.DOTALL
-        )
-        assert match is not None, \
-            "Compliance Rules Triggered panel should be labeled Rule-Based"
+        supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
+        assert 'Compliance Rules Triggered' not in supervisor_region
+        assert 'Coming Soon — Enterprise Module' in supervisor_region
 
 
 # ═══════════════════════════════════════════════════

@@ -1,0 +1,18 @@
+{
+  "base_origin_main_sha": "5b98eee3324c4bed33815c134afaf35dd009b7b1",
+  "branch": "codex/pr-pilot-scope-1b-sar-enterprise-surface-verification",
+  "focused_tests": {
+    "command": "/opt/homebrew/bin/pytest arie-backend/tests/test_feature_flags.py arie-backend/tests/test_pilot_scope_enterprise_modules_static.py arie-backend/tests/test_pilot_scope_backend_lockdown.py -q",
+    "result": "25 passed in 10.64s"
+  },
+  "full_suite_without_e2e": {
+    "command": "/opt/homebrew/bin/pytest arie-backend/tests --ignore=arie-backend/tests/test_complyadvantage_runtime_e2e.py --ignore=arie-backend/tests/test_pr13_lifecycle_e2e_report.py --ignore=arie-backend/tests/test_staging_e2e.py -q",
+    "result": "5458 passed, 17 skipped in 233.06s",
+    "excluded": [
+      "arie-backend/tests/test_complyadvantage_runtime_e2e.py",
+      "arie-backend/tests/test_pr13_lifecycle_e2e_report.py",
+      "arie-backend/tests/test_staging_e2e.py"
+    ]
+  },
+  "staging_version_proof": "pending"
+}
