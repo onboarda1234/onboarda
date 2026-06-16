@@ -1137,7 +1137,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <nav class="sidebar-nav" aria-label="Back office navigation">
     <div class="snav-section">Main</div>
     <div class="snav-item active" data-view="dashboard" onclick="showView('dashboard',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Dashboard</div>
-    <div class="snav-item" data-view="kpis" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> KPI Dashboard</div>
+    <div class="snav-item" data-view="kpis" data-enterprise-coming-soon="true" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span><span class="snav-label">KPI Dashboard</span><span class="snav-badge">Coming Soon</span></div>
     <div class="snav-item" data-view="applications" onclick="showView('applications',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span> Applications</div>
     <div class="snav-item" data-view="cases" onclick="showView('cases',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Case Management</div>
     <div class="snav-section">Compliance</div>
@@ -1327,32 +1327,18 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ KPI DASHBOARD VIEW ═══════════════ -->
 <div class="view" id="view-kpis">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
-    <div>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Real-time performance metrics across operations, compliance, AI, and team productivity.</p>
-    </div>
-    <div class="kpi-date-filter">
-      <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="kpi-period" onchange="renderKPIDashboard()">
-        <option value="month">This Month</option>
-        <option value="quarter">This Quarter</option>
-        <option value="ytd">Year to Date</option>
-        <option value="all">All Time</option>
-      </select>
-      <button class="btn btn-outline btn-sm" onclick="exportKPIReport()">📥 Export Report</button>
+  <div class="enterprise-coming-soon" data-module="kpi-dashboard">
+    <div class="enterprise-coming-soon-panel">
+      <div class="enterprise-coming-soon-kicker">
+        <span class="badge">Coming Soon</span>
+        <span class="badge purple">Enterprise Analytics</span>
+        <span class="badge amber">Not active in pilot</span>
+      </div>
+      <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
+      <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
+      <div class="enterprise-coming-soon-note">Enterprise Analytics will provide runtime-backed KPI reporting, operational performance insights, compliance quality analytics, and team productivity reporting after it is validated for pilot use.</div>
     </div>
   </div>
-
-  <!-- Section 1: Operational Efficiency -->
-  <div class="kpi-section" id="kpi-section-ops"></div>
-
-  <!-- Section 2: Risk & Compliance Quality -->
-  <div class="kpi-section" id="kpi-section-risk"></div>
-
-  <!-- Section 3: AI Performance -->
-  <div class="kpi-section" id="kpi-section-ai"></div>
-
-  <!-- Section 4: Team Productivity -->
-  <div class="kpi-section" id="kpi-section-team"></div>
 </div>
 
 <!-- ═══════════════ APPLICATIONS VIEW ═══════════════ -->
@@ -3955,11 +3941,15 @@ var BO_AUTH_SESSION_SEQ = 0;
 var BO_ACTIVE_SESSION_ID = 0;
 
 var ENTERPRISE_COMING_SOON_VIEWS = {
+  'kpis': true,
   'reg-intel': true,
   'supervisor': true,
   'supervisor-audit': true
 };
 var BACKOFFICE_ROUTE_ALIASES = {
+  'kpis': 'kpis',
+  'kpi-dashboard': 'kpis',
+  'enterprise-analytics': 'kpis',
   'regulatory-intelligence': 'reg-intel',
   'reg-intel': 'reg-intel',
   'ai-compliance-supervisor': 'supervisor',
@@ -4085,11 +4075,11 @@ function applyEnvironmentUI() {
     }
   }
 
-  // KPI: if demo data mode, show subtle label
-  if (FEATURE_FLAGS.ENABLE_KPI_DEMO_DATA) {
+  // KPI analytics remains inactive in pilot unless explicitly enabled with runtime-backed data.
+  if (FEATURE_FLAGS.ENABLE_KPI_DASHBOARD && FEATURE_FLAGS.ENABLE_KPI_DEMO_DATA) {
     setTimeout(function() {
-      var kpiView = document.getElementById('view-kpi');
-      if (kpiView) {
+      var kpiView = document.getElementById('view-kpis');
+      if (kpiView && !(typeof isEnterpriseComingSoonView === 'function' && isEnterpriseComingSoonView('kpis'))) {
         var label = document.createElement('div');
         label.style.cssText = 'background:#fef3c7;color:#92400e;padding:6px 12px;border-radius:6px;font-size:11px;margin:8px 16px;text-align:center;';
         label.textContent = 'Dashboard shows sample data for demonstration purposes';
