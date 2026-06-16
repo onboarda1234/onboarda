@@ -1,0 +1,12 @@
+[
+  {"scenario": "S01", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S02", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S03", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S04", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S05", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S06", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S07", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S08", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S09", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]},
+  {"scenario": "S10", "portal_created": false, "verdict": "BLOCKED", "defects": ["prescreening_smoke_503"]}
+]

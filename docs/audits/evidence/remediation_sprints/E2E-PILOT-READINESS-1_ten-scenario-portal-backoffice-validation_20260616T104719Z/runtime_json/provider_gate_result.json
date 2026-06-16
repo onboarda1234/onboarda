@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "ca_runtime_active": true,
+  "operator_sandbox_confirmed": true,
+  "api_exposes_workspace_identifier": false,
+  "active_aml": "ComplyAdvantage Mesh",
+  "active_aml_key": "complyadvantage",
+  "requested_provider": "complyadvantage",
+  "ca_status": "live",
+  "ca_fallback_mode": "disabled",
+  "ca_simulation_fallback_enabled": false,
+  "sumsub_status": "live",
+  "sumsub_configured": true,
+  "opencorporates_status": "simulated",
+  "opencorporates_configured": false
+}

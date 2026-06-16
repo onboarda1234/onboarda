@@ -1,0 +1,29 @@
+{
+  "run_id": "20260616T104719Z",
+  "origin_main_sha": "3c093d6fec18dc8331ceb8be701360bbddb198d8",
+  "staging_git_sha": "3c093d6fec18dc8331ceb8be701360bbddb198d8",
+  "staging_image_tag": "3c093d6fec18dc8331ceb8be701360bbddb198d8",
+  "deploy_workflow_run_id": 27611628454,
+  "deploy_workflow_conclusion": "success",
+  "stale_deploy_run_cancelled": 27609816957,
+  "provider_gate": "PASS",
+  "provider_mode": {
+    "active_aml": "ComplyAdvantage Mesh",
+    "active_aml_key": "complyadvantage",
+    "ca_status": "live",
+    "fallback_mode": "disabled",
+    "simulation_fallback_enabled": false,
+    "sandbox_confirmation": "operator-confirmed; workspace identifier not exposed by API",
+    "sumsub_status": "live",
+    "opencorporates_status": "simulated"
+  },
+  "prescreening_smoke": {
+    "application_ref": "ARF-2026-900303",
+    "portal_create_status": 201,
+    "backoffice_detail_status": 200,
+    "submit_statuses": [503, 503],
+    "result": "BLOCKED"
+  },
+  "ten_scenario_e2e_executed": false,
+  "final_pilot_readiness_verdict": "FAIL / NOT READY"
+}

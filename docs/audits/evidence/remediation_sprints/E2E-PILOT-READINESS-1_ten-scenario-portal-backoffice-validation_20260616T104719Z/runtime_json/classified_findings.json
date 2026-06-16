@@ -1,0 +1,16 @@
+[
+  {
+    "severity": "P0",
+    "key": "prescreening_smoke_503",
+    "description": "Aligned staging reports ComplyAdvantage Mesh active with fallback disabled, but a clean synthetic portal prescreening submit returned 503 twice.",
+    "application_ref": "ARF-2026-900303",
+    "submit_statuses": [503, 503],
+    "impact": "Blocks ten-scenario portal-to-back-office E2E and pilot readiness."
+  },
+  {
+    "severity": "P2",
+    "key": "provider_workspace_not_api_visible",
+    "description": "/api/screening/status does not expose the non-secret CA workspace mode or active config label.",
+    "impact": "Sandbox confirmation depends on operator statement plus runtime behavior."
+  }
+]
