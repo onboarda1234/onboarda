@@ -42,7 +42,7 @@ def test_csv_export_record_count_uses_header(monkeypatch):
             200,
             {
                 "X-Report-Record-Count": "2",
-                "X-Report-Canonical-View": "applications_report_v1",
+                "X-Report-Canonical-View": smoke.REPORT_CANONICAL_VIEW,
                 "X-Report-Field-List": smoke.DEFAULT_FIELDS,
             },
             body,
@@ -52,7 +52,7 @@ def test_csv_export_record_count_uses_header(monkeypatch):
 
     assert smoke._check_csv_export("https://example.test/api", "token", False) == {
         "rows": 2,
-        "canonical_view": "applications_report_v1",
+        "canonical_view": smoke.REPORT_CANONICAL_VIEW,
         "field_list": smoke.DEFAULT_FIELDS,
     }
 
@@ -108,7 +108,7 @@ def test_run_smoke_checks_core_day5_gates(monkeypatch):
             "report": {
                 "pending_statuses": ["draft", "pricing_review"],
                 "edd_routed_statuses": ["edd_required"],
-                "canonical_view": "applications_report_v1",
+                "canonical_view": smoke.REPORT_CANONICAL_VIEW,
             },
         },
         "/dashboard": {
@@ -116,7 +116,7 @@ def test_run_smoke_checks_core_day5_gates(monkeypatch):
             "in_progress_applications": 2,
             "edd": 1,
             "pending_statuses": ["draft", "pricing_review"],
-            "canonical_view": "applications_report_v1",
+            "canonical_view": smoke.DASHBOARD_CANONICAL_VIEW,
         },
         "/applications": {
             "applications": [
@@ -136,7 +136,7 @@ def test_run_smoke_checks_core_day5_gates(monkeypatch):
                 200,
                 {
                     "X-Report-Record-Count": "4",
-                    "X-Report-Canonical-View": "applications_report_v1",
+                    "X-Report-Canonical-View": smoke.REPORT_CANONICAL_VIEW,
                     "X-Report-Field-List": smoke.DEFAULT_FIELDS,
                 },
                 csv_body,
@@ -161,5 +161,6 @@ def test_run_smoke_checks_core_day5_gates(monkeypatch):
     assert result["git_sha"] == "abc123456"
     assert result["classified_total"] == 4
     assert result["dashboard"]["in_progress_applications"] == 2
+    assert result["dashboard"]["canonical_view"] == smoke.DASHBOARD_CANONICAL_VIEW
     assert result["csv"]["rows"] == 4
     assert result["applications_kpi_data"] == {"pending": 2, "edd": 1}
