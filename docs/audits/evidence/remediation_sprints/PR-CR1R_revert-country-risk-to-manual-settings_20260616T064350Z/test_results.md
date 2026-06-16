@@ -65,3 +65,23 @@ pytest -q tests/test_fresh_install_pg_chain.py::test_fresh_sqlite_init_and_migra
 ```
 
 Result: `3 passed in 0.79s`.
+
+Second follow-up corrective branch after staging smoke found duplicate alias entries in `/api/config/country-risk`:
+
+```bash
+python3 -m py_compile arie-backend/server.py arie-backend/tests/test_api.py
+git diff --check
+cd arie-backend
+pytest -q tests/test_api.py::TestRiskModelAdminConfigSafety::test_country_risk_endpoint_dedupes_manual_aliases tests/test_api.py::TestRiskModelAdminConfigSafety::test_country_risk_endpoint_exposes_manual_settings_source tests/test_country_risk_governance.py tests/test_country_risk_governance_ui_static.py tests/test_risk_config_integrity.py::TestSeededConfigShape::test_pr_cr1r_manual_defaults_repair_runs_once
+```
+
+Result: `11 passed in 3.16s`.
+
+Second follow-up broader risk/memo/API slice:
+
+```bash
+cd arie-backend
+pytest -q tests/test_risk_config_integrity.py tests/test_country_risk_governance.py tests/test_country_risk_governance_ui_static.py tests/test_api.py::TestRiskModelAdminConfigSafety tests/test_risk_scoring.py tests/test_risk_elevation.py tests/test_risk_recomputation.py tests/test_phase3_memo_integrity.py
+```
+
+Result: `250 passed in 3.58s`.

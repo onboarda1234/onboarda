@@ -11965,8 +11965,14 @@ class CountryRiskConfigHandler(BaseHandler):
                 self.success({"country_risk": country_risk})
                 return
             entries = []
+            seen_country_keys = set()
+            from rule_engine import normalize_country_key
             for country_key in sorted(scores):
-                entry = country_risk_details(country_key, scores)
+                canonical_key = normalize_country_key(country_key)
+                if not canonical_key or canonical_key in seen_country_keys:
+                    continue
+                seen_country_keys.add(canonical_key)
+                entry = country_risk_details(canonical_key, scores)
                 entry["active_for_scoring"] = True
                 entry["mode"] = "manual_settings"
                 entries.append(entry)
