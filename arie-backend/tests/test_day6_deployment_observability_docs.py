@@ -28,9 +28,10 @@ def test_day6_smoke_command_uses_token_env_not_literal_token():
 
     assert 'BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN"' in section
     assert "--expected-sha" in section
-    assert "--expected-total 22" in section
-    assert "--expected-pending 21" in section
-    assert "--expected-edd 1" in section
+    assert "Use `--expected-total`, `--expected-pending`, and `--expected-edd` only" in section
+    assert "--expected-total 22" not in section
+    assert "--expected-pending 21" not in section
+    assert "--expected-edd 1" not in section
     assert "--run-api-smoke" in section
     assert "Do not paste bearer tokens" in section
     assert "--token " not in section

@@ -28,15 +28,16 @@ def test_day6_closing_runbook_pins_merge_order_and_ci_gate():
     assert "all required checks are green" in text
 
 
-def test_day6_closing_runbook_pins_staging_smoke_command_and_counts():
+def test_day6_closing_runbook_pins_staging_smoke_command_and_optional_counts():
     text = _read_runbook()
 
     assert "arie-backend/scripts/qa/day5_closing_smoke.py" in text
     assert "--api-base https://staging.regmind.co/api" in text
     assert "--expected-sha" in text
-    assert "--expected-total 22" in text
-    assert "--expected-pending 21" in text
-    assert "--expected-edd 1" in text
+    assert "Use `--expected-total`, `--expected-pending`, and `--expected-edd` only" in text
+    assert "--expected-total 22" not in text
+    assert "--expected-pending 21" not in text
+    assert "--expected-edd 1" not in text
     assert 'BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN"' in text
     assert "--token-env" in text
 

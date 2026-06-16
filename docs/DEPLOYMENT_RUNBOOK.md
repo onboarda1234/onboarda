@@ -203,13 +203,11 @@ python3 arie-backend/scripts/qa/staging_release_evidence.py \
   --expected-sha "$GIT_SHA" \
   --evidence-dir "$EVIDENCE_DIR" \
   --run-api-smoke \
-  --expected-total 22 \
-  --expected-pending 21 \
-  --expected-edd 1 \
   --strict
 ```
 
 The collector writes `health.json`, `liveness.json`, authenticated `version.json`, ECS/task/image `runtime_baseline.json`, optional `api_smoke.json`, and `summary.json`.
+Use `--expected-total`, `--expected-pending`, and `--expected-edd` only for controlled fixture datasets with known counts.
 
 ### Authenticated staging browser smoke
 
@@ -310,7 +308,7 @@ Attach this ledger to every Day 6 staging deployment note before the deployment 
 | Build provenance | GitHub Actions `deploy-staging.yml` run | Run URL, run number, and actor recorded |
 | ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
 | Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
-| Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, CSV/report `canonical_view: applications_report_v1`, dashboard `canonical_view: dashboard_metrics_v2`, and expected total/pending/EDD counts |
+| Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, reconciliation passes, CSV/report `canonical_view: applications_report_v1`, dashboard `canonical_view: dashboard_metrics_v2`, and live dashboard/report/application counts agree |
 | Authenticated browser smoke | `arie-backend/scripts/qa/staging_browser_smoke.js` | Real QA login succeeds; required back-office pages/tabs load; screenshots and `report.json` attached; no token injection or auth bypass |
 | Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
 
@@ -324,9 +322,6 @@ python3 arie-backend/scripts/qa/staging_release_evidence.py \
   --expected-sha "$GIT_SHA" \
   --evidence-dir "$EVIDENCE_DIR" \
   --run-api-smoke \
-  --expected-total 22 \
-  --expected-pending 21 \
-  --expected-edd 1 \
   --strict
 ```
 
@@ -336,11 +331,10 @@ Recommended smoke command:
 BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
 python3 arie-backend/scripts/qa/day5_closing_smoke.py \
   --api-base https://staging.regmind.co/api \
-  --expected-sha "$GIT_SHA" \
-  --expected-total 22 \
-  --expected-pending 21 \
-  --expected-edd 1
+  --expected-sha "$GIT_SHA"
 ```
+
+Use `--expected-total`, `--expected-pending`, and `--expected-edd` only when validating a controlled fixture dataset with known counts. Do not use stale fixed counts for live staging data.
 
 Use `--token-env BACKOFFICE_TOKEN` if the token is stored under a different environment variable name. Do not paste bearer tokens into release notes, GitHub comments, or shell history.
 

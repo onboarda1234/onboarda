@@ -12,17 +12,17 @@ on:
         required: false
         default: ""
       expected_total:
-        description: "Expected analytics total"
-        required: true
-        default: "22"
+        description: "Optional expected analytics total for controlled fixture datasets"
+        required: false
+        default: ""
       expected_pending:
-        description: "Expected analytics pending count"
-        required: true
-        default: "21"
+        description: "Optional expected analytics pending count for controlled fixture datasets"
+        required: false
+        default: ""
       expected_edd:
-        description: "Expected analytics EDD-routed count"
-        required: true
-        default: "1"
+        description: "Optional expected analytics EDD-routed count for controlled fixture datasets"
+        required: false
+        default: ""
       show_fixtures:
         description: "Pass show_fixtures=true to supported smoke endpoints"
         required: true
@@ -119,10 +119,16 @@ jobs:
             --api-base "${{ inputs.api_base }}"
             --token-env BACKOFFICE_TOKEN
             --expected-sha "$EXPECTED_SHA"
-            --expected-total "${{ inputs.expected_total }}"
-            --expected-pending "${{ inputs.expected_pending }}"
-            --expected-edd "${{ inputs.expected_edd }}"
           )
+          if [ -n "${{ inputs.expected_total }}" ]; then
+            args+=(--expected-total "${{ inputs.expected_total }}")
+          fi
+          if [ -n "${{ inputs.expected_pending }}" ]; then
+            args+=(--expected-pending "${{ inputs.expected_pending }}")
+          fi
+          if [ -n "${{ inputs.expected_edd }}" ]; then
+            args+=(--expected-edd "${{ inputs.expected_edd }}")
+          fi
           if [ "${{ inputs.show_fixtures }}" = "true" ]; then
             args+=(--show-fixtures)
           fi
