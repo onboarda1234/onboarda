@@ -111,6 +111,8 @@ jobs:
           # Build provenance must track the image being deployed. ECS task
           # env values override Dockerfile ENV values, so stale task
           # definitions can otherwise make /api/version report an old SHA.
+          upsert_env('ENVIRONMENT', 'staging')
+          upsert_env('SERVICE_NAME', 'regmind-backend')
           upsert_env('GIT_SHA', '$GIT_SHA')
           upsert_env('BUILD_TIME', '$BUILD_TIME')
           upsert_env('IMAGE_TAG', '$IMAGE_TAG')
@@ -173,6 +175,8 @@ jobs:
           # Keep worker provenance aligned with the API image. ECS task
           # env values override Dockerfile ENV values, so stale task
           # definitions can otherwise keep reporting and running old SHAs.
+          upsert_env("ENVIRONMENT", "staging")
+          upsert_env("SERVICE_NAME", "regmind-verification-worker")
           upsert_env("GIT_SHA", os.environ["GIT_SHA"])
           upsert_env("BUILD_TIME", os.environ["BUILD_TIME"])
           upsert_env("IMAGE_TAG", os.environ["IMAGE_TAG"])
