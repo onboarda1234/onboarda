@@ -5248,8 +5248,8 @@ function applyCountryRiskGovernancePayload(payload) {
   if (entries.length > 0) {
     var grouped = { FATF_BLACK: [], FATF_GREY: [], SANCTIONED: [], LOW_RISK: [] };
     entries.forEach(function(entry) {
-      if (!entry || !entry.country) return;
-      var country = entry.country;
+      var country = entry && (entry.country || entry.country_name || entry.country_key);
+      if (!country) return;
       var fatf = String(entry.fatf_status || 'none').toLowerCase();
       var sanctions = String(entry.sanctions_status || 'none').toLowerCase();
       if (fatf === 'call_for_action' || fatf === 'black') grouped.FATF_BLACK.push(country);
@@ -25195,6 +25195,7 @@ function renderCountryRiskGovernance() {
   var state = COUNTRY_RISK_GOVERNANCE || {};
   var snapshot = state.snapshot || {};
   var entries = Array.isArray(state.entries) ? state.entries : [];
+  var snapshotVersion = snapshot.snapshot_version || snapshot.version || snapshot.snapshot_id || snapshot.id || 'Unknown';
   var warning = state.error || snapshot.stale_warning || '';
   var statusColor = warning ? 'var(--amber)' : 'var(--green)';
   var statusBg = warning ? 'var(--amber-bg)' : 'var(--green-bg)';
@@ -25223,7 +25224,7 @@ function renderCountryRiskGovernance() {
   var html = '<div style="border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow-x:auto;">' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border-bottom:1px solid var(--line);min-width:0;">' +
       '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Source</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.source_name || 'Unknown') + '</div></div>' +
-      '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Version</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.snapshot_version || snapshot.snapshot_id || 'Unknown') + '</div></div>' +
+      '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Version</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshotVersion) + '</div></div>' +
       '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Effective</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.effective_date || 'Unknown') + '</div></div>' +
       '<div style="padding:10px 12px;border-right:1px solid var(--line);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Last Checked</div><div style="font-size:12px;font-weight:700;">' + escapeHtml(snapshot.last_checked_at || snapshot.imported_at || 'Unknown') + '</div></div>' +
       '<div style="padding:10px 12px;background:' + statusBg + ';"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">Freshness</div><div style="font-size:12px;font-weight:700;color:' + statusColor + ';">' + (warning ? 'Warning' : 'Current') + '</div></div>' +
@@ -25240,17 +25241,19 @@ function renderCountryRiskGovernance() {
   html += '<table class="subcrit-table" style="margin:0;border:0;border-radius:0;">' +
     '<thead><tr><th>Country</th><th>Risk</th><th>FATF Status</th><th>Sanctions / High-Risk</th><th>Source Evidence</th></tr></thead><tbody>';
   fatfRows.forEach(function(entry) {
+    var countryName = entry.country || entry.country_name || entry.country_key || '';
     var rating = escapeHtml(entry.risk_rating || 'UNKNOWN') + ' (' + escapeHtml(String(entry.risk_score || '')) + ')';
     var fatf = String(entry.fatf_status || 'none').replace(/_/g, ' ');
     var statusBits = [];
     if (entry.sanctions_status && entry.sanctions_status !== 'none') statusBits.push(entry.sanctions_status);
     if (entry.high_risk_status && entry.high_risk_status !== 'none') statusBits.push(entry.high_risk_status);
+    var entryChecksum = entry.entry_checksum || entry.checksum || '';
     html += '<tr>' +
-      '<td style="font-weight:700;">' + escapeHtml(entry.country || '') + '</td>' +
+      '<td style="font-weight:700;">' + escapeHtml(countryName) + '</td>' +
       '<td>' + rating + '</td>' +
       '<td>' + escapeHtml(fatf) + '</td>' +
       '<td>' + escapeHtml(statusBits.length ? statusBits.join(', ') : 'none') + '</td>' +
-      '<td style="font-size:11px;color:var(--text3);">' + escapeHtml(entry.source_name || snapshot.source_name || 'Unknown') + '<br><span style="font-family:monospace;">' + escapeHtml((entry.entry_checksum || '').slice(0, 12)) + '</span></td>' +
+      '<td style="font-size:11px;color:var(--text3);">' + escapeHtml(entry.source_name || snapshot.source_name || 'Unknown') + '<br><span style="font-family:monospace;">' + escapeHtml(entryChecksum.slice(0, 12)) + '</span></td>' +
     '</tr>';
   });
   if (fatfRows.length === 0) {
