@@ -39,10 +39,7 @@ Use the Day 5 smoke harness against staging after the new task definition reache
 BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
 python3 arie-backend/scripts/qa/day5_closing_smoke.py \
   --api-base https://staging.regmind.co/api \
-  --expected-sha "$GIT_SHA" \
-  --expected-total 22 \
-  --expected-pending 21 \
-  --expected-edd 1
+  --expected-sha "$GIT_SHA"
 ```
 
 Expected result:
@@ -59,6 +56,8 @@ The smoke output must show:
 - CSV/report `canonical_view` is `applications_report_v1`;
 - dashboard `canonical_view` is `dashboard_metrics_v2`;
 - application-derived pending/EDD counts match the backend metadata contract.
+
+Use `--expected-total`, `--expected-pending`, and `--expected-edd` only when validating a controlled fixture dataset with known counts. Live staging smoke should rely on reconciliation and cross-endpoint consistency, not stale fixed totals.
 
 Do not pass bearer tokens on the command line. Use `BACKOFFICE_TOKEN` or `--token-env`.
 
@@ -101,7 +100,7 @@ Day 6 closed on staging.
 - ECS task definition: regmind-staging:<revision>
 - Previous rollback target: regmind-staging:<previous_revision>
 - /api/version git_sha: <sha>
-- Smoke harness: ok=true, total=22, pending=21, edd=1
+- Smoke harness: ok=true; reconciliation and dashboard/report/application counts agree
 - Browser gates: Dashboard, KPI Dashboard, Reports CSV, KPI CSV all green
 - CloudWatch /ecs/regmind-staging: no new post-deploy error spike
 - PR #210: still open, explicitly out of scope

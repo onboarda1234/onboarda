@@ -41,9 +41,14 @@ def test_day6_staging_smoke_uses_token_env_not_literal_token_argument():
 
     assert "arie-backend/scripts/qa/day5_closing_smoke.py" in text
     assert "--token-env BACKOFFICE_TOKEN" in text
-    assert "--expected-total" in text
-    assert "--expected-pending" in text
-    assert "--expected-edd" in text
+    assert "Optional expected analytics total" in text
+    assert "default: \"\"" in text
+    assert 'if [ -n "${{ inputs.expected_total }}" ]; then' in text
+    assert 'args+=(--expected-total "${{ inputs.expected_total }}")' in text
+    assert 'if [ -n "${{ inputs.expected_pending }}" ]; then' in text
+    assert 'args+=(--expected-pending "${{ inputs.expected_pending }}")' in text
+    assert 'if [ -n "${{ inputs.expected_edd }}" ]; then' in text
+    assert 'args+=(--expected-edd "${{ inputs.expected_edd }}")' in text
     assert "--token \"$SMOKE_TOKEN\"" not in text
     assert "--token $SMOKE_TOKEN" not in text
 
