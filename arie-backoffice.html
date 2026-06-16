@@ -1454,7 +1454,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
     <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
-    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Compliance Supervisor</button>
+    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">AI Compliance Supervisor <span class="badge" style="font-size:9px;background:rgba(99,102,241,0.1);color:#4f46e5;">Enterprise</span></button>
     <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Periodic Reviews</button>
     <button class="btn btn-outline btn-sm" id="tab-alerts" onclick="switchDetailTab('alerts')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Alerts</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
@@ -1736,110 +1736,19 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Tab: AI Supervisor (hidden by default) -->
   <div id="detail-tab-supervisor" style="display:none;">
-    <div class="detail-collapsible-card ai-governance-card" id="ai-governance-evidence-panel">
-      <details id="detail-ai-governance-evidence-details">
-        <summary>
-          <div class="detail-collapsible-copy">
-            <div class="detail-collapsible-title">AI Governance &amp; Evidence Trail</div>
-            <div class="detail-collapsible-subtitle">Advisory labels, evidence provenance, validation context, supervisor review, and risk explainability.</div>
-          </div>
-          <div class="detail-collapsible-meta">
-            <span class="detail-collapsible-summary-line" id="ai-governance-evidence-summary-copy">Advisory only · Based on stored application evidence · Expand for evidence trail and risk explainability</span>
-            <span class="detail-collapsible-toggle"><span class="when-closed">Expand</span><span class="when-open">Collapse</span></span>
-          </div>
-        </summary>
-        <div class="detail-collapsible-body">
-          <div class="ai-advisory-compact"><span style="font-size:16px;">🤖</span><div><strong>AI-generated content is advisory only.</strong> Officer review is required before any compliance decision.</div></div>
-
-          <!-- AI Explainability Layer -->
-          <div class="card ai-explain-card" id="ai-explainability-panel" style="margin-top:14px;">
-            <div class="card-header" style="flex-wrap:wrap;gap:8px;">
-              <div>
-                <div class="card-title">AI Explainability Layer</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:2px;">Risk drivers, AI reasoning, validation context, and supervisor signals.</div>
-              </div>
-              <span class="ai-explain-model-source" id="explain-model-source" style="margin-left:auto;font-size:11px;color:var(--text3);">Model: Rule-Based + AI Agents</span>
-            </div>
-            <div style="padding:14px;">
-              <!-- Decision Trail -->
-              <div class="detail-section">
-                <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-                  <span>🔗</span> AI Agent Decision Trail
-                  <span class="badge low" style="font-size:9px;margin-left:auto;">Auditable</span>
-                </div>
-                <div class="explain-trail" id="explain-decision-trail"></div>
-              </div>
-
-              <!-- Dimension Drill-Down -->
-              <div class="detail-section">
-                <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-                  <span>📊</span> Dimension Explainability
-                  <span style="font-size:10px;color:var(--text3);margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;">Click any dimension to expand</span>
-                </div>
-                <div class="dim-explain-grid" id="explain-dimensions"></div>
-              </div>
-
-              <!-- AI Confidence & Summary -->
-              <div class="detail-section">
-                <div class="detail-section-title" style="display:flex;align-items:center;gap:6px;">
-                  <span>🎯</span> AI Confidence &amp; Reasoning Summary
-                </div>
-                <div id="explain-confidence-summary"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </details>
-    </div>
-
-    <div class="card" style="margin-bottom:16px;">
-      <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-size:18px;">🛡️</span>
-        <span style="font-weight:700;">AI Compliance Supervisor Pipeline</span>
-        <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support — Rules-Based Analysis</span>
-        <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
-        <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Analysis</button>
+    <div class="enterprise-coming-soon-card" data-module="application-ai-compliance-supervisor">
+      <div class="enterprise-coming-soon-eyebrow">Enterprise Module</div>
+      <h2>Coming Soon — Enterprise Module</h2>
+      <p>This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
+      <div class="enterprise-coming-soon-note">The AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
+      <div class="enterprise-coming-soon-tags">
+        <span>Coming Soon</span>
+        <span>Enterprise</span>
+        <span>Not active in pilot</span>
       </div>
     </div>
-
-    <!-- Pipeline Results -->
-    <div id="sv-pipeline-results" style="display:none;">
-      <!-- Case Aggregate -->
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Case Aggregate</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
-        <div id="sv-case-aggregate" style="padding:14px;"></div>
-      </div>
-
-      <!-- Agent Results -->
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">AI Agent Pipeline Results</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
-        <div id="sv-agent-results" style="padding:14px;"></div>
-      </div>
-
-      <!-- Contradictions -->
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Contradictions Detected</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
-        <div id="sv-contradictions" style="padding:14px;"></div>
-      </div>
-
-      <!-- Rules Triggered -->
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Compliance Rules Triggered</div><span class="ai-advisory-badge" style="margin-left:8px;">⚙️ Rule-Based</span></div>
-        <div id="sv-rules-triggered" style="padding:14px;"></div>
-      </div>
-
-      <!-- Review & Escalation -->
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Officer Review</div></div>
-        <div id="sv-review-panel" style="padding:14px;">
-          <div id="sv-review-reasons"></div>
-          <!-- Supervisor review actions are performed via the memo approval workflow (Generate Memo → Validate → Approve) -->
-          <div style="margin-top:14px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:11px;color:var(--text3);">
-            To act on supervisor findings, use the compliance memo workflow: Generate Memo → Validate → Supervisor Run → Approve/Reject via the Memo tab.
-          </div>
-        </div>
-      </div>
-    </div>
+    <div id="sv-pipeline-status" style="display:none;">Coming Soon</div>
+    <div id="sv-pipeline-results" style="display:none;"></div>
   </div>
 
   <!-- Tab: Lifecycle (hidden by default) -->
@@ -3675,7 +3584,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="modal-body" id="alert-modal-body"></div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-alert-detail')">Close</button>
-      <button class="btn btn-outline" style="background:#7c3aed;color:white;border-color:#7c3aed;" id="alert-modal-sar-btn" onclick="triggerSARFromAlert()">File SAR</button>
+      <button class="btn btn-outline" style="background:#f8fafc;color:var(--text3);border-color:var(--border1);" id="alert-modal-sar-btn" disabled>SAR/STR Coming Soon</button>
       <button class="btn btn-primary" id="alert-modal-escalate-btn" onclick="escalateAlertFromModal()">Escalate to SCO</button>
       <button class="btn btn-outline" style="background:var(--green);color:white;border-color:var(--green);" id="alert-modal-dismiss-btn" onclick="dismissAlertFromModal()">Mark as Reviewed</button>
     </div>
@@ -3982,6 +3891,18 @@ var FEATURE_FLAGS = {};
 var BACKOFFICE_CONFIG = {};
 var BO_DOC_UPLOAD_LEGACY_MAX_MB = 25;
 var BO_DOC_UPLOAD_CLIENT_CAP_MB = 10;
+
+function isSarStrPilotActive() {
+  return !!(FEATURE_FLAGS.ENABLE_SAR_WORKFLOW && FEATURE_FLAGS.ENABLE_SAR_STR);
+}
+
+function isAiSupervisorPilotActive() {
+  return !!FEATURE_FLAGS.ENABLE_AI_SUPERVISOR;
+}
+
+function showEnterprisePilotInactive(moduleName) {
+  showToast(moduleName + ' is an Enterprise module and is not active in the pilot environment.', 'info');
+}
 
 function isBoDocUploadClientCapEnabled() {
   return !!FEATURE_FLAGS.FF_SIZE_CAP_CLIENT_REJECT;
@@ -20739,7 +20660,7 @@ function showAlertDetail(alert) {
     '<div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Recommended Action</div>' +
     '<div style="padding:12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--amber);">' +
-    (alert.severityKey === 'critical' ? '🚨 <strong>IMMEDIATE ACTION REQUIRED.</strong> Escalate to Senior Compliance Officer and initiate enhanced monitoring. Consider filing SAR if confirmed.' :
+    (alert.severityKey === 'critical' ? '🚨 <strong>IMMEDIATE ACTION REQUIRED.</strong> Escalate to Senior Compliance Officer and initiate enhanced monitoring. SAR/STR escalation is an Enterprise module and is not active in pilot.' :
      alert.severityKey === 'high' ? '⚠️ <strong>Priority review required.</strong> Assess compliance impact within 24 hours. Consider requesting additional documentation from client.' :
      '📋 Review client information and assess potential compliance impact. Document findings and update risk profile if warranted.') +
     '</div></div>';
@@ -20756,10 +20677,13 @@ function showAlertDetail(alert) {
   } else {
     escBtn.style.display = 'none'; dimBtn.style.display = 'none';
   }
-  // Show SAR button only for Critical/High severity alerts that are Open or Escalated
+  // SAR/STR is an Enterprise module; show only a disabled pilot-scope indicator.
   if (sarBtn) {
     var showSar = (alert.severityKey === 'critical' || alert.severityKey === 'high') && ['open','in_review','assigned','escalated'].indexOf(alert.statusKey || normalizeAlertStatus(alert.status)) >= 0;
     sarBtn.style.display = showSar ? '' : 'none';
+    sarBtn.disabled = true;
+    sarBtn.textContent = 'SAR/STR Coming Soon';
+    sarBtn.title = 'Enterprise module — not active in pilot';
   }
 
   document.getElementById('modal-alert-detail').classList.add('open');
@@ -20809,6 +20733,10 @@ async function dismissAlertFromModal() {
 
 async function triggerSARFromAlert() {
   if (!currentAlertRef || !currentAlertRef.id) return;
+  if (!isSarStrPilotActive()) {
+    showEnterprisePilotInactive('SAR/STR');
+    return;
+  }
   var sarBtn = document.getElementById('alert-modal-sar-btn');
   if (sarBtn) { sarBtn.disabled = true; sarBtn.textContent = 'Filing...'; }
   try {
@@ -20821,7 +20749,7 @@ async function triggerSARFromAlert() {
     closeModal('modal-alert-detail');
   } catch(err) {
     showToast('Failed to file SAR: ' + (err.message || 'Unknown error'), 'error');
-    if (sarBtn) { sarBtn.disabled = false; sarBtn.textContent = 'File SAR'; }
+    if (sarBtn) { sarBtn.disabled = true; sarBtn.textContent = 'SAR/STR Coming Soon'; }
   }
 }
 
@@ -28849,10 +28777,18 @@ async function showValidationPanelIfMemoExists() {
 window._lastSupervisorResult = null;
 
 async function runSupervisorPipeline() {
+  if (!isAiSupervisorPilotActive()) {
+    showEnterprisePilotInactive('AI Compliance Supervisor');
+    return;
+  }
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
   var btn = document.getElementById('btn-run-supervisor');
   var statusBadge = document.getElementById('sv-pipeline-status');
+  if (!btn || !statusBadge) {
+    showEnterprisePilotInactive('AI Compliance Supervisor');
+    return;
+  }
   btn.innerHTML = '⏳ Running Pipeline...'; btn.disabled = true;
   statusBadge.textContent = 'Running'; statusBadge.style.background = '#fef3c7'; statusBadge.style.color = '#92400e';
   try {
@@ -28880,6 +28816,10 @@ async function runSupervisorPipeline() {
 }
 
 async function loadSupervisorForApp() {
+  if (!isAiSupervisorPilotActive()) {
+    window._lastSupervisorResult = null;
+    return;
+  }
   var app = window._currentDetailApp;
   if (!app) return;
   var statusBadge = document.getElementById('sv-pipeline-status');

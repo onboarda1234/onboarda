@@ -140,6 +140,46 @@ def test_monitoring_agent_run_surface_blocks_enterprise_agents():
     assert "This agent is Coming Soon and not active in pilot" in trigger_region
 
 
+def test_application_review_ai_supervisor_is_coming_soon_not_executable():
+    html = BACKOFFICE_HTML.read_text()
+    start = html.index('<div id="detail-tab-supervisor"')
+    end = html.index('<div id="detail-tab-lifecycle"', start)
+    supervisor_tab_region = html[start:end]
+    run_region = _function_region(html, "runSupervisorPipeline", "loadSupervisorForApp")
+    load_region = _function_region(html, "loadSupervisorForApp", "renderSupervisorResults")
+
+    assert "Enterprise Module" in supervisor_tab_region
+    assert "Coming Soon — Enterprise Module" in supervisor_tab_region
+    assert "not active in the pilot environment" in supervisor_tab_region
+    assert "Not active in pilot" in supervisor_tab_region
+    assert "btn-run-supervisor" not in supervisor_tab_region
+    assert "Run Analysis" not in supervisor_tab_region
+    assert "AI Compliance Supervisor Pipeline" not in supervisor_tab_region
+    assert "isAiSupervisorPilotActive()" in run_region
+    assert run_region.index("isAiSupervisorPilotActive()") < run_region.index("/supervisor/run")
+    assert "isAiSupervisorPilotActive()" in load_region
+    assert load_region.index("isAiSupervisorPilotActive()") < load_region.index("/supervisor/result")
+
+
+def test_monitoring_alert_sar_str_action_is_disabled_for_pilot():
+    html = BACKOFFICE_HTML.read_text()
+    modal_start = html.index('id="modal-alert-detail"')
+    modal_end = html.index("<!-- Periodic Review Modal -->", modal_start)
+    modal_region = html[modal_start:modal_end]
+    alert_region = _function_region(html, "showAlertDetail", "viewAlert")
+    trigger_region = _function_region(html, "triggerSARFromAlert", "openPeriodicReview")
+
+    assert "SAR/STR Coming Soon" in modal_region
+    assert "id=\"alert-modal-sar-btn\" disabled" in modal_region
+    assert "File SAR" not in modal_region
+    assert "Consider filing SAR" not in html
+    assert "SAR/STR escalation is an Enterprise module and is not active in pilot" in alert_region
+    assert "sarBtn.disabled = true" in alert_region
+    assert "SAR/STR Coming Soon" in alert_region
+    assert "isSarStrPilotActive()" in trigger_region
+    assert trigger_region.index("isSarStrPilotActive()") < trigger_region.index("/sar/auto-trigger")
+
+
 def test_backoffice_direct_path_aliases_serve_shell():
     server = SERVER_PY.read_text()
 

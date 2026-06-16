@@ -50,7 +50,14 @@ class _AuditExportTestBase(AsyncHTTPTestCase):
     def setUp(self):
         super().setUp()
         from db import get_db
+        import server as server_module
         from server import create_token
+        self._server = server_module
+        self._orig_flags = dict(server_module.flags._cache)
+        server_module.flags._cache.update({
+            "ENABLE_AI_SUPERVISOR": True,
+            "ENABLE_SUPERVISOR_AUDIT": True,
+        })
         self._conn = get_db()
         self._inserted_supervisor_ids = []
         self._inserted_decision_ids = []
@@ -81,6 +88,8 @@ class _AuditExportTestBase(AsyncHTTPTestCase):
             )
         self._conn.commit()
         self._conn.close()
+        self._server.flags._cache.clear()
+        self._server.flags._cache.update(self._orig_flags)
         super().tearDown()
 
     # Convenience helpers
