@@ -6151,6 +6151,32 @@ class TestRiskModelAdminConfigSafety:
         assert resp.status_code == 200, resp.text
         return resp.json()
 
+    def _restore_risk_config(self, config):
+        from db import get_db
+        conn = get_db()
+        try:
+            conn.execute(
+                """
+                UPDATE risk_config
+                   SET dimensions=?,
+                       thresholds=?,
+                       country_risk_scores=?,
+                       sector_risk_scores=?,
+                       entity_type_scores=?
+                 WHERE id=1
+                """,
+                (
+                    json.dumps(config["dimensions"]),
+                    json.dumps(config["thresholds"]),
+                    json.dumps(config["country_risk_scores"]),
+                    json.dumps(config["sector_risk_scores"]),
+                    json.dumps(config["entity_type_scores"]),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _assert_risk_rejected_unchanged(self, api_server, payload, expected_code):
         headers = self._admin_headers()
         before = self._risk_config(api_server, headers)
@@ -6172,60 +6198,68 @@ class TestRiskModelAdminConfigSafety:
 
         before_body = self._risk_config(api_server, headers)
 
-        update = http_requests.put(
-            f"{api_server}/api/config/risk-model",
-            headers=headers,
-            json={"country_risk_scores": {"testland": 2}},
-            timeout=5,
-        )
-        assert update.status_code == 200, update.text
+        try:
+            update = http_requests.put(
+                f"{api_server}/api/config/risk-model",
+                headers=headers,
+                json={"country_risk_scores": {"testland": 2}},
+                timeout=5,
+            )
+            assert update.status_code == 200, update.text
 
-        after_body = self._risk_config(api_server, headers)
+            after_body = self._risk_config(api_server, headers)
 
-        assert after_body["dimensions"] == before_body["dimensions"]
-        assert after_body["thresholds"] == before_body["thresholds"]
-        assert after_body["country_risk_scores"] == {"testland": 2}
-        assert after_body["sector_risk_scores"] == before_body["sector_risk_scores"]
-        assert after_body["entity_type_scores"] == before_body["entity_type_scores"]
+            assert after_body["dimensions"] == before_body["dimensions"]
+            assert after_body["thresholds"] == before_body["thresholds"]
+            assert after_body["country_risk_scores"] == {"testland": 2}
+            assert after_body["sector_risk_scores"] == before_body["sector_risk_scores"]
+            assert after_body["entity_type_scores"] == before_body["entity_type_scores"]
+        finally:
+            self._restore_risk_config(before_body)
 
     def test_country_risk_endpoint_exposes_manual_settings_source(self, api_server):
         headers = self._admin_headers()
-        seed_resp = http_requests.put(
-            f"{api_server}/api/config/risk-model",
-            headers=headers,
-            json={"country_risk_scores": {"mauritius": 2, "nigeria": 3, "france": 1}},
-            timeout=5,
-        )
-        assert seed_resp.status_code == 200, seed_resp.text
+        before_body = self._risk_config(api_server, headers)
+        try:
+            seed_resp = http_requests.put(
+                f"{api_server}/api/config/risk-model",
+                headers=headers,
+                json={"country_risk_scores": {"mauritius": 2, "nigeria": 3, "france": 1}},
+                timeout=5,
+            )
+            assert seed_resp.status_code == 200, seed_resp.text
 
-        resp = http_requests.get(
-            f"{api_server}/api/config/country-risk?country=Mauritius",
-            headers=headers,
-            timeout=5,
-        )
-        assert resp.status_code == 200, resp.text
-        country_risk = resp.json()["country_risk"]
-        assert country_risk["country_key"] == "mauritius"
-        assert country_risk["risk_score"] == 2
-        assert country_risk["mode"] == "manual_settings"
-        assert country_risk["active_for_scoring"] is True
-        assert country_risk["source"] == "risk_config.country_risk_scores"
+            resp = http_requests.get(
+                f"{api_server}/api/config/country-risk?country=Mauritius",
+                headers=headers,
+                timeout=5,
+            )
+            assert resp.status_code == 200, resp.text
+            country_risk = resp.json()["country_risk"]
+            assert country_risk["country_key"] == "mauritius"
+            assert country_risk["risk_score"] == 2
+            assert country_risk["mode"] == "manual_settings"
+            assert country_risk["active_for_scoring"] is True
+            assert country_risk["source"] == "risk_config.country_risk_scores"
 
-        list_resp = http_requests.get(
-            f"{api_server}/api/config/country-risk",
-            headers=headers,
-            timeout=5,
-        )
-        assert list_resp.status_code == 200, list_resp.text
-        body = list_resp.json()
-        assert body["mode"] == "manual_settings"
-        assert body["active_source"] == "risk_config.country_risk_scores"
-        assert body["snapshot"] is None
-        assert body["reference_snapshot_active_for_scoring"] is False
-        assert any(entry["country_key"] == "mauritius" for entry in body["entries"])
+            list_resp = http_requests.get(
+                f"{api_server}/api/config/country-risk",
+                headers=headers,
+                timeout=5,
+            )
+            assert list_resp.status_code == 200, list_resp.text
+            body = list_resp.json()
+            assert body["mode"] == "manual_settings"
+            assert body["active_source"] == "risk_config.country_risk_scores"
+            assert body["snapshot"] is None
+            assert body["reference_snapshot_active_for_scoring"] is False
+            assert any(entry["country_key"] == "mauritius" for entry in body["entries"])
+        finally:
+            self._restore_risk_config(before_body)
 
     def test_grouped_manual_country_payload_is_saved_as_score_map(self, api_server):
         headers = self._admin_headers()
+        before_body = self._risk_config(api_server, headers)
         payload = {
             "country_risk_scores": {
                 "FATF_BLACK": ["Iran"],
@@ -6235,25 +6269,28 @@ class TestRiskModelAdminConfigSafety:
                 "LOW_RISK": ["France"],
             }
         }
-        resp = http_requests.put(
-            f"{api_server}/api/config/risk-model",
-            headers=headers,
-            json=payload,
-            timeout=5,
-        )
-        assert resp.status_code == 200, resp.text
+        try:
+            resp = http_requests.put(
+                f"{api_server}/api/config/risk-model",
+                headers=headers,
+                json=payload,
+                timeout=5,
+            )
+            assert resp.status_code == 200, resp.text
 
-        config_resp = http_requests.get(
-            f"{api_server}/api/config/risk-model",
-            headers=headers,
-            timeout=5,
-        )
-        scores = config_resp.json()["country_risk_scores"]
-        assert scores["mauritius"] == 2
-        assert scores["nigeria"] == 3
-        assert scores["syria"] == 4
-        assert scores["france"] == 1
-        assert all(not isinstance(value, list) for value in scores.values())
+            config_resp = http_requests.get(
+                f"{api_server}/api/config/risk-model",
+                headers=headers,
+                timeout=5,
+            )
+            scores = config_resp.json()["country_risk_scores"]
+            assert scores["mauritius"] == 2
+            assert scores["nigeria"] == 3
+            assert scores["syria"] == 4
+            assert scores["france"] == 1
+            assert all(not isinstance(value, list) for value in scores.values())
+        finally:
+            self._restore_risk_config(before_body)
 
     def test_incomplete_dimension_payload_is_rejected_without_mutation(self, api_server):
         self._assert_risk_rejected_unchanged(
