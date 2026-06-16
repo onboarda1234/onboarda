@@ -33,6 +33,7 @@ _REQUIRED_CLIENT_FLAGS = [
     "ENABLE_MONITORING_DASHBOARD",
     "ENABLE_SAR_WORKFLOW",
     "ENABLE_AI_SUPERVISOR",
+    "ENABLE_KPI_DASHBOARD",
     "ENABLE_KPI_DEMO_DATA",
     "ENABLE_ROLE_SWITCHER",
     "ENABLE_DOCUMENT_AI_ANALYSIS",
@@ -142,3 +143,8 @@ class TestDefaultFlagConsistency:
         for env, defaults in _DEFAULT_FLAGS.items():
             enabled = [flag for flag in UPLOAD_LATENCY_FLAGS if defaults.get(flag) is not False]
             assert enabled == [], f"{env} enables upload-latency flags by default: {enabled}"
+
+    def test_kpi_dashboard_is_default_off_for_pilot_environments(self):
+        """Enterprise KPI analytics must be opt-in for staging and production pilot."""
+        for env in ("staging", "production"):
+            assert _DEFAULT_FLAGS[env]["ENABLE_KPI_DASHBOARD"] is False

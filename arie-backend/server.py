@@ -31224,7 +31224,7 @@ def make_app():
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
         (r"/backoffice", BackOfficeHandler),
-        (r"/backoffice/(?:regulatory-intelligence|reg-intel|ai-compliance-supervisor|supervisor-dashboard|supervisor|audit-chain|supervisor-audit|supervisor-audit-chain|ai-agents)", BackOfficeHandler),
+        (r"/backoffice/(?:kpis|kpi-dashboard|enterprise-analytics|regulatory-intelligence|reg-intel|ai-compliance-supervisor|supervisor-dashboard|supervisor|audit-chain|supervisor-audit|supervisor-audit-chain|ai-agents)", BackOfficeHandler),
         (r"/static/(.*)", SecureStaticFileHandler, {"path": STATIC_DIR}),
     ]
 
