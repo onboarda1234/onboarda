@@ -24,3 +24,4 @@
 - Added/updated regression coverage for manual lookup, memo source, API payload, grouped-list save normalisation, UI manual mode, duplicate display guard, and risk config versioning.
 - Added regression coverage that existing partial manual score maps are repaired by adding missing defaults without overwriting manually changed values.
 - Fixed mutating API tests to restore the shared test DB risk-model row after intentional update scenarios.
+- Follow-up dedupe repair: `/api/config/country-risk` now emits one active list entry per canonical country key, so aliases such as `uk`/`united kingdom`, `usa`/`united states`, `bvi`/`british virgin islands`, `drc`/`democratic republic of congo`, and `dprk`/`north korea` do not appear as duplicate operational countries.

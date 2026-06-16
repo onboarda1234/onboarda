@@ -6257,6 +6257,44 @@ class TestRiskModelAdminConfigSafety:
         finally:
             self._restore_risk_config(before_body)
 
+    def test_country_risk_endpoint_dedupes_manual_aliases(self, api_server):
+        headers = self._admin_headers()
+        before_body = self._risk_config(api_server, headers)
+        try:
+            seed_resp = http_requests.put(
+                f"{api_server}/api/config/risk-model",
+                headers=headers,
+                json={
+                    "country_risk_scores": {
+                        "uk": 1,
+                        "united kingdom": 1,
+                        "usa": 1,
+                        "united states": 1,
+                        "bvi": 4,
+                        "british virgin islands": 4,
+                        "mauritius": 2,
+                    }
+                },
+                timeout=5,
+            )
+            assert seed_resp.status_code == 200, seed_resp.text
+
+            list_resp = http_requests.get(
+                f"{api_server}/api/config/country-risk",
+                headers=headers,
+                timeout=5,
+            )
+            assert list_resp.status_code == 200, list_resp.text
+            entries = list_resp.json()["entries"]
+            country_keys = [entry["country_key"] for entry in entries]
+            assert country_keys.count("united kingdom") == 1
+            assert country_keys.count("united states") == 1
+            assert country_keys.count("british virgin islands") == 1
+            assert country_keys.count("mauritius") == 1
+            assert len(country_keys) == len(set(country_keys))
+        finally:
+            self._restore_risk_config(before_body)
+
     def test_grouped_manual_country_payload_is_saved_as_score_map(self, api_server):
         headers = self._admin_headers()
         before_body = self._risk_config(api_server, headers)

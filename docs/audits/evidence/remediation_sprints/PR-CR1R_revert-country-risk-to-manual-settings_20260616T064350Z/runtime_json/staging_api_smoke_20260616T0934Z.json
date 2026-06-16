@@ -1,0 +1,127 @@
+{
+  "base": "https://staging.regmind.co/api",
+  "captured_at": "2026-06-16T09:35:34Z",
+  "checks": {
+    "country_entries_no_duplicates": false,
+    "country_list_active_source_manual": true,
+    "country_list_manual_mode": true,
+    "country_list_snapshot_not_active": true,
+    "country_list_status_200": true,
+    "health_status_200": true,
+    "liveness_status_200": true,
+    "login_role_present": true,
+    "login_status_200": true,
+    "mauritius_from_manual_config": true,
+    "mauritius_lookup_status_200": true,
+    "mauritius_manual_active": true,
+    "mauritius_score_2": true,
+    "risk_model_has_country_risk_scores": true,
+    "risk_model_mauritius_present": true,
+    "risk_model_status_200": true,
+    "syria_lookup_status_200": true,
+    "syria_manual_active": true,
+    "version_git_sha_matches": true,
+    "version_image_tag_matches": true,
+    "version_status_200": true
+  },
+  "country_list_summary": {
+    "active_source": "risk_config.country_risk_scores",
+    "duplicate_entry_countries": [
+      "british virgin islands",
+      "democratic republic of congo",
+      "north korea",
+      "united kingdom",
+      "united states"
+    ],
+    "entries_count": 110,
+    "mode": "manual_settings",
+    "reference_snapshot_active_for_scoring": false,
+    "snapshot": null,
+    "status": 200
+  },
+  "credential_handling": "Approved staging QA credentials read from AWS Secrets Manager in process; token/password/email omitted",
+  "expected_sha": "69f751cf12f7a7694ecfcd67ad5f6134c706f393",
+  "health": {
+    "environment": "staging",
+    "platform": "Onboarda",
+    "service": "RegMind API",
+    "status": "ok",
+    "timestamp": "2026-06-16T09:35:32Z",
+    "version": "1.0.0"
+  },
+  "liveness": {
+    "service": "regmind-backend",
+    "status": "ok",
+    "timestamp": "2026-06-16T09:35:32Z"
+  },
+  "login_summary": {
+    "role": "sco",
+    "status": 200,
+    "token_omitted": true
+  },
+  "mauritius_lookup": {
+    "active_for_scoring": true,
+    "active_source": "manual_settings",
+    "country_key": "mauritius",
+    "country_name": "Mauritius",
+    "defaulted": false,
+    "effective_date": "",
+    "fatf_status": "none",
+    "found": true,
+    "high_risk_status": "none",
+    "is_unknown": false,
+    "lookup_reason": "manual_config",
+    "mode": "manual_settings",
+    "notes": "Manual country-risk settings are active for pilot; PR-CR1 snapshot is dormant.",
+    "risk_rating": "MEDIUM",
+    "risk_score": 2,
+    "sanctions_status": "none",
+    "source": "risk_config.country_risk_scores",
+    "source_name": "Manual Risk Scoring Model country_risk_scores",
+    "source_publication_date": "",
+    "source_url": ""
+  },
+  "qa_email_hash": "cda4363e56e7b0a3",
+  "risk_model_summary": {
+    "country_risk_scores_count": 110,
+    "manual_scores_sample": {
+      "iran": 4,
+      "mauritius": 2,
+      "pakistan": 2,
+      "syria": 4,
+      "united_arab_emirates": 2
+    },
+    "status": 200
+  },
+  "script": "pr_cr1r_authenticated_api_smoke",
+  "syria_lookup": {
+    "active_for_scoring": true,
+    "active_source": "manual_settings",
+    "country_key": "syria",
+    "country_name": "Syria",
+    "defaulted": false,
+    "effective_date": "",
+    "fatf_status": "black",
+    "found": true,
+    "high_risk_status": "none",
+    "is_unknown": false,
+    "lookup_reason": "manual_config",
+    "mode": "manual_settings",
+    "notes": "Manual country-risk settings are active for pilot; PR-CR1 snapshot is dormant.",
+    "risk_rating": "VERY_HIGH",
+    "risk_score": 4,
+    "sanctions_status": "sanctioned",
+    "source": "risk_config.country_risk_scores",
+    "source_name": "Manual Risk Scoring Model country_risk_scores",
+    "source_publication_date": "",
+    "source_url": ""
+  },
+  "version": {
+    "build_time": "2026-06-16T09:20:49Z",
+    "environment": "staging",
+    "git_sha": "69f751cf12f7a7694ecfcd67ad5f6134c706f393",
+    "git_sha_short": "69f751c",
+    "image_tag": "69f751cf12f7a7694ecfcd67ad5f6134c706f393",
+    "service": "regmind-backend"
+  }
+}

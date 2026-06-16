@@ -30,3 +30,12 @@ pytest -q
 ```
 
 Result: `5436 passed, 17 skipped in 236.40s (0:03:56)`.
+
+Second follow-up corrective branch `codex/pr-cr1r-dedupe-manual-country-risk-api`:
+
+```bash
+cd arie-backend
+pytest -q
+```
+
+Result: `5438 passed, 17 skipped in 267.73s (0:04:27)`.
