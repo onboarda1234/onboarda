@@ -588,6 +588,55 @@ def _get_postgres_schema() -> str:
         updated_by TEXT REFERENCES users(id)
     );
 
+    -- PR-CR1: Canonical country-risk source governance snapshots
+    CREATE TABLE IF NOT EXISTS country_risk_snapshots (
+        id TEXT PRIMARY KEY,
+        version TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        source_name TEXT NOT NULL,
+        source_url TEXT,
+        source_publication_date TEXT,
+        effective_date TEXT NOT NULL,
+        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        imported_by TEXT NOT NULL DEFAULT 'system',
+        last_checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        checksum TEXT NOT NULL,
+        freshness_days INTEGER NOT NULL DEFAULT 180,
+        notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS country_risk_entries (
+        id TEXT PRIMARY KEY,
+        snapshot_id TEXT NOT NULL REFERENCES country_risk_snapshots(id),
+        country_name TEXT NOT NULL,
+        country_key TEXT NOT NULL,
+        iso_alpha2 TEXT,
+        iso_alpha3 TEXT,
+        risk_rating TEXT NOT NULL,
+        risk_score INTEGER NOT NULL CHECK(risk_score BETWEEN 1 AND 4),
+        fatf_status TEXT NOT NULL DEFAULT 'none',
+        sanctions_status TEXT NOT NULL DEFAULT 'none',
+        high_risk_status TEXT NOT NULL DEFAULT 'none',
+        source_name TEXT NOT NULL,
+        source_url TEXT,
+        source_publication_date TEXT,
+        effective_date TEXT NOT NULL,
+        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        imported_by TEXT NOT NULL DEFAULT 'system',
+        status TEXT NOT NULL DEFAULT 'active',
+        checksum TEXT NOT NULL,
+        notes TEXT,
+        previous_risk_rating TEXT,
+        previous_fatf_status TEXT,
+        UNIQUE(snapshot_id, country_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_country_risk_entries_lookup
+        ON country_risk_entries(snapshot_id, country_key, status);
+
+    CREATE INDEX IF NOT EXISTS idx_country_risk_entries_fatf
+        ON country_risk_entries(fatf_status, status);
+
     -- System Settings
     CREATE TABLE IF NOT EXISTS system_settings (
         id INTEGER PRIMARY KEY DEFAULT 1,
@@ -1707,6 +1756,55 @@ def _get_sqlite_schema() -> str:
         updated_by TEXT REFERENCES users(id)
     );
 
+    -- PR-CR1: Canonical country-risk source governance snapshots
+    CREATE TABLE IF NOT EXISTS country_risk_snapshots (
+        id TEXT PRIMARY KEY,
+        version TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        source_name TEXT NOT NULL,
+        source_url TEXT,
+        source_publication_date TEXT,
+        effective_date TEXT NOT NULL,
+        imported_at TEXT DEFAULT (datetime('now')),
+        imported_by TEXT NOT NULL DEFAULT 'system',
+        last_checked_at TEXT DEFAULT (datetime('now')),
+        checksum TEXT NOT NULL,
+        freshness_days INTEGER NOT NULL DEFAULT 180,
+        notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS country_risk_entries (
+        id TEXT PRIMARY KEY,
+        snapshot_id TEXT NOT NULL REFERENCES country_risk_snapshots(id),
+        country_name TEXT NOT NULL,
+        country_key TEXT NOT NULL,
+        iso_alpha2 TEXT,
+        iso_alpha3 TEXT,
+        risk_rating TEXT NOT NULL,
+        risk_score INTEGER NOT NULL CHECK(risk_score BETWEEN 1 AND 4),
+        fatf_status TEXT NOT NULL DEFAULT 'none',
+        sanctions_status TEXT NOT NULL DEFAULT 'none',
+        high_risk_status TEXT NOT NULL DEFAULT 'none',
+        source_name TEXT NOT NULL,
+        source_url TEXT,
+        source_publication_date TEXT,
+        effective_date TEXT NOT NULL,
+        imported_at TEXT DEFAULT (datetime('now')),
+        imported_by TEXT NOT NULL DEFAULT 'system',
+        status TEXT NOT NULL DEFAULT 'active',
+        checksum TEXT NOT NULL,
+        notes TEXT,
+        previous_risk_rating TEXT,
+        previous_fatf_status TEXT,
+        UNIQUE(snapshot_id, country_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_country_risk_entries_lookup
+        ON country_risk_entries(snapshot_id, country_key, status);
+
+    CREATE INDEX IF NOT EXISTS idx_country_risk_entries_fatf
+        ON country_risk_entries(fatf_status, status);
+
     -- System Settings
     CREATE TABLE IF NOT EXISTS system_settings (
         id INTEGER PRIMARY KEY DEFAULT 1,
@@ -2632,6 +2730,11 @@ def init_db():
         db.commit()
         logger.info("startup: completed _ensure_default_system_settings")
 
+        logger.info("startup: entering _ensure_country_risk_governance")
+        _ensure_country_risk_governance(db)
+        db.commit()
+        logger.info("startup: completed _ensure_country_risk_governance")
+
         # Ensure configurable Enhanced / EDD requirement rules exist.
         logger.info("startup: entering _ensure_default_enhanced_requirement_rules")
         _ensure_default_enhanced_requirement_rules(db)
@@ -3087,6 +3190,66 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _ensure_country_risk_governance(db: DBConnection):
+    """Create and seed PR-CR1 canonical country-risk snapshot tables."""
+    db.executescript("""
+    CREATE TABLE IF NOT EXISTS country_risk_snapshots (
+        id TEXT PRIMARY KEY,
+        version TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        source_name TEXT NOT NULL,
+        source_url TEXT,
+        source_publication_date TEXT,
+        effective_date TEXT NOT NULL,
+        imported_at TEXT DEFAULT (datetime('now')),
+        imported_by TEXT NOT NULL DEFAULT 'system',
+        last_checked_at TEXT DEFAULT (datetime('now')),
+        checksum TEXT NOT NULL,
+        freshness_days INTEGER NOT NULL DEFAULT 180,
+        notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS country_risk_entries (
+        id TEXT PRIMARY KEY,
+        snapshot_id TEXT NOT NULL REFERENCES country_risk_snapshots(id),
+        country_name TEXT NOT NULL,
+        country_key TEXT NOT NULL,
+        iso_alpha2 TEXT,
+        iso_alpha3 TEXT,
+        risk_rating TEXT NOT NULL,
+        risk_score INTEGER NOT NULL CHECK(risk_score BETWEEN 1 AND 4),
+        fatf_status TEXT NOT NULL DEFAULT 'none',
+        sanctions_status TEXT NOT NULL DEFAULT 'none',
+        high_risk_status TEXT NOT NULL DEFAULT 'none',
+        source_name TEXT NOT NULL,
+        source_url TEXT,
+        source_publication_date TEXT,
+        effective_date TEXT NOT NULL,
+        imported_at TEXT DEFAULT (datetime('now')),
+        imported_by TEXT NOT NULL DEFAULT 'system',
+        status TEXT NOT NULL DEFAULT 'active',
+        checksum TEXT NOT NULL,
+        notes TEXT,
+        previous_risk_rating TEXT,
+        previous_fatf_status TEXT,
+        UNIQUE(snapshot_id, country_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_country_risk_entries_lookup
+        ON country_risk_entries(snapshot_id, country_key, status);
+
+    CREATE INDEX IF NOT EXISTS idx_country_risk_entries_fatf
+        ON country_risk_entries(fatf_status, status);
+    """)
+    try:
+        from country_risk import seed_default_country_risk_snapshot
+        if seed_default_country_risk_snapshot(db):
+            logger.info("PR-CR1: seeded canonical country-risk snapshot")
+    except Exception as exc:
+        logger.exception("PR-CR1: country-risk snapshot seed failed")
+        raise
 
 
 def _ensure_verification_jobs_schema(db: DBConnection) -> None:
@@ -4125,6 +4288,8 @@ def repair_document_current_versions(db: DBConnection):
 
 def _run_migrations(db: DBConnection):
     """Run incremental schema migrations for existing databases."""
+    _ensure_country_risk_governance(db)
+
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):
         logger.info("Migration v2.1: Adding pre-approval columns to applications table")

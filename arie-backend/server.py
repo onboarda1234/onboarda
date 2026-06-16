@@ -11896,6 +11896,35 @@ class RiskConfigHandler(BaseHandler):
         })
 
 
+class CountryRiskConfigHandler(BaseHandler):
+    """GET /api/config/country-risk — source-backed country-risk snapshot."""
+
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        country = (self.get_argument("country", "") or "").strip()
+        db = None
+        try:
+            from country_risk import list_country_risk_entries, lookup_country_risk
+            db = get_db()
+            if country:
+                self.success({"country_risk": lookup_country_risk(country, db=db)})
+                return
+            data = list_country_risk_entries(db=db)
+            self.success({
+                "snapshot": data.get("snapshot"),
+                "entries": data.get("entries") or [],
+                "entry_count": len(data.get("entries") or []),
+            })
+        except Exception:
+            logger.exception("country_risk_config_lookup_failed")
+            self.error("Failed to load country risk source governance", 500)
+        finally:
+            if db is not None:
+                db.close()
+
+
 class EnvironmentInfoHandler(BaseHandler):
     """GET /api/config/environment — return environment info for frontend"""
     def get(self):
@@ -30779,6 +30808,7 @@ def make_app():
         (r"/api/users/([^/]+)", UserDetailHandler),
 
         # Config
+        (r"/api/config/country-risk", CountryRiskConfigHandler),
         (r"/api/config/risk-model", RiskConfigHandler),
         (r"/api/config/system-settings", SystemSettingsHandler),
         (r"/api/config/roles-permissions", RolesPermissionsHandler),

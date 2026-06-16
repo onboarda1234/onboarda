@@ -28,6 +28,7 @@ from rule_engine import (
     _has_material_screening_concern,
     CANONICAL_THRESHOLDS,
 )
+from country_risk import lookup_country_risk
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -719,18 +720,18 @@ class TestNoGenericElevation:
 
 
 # ═══════════════════════════════════════════════════════════════
-# TEST: EX-06 Pakistan FATF grey-list hotfix
+# TEST: PR-CR1 canonical country-risk snapshot supersedes stale Pakistan fallback
 # ═══════════════════════════════════════════════════════════════
 
 class TestPakistanElevation:
-    """Pakistan must be treated as FATF grey-list so the combination elevation rule fires."""
+    """Pakistan must follow the governed snapshot, not stale hardcoded FATF fallback data."""
 
-    def test_pakistan_in_fatf_grey_constant(self):
-        """Pakistan must be present in the FATF_GREY set in rule_engine.py."""
+    def test_legacy_fatf_grey_constant_still_contains_pakistan_for_diagnosis(self):
+        """The stale constant remains visible as legacy evidence but must not drive decisions."""
         assert "pakistan" in FATF_GREY
 
-    def test_pakistan_in_jurisdiction_config(self):
-        """Pakistan must be present in jurisdiction_config.json fatf_grey countries."""
+    def test_legacy_jurisdiction_config_still_contains_pakistan_for_diagnosis(self):
+        """The stale JSON config remains visible as legacy evidence but must not drive decisions."""
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "jurisdiction_config.json",
@@ -740,13 +741,16 @@ class TestPakistanElevation:
         grey_countries = config["risk_classifications"]["fatf_grey"]["countries"]
         assert "pakistan" in grey_countries
 
-    def test_pakistan_is_elevated_jurisdiction(self):
-        """_is_elevated_jurisdiction must return True for Pakistan."""
-        assert _is_elevated_jurisdiction("pakistan") is True
-        assert _is_elevated_jurisdiction("Pakistan") is True
+    def test_pakistan_current_snapshot_is_not_fatf_elevated(self, temp_db):
+        """_is_elevated_jurisdiction must use the source-backed snapshot before stale fallback."""
+        pakistan = lookup_country_risk("Pakistan")
+        assert pakistan["risk_score"] == 2
+        assert pakistan["fatf_status"] == "none"
+        assert _is_elevated_jurisdiction("pakistan") is False
+        assert _is_elevated_jurisdiction("Pakistan") is False
 
-    def test_pakistan_crypto_shell_elevates_medium_to_high(self):
-        """EX-06 test case: Pakistan + crypto + shell/opaque → combination elevation fires."""
+    def test_pakistan_crypto_shell_no_longer_gets_stale_grey_combo(self, temp_db):
+        """Pakistan + crypto + shell should not fire FATF-grey combo unless the snapshot says FATF."""
         result = compute_risk_score(_grey_crypto_shell_app(
             country="pakistan",
             directors=[{"full_name": "Test Person", "nationality": "pakistani",
@@ -755,19 +759,20 @@ class TestPakistanElevation:
                    "ownership_pct": "100"}],
         ))
         assert result["final_risk_level"] in ("HIGH", "VERY_HIGH")
-        assert "elevation_grey_sector_opaque" in result["escalations"]
+        assert "elevation_grey_sector_opaque" not in result["escalations"]
 
-    def test_pakistan_without_crypto_respects_jurisdiction_high_floor(self):
-        """Pakistan + non-high-risk sector still respects the jurisdiction HIGH floor."""
+    def test_pakistan_without_crypto_does_not_get_jurisdiction_high_floor(self, temp_db):
+        """Pakistan + non-high-risk sector should not inherit a stale FATF jurisdiction floor."""
         result = compute_risk_score(_base_medium_app(
             country="pakistan",
             sector="import",
             ownership_structure="simple",
         ))
-        assert result["final_risk_level"] == "HIGH"
+        assert result["final_risk_level"] in ("LOW", "MEDIUM")
+        assert "floor_rule_elevated_jurisdiction" not in result["escalations"]
         assert "elevation_grey_sector_opaque" not in result["escalations"]
 
-    def test_pakistan_without_opaque_stays_medium(self):
+    def test_pakistan_without_opaque_stays_medium(self, temp_db):
         """Pakistan + crypto but simple ownership → no combination elevation."""
         result = compute_risk_score(_base_medium_app(
             country="pakistan",
