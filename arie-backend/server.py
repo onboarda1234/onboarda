@@ -12113,17 +12113,86 @@ class EnvironmentInfoHandler(BaseHandler):
         self.success(get_environment_info())
 
 
+_UNKNOWN_RUNTIME_VALUE = "unknown"
+
+
+def _runtime_env_value(name, *, fallback=_UNKNOWN_RUNTIME_VALUE):
+    value = os.environ.get(name)
+    if value is None:
+        return fallback
+    value = str(value).strip()
+    return value or fallback
+
+
+def _git_sha_short(git_sha):
+    git_sha = str(git_sha or "").strip()
+    if not git_sha or git_sha == _UNKNOWN_RUNTIME_VALUE:
+        return _UNKNOWN_RUNTIME_VALUE
+    return git_sha[:7]
+
+
+def get_provider_status_summary():
+    """Return a small, secret-free provider status summary for release proof."""
+    try:
+        ca_status = _complyadvantage_runtime_status(probe_auth=False)
+    except Exception:
+        logger.exception("version_provider_status_summary_failed")
+        ca_status = {
+            "status": _UNKNOWN_RUNTIME_VALUE,
+            "active": False,
+            "provider_display_name": "ComplyAdvantage Mesh",
+            "mode": _UNKNOWN_RUNTIME_VALUE,
+            "workspace_label": _UNKNOWN_RUNTIME_VALUE,
+            "screening_configuration_label": _UNKNOWN_RUNTIME_VALUE,
+            "abstraction_enabled": False,
+            "fallback_mode": _UNKNOWN_RUNTIME_VALUE,
+            "simulation_fallback_enabled": False,
+            "last_provider_health_result": _UNKNOWN_RUNTIME_VALUE,
+            "last_token_auth_probe_result": {"status": _UNKNOWN_RUNTIME_VALUE},
+            "updated_at": _UNKNOWN_RUNTIME_VALUE,
+        }
+
+    active_aml_provider = ca_status.get("provider_display_name") if ca_status.get("active") else "Not active"
+    auth_probe = ca_status.get("last_token_auth_probe_result") or {}
+    opencorporates_status = "live" if OPENCORPORATES_API_KEY else "simulated"
+    sumsub_status = "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated"
+    return {
+        "aml_screening": {
+            "provider": active_aml_provider,
+            "status": ca_status.get("status") or _UNKNOWN_RUNTIME_VALUE,
+            "mode": ca_status.get("mode") or _UNKNOWN_RUNTIME_VALUE,
+            "workspace_label": ca_status.get("workspace_label") or _UNKNOWN_RUNTIME_VALUE,
+            "configuration_label": ca_status.get("screening_configuration_label") or _UNKNOWN_RUNTIME_VALUE,
+            "abstraction_enabled": bool(ca_status.get("abstraction_enabled")),
+            "fallback_mode": ca_status.get("fallback_mode") or _UNKNOWN_RUNTIME_VALUE,
+            "fallback_enabled": bool(ca_status.get("simulation_fallback_enabled")),
+            "health": ca_status.get("last_provider_health_result") or _UNKNOWN_RUNTIME_VALUE,
+            "auth_probe": auth_probe.get("status") or _UNKNOWN_RUNTIME_VALUE,
+            "checked_at": ca_status.get("updated_at") or _UNKNOWN_RUNTIME_VALUE,
+        },
+        "identity_verification": {
+            "provider": "Sumsub IDV/KYC",
+            "status": sumsub_status,
+            "scope": "individual_kyc_identity_verification",
+        },
+        "registry_kyb": {
+            "provider": "OpenCorporates registry/enrichment",
+            "status": opencorporates_status,
+        },
+    }
+
+
 def get_build_metadata():
-    git_sha = os.environ.get("GIT_SHA") or "unknown"
-    build_time = os.environ.get("BUILD_TIME") or "unknown"
-    image_tag = os.environ.get("IMAGE_TAG") or git_sha
+    git_sha = _runtime_env_value("GIT_SHA")
+    image_tag = _runtime_env_value("IMAGE_TAG", fallback=git_sha if git_sha != _UNKNOWN_RUNTIME_VALUE else _UNKNOWN_RUNTIME_VALUE)
     return {
         "git_sha": git_sha,
-        "git_sha_short": git_sha[:7] if git_sha != "unknown" else "unknown",
-        "build_time": build_time,
+        "git_sha_short": _git_sha_short(git_sha),
         "image_tag": image_tag,
-        "environment": ENVIRONMENT,
-        "service": "regmind-backend",
+        "build_time": _runtime_env_value("BUILD_TIME"),
+        "environment": _runtime_env_value("ENVIRONMENT", fallback=ENVIRONMENT or _UNKNOWN_RUNTIME_VALUE),
+        "service": _runtime_env_value("SERVICE_NAME", fallback="regmind-backend"),
+        "provider_status": get_provider_status_summary(),
     }
 
 

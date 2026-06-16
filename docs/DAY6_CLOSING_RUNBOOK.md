@@ -24,12 +24,12 @@ Record these values before marking the deployment complete:
 
 - GitHub Actions deploy run URL and run number.
 - Deployed `main` SHA.
-- `/api/version` response, including `git_sha`, `image_tag`, and `build_time`.
+- Authenticated `/api/version` response, including `git_sha`, `image_tag`, `build_time`, `environment`, `service`, and safe provider status summary.
 - ECS cluster/service: `regmind-staging` / `regmind-backend`.
 - New and previous ECS task definitions.
 - CloudWatch log group: `/ecs/regmind-staging`.
 
-The deployment is not closed until `/api/version` returns the reviewed `main` SHA and the ECS service reports steady state.
+The deployment is not closed until authenticated `/api/version` returns the reviewed `main` SHA and the ECS service reports steady state.
 
 ## Run The Smoke Harness
 

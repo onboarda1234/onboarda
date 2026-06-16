@@ -178,12 +178,38 @@ Expected: `"ready": true`, database `"status": "ok"`, encryption `"status": "ok"
 Run public/runtime API checks first:
 
 ```bash
-curl -s https://staging.regmind.co/api/version | python3 -m json.tool
 curl -s https://staging.regmind.co/api/health | python3 -m json.tool
 curl -s https://staging.regmind.co/api/liveness | python3 -m json.tool
+curl -s -H "Authorization: Bearer $BACKOFFICE_TOKEN" \
+  https://staging.regmind.co/api/version | python3 -m json.tool
 ```
 
-Expected: `/api/version` reports the deployed Git SHA and image tag, and health/liveness return safe public `ok` responses.
+Expected: authenticated `/api/version` reports the deployed Git SHA and image tag, and health/liveness return safe public `ok` responses.
+
+Deterministic staging smoke token path:
+
+- GitHub Actions mints a short-lived JWT from Secrets Manager `regmind/staging` `JWT_SECRET`.
+- The token subject is `github-actions:day6-staging-smoke`.
+- The app seeds that subject as an active SCO smoke user in staging so DB-backed auth validation succeeds without weakening general authentication.
+- Local operators should prefer a real staging QA login token or a short-lived token stored only in `BACKOFFICE_TOKEN`; do not put bearer tokens on the command line.
+
+Recommended evidence collector:
+
+```bash
+EVIDENCE_DIR="docs/audits/evidence/remediation_sprints/<PR-ID>_<short-name>_<YYYYMMDDTHHMMSSZ>/runtime_json"
+BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
+python3 arie-backend/scripts/qa/staging_release_evidence.py \
+  --api-base https://staging.regmind.co/api \
+  --expected-sha "$GIT_SHA" \
+  --evidence-dir "$EVIDENCE_DIR" \
+  --run-api-smoke \
+  --expected-total 22 \
+  --expected-pending 21 \
+  --expected-edd 1 \
+  --strict
+```
+
+The collector writes `health.json`, `liveness.json`, authenticated `version.json`, ECS/task/image `runtime_baseline.json`, optional `api_smoke.json`, and `summary.json`.
 
 ### Authenticated staging browser smoke
 
@@ -217,7 +243,7 @@ Expected: exit code `0`, `report.json` written, screenshots captured, no page er
 
 | # | Check | How | Expected |
 |---|---|---|---|
-| 1 | Build provenance | `curl https://staging.regmind.co/api/version` | `git_sha` and `image_tag` match the deployed commit; no `unknown` values |
+| 1 | Build provenance | `curl -H "Authorization: Bearer $BACKOFFICE_TOKEN" https://staging.regmind.co/api/version` | `git_sha` and `image_tag` match the deployed commit; no `unknown` values |
 | 2 | Public liveness | `curl https://staging.regmind.co/api/liveness` | `ok`; no database/integration inventory |
 | 3 | Public health | `curl https://staging.regmind.co/api/health` | Safe public keys only; no `database`, `integrations`, or `metrics_enabled` |
 | 4 | Portal loads | Browser: staging.regmind.co/portal | Login page, no demo data |
@@ -231,7 +257,7 @@ Expected: exit code `0`, `report.json` written, screenshots captured, no page er
 
 Run these after every Phase hardening deployment before declaring the environment pilot-ready:
 
-1. **Version/SHA:** `/api/version` returns the deployed Git SHA, image tag, and build time.
+1. **Version/SHA:** authenticated `/api/version` returns the deployed Git SHA, image tag, build time, environment, service, and safe provider status summary.
 2. **CSRF:** cookie-auth unsafe write without `X-CSRF-Token` returns `403`; same write with a valid token reaches business validation/success.
 3. **Audit reconstruction:** `/api/audit?ref=<ARF>`, `/api/audit/export?format=csv&ref=<ARF>`, `/api/applications/<ARF>/audit-log`, and `/api/applications/<ARF>/evidence-pack` reconcile on the same case audit events.
 4. **Evidence pack:** includes application notes, documents, RMI, memos, decision records, EDD cases, EDD findings/status/policy, and build metadata.
@@ -280,13 +306,29 @@ Attach this ledger to every Day 6 staging deployment note before the deployment 
 
 | Evidence item | Source | Required value |
 |---|---|---|
-| Deployed commit | `curl https://staging.regmind.co/api/version` | `git_sha` equals the reviewed `main` commit; `image_tag` contains the same SHA |
+| Deployed commit | `staging_release_evidence.py` authenticated `version.json` | `git_sha` equals the reviewed `main` commit; `image_tag` contains the same SHA |
 | Build provenance | GitHub Actions `deploy-staging.yml` run | Run URL, run number, and actor recorded |
 | ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
 | Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
 | Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, `canonical_view: applications_report_v1`, and expected total/pending/EDD counts |
 | Authenticated browser smoke | `arie-backend/scripts/qa/staging_browser_smoke.js` | Real QA login succeeds; required back-office pages/tabs load; screenshots and `report.json` attached; no token injection or auth bypass |
 | Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
+
+Recommended evidence bundle command:
+
+```bash
+EVIDENCE_DIR="docs/audits/evidence/remediation_sprints/<PR-ID>_<short-name>_<YYYYMMDDTHHMMSSZ>/runtime_json"
+BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
+python3 arie-backend/scripts/qa/staging_release_evidence.py \
+  --api-base https://staging.regmind.co/api \
+  --expected-sha "$GIT_SHA" \
+  --evidence-dir "$EVIDENCE_DIR" \
+  --run-api-smoke \
+  --expected-total 22 \
+  --expected-pending 21 \
+  --expected-edd 1 \
+  --strict
+```
 
 Recommended smoke command:
 
@@ -430,7 +472,7 @@ DEPLOY
 [ ] sleep 120
 
 VERIFY
-[ ] /api/version → deployed SHA and image tag match
+[ ] authenticated /api/version → deployed SHA and image tag match
 [ ] /api/liveness → ok, hardened headers
 [ ] /api/readiness unauthenticated → 401
 [ ] /metrics unauthenticated → 401

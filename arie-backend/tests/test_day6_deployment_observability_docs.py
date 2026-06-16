@@ -8,9 +8,11 @@ def test_day6_deployment_observability_ledger_is_documented():
     runbook = (ROOT / "docs" / "DEPLOYMENT_RUNBOOK.md").read_text()
 
     assert "Day 6 deployment evidence ledger" in runbook
-    assert "curl https://staging.regmind.co/api/version" in runbook
+    assert 'Authorization: Bearer $BACKOFFICE_TOKEN' in runbook
+    assert "staging_release_evidence.py" in runbook
     assert "git_sha" in runbook
     assert "image_tag" in runbook
+    assert "provider status summary" in runbook
     assert "deploy-staging.yml" in runbook
     assert "regmind-staging" in runbook
     assert "regmind-backend" in runbook
@@ -29,5 +31,6 @@ def test_day6_smoke_command_uses_token_env_not_literal_token():
     assert "--expected-total 22" in section
     assert "--expected-pending 21" in section
     assert "--expected-edd 1" in section
+    assert "--run-api-smoke" in section
     assert "Do not paste bearer tokens" in section
     assert "--token " not in section
