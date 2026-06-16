@@ -88,7 +88,7 @@ jobs:
           header = {"alg": "HS256", "typ": "JWT"}
           payload = {
               "sub": "github-actions:day6-staging-smoke",
-              "role": "admin",
+              "role": "sco",
               "name": "GitHub Day 6 Staging Smoke",
               "type": "officer",
               "jti": uuid.uuid4().hex,
