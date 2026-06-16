@@ -11,6 +11,8 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from document_policy_registry import STATUS_ACTIVE, STATUS_FUTURE, STATUS_MANUAL, policy_for_document_type
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,6 +148,59 @@ EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
 BANK_ACCOUNT_DEPENDENT_REQUIREMENT_KEYS = {
     "high_volume_bank_statements",
 }
+
+
+ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP = {
+    # Active pilot runtime verification policies.
+    "company_bank_reference": "bankref",
+    "company_bank_statements_6m": "bank_statements",
+    "company_sof_evidence": "source_funds",
+    "material_ubo_sow_evidence": "source_wealth",
+    "pep_sow_evidence": "source_wealth",
+    "pep_bank_reference": "bankref",
+    "pep_linked_sof_evidence": "source_funds",
+    "aml_cft_policy": "aml_policy",
+    "licence_or_registration_evidence": "licence",
+    "crypto_source_of_funds_evidence": "source_funds",
+    "ownership_structure_chart": "structure_chart",
+    "jurisdiction_sof_evidence": "source_funds",
+    "jurisdiction_licensing_regulatory_evidence": "licence",
+    "contracts_invoices": "contracts",
+    "high_volume_bank_statements": "bank_statements",
+    # Manual-review-only pilot policies.
+    "ownership_chain_documents": "supporting_document",
+    "enhanced_ubo_evidence": "supporting_document",
+    "trust_nominee_foundation_documents": "trust_deed",
+    "expected_transaction_flow_evidence": "supporting_document",
+}
+
+
+def enhanced_requirement_document_policy(requirement_key):
+    """Return the canonical Agent 1 policy classification for an EDD request."""
+    key = _clean_text(requirement_key).lower()
+    doc_type = ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP.get(key) or "supporting_document"
+    policy = policy_for_document_type(doc_type) or {}
+    status = policy.get("active_pilot_status") or STATUS_MANUAL
+    backend_executable = bool(policy.get("backend_executable"))
+    runtime_executable = status == STATUS_ACTIVE and backend_executable
+    if status == STATUS_FUTURE:
+        verification_mode = "future_enterprise"
+    elif runtime_executable:
+        verification_mode = "active_runtime_verified"
+    else:
+        verification_mode = "manual_review_only"
+    return {
+        "requirement_key": key,
+        "document_type": policy.get("document_type") or doc_type,
+        "display_label": policy.get("display_label") or doc_type.replace("_", " ").title(),
+        "policy_id": policy.get("policy_id") or "",
+        "active_pilot_status": status,
+        "backend_executable": backend_executable,
+        "runtime_executable": runtime_executable,
+        "manual_review_only": verification_mode == "manual_review_only",
+        "future_enterprise": verification_mode == "future_enterprise",
+        "verification_mode": verification_mode,
+    }
 
 
 DEFAULT_ENHANCED_REQUIREMENT_RULES = [
@@ -777,6 +832,8 @@ def serialize_application_requirement(row):
         item["subject_name"] = item["subject"].get("name")
         item["subject_id"] = item["subject"].get("id")
         item["subject_person_key"] = item["subject"].get("person_key")
+    if _clean_text(item.get("requirement_type")).lower() == "document":
+        item["document_policy"] = enhanced_requirement_document_policy(item.get("requirement_key"))
     return item
 
 
@@ -1183,9 +1240,10 @@ def _verification_status_label(status):
         "pending": "Verification pending",
         "in_progress": "Verification running",
         "running": "Verification running",
-        "flagged": "Verification failed",
+        "flagged": "Review required",
         "failed": "Verification failed",
         "rejected": "Verification failed",
+        "skipped": "Manual review required",
         "not_run": "Verification not available",
     }.get(normalized, normalized.replace("_", " ").title() or "Verification pending")
 
@@ -1198,6 +1256,8 @@ def _verification_status_tone(status):
         return "error"
     if normalized in ("in_progress", "running"):
         return "info"
+    if normalized == "skipped":
+        return "warning"
     return "pending"
 
 
@@ -3302,7 +3362,7 @@ def serialize_portal_application_requirement(db, row):
         try:
             doc_row = db.execute(
                 """
-                SELECT id, doc_name, uploaded_at, verification_status, review_status
+                SELECT id, doc_type, doc_name, uploaded_at, verification_status, review_status
                 FROM documents
                 WHERE id = ? AND application_id = ?
                 """,
@@ -3312,9 +3372,12 @@ def serialize_portal_application_requirement(db, row):
             if doc:
                 result["linked_document"] = {
                     "id": doc.get("id"),
+                    "doc_type": doc.get("doc_type"),
                     "doc_name": doc.get("doc_name"),
                     "uploaded_at": doc.get("uploaded_at"),
                     "verification_status": doc.get("verification_status"),
+                    "verification_status_label": _verification_status_label(doc.get("verification_status")),
+                    "verification_status_tone": _verification_status_tone(doc.get("verification_status")),
                     "review_status": doc.get("review_status"),
                 }
         except Exception:
@@ -3426,7 +3489,12 @@ def fulfill_application_enhanced_requirement_document(
         str(before.get("generation_source") or "").strip() == "monitoring_document_expiry_refresh"
         or bool(before.get("monitoring_alert_id") or before.get("monitoring_document_id"))
     )
-    doc_type_clause = "" if is_monitoring_refresh else "AND doc_type = 'enhanced_requirement'"
+    policy_info = enhanced_requirement_document_policy(before.get("requirement_key"))
+    expected_doc_type = policy_info.get("document_type") or "enhanced_requirement"
+    doc_type_clause = "" if is_monitoring_refresh else "AND doc_type = ?"
+    params = [document_id, app["id"]]
+    if not is_monitoring_refresh:
+        params.append(expected_doc_type)
     doc = db.execute(
         f"""
         SELECT id
@@ -3435,12 +3503,12 @@ def fulfill_application_enhanced_requirement_document(
           AND application_id = ?
           {doc_type_clause}
         """,
-        (document_id, app["id"]),
+        params,
     ).fetchone()
     if not doc:
         if is_monitoring_refresh:
             return None, "Uploaded document must belong to the same application", 400
-        return None, "Uploaded document must be an enhanced requirement document for the same application", 400
+        return None, "Uploaded document must match the requested enhanced requirement document type", 400
 
     now = _now_iso()
     client_id = client_user.get("sub")

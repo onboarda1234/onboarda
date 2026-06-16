@@ -1982,14 +1982,17 @@ def test_backoffice_enhanced_requirement_upload_links_document_under_review_and_
     assert body["requirement"]["linked_document"]["id"] == body["document"]["id"]
     assert body["requirement"]["linked_document"]["verification_status"] == "pending"
     assert body["requirement"]["linked_document"]["verification_status_label"] == "Verification pending"
-    assert body["document"]["doc_type"] == "enhanced_requirement"
+    assert body["document"]["doc_type"] == "bankref"
     assert body["document"]["verification_status"] == "pending"
     assert body["document"]["verification_status_label"] == "Verification pending"
-    assert body["agent1_verification"]["triggered"] is False
+    assert body["document"]["verification_queued"] is True
+    assert body["agent1_verification"]["triggered"] is True
+    assert body["agent1_verification"]["mode"] == "active_runtime_verified"
 
     conn = get_db()
     req = conn.execute("SELECT * FROM application_enhanced_requirements WHERE id=?", (req_id,)).fetchone()
     doc = conn.execute("SELECT * FROM documents WHERE id=?", (req["linked_document_id"],)).fetchone()
+    job = conn.execute("SELECT * FROM verification_jobs WHERE document_id=?", (doc["id"],)).fetchone()
     audit = conn.execute(
         """
         SELECT detail, before_state, after_state
@@ -2004,13 +2007,20 @@ def test_backoffice_enhanced_requirement_upload_links_document_under_review_and_
     assert req["linked_document_id"] == body["document"]["id"]
     assert req["uploaded_at"]
     assert doc["doc_name"] == "source-of-funds.pdf"
-    assert doc["doc_type"] == "enhanced_requirement"
+    assert doc["doc_type"] == "bankref"
     assert doc["slot_key"] == f"enhanced_requirement:{req_id}"
     assert doc["verification_status"] == "pending"
+    assert doc["uploaded_by"] == "co001"
+    assert doc["uploaded_by_actor_type"] == "user"
+    assert doc["upload_source"] == "back_office_upload"
+    assert job is not None
     metadata = json.loads(doc["verification_results"])
     assert metadata["source_surface"] == "kyc_enhanced_requirement_row"
     assert metadata["enhanced_requirement_id"] == str(req_id)
-    assert metadata["verification_triggered"] is False
+    assert metadata["canonical_document_type"] == "bankref"
+    assert metadata["verification_triggered"] is True
+    assert metadata["verification_queued"] is True
+    assert metadata["document_policy"]["policy_id"] == "DOC-EVIDENCE-BANK-REFERENCE-v1"
     assert audit is not None
     detail = json.loads(audit["detail"])
     before = json.loads(audit["before_state"])
@@ -2019,6 +2029,7 @@ def test_backoffice_enhanced_requirement_upload_links_document_under_review_and_
     assert detail["requirement_id"] == req_id
     assert detail["document_id"] == doc["id"]
     assert detail["filename"] == "source-of-funds.pdf"
+    assert detail["doc_type"] == "bankref"
     assert detail["source_surface"] == "kyc_enhanced_requirement_row"
     assert detail["resulting_requirement_status"] == "under_review"
     assert detail["auto_accepted"] is False
@@ -2844,13 +2855,19 @@ def test_portal_document_upload_fulfils_requested_enhanced_requirement(enhanced_
     assert body["status"] == "submitted"
     assert body["requirement"]["status"] == "submitted"
     assert body["requirement"]["id"] == req_id
-    assert body["document"]["doc_type"] == "enhanced_requirement"
+    assert body["document"]["doc_type"] == "bankref"
+    assert body["document"]["verification_status"] == "pending"
+    assert body["document"]["verification_status_label"] == "Verification pending"
+    assert body["document"]["verification_queued"] is True
+    assert body["agent1_verification"]["triggered"] is True
+    assert body["agent1_verification"]["mode"] == "active_runtime_verified"
     forbidden_fields = {"trigger_key", "trigger_reason", "trigger_context", "review_notes", "waiver_reason", "requested_by", "audit"}
     assert not forbidden_fields.intersection(body["requirement"])
 
     conn = get_db()
     req = conn.execute("SELECT * FROM application_enhanced_requirements WHERE id=?", (req_id,)).fetchone()
     doc = conn.execute("SELECT * FROM documents WHERE id=?", (req["linked_document_id"],)).fetchone()
+    job = conn.execute("SELECT * FROM verification_jobs WHERE document_id=?", (doc["id"],)).fetchone()
     app = conn.execute("SELECT status, decision_notes FROM applications WHERE id=?", (app_id,)).fetchone()
     rmi_count = conn.execute("SELECT COUNT(*) AS c FROM rmi_requests WHERE application_id=?", (app_id,)).fetchone()["c"]
     rmi_item_count = conn.execute(
@@ -2877,11 +2894,20 @@ def test_portal_document_upload_fulfils_requested_enhanced_requirement(enhanced_
 
     assert req["status"] == "uploaded"
     assert req["uploaded_at"]
-    assert doc["doc_type"] == "enhanced_requirement"
+    assert doc["doc_type"] == "bankref"
     assert doc["verification_status"] == "pending"
     assert doc["review_status"] == "pending"
+    assert doc["uploaded_by"] is None
+    assert doc["uploaded_by_actor_type"] == "client"
+    assert doc["uploaded_by_actor_id"] == client_id
+    assert doc["upload_source"] == "client_portal"
+    assert job is not None
     metadata = json.loads(doc["verification_results"])
     assert metadata["enhanced_requirement_id"] == str(req_id)
+    assert metadata["source_surface"] == "portal_enhanced_requirement_upload"
+    assert metadata["canonical_document_type"] == "bankref"
+    assert metadata["verification_triggered"] is True
+    assert metadata["verification_queued"] is True
     assert app["status"] == "submitted"
     assert app["decision_notes"] in (None, "")
     assert rmi_count == 0

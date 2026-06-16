@@ -6695,28 +6695,20 @@ _AGENT_METADATA = {
 _AGENT_DEFINITIONS_V2 = {
     1: {
         "description": (
-            "Validates uploaded documents against canonical document policies. Checks are document-type based, not duplicated by lifecycle stage; "
-            "workflows map verified documents to onboarding, change management, periodic review, and EDD blockers/triggers. "
-            "Agent 1 can verify, flag, block, recommend, and mark required follow-up, but does not approve, reject, waive, or override compliance decisions. "
-            "Agent 1 does not perform sanctions, PEP, or adverse-media screening."
+            "Agent 1 verifies uploaded onboarding and requested evidence documents using the checks configured in Document Verification Policies. "
+            "It can verify, flag, block reliance, recommend officer action, and trigger required follow-up. "
+            "It cannot approve, reject, waive, or perform sanctions/PEP/adverse-media screening."
         ),
         "checks": [
-            "COI: Entity Name Match", "COI: Registration Number", "COI: Document Clarity",
-            "M&A: Entity Name Match", "M&A: Completeness", "M&A: Certification",
-            "Registration: Entity Name Match", "Registration: Current Validity", "Registration: Document Clarity",
-            "Shareholder Register: Ownership Consistency", "Shareholder Register: Completeness", "Shareholder Register: Currency",
-            "Director Register: Director Consistency", "Director Register: Completeness", "Director Register: Clarity",
-            "Financials: Financial Period", "Financials: Entity Name Match", "Financials: Audit Status", "Financials: Completeness",
-            "Board Resolution: Signatory Match", "Board Resolution: Date", "Board Resolution: Scope of Authority",
-            "Structure Chart: UBO Chain", "Structure Chart: Ownership Match", "Structure Chart: Legibility",
-            "Proof of Address: Document Date", "Proof of Address: Entity Name Match", "Proof of Address: Clarity", "Proof of Address: Address Match",
-            "Bank Reference: Letterhead", "Bank Reference: Date", "Bank Reference: Entity Name Match",
-            "Licence: Entity Name Match", "Licence: Validity", "Licence: Issuing Authority",
-            "Passport: Document Expiry", "Passport: Photo Quality", "Passport: Name Match", "Passport: Nationality Match",
-            "Personal PoA: Document Date", "Personal PoA: Name Match", "Personal PoA: Clarity", "Personal PoA: Certification",
-            "CV: Name Match", "CV: Employment History",
-            "Bank Reference (PEP): Date", "Bank Reference (PEP): Name Match", "Bank Reference (PEP): Bank ID",
-            "Bank Reference (PEP): Account Standing", "Bank Reference (PEP): Signatory",
+            "Configured document verification checks",
+            "Upload gate checks",
+            "Material issue detection",
+            "Requested EDD evidence routing",
+            "Manual-review-only evidence routing",
+            "Workflow blocker mapping",
+            "Follow-up requirement markers",
+            "Unknown document review routing",
+            "Audit/export detail preservation",
         ],
     },
     3: {
@@ -7312,23 +7304,15 @@ def seed_initial_data(db: DBConnection):
     # === AI AGENTS ===
     if agents_count == 0:
         agent1_checks = json.dumps([
-        # Entity document checks (aligned with ENTITY_DOC_CHECKS in back office)
-        "COI: Entity Name Match", "COI: Registration Number", "COI: Document Clarity",
-        "M&A: Entity Name Match", "M&A: Completeness", "M&A: Certification",
-        "Registration: Entity Name Match", "Registration: Current Validity", "Registration: Document Clarity",
-        "Shareholder Register: Ownership Consistency", "Shareholder Register: Completeness", "Shareholder Register: Currency",
-        "Director Register: Director Consistency", "Director Register: Completeness", "Director Register: Clarity",
-        "Financials: Financial Period", "Financials: Entity Name Match", "Financials: Audit Status", "Financials: Completeness",
-        "Board Resolution: Signatory Match", "Board Resolution: Date", "Board Resolution: Scope of Authority",
-        "Structure Chart: UBO Chain", "Structure Chart: Ownership Match", "Structure Chart: Legibility",
-        "Proof of Address: Document Date", "Proof of Address: Entity Name Match", "Proof of Address: Clarity", "Proof of Address: Address Match",
-        "Bank Reference: Letterhead", "Bank Reference: Date", "Bank Reference: Entity Name Match",
-        "Licence: Entity Name Match", "Licence: Validity", "Licence: Issuing Authority",
-        # Person document checks (aligned with PERSON_DOC_CHECKS in back office)
-        "Passport: Document Expiry", "Passport: Photo Quality", "Passport: Name Match", "Passport: Nationality Match",
-        "Personal PoA: Document Date", "Personal PoA: Name Match", "Personal PoA: Clarity", "Personal PoA: Certification",
-        "CV: Name Match", "CV: Employment History",
-        "Bank Reference (PEP): Date", "Bank Reference (PEP): Name Match", "Bank Reference (PEP): Bank ID", "Bank Reference (PEP): Account Standing", "Bank Reference (PEP): Signatory"
+        "Configured document verification checks",
+        "Upload gate checks",
+        "Material issue detection",
+        "Requested EDD evidence routing",
+        "Manual-review-only evidence routing",
+        "Workflow blocker mapping",
+        "Follow-up requirement markers",
+        "Unknown document review routing",
+        "Audit/export detail preservation",
     ])
         agent2_checks = json.dumps([
             "Registry source selection (rule)",
@@ -7383,10 +7367,9 @@ def seed_initial_data(db: DBConnection):
         agents_seed = [
             (
                 1, "Identity & Document Integrity Agent", "🔍", "Onboarding",
-                "Validates uploaded documents against canonical document policies. Checks are document-type based, not duplicated by lifecycle stage; "
-                "workflows map verified documents to onboarding, change management, periodic review, and EDD blockers/triggers. "
-                "Agent 1 can verify, flag, block, recommend, and mark required follow-up, but does not approve, reject, waive, or override compliance decisions. "
-                "Agent 1 does not perform sanctions, PEP, or adverse-media screening.",
+                "Agent 1 verifies uploaded onboarding and requested evidence documents using the checks configured in Document Verification Policies. "
+                "It can verify, flag, block reliance, recommend officer action, and trigger required follow-up. "
+                "It cannot approve, reject, waive, or perform sanctions/PEP/adverse-media screening.",
                 1, agent1_checks
             ),
             (

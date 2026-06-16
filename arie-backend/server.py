@@ -184,6 +184,7 @@ from enhanced_requirements import (
     build_enhanced_review_memo_summary,
     decorate_application_requirements_for_backoffice,
     diagnose_enhanced_requirement_config,
+    enhanced_requirement_document_policy,
     fulfill_application_enhanced_requirement_document,
     generate_application_enhanced_requirements,
     list_portal_application_enhanced_requirements,
@@ -2236,6 +2237,15 @@ def _document_upload_actor_metadata(user):
         "uploaded_by_display": str(display or ("Uploaded by client" if actor_type == "client" else "")),
         "upload_source": "client_portal" if actor_type == "client" else "back_office_upload",
     }
+
+
+def _enhanced_upload_verification_state_payload(status):
+    payload = verification_state_payload(status)
+    if payload.get("verification_state") == STATE_PENDING:
+        payload["verification_status_label"] = "Verification pending"
+    elif payload.get("verification_state") == STATE_SKIPPED:
+        payload["verification_status_label"] = "Manual review required"
+    return payload
 
 
 def _decorate_document_upload_actor(db, doc):
@@ -12624,6 +12634,10 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 return self.error("This enhanced requirement does not accept document uploads", 400)
             if str(before.get("status") or "").lower() in ("accepted", "waived", "cancelled"):
                 return self.error("This enhanced requirement is already resolved and cannot accept uploads", 409)
+            policy_info = enhanced_requirement_document_policy(before.get("requirement_key"))
+            upload_doc_type = policy_info.get("document_type") or "supporting_document"
+            upload_runtime_executable = bool(policy_info.get("runtime_executable"))
+            upload_verification_status = STATE_PENDING if upload_runtime_executable else STATE_SKIPPED
 
             if "file" not in self.request.files:
                 self._audit_inline_upload_rejected(user, app["ref"], "missing_file", "No file provided", db=db)
@@ -12676,7 +12690,7 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     success, key_or_error = s3.upload_document(
                         file_data=body,
                         client_id=app["id"],
-                        doc_type="enhanced_requirement",
+                        doc_type=upload_doc_type,
                         filename=safe_name,
                         content_type=content_type,
                         metadata={
@@ -12720,17 +12734,22 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 "source": "enhanced_requirement_upload",
                 "source_surface": "kyc_enhanced_requirement_row",
                 "enhanced_requirement_id": str(requirement_id),
+                "requirement_key": before.get("requirement_key"),
+                "canonical_document_type": upload_doc_type,
+                "document_policy": policy_info,
                 "officer_uploaded": True,
-                "verification_triggered": False,
+                "verification_queued": upload_runtime_executable,
+                "verification_triggered": upload_runtime_executable,
+                "manual_review_only": not upload_runtime_executable,
                 "verification_trigger_path": "/api/documents/{document_id}/verify",
             }
             replacement = _prepare_document_slot_replacement(
                 db,
                 application_id=app["id"],
                 new_document_id=document_id,
-                doc_type="enhanced_requirement",
+                doc_type=upload_doc_type,
                 person_id=None,
-                slot_key=_document_slot_key("enhanced_requirement", enhanced_requirement_id=requirement_id),
+                slot_key=_document_slot_key(upload_doc_type, enhanced_requirement_id=requirement_id),
                 actor_user=user,
                 replaced_reason="enhanced_requirement_replacement",
                 extra_document_ids=[before.get("linked_document_id")] if before.get("linked_document_id") else None,
@@ -12741,13 +12760,15 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 INSERT INTO documents
                 (id, application_id, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version,
-                 verification_status, verification_results, review_status, file_sha256)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 verification_status, verification_results, review_status, file_sha256,
+                 uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id,
+                 uploaded_by_display, upload_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
                     app["id"],
-                    "enhanced_requirement",
+                    upload_doc_type,
                     filename,
                     file_path,
                     s3_key,
@@ -12756,13 +12777,45 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     replacement["slot_key"],
                     True,
                     replacement["version"],
-                    STATE_PENDING,
+                    upload_verification_status,
                     json.dumps(verification_metadata, sort_keys=True),
                     "pending",
                     file_sha256,
+                    _document_upload_actor_metadata(user)["uploaded_by"],
+                    _document_upload_actor_metadata(user)["uploaded_by_actor_type"],
+                    _document_upload_actor_metadata(user)["uploaded_by_actor_id"],
+                    _document_upload_actor_metadata(user)["uploaded_by_display"],
+                    _document_upload_actor_metadata(user)["upload_source"],
                 ),
             )
             _finalize_document_slot_replacement(db, app["id"], previous_documents, document_id)
+            verification_queue = None
+            if upload_runtime_executable:
+                try:
+                    from verification_jobs import enqueue_verification_job
+
+                    queued_doc = dict(db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone())
+                    verification_queue = enqueue_verification_job(
+                        db,
+                        queued_doc,
+                        dict(app),
+                        user,
+                        request_id=self.request.headers.get("X-Request-ID", ""),
+                        ip_address=self.get_client_ip(),
+                    )
+                except Exception as queue_err:
+                    logger.exception("Enhanced requirement verification enqueue failed for doc=%s", document_id)
+                    verification_metadata.update({
+                        "verification_queued": False,
+                        "verification_triggered": False,
+                        "system_warning": "verification_queue_unavailable",
+                        "requires_review": True,
+                        "queue_error": type(queue_err).__name__,
+                    })
+                    db.execute(
+                        "UPDATE documents SET verification_results=? WHERE id=?",
+                        (json.dumps(verification_metadata, sort_keys=True), document_id),
+                    )
 
             now = datetime.now(timezone.utc).isoformat()
             db.execute(
@@ -12800,13 +12853,15 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 "document_id": document_id,
                 "filename": filename,
                 "file_size": len(body),
+                "doc_type": upload_doc_type,
+                "document_policy": policy_info,
                 "actor": user.get("sub", ""),
                 "actor_role": user.get("role", ""),
                 "timestamp": now,
                 "source_surface": "kyc_enhanced_requirement_row",
                 "resulting_requirement_status": after.get("status"),
-                "verification_status": STATE_PENDING,
-                "verification_triggered": False,
+                "verification_status": upload_verification_status,
+                "verification_triggered": bool(verification_queue and verification_queue.get("job")),
                 "verification_trigger_path": "/api/documents/{document_id}/verify",
                 "auto_accepted": False,
                 "changes": changes,
@@ -12816,7 +12871,7 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 user,
                 "Upload",
                 app["ref"],
-                f"Document uploaded: {filename} (enhanced_requirement) enhanced_requirement_id={requirement_id}",
+                f"Document uploaded: {filename} ({upload_doc_type}) enhanced_requirement_id={requirement_id}",
                 db=db,
                 commit=False,
             )
@@ -12859,7 +12914,7 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                         "event": "document.replaced",
                         "application_id": app["id"],
                         "application_ref": app["ref"],
-                        "doc_type": "enhanced_requirement",
+                        "doc_type": upload_doc_type,
                         "slot_key": replacement["slot_key"],
                         "enhanced_requirement_id": str(requirement_id),
                         "old_document_id": previous_documents[0]["id"],
@@ -12904,20 +12959,22 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 "document": {
                     "id": document_id,
                     "doc_name": filename,
-                    "doc_type": "enhanced_requirement",
+                    "doc_type": upload_doc_type,
                     "file_size": len(body),
                     "mime_type": content_type,
                     "slot_key": replacement["slot_key"],
                     "is_current": True,
                     "version": replacement["version"],
-                    "verification_status": STATE_PENDING,
-                    "verification_status_label": "Verification pending",
-                    "verification_status_tone": "pending",
+                    "verification_status": upload_verification_status,
+                    **_enhanced_upload_verification_state_payload(upload_verification_status),
+                    "verification_queued": bool(verification_queue and verification_queue.get("job")),
                     "replaced_document_ids": [row["id"] for row in previous_documents],
                 },
                 "enhanced_review_summary": summary,
                 "agent1_verification": {
-                    "triggered": False,
+                    "triggered": bool(verification_queue and verification_queue.get("job")),
+                    "mode": policy_info.get("verification_mode"),
+                    "policy_id": policy_info.get("policy_id"),
                     "trigger_path": "/api/documents/{document_id}/verify",
                 },
             }, 201)
@@ -30263,18 +30320,22 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             ).fetchone()
             raw_req = serialize_application_requirement(requirement_row)
             is_monitoring_refresh = _is_monitoring_document_refresh_requirement(raw_req)
+            policy_info = enhanced_requirement_document_policy((raw_req or {}).get("requirement_key"))
+            mapped_doc_type = policy_info.get("document_type") or "supporting_document"
             upload_target = (
                 _monitoring_refresh_upload_target(db, app["id"], raw_req)
                 if is_monitoring_refresh
                 else {
-                    "doc_type": "enhanced_requirement",
+                    "doc_type": mapped_doc_type,
                     "person_id": None,
-                    "slot_key": _document_slot_key("enhanced_requirement", enhanced_requirement_id=requirement_id),
+                    "slot_key": _document_slot_key(mapped_doc_type, enhanced_requirement_id=requirement_id),
                     "old_document_id": "",
                     "extra_document_ids": [safe_req.get("linked_document_id")] if safe_req.get("linked_document_id") else [],
                 }
             )
             upload_doc_type = upload_target["doc_type"]
+            upload_runtime_executable = bool(policy_info.get("runtime_executable")) and not is_monitoring_refresh
+            upload_verification_status = STATE_PENDING if upload_runtime_executable or is_monitoring_refresh else STATE_SKIPPED
 
             if "file" not in self.request.files:
                 return self.error("No file provided", 400)
@@ -30282,6 +30343,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             filename = os.path.basename(file_info["filename"] or "")
             body = file_info["body"]
             content_type = file_info.get("content_type", "application/octet-stream")
+            file_sha256 = hashlib.sha256(body).hexdigest()
 
             if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
                 return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
@@ -30334,13 +30396,22 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
 
             verification_metadata = {
                 "source": "monitoring_document_refresh_upload" if is_monitoring_refresh else "enhanced_requirement_upload",
+                "source_surface": "monitoring_document_refresh_portal_upload" if is_monitoring_refresh else "portal_enhanced_requirement_upload",
                 "enhanced_requirement_id": str(requirement_id),
+                "requirement_key": (raw_req or {}).get("requirement_key"),
+                "canonical_document_type": upload_doc_type,
+                "document_policy": policy_info,
                 "monitoring_alert_id": (raw_req or {}).get("monitoring_alert_id") or "",
                 "monitoring_document_id": upload_target.get("old_document_id") or "",
                 "previous_document_id": upload_target.get("old_document_id") or "",
-                "upload_source": "client_portal" if is_monitoring_refresh else "portal",
+                "upload_source": "client_portal",
                 "client_submitted": True,
+                "verification_queued": upload_runtime_executable,
+                "verification_triggered": upload_runtime_executable,
+                "manual_review_only": not upload_runtime_executable,
+                "verification_trigger_path": "/api/documents/{document_id}/verify",
             }
+            upload_actor = _document_upload_actor_metadata(user)
             replacement = _prepare_document_slot_replacement(
                 db,
                 application_id=app["id"],
@@ -30358,8 +30429,10 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version,
-                 verification_status, verification_results, review_status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 verification_status, verification_results, review_status, file_sha256,
+                 uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id,
+                 uploaded_by_display, upload_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
@@ -30374,12 +30447,45 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     replacement["slot_key"],
                     True,
                     replacement["version"],
-                    "pending",
+                    upload_verification_status,
                     json.dumps(verification_metadata, sort_keys=True),
                     "pending",
+                    file_sha256,
+                    upload_actor["uploaded_by"],
+                    upload_actor["uploaded_by_actor_type"],
+                    upload_actor["uploaded_by_actor_id"],
+                    upload_actor["uploaded_by_display"],
+                    upload_actor["upload_source"],
                 ),
             )
             _finalize_document_slot_replacement(db, app["id"], previous_documents, document_id)
+            verification_queue = None
+            if upload_runtime_executable:
+                try:
+                    from verification_jobs import enqueue_verification_job
+
+                    queued_doc = dict(db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone())
+                    verification_queue = enqueue_verification_job(
+                        db,
+                        queued_doc,
+                        dict(app),
+                        user,
+                        request_id=self.request.headers.get("X-Request-ID", ""),
+                        ip_address=self.get_client_ip(),
+                    )
+                except Exception as queue_err:
+                    logger.exception("Portal enhanced requirement verification enqueue failed for doc=%s", document_id)
+                    verification_metadata.update({
+                        "verification_queued": False,
+                        "verification_triggered": False,
+                        "system_warning": "verification_queue_unavailable",
+                        "requires_review": True,
+                        "queue_error": type(queue_err).__name__,
+                    })
+                    db.execute(
+                        "UPDATE documents SET verification_results=? WHERE id=?",
+                        (json.dumps(verification_metadata, sort_keys=True), document_id),
+                    )
             result, error, status_code = fulfill_application_enhanced_requirement_document(
                 db,
                 app["id"],
@@ -30484,6 +30590,15 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     "slot_key": replacement["slot_key"],
                     "is_current": True,
                     "version": replacement["version"],
+                    "verification_status": upload_verification_status,
+                    **_enhanced_upload_verification_state_payload(upload_verification_status),
+                    "verification_queued": bool(verification_queue and verification_queue.get("job")),
+                    "document_policy": policy_info,
+                },
+                "agent1_verification": {
+                    "triggered": bool(verification_queue and verification_queue.get("job")),
+                    "mode": policy_info.get("verification_mode"),
+                    "policy_id": policy_info.get("policy_id"),
                 },
             }, 201)
         except Exception as exc:

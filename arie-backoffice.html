@@ -756,44 +756,6 @@ a { color:var(--brand); text-decoration:none; }
 .verification-technical-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
 .verification-audit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:7px; margin:0 0 8px; }
 .verification-audit-fact { border:1px solid var(--border1); border-radius:8px; background:var(--surface2); padding:6px 8px; font-size:11px; color:var(--text2); overflow-wrap:anywhere; }
-.agent1-policy-hero { border:1px solid #d7def2; border-radius:16px; background:linear-gradient(180deg,#ffffff 0%,#f7f9ff 100%); box-shadow:0 10px 24px rgba(16,24,40,0.06); padding:18px 20px; margin-bottom:16px; }
-.agent1-policy-eyebrow { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--brand); margin-bottom:4px; }
-.agent1-policy-title { font-size:20px; font-weight:800; color:var(--text1); letter-spacing:0; line-height:1.25; }
-.agent1-policy-subtitle { font-size:13px; color:var(--text2); margin-top:6px; max-width:860px; line-height:1.5; }
-.agent1-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:14px; }
-.agent1-summary-card { border:1px solid var(--border1); border-radius:10px; background:var(--surface); padding:11px 12px; }
-.agent1-summary-label { font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text3); }
-.agent1-summary-value { font-size:20px; font-weight:800; color:var(--text1); margin-top:2px; }
-.agent1-filter-bar { display:grid; grid-template-columns:minmax(220px,1fr) repeat(3,minmax(150px,190px)); gap:10px; align-items:end; margin:12px 0 14px; }
-.agent1-lifecycle-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 14px; }
-.agent1-lifecycle-tab { border:1px solid var(--border1); border-radius:999px; padding:7px 10px; background:var(--surface); color:var(--text2); font-size:12px; font-weight:700; cursor:pointer; }
-.agent1-lifecycle-tab.active { border-color:var(--brand); background:var(--brand-dim); color:var(--brand); }
-.agent1-policy-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; align-items:start; }
-.agent1-policy-card { border:1px solid #dfe7f2; border-radius:14px; background:var(--surface); box-shadow:0 8px 16px rgba(16,24,40,0.04); overflow:hidden; }
-.agent1-policy-card summary { list-style:none; cursor:pointer; padding:13px 14px; display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
-.agent1-policy-card summary::-webkit-details-marker { display:none; }
-.agent1-policy-card[open] summary { border-bottom:1px solid var(--border1); background:#fbfcff; }
-.agent1-policy-family { font-size:14px; font-weight:800; color:var(--text1); line-height:1.28; }
-.agent1-policy-meta { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
-.agent1-policy-body { padding:12px 14px 14px; }
-.agent1-policy-section-label { font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text3); margin:10px 0 5px; }
-.agent1-chip-row { display:flex; flex-wrap:wrap; gap:5px; }
-.agent1-chip { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; background:var(--surface2); border:1px solid var(--border1); color:var(--text2); font-size:10px; font-weight:700; line-height:1.45; }
-.agent1-chip.material { background:rgba(37,99,235,.07); border-color:rgba(37,99,235,.18); color:#1d4ed8; }
-.agent1-chip.technical { background:rgba(100,116,139,.08); border-color:rgba(100,116,139,.18); color:#475569; }
-.agent1-gate-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; border:1px solid transparent; }
-.agent1-gate-badge.blocking { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
-.agent1-gate-badge.review { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
-.agent1-gate-badge.library { background:rgba(100,116,139,.1); color:#475569; border-color:rgba(100,116,139,.22); }
-.agent1-status-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; background:var(--green-bg); color:var(--green); border:1px solid rgba(22,163,74,.2); }
-.agent1-status-badge.manual-review-only { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
-.agent1-status-badge.future-enterprise { background:rgba(100,116,139,.1); color:#475569; border-color:rgba(100,116,139,.22); }
-.agent1-policy-empty { border:1px dashed var(--border1); border-radius:12px; background:var(--surface2); padding:20px; text-align:center; color:var(--text3); font-size:13px; }
-@media (max-width:900px) {
-  .agent1-filter-bar { grid-template-columns:1fr; }
-  .agent1-policy-grid { grid-template-columns:1fr; }
-}
-
 /* ── Risk Model Visual Enhancements ── */
 .weight-slider-container { display:flex; align-items:center; gap:10px; flex:1; }
 .weight-slider { -webkit-appearance:none; appearance:none; width:100%; height:6px; border-radius:3px; background:var(--surface3); outline:none; }
@@ -2827,78 +2789,35 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ AI VERIFICATION CHECKS VIEW ═══════════════ -->
 <div class="view" id="view-ai-checks">
-  <div class="agent1-policy-hero">
+  <div class="card" style="padding:18px 20px;margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
       <div>
-        <div class="agent1-policy-eyebrow">Agent 1 Evidence Control Layer</div>
-        <h3 class="agent1-policy-title">Document Policy Registry</h3>
-        <p class="agent1-policy-subtitle">Agent 1 verifies each document type consistently. Workflows decide when the document is required, what it blocks, and what follow-up it triggers.</p>
+        <h3 style="font-size:18px;font-weight:800;color:var(--text1);letter-spacing:0;">Document Verification Policies</h3>
+        <p style="font-size:13px;color:var(--text3);margin-top:4px;max-width:860px;line-height:1.5;">Configure the verification checks Agent 1 uses for uploaded onboarding and requested evidence documents.</p>
       </div>
       <button class="btn btn-primary" onclick="saveAIChecks()">💾 Save Check Configuration</button>
     </div>
-    <div id="agent1-policy-summary" class="agent1-summary-grid"></div>
   </div>
 
-  <div class="card" style="padding:16px;margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px;">
-      <div>
-        <div class="card-title">Canonical Policy Coverage</div>
-        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Document-first registry showing active runtime policies, manual-review evidence, and future/enterprise scope without duplicating checks by lifecycle.</p>
-      </div>
-      <span class="badge" style="background:var(--brand-dim);color:var(--brand);">Registry version DOC-POLICY-CANONICAL-v1</span>
-    </div>
-    <div class="agent1-filter-bar">
-      <div>
-        <label class="form-label" style="font-size:10px;">Search policy</label>
-        <input class="form-input" id="agent1-policy-search" placeholder="Search documents, checks, gate behaviour..." oninput="renderPolicyRegistry()" />
-      </div>
-      <div>
-        <label class="form-label" style="font-size:10px;">Document family</label>
-        <select class="form-select" id="agent1-policy-lifecycle-filter" onchange="switchPolicyTab(this.value)">
-          <option value="all">All families</option>
-        </select>
-      </div>
-      <div>
-        <label class="form-label" style="font-size:10px;">Gate behaviour</label>
-        <select class="form-select" id="agent1-policy-gate-filter" onchange="renderPolicyRegistry()">
-          <option value="all">All gates</option>
-          <option value="blocking">Blocking gates</option>
-          <option value="review">Review / classify</option>
-          <option value="library">Library only</option>
-        </select>
-      </div>
-      <div>
-        <label class="form-label" style="font-size:10px;">Status</label>
-        <select class="form-select" id="agent1-policy-status-filter" onchange="renderPolicyRegistry()">
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="manual review only">Manual review only</option>
-          <option value="future / enterprise">Future / enterprise</option>
-        </select>
-      </div>
-    </div>
-    <div id="agent1-policy-tabs" class="agent1-lifecycle-tabs"></div>
-    <div id="agent1-policy-registry" class="agent1-policy-grid"></div>
-  </div>
-
-  <details class="card" style="padding:0;overflow:hidden;">
-    <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:16px 18px;list-style-position:inside;">
+  <div class="card" style="padding:0;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:16px 18px;border-bottom:1px solid var(--border1);flex-wrap:wrap;">
       <div>
         <div class="card-title">Underlying Verification Check Configuration</div>
-        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Editable onboarding check rules currently persisted through <code>/config/verification-checks</code>. Currently <strong id="total-checks-count">0</strong> checks active.</p>
+        <p style="font-size:12px;color:var(--text3);margin-top:2px;">Editable Agent 1 check rules persisted through <code>/config/verification-checks</code>. Currently <strong id="total-checks-count">0</strong> checks active.</p>
       </div>
-      <span style="font-size:11px;color:var(--brand);font-weight:800;white-space:nowrap;">Expand editor</span>
-    </summary>
+    </div>
     <div style="padding:0 18px 18px;">
       <div class="tab-bar" style="margin-bottom:0;">
         <div class="tab active" onclick="switchCheckTab('entity',this)">Entity Documents</div>
         <div class="tab" onclick="switchCheckTab('person',this)">Person / KYC Documents</div>
+        <div class="tab" onclick="switchCheckTab('edd',this)">Enhanced / EDD Documents</div>
       </div>
 
       <div id="checks-entity-tab"></div>
       <div id="checks-person-tab" style="display:none;"></div>
+      <div id="checks-edd-tab" style="display:none;"></div>
     </div>
-  </details>
+  </div>
 </div>
 
 <!-- ═══════════════ AI AGENTS VIEW ═══════════════ -->
@@ -4963,29 +4882,7 @@ async function loadFromAPI() {
 
   await safeLoadModule('Verification checks', async function() {
     var checksResp = await boApiCall('GET', '/config/verification-checks');
-    applyAgent1PolicyPayload(checksResp);
-    if (checksResp.entity && checksResp.entity.length > 0) {
-      ENTITY_DOC_CHECKS = checksResp.entity.map(function(item) {
-        return {
-          docId: item.doc_type || ('doc-' + String(item.doc_name || 'entity').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-          name: item.doc_name || item.doc_type || 'Untitled Entity Document',
-          checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-            return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
-          }) : []
-        };
-      });
-    }
-    if (checksResp.person && checksResp.person.length > 0) {
-      PERSON_DOC_CHECKS = checksResp.person.map(function(item) {
-        return {
-          docId: item.doc_type || ('doc-' + String(item.doc_name || 'person').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-          name: item.doc_name || item.doc_type || 'Untitled Person Document',
-          checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-            return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
-          }) : []
-        };
-      });
-    }
+    applyVerificationChecksPayload(checksResp);
   }, failures);
 
   try { await loadAuditTrail({ silent: true }); } catch(e) {}
@@ -5290,31 +5187,31 @@ async function loadAIAgentsFromAPI(options) {
   if (agentsResp.agents && agentsResp.agents.length > 0) AI_AGENTS = agentsResp.agents.map(normalizeAIAgentConfig);
 }
 
-async function loadVerificationChecksFromAPI(options) {
-  var checksResp = await boApiCall('GET', '/config/verification-checks', null, options);
+function normalizeVerificationCheckConfigItem(item, fallbackCategory) {
+  return {
+    docId: item.doc_type || ('doc-' + String(item.doc_name || fallbackCategory || 'document').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
+    name: item.doc_name || item.doc_type || 'Untitled Document',
+    checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
+      return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
+    }) : []
+  };
+}
+
+function applyVerificationChecksPayload(checksResp) {
   applyAgent1PolicyPayload(checksResp);
   if (checksResp.entity && checksResp.entity.length > 0) {
-    ENTITY_DOC_CHECKS = checksResp.entity.map(function(item) {
-      return {
-        docId: item.doc_type || ('doc-' + String(item.doc_name || 'entity').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-        name: item.doc_name || item.doc_type || 'Untitled Entity Document',
-        checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-          return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
-        }) : []
-      };
-    });
+    var entityItems = checksResp.entity.map(function(item) { return normalizeVerificationCheckConfigItem(item, 'entity'); });
+    EDD_DOC_CHECKS = entityItems.filter(function(item) { return !!EDD_DOC_CHECK_IDS[item.docId]; });
+    ENTITY_DOC_CHECKS = entityItems.filter(function(item) { return !EDD_DOC_CHECK_IDS[item.docId]; });
   }
   if (checksResp.person && checksResp.person.length > 0) {
-    PERSON_DOC_CHECKS = checksResp.person.map(function(item) {
-      return {
-        docId: item.doc_type || ('doc-' + String(item.doc_name || 'person').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-        name: item.doc_name || item.doc_type || 'Untitled Person Document',
-        checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-          return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
-        }) : []
-      };
-    });
+    PERSON_DOC_CHECKS = checksResp.person.map(function(item) { return normalizeVerificationCheckConfigItem(item, 'person'); });
   }
+}
+
+async function loadVerificationChecksFromAPI(options) {
+  var checksResp = await boApiCall('GET', '/config/verification-checks', null, options);
+  applyVerificationChecksPayload(checksResp);
 }
 
 function loadSupportReferenceData(sessionId) {
@@ -25650,7 +25547,39 @@ var PERSON_DOC_CHECKS = [
   ]}
 ];
 
-var AGENT1_POLICY_REGISTRY_VERSION = 'DOC-POLICY-REGISTRY-v1';
+var EDD_DOC_CHECK_IDS = {
+  bankref: true,
+  source_wealth: true,
+  source_funds: true,
+  bank_statements: true,
+  fin_stmt: true,
+  aml_policy: true,
+  contracts: true
+};
+
+var EDD_DOC_CHECKS = [
+  { docId:'source_wealth', name:'Source of Wealth Documentation', checks:[
+    { label:'Consistency', rule:'Evidence must be consistent with the declared source of wealth', type:'content', classification:'hybrid' },
+    { label:'Clarity', rule:'Document must be legible and sufficient for officer review', type:'quality', classification:'rule' }
+  ]},
+  { docId:'source_funds', name:'Source of Funds Documentation', checks:[
+    { label:'Consistency', rule:'Evidence must be consistent with the declared source of funds', type:'content', classification:'hybrid' },
+    { label:'Clarity', rule:'Document must be legible and sufficient for officer review', type:'quality', classification:'rule' }
+  ]},
+  { docId:'bank_statements', name:'Bank Statements', checks:[
+    { label:'Period', rule:'Statement period must cover the requested review window', type:'age', classification:'rule' },
+    { label:'Name Match', rule:'Account holder name must match the application or requested party', type:'name', classification:'rule' },
+    { label:'Completeness', rule:'Statements must include all pages for the requested period', type:'quality', classification:'rule' }
+  ]},
+  { docId:'bankref', name:'Bank Reference Letter', checks:[
+    { label:'Bank Letterhead', rule:'Must be on official bank letterhead', type:'quality' },
+    { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
+    { label:'Name Match', rule:'Entity or person name must match the requested evidence subject', type:'name' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant where required', type:'quality' }
+  ]}
+];
+
+var AGENT1_POLICY_REGISTRY_VERSION = 'DOC-POLICY-CANONICAL-v1';
 var AGENT1_DEFAULT_TECHNICAL_CHECKS = ['file format', 'file size', 'duplicate detection', 'hash generation', 'OCR confidence', 'clarity/readability', 'crop/page completeness', 'redaction/tamper indicators'];
 var AGENT1_ENTITY_MATERIAL_CHECKS = ['entity name match', 'registration number match', 'jurisdiction match', 'date/freshness', 'certification/notarisation where required'];
 var AGENT1_PERSON_MATERIAL_CHECKS = ['person match', 'DOB match', 'nationality match', 'expiry check', 'certification/notarisation where required'];
@@ -25900,171 +25829,28 @@ var AGENT1_POLICY_SUMMARY = {
 };
 window.AGENT1_POLICY_SUMMARY = AGENT1_POLICY_SUMMARY;
 
-var activePolicyLifecycle = 'entity';
-
-function ensurePolicyLifecycleFilterOptions() {
-  var select = document.getElementById('agent1-policy-lifecycle-filter');
-  if (!select || select.dataset.loaded === 'true') return;
-  AGENT1_POLICY_LIFECYCLES.forEach(function(stage) {
-    var opt = document.createElement('option');
-    opt.value = stage.key;
-    opt.textContent = stage.label;
-    select.appendChild(opt);
-  });
-  select.dataset.loaded = 'true';
-}
-
-function policyContainsSearch(policy, query) {
-  if (!query) return true;
-  var haystack = [
-    policy.family,
-    policy.stageLabel,
-    policy.policyId,
-    policy.whenRequired,
-    policy.gateBehavior,
-    policy.manualAcceptance,
-    policy.rescreeningTrigger,
-    policy.status,
-    (policy.usedIn || policy.used_in || []).join(' '),
-    (policy.triggers || []).join(' '),
-    (policy.materialChecks || []).join(' '),
-    (policy.technicalChecks || []).join(' ')
-  ].join(' ').toLowerCase();
-  return haystack.indexOf(query.toLowerCase()) >= 0;
-}
-
-function renderPolicySummary() {
-  var container = document.getElementById('agent1-policy-summary');
-  if (!container) return;
-  var active = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'active'; }).length;
-  var manual = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'manual review only'; }).length;
-  var future = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return String(policy.status).toLowerCase() === 'future / enterprise'; }).length;
-  var stages = AGENT1_POLICY_LIFECYCLES.filter(function(stage) {
-    return AGENT1_DOCUMENT_POLICIES.some(function(policy) { return policy.stage === stage.key; });
-  }).length;
-  var blockers = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.gateType === 'blocking'; }).length;
-  var unknownEnabled = AGENT1_DOCUMENT_POLICIES.some(function(policy) { return policy.policyId === 'DOC-UNKNOWN-UNCLASSIFIED-v1'; });
-  var stats = [
-    ['Total document policies', AGENT1_DOCUMENT_POLICIES.length],
-    ['Active policies', active],
-    ['Manual review only', manual],
-    ['Future / enterprise', future],
-    ['Policy families covered', stages],
-    ['Policies that block decisions', blockers],
-    ['Unknown documents require review', unknownEnabled ? 'Yes' : 'No']
-  ];
-  container.innerHTML = stats.map(function(stat) {
-    return '<div class="agent1-summary-card"><div class="agent1-summary-label">' + escapeHtml(stat[0]) + '</div><div class="agent1-summary-value">' + escapeHtml(stat[1]) + '</div></div>';
-  }).join('');
-}
-
-function renderPolicyLifecycleTabs() {
-  var container = document.getElementById('agent1-policy-tabs');
-  if (!container) return;
-  container.innerHTML = AGENT1_POLICY_LIFECYCLES.map(function(stage) {
-    var count = AGENT1_DOCUMENT_POLICIES.filter(function(policy) { return policy.stage === stage.key; }).length;
-    return '<button type="button" class="agent1-lifecycle-tab ' + (activePolicyLifecycle === stage.key ? 'active' : '') + '" onclick="switchPolicyTab(\'' + stage.key + '\')">' + escapeHtml(stage.label) + ' <span style="opacity:.7;">' + count + '</span></button>';
-  }).join('');
-}
-
-function gateBadgeClass(policy) {
-  return policy.gateType === 'library' ? 'library' : policy.gateType === 'review' ? 'review' : 'blocking';
-}
-
-function renderPolicyChipList(items, cls) {
-  return (items || []).map(function(item) {
-    return '<span class="agent1-chip ' + cls + '">' + escapeHtml(item) + '</span>';
-  }).join('');
-}
-
-function renderAgent1PolicyCard(policy, index) {
-  var open = index < 2 || policy.policyId === 'DOC-UNKNOWN-UNCLASSIFIED-v1';
-  var usedIn = policy.usedIn || policy.used_in || [];
-  var triggers = policy.triggers || [];
-  var statusClass = String(policy.status || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  var executableLabel = policy.backend_executable || policy.runtime_verified ? 'Runtime verified' : (String(policy.status).toLowerCase() === 'future / enterprise' ? 'Future scope' : 'Manual review');
-  return '<details class="agent1-policy-card" ' + (open ? 'open' : '') + '>' +
-    '<summary>' +
-      '<div style="min-width:0;">' +
-        '<div class="agent1-policy-family">' + escapeHtml(policy.family) + '</div>' +
-        '<div class="agent1-policy-meta">' +
-          '<span class="agent1-chip">' + escapeHtml(policy.stageLabel) + '</span>' +
-          '<span class="agent1-chip ' + (policy.backend_executable ? 'material' : '') + '">' + escapeHtml(executableLabel) + '</span>' +
-          '<span class="agent1-gate-badge ' + gateBadgeClass(policy) + '">' + escapeHtml(policy.gateType === 'blocking' ? 'Blocks decisions' : policy.gateType === 'library' ? 'Library / cited reliance' : 'Requires review') + '</span>' +
-        '</div>' +
-      '</div>' +
-      '<span class="agent1-status-badge ' + escapeHtml(statusClass) + '">' + escapeHtml(policy.status) + '</span>' +
-    '</summary>' +
-    '<div class="agent1-policy-body">' +
-      '<div class="agent1-policy-section-label">Used in</div>' +
-      '<div class="agent1-chip-row">' + renderPolicyChipList(usedIn.length ? usedIn : ['Not mapped to an active workflow'], '') + '</div>' +
-      '<div class="agent1-policy-section-label">Blocks / gate behaviour</div>' +
-      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.gateBehavior) + '</div>' +
-      '<div class="agent1-policy-section-label">Triggers</div>' +
-      '<div class="agent1-chip-row">' + renderPolicyChipList(triggers.length ? triggers : ['No automatic trigger'], triggers.length ? 'material' : '') + '</div>' +
-      '<div class="agent1-policy-section-label">Manual acceptance</div>' +
-      '<div style="font-size:12px;color:var(--text2);line-height:1.5;">' + escapeHtml(policy.manualAcceptanceAllowed ? policy.manualAcceptance : 'Manual acceptance not allowed') + '</div>' +
-      '<div class="agent1-policy-section-label">Material checks</div>' +
-      '<div class="agent1-chip-row">' + renderPolicyChipList(policy.materialChecks, 'material') + '</div>' +
-      '<div class="agent1-policy-section-label">Technical checks</div>' +
-      '<div class="agent1-chip-row">' + renderPolicyChipList(policy.technicalChecks, 'technical') + '</div>' +
-      '<div class="agent1-policy-section-label">Audit details</div>' +
-      '<div class="agent1-chip-row">' +
-        '<span class="agent1-chip">' + escapeHtml(policy.policyId + ' / ' + policy.version) + '</span>' +
-        '<span class="agent1-chip">' + escapeHtml(policy.backend_executable ? 'backend executable' : 'not backend executable') + '</span>' +
-      '</div>' +
-    '</div>' +
-  '</details>';
-}
-
-function renderPolicyRegistry() {
-  ensurePolicyLifecycleFilterOptions();
-  renderPolicySummary();
-  var lifecycleSelect = document.getElementById('agent1-policy-lifecycle-filter');
-  var lifecycleFilter = lifecycleSelect ? lifecycleSelect.value : activePolicyLifecycle;
-  if (lifecycleFilter && lifecycleFilter !== 'all') activePolicyLifecycle = lifecycleFilter;
-  renderPolicyLifecycleTabs();
-  var searchEl = document.getElementById('agent1-policy-search');
-  var gateEl = document.getElementById('agent1-policy-gate-filter');
-  var statusEl = document.getElementById('agent1-policy-status-filter');
-  var query = searchEl ? searchEl.value.trim() : '';
-  var gate = gateEl ? gateEl.value : 'all';
-  var status = statusEl ? statusEl.value : 'all';
-  var effectiveLifecycle = lifecycleFilter || activePolicyLifecycle;
-  var policies = AGENT1_DOCUMENT_POLICIES.filter(function(policy) {
-    if (effectiveLifecycle !== 'all' && policy.stage !== activePolicyLifecycle) return false;
-    if (gate !== 'all' && policy.gateType !== gate) return false;
-    if (status !== 'all' && String(policy.status).toLowerCase() !== status && String(policy.coverageStatus).toLowerCase() !== status) return false;
-    return policyContainsSearch(policy, query);
-  });
-  var container = document.getElementById('agent1-policy-registry');
-  if (!container) return;
-  container.innerHTML = policies.length
-    ? policies.map(renderAgent1PolicyCard).join('')
-    : '<div class="agent1-policy-empty">No document policies match the selected filters.</div>';
-}
-
-function switchPolicyTab(stage) {
-  activePolicyLifecycle = stage || 'entity';
-  var lifecycleSelect = document.getElementById('agent1-policy-lifecycle-filter');
-  if (lifecycleSelect) lifecycleSelect.value = activePolicyLifecycle;
-  renderPolicyRegistry();
-}
-
 function renderAIChecks() {
-  renderPolicyRegistry();
   renderCheckTab('entity');
   renderCheckTab('person');
+  renderCheckTab('edd');
   // Count total
   var total = 0;
   ENTITY_DOC_CHECKS.forEach(function(d){total+=d.checks.length;});
   PERSON_DOC_CHECKS.forEach(function(d){total+=d.checks.length;});
+  EDD_DOC_CHECKS.forEach(function(d){total+=d.checks.length;});
   document.getElementById('total-checks-count').textContent = total;
 }
 
+function checkDataForType(type) {
+  if (type === 'person') return PERSON_DOC_CHECKS;
+  if (type === 'edd') return EDD_DOC_CHECKS;
+  return ENTITY_DOC_CHECKS;
+}
+
 function renderCheckTab(type) {
-  var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+  var data = checkDataForType(type);
   var container = document.getElementById('checks-' + type + '-tab');
+  if (!container) return;
   var html = '<div style="padding-top:16px;">';
 
   data.forEach(function(doc, di) {
@@ -26116,16 +25902,17 @@ function switchCheckTab(tab, btn) {
   btn.classList.add('active');
   document.getElementById('checks-entity-tab').style.display = tab === 'entity' ? '' : 'none';
   document.getElementById('checks-person-tab').style.display = tab === 'person' ? '' : 'none';
+  document.getElementById('checks-edd-tab').style.display = tab === 'edd' ? '' : 'none';
 }
 
 function addCheck(type, docIdx) {
-  var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+  var data = checkDataForType(type);
   data[docIdx].checks.push({ label:'New Check', rule:'Define the verification rule', type:'content' });
   renderAIChecks();
 }
 
 function removeCheck(type, docIdx, checkIdx) {
-  var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+  var data = checkDataForType(type);
   var removed = data[docIdx].checks.splice(checkIdx, 1);
   renderAIChecks();
 }
@@ -26133,7 +25920,7 @@ function removeCheck(type, docIdx, checkIdx) {
 function addDocType(type) {
   var name = prompt('Enter document type name:');
   if (!name) return;
-  var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+  var data = checkDataForType(type);
   data.push({ docId:'doc-' + name.toLowerCase().replace(/\s+/g,'-'), name:name, checks:[] });
   renderAIChecks();
   showToast('Document type "' + name + '" added');
@@ -26142,15 +25929,15 @@ function addDocType(type) {
 async function saveAIChecks() {
   // Read back input values
   document.querySelectorAll('.check-label').forEach(function(el) {
-    var data = el.dataset.type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+    var data = checkDataForType(el.dataset.type);
     data[parseInt(el.dataset.doc)].checks[parseInt(el.dataset.check)].label = el.value;
   });
   document.querySelectorAll('.check-rule').forEach(function(el) {
-    var data = el.dataset.type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+    var data = checkDataForType(el.dataset.type);
     data[parseInt(el.dataset.doc)].checks[parseInt(el.dataset.check)].rule = el.value;
   });
   document.querySelectorAll('.check-type-sel').forEach(function(el) {
-    var data = el.dataset.type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
+    var data = checkDataForType(el.dataset.type);
     data[parseInt(el.dataset.doc)].checks[parseInt(el.dataset.check)].type = el.value;
   });
   try {
@@ -26160,6 +25947,9 @@ async function saveAIChecks() {
     });
     PERSON_DOC_CHECKS.forEach(function(doc) {
       payloads.push({ category:'person', doc_type:doc.docId, doc_name:doc.name, checks:doc.checks });
+    });
+    EDD_DOC_CHECKS.forEach(function(doc) {
+      payloads.push({ category:'entity', doc_type:doc.docId, doc_name:doc.name, checks:doc.checks });
     });
     for (var i = 0; i < payloads.length; i++) {
       await boApiCall('PUT', '/config/verification-checks', payloads[i]);
@@ -26177,8 +25967,8 @@ async function saveAIChecks() {
 // ═══════════════════════════════════════════════════════════
 var AI_AGENTS = [
   { id:1, name:'Identity & Document Integrity Agent', icon:'🔍', stage:'Onboarding', enabled:true,
-    description:'Validates uploaded documents against canonical document policies. Checks are document-type based, not lifecycle duplicated; workflows map verified documents to onboarding, change management, periodic review, and EDD blockers/triggers. Agent 1 can verify, flag, block, recommend, and trigger required follow-up. Agent 1 does not approve, reject, waive, or override compliance decisions and does not perform sanctions, PEP, or adverse-media screening.',
-    checks:['Canonical document policy registry', 'Document-type verification checks', 'Upload gate checks', 'Material issue detection', 'Manual-review-only evidence routing', 'Future/enterprise scope separation', 'Workflow blocker mapping', 'Re-screening requirement markers', 'Risk refresh requirement markers', 'Memo staleness requirement markers', 'Unknown document review routing', 'Audit/export detail preservation'] },
+    description:'Agent 1 verifies uploaded onboarding and requested evidence documents using the checks configured in Document Verification Policies. It can verify, flag, block reliance, recommend officer action, and trigger required follow-up. It cannot approve, reject, waive, or perform sanctions/PEP/adverse-media screening.',
+    checks:['Configured document verification checks', 'Upload gate checks', 'Material issue detection', 'Requested EDD evidence routing', 'Manual-review-only evidence routing', 'Workflow blocker mapping', 'Follow-up requirement markers', 'Unknown document review routing', 'Audit/export detail preservation'] },
   { id:2, name:'External Database Cross-Verification Agent', icon:'🔎', stage:'Onboarding', enabled:true,
     description:'Rule-based registry verification with provider abstraction. Checks company identity data against external registries (OpenCorporates, Companies House, CBRD, ADGM, DIFC). Runs in degraded mode when no external API credentials are configured.',
     checks:['Registry source selection (rule)', 'Company registration number lookup (rule)', 'Entity name match to registry (rule)', 'Incorporation date match (rule)', 'Company status check (rule)', 'Jurisdiction match (rule)', 'Company type / legal form (rule)', 'Registered address match (hybrid)', 'Director names cross-check (hybrid)', 'Shareholder names cross-check (hybrid)', 'UBO declarations vs registry shareholders (hybrid)', 'Registry filing recency / availability (rule)', 'Interpretation of unusual registry output (hybrid)'] },
@@ -26249,7 +26039,7 @@ function renderAgentsPipeline() {
           '<div class="agent-config-desc">' + agent.description + '</div>' +
         '</div>' +
         '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px;">' + agent.stage + '</span>' +
-        '<span class="badge" style="font-size:10px;">' + (agent.id === 1 && AGENT1_POLICY_SUMMARY ? (AGENT1_POLICY_SUMMARY.active_policies + ' active policies') : (agent.checks.length + ' checks')) + '</span>' +
+        '<span class="badge" style="font-size:10px;">' + (agent.id === 1 ? (agent.checks.length + ' configured checks') : (agent.checks.length + ' checks')) + '</span>' +
         '<div class="toggle-switch' + (agent.enabled ? ' on' : '') + '" onclick="event.stopPropagation();toggleAgent(' + ai + ',this)"></div>' +
       '</div>' +
       '<div class="agent-config-body">' +

@@ -1,0 +1,13 @@
+{
+  "agent_number": 1,
+  "name": "Identity & Document Integrity Agent",
+  "description": "Agent 1 verifies uploaded onboarding and requested evidence documents using the checks configured in Document Verification Policies. It can verify, flag, block reliance, recommend officer action, and trigger required follow-up. It cannot approve, reject, waive, or perform sanctions/PEP/adverse-media screening.",
+  "checks_count": 88,
+  "first_checks": [
+    "Certificate of Incorporation: Entity Name Match",
+    "Certificate of Incorporation: Registration Number Match",
+    "Certificate of Incorporation: Incorporation Date Match",
+    "Certificate of Incorporation: Jurisdiction Match",
+    "Certificate of Incorporation: Document Clarity"
+  ]
+}
