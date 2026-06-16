@@ -1,0 +1,8 @@
+{
+  "git_sha": "unknown",
+  "git_sha_short": "unknown",
+  "build_time": "unknown",
+  "image_tag": "unknown",
+  "environment": "demo",
+  "service": "regmind-backend"
+}

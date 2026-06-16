@@ -1,0 +1,20 @@
+company_bank_reference|Company bank reference letter|bankref|Bank reference|active_runtime_verified|DOC-EVIDENCE-BANK-REFERENCE-v1|True|True
+company_bank_statements_6m|6 months company bank statements where available|bank_statements|Bank statements|active_runtime_verified|DOC-EDD-BANK-STATEMENTS-v1|True|False
+company_sof_evidence|Company Source of Funds evidence|source_funds|Source of Funds|active_runtime_verified|DOC-EDD-SOF-v1|True|True
+material_ubo_sow_evidence|UBO Source of Wealth evidence for material UBOs/controllers|source_wealth|Source of Wealth|active_runtime_verified|DOC-EDD-SOW-v1|True|True
+pep_sow_evidence|Source of Wealth evidence|source_wealth|Source of Wealth|active_runtime_verified|DOC-EDD-SOW-v1|True|True
+pep_bank_reference|Bank reference letter|bankref|Bank reference|active_runtime_verified|DOC-EVIDENCE-BANK-REFERENCE-v1|True|True
+pep_linked_sof_evidence|Source of Funds evidence where funds are linked to PEP|source_funds|Source of Funds|active_runtime_verified|DOC-EDD-SOF-v1|True|True
+aml_cft_policy|AML/CFT policy|aml_policy|AML/compliance policy|active_runtime_verified|DOC-ENTITY-AML-POLICY-v1|True|True
+licence_or_registration_evidence|Licence/registration evidence or confirmation of unlicensed status|licence|Regulatory licence|active_runtime_verified|DOC-ENTITY-LICENCE-v1|True|True
+crypto_source_of_funds_evidence|Source of Funds evidence|source_funds|Source of Funds|active_runtime_verified|DOC-EDD-SOF-v1|True|True
+ownership_structure_chart|Ownership structure chart|structure_chart|Ownership chart / structure chart|active_runtime_verified|DOC-ENTITY-OWNERSHIP-CHART-v1|True|False
+ownership_chain_documents|Full ownership-chain documents|supporting_document|Unclassified / supporting document|manual_review_only|DOC-UNKNOWN-UNCLASSIFIED-v1|False|True
+enhanced_ubo_evidence|Enhanced UBO evidence|supporting_document|Unclassified / supporting document|manual_review_only|DOC-UNKNOWN-UNCLASSIFIED-v1|False|True
+trust_nominee_foundation_documents|Trust/nominee/foundation documents where applicable|trust_deed|Trust deed / foundation charter / partnership agreement|manual_review_only|DOC-ENTITY-TRUST-DEED-v1|False|True
+jurisdiction_sof_evidence|Source of Funds evidence|source_funds|Source of Funds|active_runtime_verified|DOC-EDD-SOF-v1|True|False
+jurisdiction_licensing_regulatory_evidence|Licensing/regulatory evidence where relevant|licence|Regulatory licence|active_runtime_verified|DOC-ENTITY-LICENCE-v1|True|True
+contracts_invoices|Contracts/invoices|contracts|Contracts / invoices / business activity evidence|active_runtime_verified|DOC-ENTITY-CONTRACTS-v1|True|True
+expected_transaction_flow_evidence|Expected transaction flow evidence|supporting_document|Unclassified / supporting document|manual_review_only|DOC-UNKNOWN-UNCLASSIFIED-v1|False|False
+high_volume_bank_statements|Company bank statements where available|bank_statements|Bank statements|active_runtime_verified|DOC-EDD-BANK-STATEMENTS-v1|True|False
+COUNT|19

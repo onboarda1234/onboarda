@@ -68,36 +68,27 @@ def test_doc2a_evidence_control_card_surfaces_required_reliance_fields():
     assert "Document type" in html
 
 
-def test_doc2a_agent1_settings_is_lifecycle_policy_registry():
+def test_doc2a_agent1_settings_keeps_simple_check_configuration():
     html = _backoffice_html()
 
-    assert "Agent 1 Evidence Control Layer" in html
-    assert "Document Policy Registry" in html
-    assert "DOC-POLICY-REGISTRY-v1" in html
-    assert "agent1-policy-search" in html
-    assert "agent1-policy-lifecycle-filter" in html
-    assert "agent1-policy-gate-filter" in html
-    assert "agent1-policy-status-filter" in html
-    assert "Total document policies" in html
-    assert "Active policies" in html
-    assert "Manual review only" in html
-    assert "Future / enterprise" in html
-    assert "Policy families covered" in html
-    assert "Policies that block decisions" in html
-    assert "Unknown documents require review" in html
-    assert "DOC-POLICY-CANONICAL-v1" in html
+    settings_view = html.split('<div class="view" id="view-ai-checks">', 1)[1]
+    settings_view = settings_view.split('<!-- ═══════════════ AI AGENTS VIEW', 1)[0]
 
-    for section in [
-        "Entity Documents",
-        "Person / KYC Documents",
-        "EDD Evidence",
-        "Change Management Evidence",
-        "Periodic Review Evidence",
-        "Monitoring Evidence",
-        "Regulatory / Resource Evidence",
-        "Supporting Evidence",
-    ]:
-        assert section in html
+    assert "Document Verification Policies" in settings_view
+    assert "Underlying Verification Check Configuration" in settings_view
+    assert "Entity Documents" in settings_view
+    assert "Person / KYC Documents" in settings_view
+    assert "Enhanced / EDD Documents" in settings_view
+
+    assert "Agent 1 Evidence Control Layer" not in settings_view
+    assert "Document Policy Registry" not in settings_view
+    assert "Canonical Policy Coverage" not in settings_view
+    assert "agent1-policy-search" not in settings_view
+    assert "agent1-policy-lifecycle-filter" not in settings_view
+    assert "agent1-policy-gate-filter" not in settings_view
+    assert "agent1-policy-status-filter" not in settings_view
+    assert "Total document policies" not in settings_view
+    assert "Policy families covered" not in settings_view
 
 
 def test_doc2a_policy_registry_lists_required_document_families():
@@ -165,7 +156,7 @@ def test_doc2a_change_management_policy_baselines_are_explicit():
         assert expected in html
 
 
-def test_doc2a_policy_cards_show_required_controls():
+def test_doc2a_policy_metadata_remains_available_without_registry_dashboard():
     html = _backoffice_html()
 
     for expected in [
@@ -177,14 +168,19 @@ def test_doc2a_policy_cards_show_required_controls():
         "manualAcceptanceAllowed",
         "rescreeningTrigger",
         "coverageStatus",
-        "Used in",
-        "Blocks / gate behaviour",
-        "Manual acceptance",
-        "Triggers",
-        "Material checks",
-        "Technical checks",
+        "usedIn: usedIn",
+        "triggers: triggers",
+        "backend_executable",
+        "AGENT1_POLICY_SUMMARY",
     ]:
         assert expected in html
+
+    view = html.split('<div class="view" id="view-ai-checks">', 1)[1].split(
+        '<!-- ═══════════════ AI AGENTS VIEW', 1
+    )[0]
+    assert "Underlying Verification Check Configuration" in view
+    assert "Blocks / gate behaviour" not in view
+    assert "agent1-policy-registry" not in view
 
 
 def test_doc2a_unclassified_documents_are_not_auto_reliable():
@@ -210,17 +206,16 @@ def test_doc_policy_canonical_ui_renames_and_pipeline_boundary():
     html = _backoffice_html()
 
     assert "Document Verification Policies" in html
-    assert "Agent 1 verifies each document type consistently" in html
-    assert "Checks are document-type based, not lifecycle duplicated" in html
-    assert "Agent 1 does not approve, reject, waive, or override compliance decisions" in html
-    assert "does not perform sanctions, PEP, or adverse-media screening" in html
-    assert "Pipeline Check Labels" in html
+    assert "Agent 1 verifies uploaded onboarding and requested evidence documents using the checks configured in Document Verification Policies." in html
+    assert "It cannot approve, reject, waive, or perform sanctions/PEP/adverse-media screening." in html
+    assert "configured checks" in html
+    assert "Underlying Verification Check Configuration" in html
 
 
 def test_doc_policy_canonical_ui_status_and_scope_are_honest():
     html = _backoffice_html()
 
-    assert "Runtime verified" in html
+    assert "backend_executable" in html
     assert "Manual review only" in html
     assert "Future / enterprise" in html
     assert "Future / enterprise. SAR/STR implementation is not active in pilot scope." in html
