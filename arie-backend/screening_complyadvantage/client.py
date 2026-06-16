@@ -2,6 +2,7 @@
 
 import logging
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -170,7 +171,8 @@ class ComplyAdvantageClient:
         if status == 429:
             raise CARateLimited("ComplyAdvantage API rate limited")
         if 400 <= status < 500:
-            raise CABadRequest("ComplyAdvantage API request rejected")
+            context = _safe_provider_error_context(response, self._log_path(path))
+            raise CABadRequest("ComplyAdvantage API request rejected", **context)
         if 500 <= status < 600:
             raise CAServerError("ComplyAdvantage API server error")
         raise CAUnexpectedResponse("ComplyAdvantage API status unexpected")
@@ -208,3 +210,46 @@ class ComplyAdvantageClient:
             attempt=attempt,
             exception_class=exc.__class__.__name__,
         )
+
+
+def _safe_provider_error_context(response, path):
+    context = {
+        "status_code": response.status_code,
+        "path": path,
+    }
+    try:
+        payload = response.json()
+    except ValueError:
+        return context
+    if not isinstance(payload, dict):
+        return context
+    fields = {
+        "provider_error_type": payload.get("type"),
+        "provider_error_title": payload.get("title"),
+        "provider_error_detail": payload.get("detail"),
+        "provider_error_identifier": payload.get("identifier"),
+    }
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        errors = properties.get("errors")
+        if errors:
+            fields["provider_error_count"] = len(errors) if isinstance(errors, list) else 1
+    for key, value in fields.items():
+        safe_value = _safe_status_value(value)
+        if safe_value:
+            context[key] = safe_value
+    return context
+
+
+def _safe_status_value(value, *, limit=240):
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, (int, float, bool)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.netloc:
+        text = parsed.path or parsed.netloc
+    return text[:limit]

@@ -1,0 +1,15 @@
+{
+  "failing_application_ref": "ARF-2026-900303",
+  "staging_sha_at_failure": "3c093d6fec18dc8331ceb8be701360bbddb198d8",
+  "observed_submit_status": [503, 503],
+  "provider_runtime": {
+    "auth_path": "/v2/token",
+    "auth_status": 200,
+    "create_and_screen_statuses": [200, 400],
+    "successful_pass_followup_statuses": [200],
+    "fallback_simulation_enabled": false
+  },
+  "handler_error": "ComplyAdvantage API request rejected",
+  "classification": "provider_schema_rejection_hidden_by_generic_submit_503"
+}
+

@@ -88,12 +88,15 @@ class TestScreeningExceptionReturns503:
             db = _get_project_db(temp_db)
             app_id = _setup_test_app(db)
             handler._do_submit(db, {"sub": "testuser", "name": "Test", "role": "client", "type": "client"}, app_id)
+            row = db.execute("SELECT status, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
             db.close()
 
         assert len(error_calls) > 0, "Expected error to be called"
         last_error = error_calls[-1]
         assert last_error[1] == 503, f"Expected 503 but got {last_error[1]}"
         assert "temporarily unavailable" in last_error[0].lower() or "retry" in last_error[0].lower()
+        assert row["status"] == "draft"
+        assert "screening_report" not in json.loads(row["prescreening_data"])
 
     def test_screening_provider_error_returns_503(self, temp_db):
         """Simulate ScreeningProviderError specifically."""
@@ -107,10 +110,13 @@ class TestScreeningExceptionReturns503:
             db = _get_project_db(temp_db)
             app_id = _setup_test_app(db)
             handler._do_submit(db, {"sub": "testuser", "name": "Test", "role": "client", "type": "client"}, app_id)
+            row = db.execute("SELECT status, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
             db.close()
 
         assert len(error_calls) > 0
         assert error_calls[-1][1] == 503
+        assert row["status"] == "draft"
+        assert "screening_report" not in json.loads(row["prescreening_data"])
 
 
 # ---------------------------------------------------------------------------

@@ -129,29 +129,12 @@ def build_customer_person(person, *, strict=True):
         customer["last_name"] = _derive_last_name(person, full_name)
     customer = _drop_empty(customer)
     if strict:
+        # CA Mesh Sandbox rejects rich address/contact fields on create-and-screen.
+        # Keep strict mode to high-value identity attributes until schema support is proven.
         customer.update(_drop_empty({
-            "gender": _first(person, "gender"),
             "nationality": to_ca_nationalities(_first(person, "nationality")),
             "country_of_birth": to_ca_country_code(_first(person, "country_of_birth")),
-            "place_of_birth": _first(person, "place_of_birth"),
-            "occupation": _first(person, "occupation"),
-            "employer": _first(person, "employer"),
-            "source_of_wealth": _first(person, "source_of_wealth"),
-            "source_of_funds": _first(person, "source_of_funds"),
         }))
-        address = to_ca_address(
-            _first(person, "address", "residential_address", "registered_address") or person,
-            location_type="residential_address",
-        )
-        if address:
-            customer["addresses"] = [address]
-        contact = _drop_empty({
-            "email": _first(person, "email"),
-            "phone": _first(person, "phone"),
-            "mobile": _first(person, "mobile"),
-        })
-        if contact:
-            customer["contact_information"] = contact
     return _customer_envelope(customer, "person", _first(person, "person_key", "id"))
 
 
@@ -162,50 +145,12 @@ def build_customer_company(application_data, *, strict=True):
         "legal_name": legal_name,
     })
     if strict:
-        jurisdiction = _first(
-            application_data,
-            "jurisdiction",
-            "country_of_incorporation",
-            "incorporation_country",
-            "registered_country",
-            "country",
-        )
-        registration_number = _first(
-            application_data,
-            "company_registration_number",
-            "registration_number",
-            "company_number",
-            "brn",
-            "business_registration_number",
-            "incorporation_number",
-        )
+        # CA Mesh Sandbox create-and-screen accepts legal_name plus industry, but
+        # rejects richer company fields such as registration number, jurisdiction,
+        # incorporation date, website, custom_fields, and addresses.
         company.update(_drop_empty({
-            "registration_number": registration_number,
-            "jurisdiction": to_ca_country_code(jurisdiction) or jurisdiction,
-            "incorporation_date": _to_iso_date(_first(
-                application_data,
-                "incorporation_date",
-                "date_of_incorporation",
-                "company_incorporation_date",
-            )),
-            "entity_type": _first(application_data, "entity_type", "company_type", "legal_form"),
             "industry": _first(application_data, "industry", "sector", "business_activity", "business_sector"),
-            "website": _first(application_data, "website", "website_url", "entity_website"),
         }))
-        address_source = (
-            _first(application_data, "registered_address", "registered_office_address", "address")
-            or (application_data if _has_address_detail(application_data) else None)
-        )
-        address = to_ca_address(address_source, location_type="registered_address")
-        if address:
-            company["addresses"] = [address]
-        reference = _first(application_data, "application_ref", "ref", "application_id", "id")
-        custom_fields = _drop_empty({
-            "source_system": "regmind",
-            "application_reference": reference,
-        })
-        if custom_fields:
-            company["custom_fields"] = custom_fields
     return _customer_envelope(company, "company", _first(application_data, "application_id", "id", "ref"))
 
 

@@ -49,7 +49,7 @@ from config import (
 )
 from functools import wraps
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import bcrypt
 import jwt
@@ -2736,7 +2736,7 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
 
 
 # ── Health Check ──
-def _complyadvantage_runtime_status():
+def _complyadvantage_runtime_status(probe_auth=False):
     """Return truthful ComplyAdvantage Mesh readiness without activating it.
 
     Sumsub remains authoritative for IDV/KYC.  ComplyAdvantage Mesh only reports
@@ -2747,6 +2747,7 @@ def _complyadvantage_runtime_status():
 
     requested_provider = get_active_provider_name()
     abstraction_enabled = is_abstraction_enabled()
+    checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     ca_env_keys = (
         "COMPLYADVANTAGE_API_BASE_URL",
         "COMPLYADVANTAGE_AUTH_URL",
@@ -2757,9 +2758,10 @@ def _complyadvantage_runtime_status():
     has_partial_config = any((os.environ.get(key) or "").strip() for key in ca_env_keys)
     configured = False
     config_error = ""
+    config = None
     try:
         from screening_complyadvantage.config import CAConfig
-        CAConfig.from_env()
+        config = CAConfig.from_env()
         configured = True
     except Exception as exc:
         config_error = str(exc)
@@ -2780,11 +2782,32 @@ def _complyadvantage_runtime_status():
     if not configured and config_error:
         blockers.append(config_error)
     fallback_mode = "disabled" if active else ("provider_ready_but_inactive" if configured else status)
+    provider_mode = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_WORKSPACE_MODE"))
+    if not provider_mode:
+        provider_mode = "production" if ENV == "production" else "unknown"
+    workspace_label = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_WORKSPACE_LABEL")) or "unknown"
+    screening_config_label = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_SCREENING_CONFIG_LABEL")) or "unknown"
+    screening_config_id = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_SCREENING_CONFIG_ID")) or None
+    auth_probe = _complyadvantage_auth_probe(config, configured, probe_auth=probe_auth)
+    last_error_category = None
+    if config_error:
+        last_error_category = "configuration"
+    if auth_probe.get("error_category"):
+        last_error_category = auth_probe.get("error_category")
+    provider_health_result = "ok" if auth_probe.get("status") == "ok" else (
+        "unavailable" if auth_probe.get("status") == "unavailable" else "not_probed"
+    )
 
     return {
         "configured": configured,
         "status": status,
         "active": active,
+        "mode": provider_mode,
+        "workspace_label": workspace_label,
+        "screening_configuration_identifier": screening_config_id,
+        "screening_configuration_label": screening_config_label,
+        "api_base_url_host": _safe_url_host(os.environ.get("COMPLYADVANTAGE_API_BASE_URL")),
+        "auth_url_host": _safe_url_host(os.environ.get("COMPLYADVANTAGE_AUTH_URL")),
         "requested_provider": requested_provider,
         "requested_provider_label": get_provider_display_name(requested_provider),
         "provider_display_name": "ComplyAdvantage Mesh",
@@ -2792,10 +2815,50 @@ def _complyadvantage_runtime_status():
         "implementation_status": "active" if active else ("ready_not_active" if configured else status),
         "fallback_mode": fallback_mode,
         "simulation_fallback_enabled": False,
+        "last_provider_health_result": provider_health_result,
+        "last_token_auth_probe_result": auth_probe,
+        "last_error_category": last_error_category,
+        "updated_at": checked_at,
         "role": "AML sanctions, PEP/RCA, adverse-media screening, and ongoing monitoring",
         "description": "ComplyAdvantage Mesh AML, sanctions, PEP/RCA, adverse-media, and monitoring integration",
         "blockers": blockers,
     }
+
+
+def _complyadvantage_auth_probe(config, configured, *, probe_auth=False):
+    checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not probe_auth:
+        return {"status": "not_run", "checked_at": checked_at, "error_category": None}
+    if not configured or config is None:
+        return {"status": "skipped", "checked_at": checked_at, "error_category": "configuration"}
+    try:
+        from screening_complyadvantage.auth import ComplyAdvantageTokenClient
+        ComplyAdvantageTokenClient(config).force_refresh()
+        return {"status": "ok", "checked_at": checked_at, "error_category": None}
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "checked_at": checked_at,
+            "error_category": exc.__class__.__name__,
+            "error": _safe_provider_status_label(str(exc), limit=160),
+        }
+
+
+def _safe_provider_status_label(value, *, limit=120):
+    if value in (None, "", [], {}):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = re.sub(r"(?i)(password|secret|token|authorization|bearer)\s*[:=]\s*[^,\s)]+", r"\1=[redacted]", text)
+    return text[:limit]
+
+
+def _safe_url_host(value):
+    if value in (None, ""):
+        return None
+    parsed = urlparse(str(value).strip())
+    return parsed.netloc or None
 
 
 class HealthHandler(BaseHandler):
@@ -20898,7 +20961,8 @@ class APIStatusHandler(BaseHandler):
         if not user:
             return
 
-        ca_status = _complyadvantage_runtime_status()
+        probe = str(self.get_argument("probe", "false")).strip().lower() in {"1", "true", "yes"}
+        ca_status = _complyadvantage_runtime_status(probe_auth=probe)
         active_aml_provider = ca_status.get("provider_display_name") if ca_status.get("active") else "Not active"
         simulation_mode = ca_status.get("fallback_mode") or ("disabled" if ca_status.get("active") else ca_status.get("status") or "unknown")
         opencorporates_status = "live" if OPENCORPORATES_API_KEY else "simulated"
@@ -20912,11 +20976,18 @@ class APIStatusHandler(BaseHandler):
                 "registry_kyb_status": opencorporates_status,
                 "requested_screening_provider": ca_status.get("requested_provider"),
                 "requested_screening_provider_label": ca_status.get("requested_provider_label"),
+                "active_aml_screening_mode": ca_status.get("mode"),
+                "active_aml_workspace_label": ca_status.get("workspace_label"),
+                "active_aml_screening_config_id": ca_status.get("screening_configuration_identifier"),
+                "active_aml_screening_config_label": ca_status.get("screening_configuration_label"),
                 "screening_abstraction_enabled": bool(ca_status.get("abstraction_enabled")),
                 "screening_abstraction_required_for_ca": True,
                 "simulation_fallback_mode": simulation_mode,
                 "simulation_fallback_enabled": bool(ca_status.get("simulation_fallback_enabled")),
-                "last_provider_status_check": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "last_provider_health_result": ca_status.get("last_provider_health_result"),
+                "last_token_auth_probe_result": ca_status.get("last_token_auth_probe_result"),
+                "last_error_category": ca_status.get("last_error_category"),
+                "last_provider_status_check": ca_status.get("updated_at"),
                 "sumsub_provider_scope": "individual_kyc_identity_verification",
                 "aml_provider_scope": "aml_sanctions_pep_rca_adverse_media_monitoring",
                 "provider_labels_safe": True,

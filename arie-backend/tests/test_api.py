@@ -254,6 +254,17 @@ class TestAuthenticatedAccess:
         assert body["provider_truth"]["registry_kyb_provider"] == "OpenCorporates registry/enrichment"
         assert body["provider_truth"]["screening_abstraction_required_for_ca"] is True
         assert body["provider_truth"]["simulation_fallback_enabled"] is False
+        assert "active_aml_screening_mode" in body["provider_truth"]
+        assert "active_aml_workspace_label" in body["provider_truth"]
+        assert "active_aml_screening_config_id" in body["provider_truth"]
+        assert "active_aml_screening_config_label" in body["provider_truth"]
+        assert "last_provider_health_result" in body["provider_truth"]
+        assert "last_token_auth_probe_result" in body["provider_truth"]
+        assert "last_error_category" in body["provider_truth"]
+        assert "username" not in serialized
+        assert "password" not in serialized
+        assert "access_token" not in serialized
+        assert "authorization" not in serialized
         assert body["sumsub"]["description"] == "Individual identity verification and KYC (document + selfie + liveness)"
 
     def test_admin_health_does_not_expose_unused_provider(self, api_server):

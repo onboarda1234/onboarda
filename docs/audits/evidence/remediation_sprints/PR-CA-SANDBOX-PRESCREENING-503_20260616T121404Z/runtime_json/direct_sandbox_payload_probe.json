@@ -1,0 +1,21 @@
+{
+  "api_base_url_host": "api.mesh.complyadvantage.com",
+  "auth_url_host": "api.mesh.complyadvantage.com",
+  "checked_at": "2026-06-16T12:08:53Z",
+  "realm": "regmind",
+  "screening_config_id_present": true,
+  "task_definition": "regmind-staging:593",
+  "subjects": {
+    "company_strict": {
+      "customer_keys": ["industry", "legal_name"],
+      "status": "ok",
+      "workflow_handle_present": true
+    },
+    "person_strict": {
+      "customer_keys": ["country_of_birth", "date_of_birth", "full_name", "nationality"],
+      "status": "ok",
+      "workflow_handle_present": true
+    }
+  }
+}
+
