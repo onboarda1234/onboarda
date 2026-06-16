@@ -399,7 +399,9 @@ def test_backoffice_places_sumsub_identity_verification_under_section_b_compactl
     assert "Identity verification provider: Sumsub. Financial-crime screening is handled separately." in html
     assert "renderSumsubIdvPanel(app) + renderPartySection(app)" not in html
     assert "document.getElementById('detail-persons').innerHTML = renderPartySection(app)" in html
-    assert "if (includeIdv) html += renderSumsubIdvPanel(app);" in html
+    assert "B — Directors & UBO Identity Documents" in html
+    assert "if (includeIdv) personBody += renderSumsubIdvPanel(app);" in html
+    assert "personBody" in html
     assert "id=\"individual-identity-verification\"" in html
     assert "data-section=\"section-b-identity-verification\"" in html
     assert "idv-compact-table" in html
