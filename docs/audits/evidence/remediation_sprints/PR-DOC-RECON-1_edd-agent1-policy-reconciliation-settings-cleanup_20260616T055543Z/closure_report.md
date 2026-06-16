@@ -13,11 +13,14 @@ Status: In progress.
 - Added/updated tests.
 - Full local backend suite passed: `5434 passed, 17 skipped`.
 - Local HTTP/API smoke completed.
+- GitHub CI passed on PR #504:
+  - CodeRabbit: passed
+  - lint-and-test: passed
+  - pdf-tests: passed
+  - docker-validate: passed
 
 ## Pending Before PR-DOC-RECON-1 Can Be Marked Closed
 
-- Open PR.
-- GitHub CI passes.
 - PR merged to `main`.
 - Merged main deployed to staging.
 - `/api/version` confirms `git_sha` and `image_tag` match merged SHA.
