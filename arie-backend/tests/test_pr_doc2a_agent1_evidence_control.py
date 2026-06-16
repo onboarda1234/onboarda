@@ -25,10 +25,10 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
     html = _backoffice_html()
     renderer = _verification_renderer(html)
 
-    assert "Reliance status" in renderer
+    assert "Document status" in renderer
     assert "Why review is required" in renderer
-    assert "Material issues" in renderer
-    assert "Technical / audit details" in renderer
+    assert "Issue" in renderer
+    assert "<summary>Details</summary>" in renderer
     assert "Full check result list" in renderer
     assert "Agent execution ID" in renderer
     assert "Evidence hash" in renderer
@@ -48,9 +48,9 @@ def test_doc2a_evidence_control_card_surfaces_required_reliance_fields():
     assert "document-review-row" in html
     assert "Lifecycle context" in html
     assert "Policy ID/version" in html
-    assert "Last verified" in html
+    assert "Verification timestamp" in html
     assert "Uploaded by" in html
-    assert "Next action" in html
+    assert "Next:" in html
     assert "Issue" in html
     assert "Verification details" in html
     assert "Verified" in html
@@ -191,7 +191,7 @@ def test_doc2a_unclassified_documents_are_not_auto_reliable():
     assert "automated reliance blocked" in html
     assert "officer classification required" in html
     assert "blocked from automated reliance until classified and verified or manually accepted with reason" in html
-    assert "Document type required before this evidence can be relied on automatically." in html
+    assert "Document type required before this evidence can support approval." in html
 
 
 def test_doc2a_resource_documents_are_library_only_unless_relied_on():

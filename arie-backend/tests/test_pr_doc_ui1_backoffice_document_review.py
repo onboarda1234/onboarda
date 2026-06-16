@@ -92,10 +92,10 @@ def test_default_row_is_action_first_and_details_hold_audit_fields():
     default_row = card_renderer.split("renderDocumentAuditDetails", 1)[0]
     details = _function_region(html, "renderDocumentAuditDetails", "renderUnifiedKycDocumentCard")
 
-    for visible in ["Status", "Issue", "Blocks", "Next action", "View", "Download"]:
+    for visible in ["renderDocumentCompactSummary", "document-review-status-actions", "View", "Download"]:
         assert visible in default_row or visible in _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
 
-    for hidden_by_default in ["Policy ID/version", "Agent run ID", "Evidence hash"]:
+    for hidden_by_default in ["Policy ID/version", "Agent run ID", "Evidence hash", "Verification timestamp", "Uploaded by", "Lifecycle context"]:
         assert hidden_by_default not in default_row
 
     for audit_field in [
@@ -103,7 +103,7 @@ def test_default_row_is_action_first_and_details_hold_audit_fields():
         "Policy ID/version",
         "Agent run ID",
         "Evidence hash",
-        "Technical / audit details",
+        "<summary>Details</summary>",
     ]:
         assert audit_field in details or audit_field in html
 

@@ -536,6 +536,7 @@ a { color:var(--brand); text-decoration:none; }
 .ai-advisory-banner .ai-adv-sub { font-size:10px; color:#6d28d9; font-weight:500; margin-top:1px; }
 .ai-advisory-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:4px; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; background:rgba(124,58,237,0.1); color:#7c3aed; border:1px solid rgba(124,58,237,0.3); white-space:nowrap; }
 .ai-advisory-compact { display:flex; align-items:flex-start; gap:8px; padding:9px 12px; border-radius:8px; background:rgba(124,58,237,0.06); border:1px solid rgba(124,58,237,0.22); color:#5b21b6; font-size:12px; line-height:1.45; margin-bottom:12px; }
+.document-review-helper-note { display:flex; align-items:center; gap:7px; border:1px solid rgba(43,47,143,.14); background:rgba(43,47,143,.045); color:var(--text2); border-radius:9px; padding:8px 10px; margin-bottom:10px; font-size:12px; line-height:1.4; }
 .ai-governance-card { border-left:4px solid #7c3aed; background:rgba(124,58,237,0.025); }
 .ai-simulated-banner { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:6px; background:#fffbeb; border:1.5px solid #d97706; margin-bottom:12px; }
 .ai-simulated-banner .ai-sim-icon { font-size:16px; flex-shrink:0; }
@@ -715,23 +716,32 @@ a { color:var(--brand); text-decoration:none; }
 .evidence-action-copy { font-size:12px; color:var(--text1); font-weight:650; line-height:1.45; }
 .evidence-material-panel { border:1px solid var(--border1); border-radius:10px; background:var(--surface2); padding:10px 11px; margin-top:8px; }
 .evidence-material-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
-.document-action-groups { display:grid; gap:12px; }
-.document-action-group { border:1px solid #dfe7f2; border-radius:14px; background:var(--surface); box-shadow:0 8px 18px rgba(16,24,40,0.045); overflow:hidden; }
-.document-action-group-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:13px 15px; background:#fbfcff; border-bottom:1px solid var(--border1); }
+.document-action-groups { display:grid; gap:10px; }
+.document-action-group { border:1px solid #dfe7f2; border-radius:12px; background:var(--surface); box-shadow:0 5px 14px rgba(16,24,40,0.035); overflow:hidden; }
+.document-action-group-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:10px 13px; background:#fbfcff; border-bottom:1px solid var(--border1); }
 .document-action-group-title { font-size:13px; font-weight:800; color:var(--text1); }
 .document-action-group-subtitle { font-size:11px; color:var(--text3); margin-top:3px; line-height:1.4; }
 .document-action-group-count { font-size:10px; font-weight:800; color:var(--brand); background:var(--brand-dim); border:1px solid rgba(43,47,143,.18); border-radius:999px; padding:4px 8px; white-space:nowrap; }
-.document-action-group-body { display:grid; gap:9px; padding:12px; }
-.document-review-row { border:1px solid var(--border1); border-left:4px solid #cbd5e1; border-radius:12px; background:var(--surface); padding:12px; box-shadow:0 4px 10px rgba(16,24,40,0.035); }
+.document-action-group-body { display:grid; gap:7px; padding:9px; }
+.document-review-row { border:1px solid var(--border1); border-left:3px solid #cbd5e1; border-radius:10px; background:var(--surface); padding:9px 10px; box-shadow:0 2px 8px rgba(16,24,40,0.025); }
 .document-review-row.action-required { border-left-color:#d97706; background:linear-gradient(90deg,rgba(217,119,6,.06),#fff 44%); }
 .document-review-row.missing, .document-review-row.failed, .document-review-row.stale { border-left-color:#dc2626; background:linear-gradient(90deg,rgba(220,38,38,.055),#fff 44%); }
 .document-review-row.verified { border-left-color:#16a34a; }
 .document-review-row.optional { border-left-color:#64748b; }
-.document-review-main { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+.document-review-main { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+.document-review-identity { display:flex; align-items:flex-start; gap:9px; min-width:240px; flex:1; }
+.document-review-icon { width:30px; height:30px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; background:var(--brand-dim); color:var(--brand); font-size:10px; font-weight:850; letter-spacing:.01em; flex:0 0 auto; }
 .document-review-title-wrap { min-width:0; flex:1; }
-.document-review-title { font-size:14px; font-weight:800; color:var(--text1); line-height:1.28; overflow-wrap:anywhere; }
-.document-review-subtitle { font-size:11px; color:var(--text3); margin-top:3px; line-height:1.4; overflow-wrap:anywhere; }
-.document-review-file { font-size:11px; color:var(--text2); margin-top:4px; overflow-wrap:anywhere; }
+.document-review-title { font-size:13px; font-weight:800; color:var(--text1); line-height:1.25; overflow-wrap:anywhere; }
+.document-review-subtitle { font-size:11px; color:var(--text3); margin-top:2px; line-height:1.35; overflow-wrap:anywhere; }
+.document-review-file { font-size:11px; color:var(--text2); margin-top:2px; overflow-wrap:anywhere; }
+.document-review-status-actions { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:wrap; }
+.document-review-summary-line { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-top:7px; font-size:12px; line-height:1.35; color:var(--text2); }
+.document-review-chip { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:3px 8px; border:1px solid var(--border1); background:var(--surface2); font-size:11px; font-weight:750; color:var(--text2); }
+.document-review-chip.neutral { border-color:rgba(43,47,143,.16); background:rgba(43,47,143,.045); color:var(--text2); }
+.document-review-chip.issue { border-color:rgba(217,119,6,.28); background:rgba(217,119,6,.08); color:#92400e; }
+.document-review-chip.blocking { border-color:rgba(220,38,38,.26); background:rgba(220,38,38,.08); color:#991b1b; }
+.document-review-chip.system { border-color:rgba(37,99,235,.24); background:rgba(37,99,235,.07); color:#1d4ed8; }
 .document-review-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin-top:10px; }
 .document-review-field { border:1px solid var(--border1); border-radius:9px; background:var(--surface2); padding:7px 8px; min-width:0; }
 .document-review-field-label { font-size:9px; font-weight:800; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:3px; }
@@ -739,10 +749,13 @@ a { color:var(--brand); text-decoration:none; }
 .document-review-field-value.issue { color:#92400e; font-weight:750; }
 .document-review-field-value.blocking { color:#991b1b; }
 .document-review-field-value.none { color:var(--text3); font-weight:650; }
-.document-review-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:11px; align-items:center; }
-.document-review-details { margin-top:10px; border:1px solid var(--border1); border-radius:10px; background:var(--surface2); overflow:hidden; }
-.document-review-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
-.document-review-details-body { padding:0 10px 10px; }
+.document-review-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:0; align-items:center; }
+.document-review-details { margin-top:7px; border:0; border-radius:10px; background:transparent; overflow:visible; }
+.document-review-details[open] { border:1px solid var(--border1); background:var(--surface2); padding:8px; }
+.document-review-details summary { cursor:pointer; display:inline-flex; align-items:center; gap:5px; width:max-content; padding:5px 9px; border:1px solid rgba(43,47,143,.18); border-radius:6px; background:var(--surface2); font-size:11px; font-weight:800; color:var(--brand); list-style:none; }
+.document-review-details summary::-webkit-details-marker { display:none; }
+.document-review-details[open] summary { margin-bottom:8px; background:var(--surface); }
+.document-review-details-body { padding:0; }
 .document-review-details-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin:0 0 9px; }
 .document-review-empty { padding:14px; border:1px dashed var(--border1); border-radius:10px; background:var(--surface2); color:var(--text3); font-size:12px; text-align:center; }
 .reliance-badge { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:800; border:1px solid transparent; white-space:nowrap; }
@@ -750,6 +763,7 @@ a { color:var(--brand); text-decoration:none; }
 .reliance-badge.review-required, .reliance-badge.request-info { background:var(--amber-bg); color:var(--amber); border-color:rgba(217,119,6,.24); }
 .reliance-badge.failed, .reliance-badge.rejected { background:var(--red-bg); color:var(--red); border-color:rgba(220,38,38,.24); }
 .reliance-badge.pending { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
+.reliance-badge.system-issue { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
 .reliance-badge.stale { background:rgba(100,116,139,.12); color:#475569; border-color:rgba(100,116,139,.25); }
 .reliance-badge.manual-accepted { background:rgba(43,47,143,.08); color:var(--brand); border-color:rgba(43,47,143,.24); }
 .verification-technical-details { margin-top:8px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); overflow:hidden; }
@@ -1599,7 +1613,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <div class="detail-collapsible-inline-header">
             <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
           </div>
-          <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI Verification Results — Advisory Only</div><div class="ai-adv-sub">Document verification checks below are AI-generated and advisory. Officer review is required before relying on these results for compliance decisions.</div></div></div>
+          <div class="document-review-helper-note"><strong>Agent 1</strong><span>Agent 1 assists document review. Officers must review exceptions before relying on documents.</span></div>
           <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
           <div class="form-group" style="margin:0;">
@@ -7817,14 +7831,14 @@ function buildVerificationResultsHtml(results) {
     var overallValue = firstMeaningfulDetailValue(results.overall, results.overall_result, results.result, results.status);
     var overallTone = String(overallValue || '').toLowerCase().indexOf('fail') >= 0 || String(overallValue || '').toLowerCase().indexOf('flag') >= 0 ? 'red'
       : String(overallValue || '').toLowerCase().indexOf('warn') >= 0 ? 'amber' : '';
-    pushItem('Reliance status', overallValue, overallTone);
+    pushItem('Document status', overallValue, overallTone);
     pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
     pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
     pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
     pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
     pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
     pushItem('Why review is required', Array.isArray(results.warnings) ? results.warnings.join(', ') : '', 'amber');
-    pushItem('Red Flags', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '', 'red');
+    pushItem('Issue', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '', 'red');
     if (Array.isArray(results.checks)) {
       var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
       // EX-11: Check type legend for visual distinction
@@ -7873,7 +7887,7 @@ function buildVerificationResultsHtml(results) {
         if (result !== 'pass') visibleCheckItems.push(checkHtml);
       });
       if (visibleCheckItems.length) {
-        items.push('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;color:var(--text1);text-transform:uppercase;letter-spacing:.03em;">Material issues</div>' + visibleCheckItems.join('') + '</div>');
+        items.push('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:800;color:var(--text1);text-transform:uppercase;letter-spacing:.03em;">Issue</div>' + visibleCheckItems.join('') + '</div>');
       }
       if (allCheckItems.length) {
         var auditFacts = [];
@@ -7891,7 +7905,7 @@ function buildVerificationResultsHtml(results) {
         pushAuditFact('Policy ID/version', policyId && policyVersion ? policyId + ' / ' + policyVersion : firstMeaningfulDetailValue(policyId, policyVersion));
         var auditHtml = auditFacts.length ? '<div class="verification-audit-grid">' + auditFacts.join('') + '</div>' : '';
         items.push('<details class="verification-technical-details">' +
-          '<summary>Technical / audit details</summary>' +
+          '<summary>Details</summary>' +
           '<div style="padding:0 10px 9px;">' +
             auditHtml +
             '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:3px 0 5px;">Full check result list</div>' +
@@ -8328,6 +8342,7 @@ function documentRelianceDisplayState(doc, policy) {
   var relianceState = String((doc && (doc.document_reliance_state || doc.document_reliance_status)) || '').toLowerCase();
   var verificationState = String((doc && (doc.verification_state || doc.verification_status)) || '').toLowerCase();
   var results = (doc && doc.verification_results) || {};
+  var systemWarning = String((results && (results.system_warning || results.systemWarning)) || '').toLowerCase();
   var overall = String((results && (results.overall || results.overall_result || results.status)) || '').toLowerCase();
   var warnings = Array.isArray(results.warnings) ? results.warnings : [];
   var issues = Array.isArray(results.issues) ? results.issues : [];
@@ -8341,6 +8356,7 @@ function documentRelianceDisplayState(doc, policy) {
     var result = String((check && (check.result || check.status)) || '').toLowerCase();
     return ['warn', 'warning', 'review'].indexOf(result) >= 0;
   });
+  if (systemWarning === 'file_not_accessible') return { label: 'System issue', tone: 'system-issue' };
   if (reviewStatus === 'rejected') return { label: 'Rejected', tone: 'rejected' };
   if (reviewStatus === 'info_requested') return { label: 'Request replacement', tone: 'request-info' };
   if (!policy) return { label: 'Review required', tone: 'review-required' };
@@ -8361,7 +8377,8 @@ function renderRelianceBadge(state) {
 function documentRequiredAction(doc, policy, state) {
   var label = (state && state.label) || 'Review required';
   var blockers = Array.isArray(doc && doc.document_reliance_blockers) ? doc.document_reliance_blockers : [];
-  if (!policy) return 'Document type required before this evidence can be relied on automatically.';
+  if (label === 'System issue') return 'Re-verify or escalate the file-access issue before relying on this document.';
+  if (!policy) return 'Document type required before this evidence can support approval.';
   if (label === 'Verified') return 'No officer action required unless case context changes or the document becomes stale.';
   if (label === 'Pending verification') return 'Wait for Agent 1 verification or re-run verification before using this document as compliance evidence.';
   if (label === 'Failed') return 'Reject, request corrected evidence, or manually accept only with the required senior-approved rationale where policy allows.';
@@ -8371,7 +8388,7 @@ function documentRequiredAction(doc, policy, state) {
   if (label === 'Request replacement') return 'Client remediation or officer follow-up is required before reliance.';
   if (label === 'Manual accepted') return 'Manual acceptance is recorded; retain rationale and audit evidence for decision review.';
   if (blockers.length) return 'Resolve document reliance blockers before this evidence supports a decision.';
-  return 'Officer review required before automated reliance.';
+  return 'Officer review required before this document supports approval.';
 }
 
 function documentLifecycleLabel(doc, policy, linkedRequirement) {
@@ -8414,8 +8431,11 @@ function documentExpectedTypeLabel(doc, linkedRequirement, policy, expectedSlot)
 function documentPrimaryIssue(doc, state, policy, expectedSlot) {
   if (!doc) return 'No document uploaded.';
   var label = (state && state.label) || 'Review required';
+  var results = doc.verification_results || {};
+  var systemWarning = String(results.system_warning || results.systemWarning || '').toLowerCase();
+  if (systemWarning === 'file_not_accessible') return 'System issue — document file was not accessible for analysis.';
   if (label === 'Verified' || label === 'Manual accepted') return 'None';
-  if (!policy) return expectedSlot ? 'Verification policy is not mapped for this expected document type.' : 'Document type required before reliance.';
+  if (!policy) return expectedSlot ? 'System setup issue: verification policy missing.' : 'Document type required before reliance.';
   if (label === 'Pending verification') return 'Verification not completed. Officer must review before relying on this document.';
   if (label === 'Expired') {
     var expiry = firstMeaningfulDetailValue(doc.expiry_date, doc.expires_at, doc.valid_until);
@@ -8424,7 +8444,6 @@ function documentPrimaryIssue(doc, state, policy, expectedSlot) {
   if (label === 'Stale') return 'Document is stale and must be refreshed or re-verified before reliance.';
   if (label === 'Rejected') return doc.review_comment || 'Document was rejected by an officer.';
   if (label === 'Request replacement') return doc.review_comment || 'Replacement or clarification has been requested.';
-  var results = doc.verification_results || {};
   var issueArrays = [results.red_flags, results.issues, results.warnings, results.flags];
   for (var i = 0; i < issueArrays.length; i++) {
     if (Array.isArray(issueArrays[i]) && issueArrays[i].length) return String(issueArrays[i][0]);
@@ -8452,7 +8471,7 @@ function documentBlocksDisplay(doc, policy, state, expectedSlot) {
   if (gate.indexOf('memo') >= 0 && gate.indexOf('approval') >= 0) return 'Memo and approval';
   if (gate.indexOf('approval') >= 0) return label === 'Review required' ? 'Approval unless accepted with reason' : 'Approval';
   if (gate.indexOf('block') >= 0) return policy.gateBehavior;
-  return label && label !== 'Verified' ? 'Automated reliance' : 'None';
+  return label && label !== 'Verified' ? 'Approval blocked' : 'None';
 }
 
 function documentReviewGroupKey(doc, policy, state, expectedSlot, linkedRequirement) {
@@ -8460,7 +8479,7 @@ function documentReviewGroupKey(doc, policy, state, expectedSlot, linkedRequirem
   var label = (state && state.label) || 'Review required';
   if (label === 'Verified' || label === 'Manual accepted') return 'verified';
   if (documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot)) return 'action';
-  if (['Review required', 'Pending verification', 'Failed', 'Expired', 'Stale', 'Rejected', 'Request replacement'].indexOf(label) >= 0) return 'action';
+  if (['Review required', 'Pending verification', 'Failed', 'Expired', 'Stale', 'Rejected', 'Request replacement', 'System issue'].indexOf(label) >= 0) return 'action';
   return 'optional';
 }
 
@@ -8480,13 +8499,84 @@ function renderDocumentReviewField(label, value, tone) {
   return '<div class="document-review-field"><div class="document-review-field-label">' + escapeHtml(label) + '</div><div class="document-review-field-value' + toneClass + '">' + escapeHtml(normalized) + '</div></div>';
 }
 
+function documentReviewIconForType(doc, expectedSlot, linkedRequirement) {
+  var type = normalizePolicyDocTypeKey(
+    (expectedSlot && expectedSlot.doc_type) ||
+    (doc && (doc.doc_type || doc.slot_key)) ||
+    (linkedRequirement && linkedRequirement.requirement_key)
+  );
+  var map = {
+    cert_inc: 'COI',
+    cert_reg: 'REG',
+    memarts: 'M&A',
+    reg_dir: 'DIR',
+    reg_sh: 'SH',
+    register_of_directors: 'DIR',
+    register_of_shareholders: 'SH',
+    fin_stmt: 'FIN',
+    board_res: 'BRD',
+    structure_chart: 'ORG',
+    poa: 'ADR',
+    proof_of_address: 'ADR',
+    passport: 'ID',
+    national_id: 'ID',
+    id_card: 'ID',
+    drivers_license: 'ID',
+    bankref: 'BNK',
+    bank_statements: 'BNK',
+    source_wealth: 'SOW',
+    source_funds: 'SOF',
+    aml_policy: 'AML',
+    contracts: 'DOC',
+    enhanced_requirement: 'EDD',
+    supporting_document: 'DOC'
+  };
+  return map[type] || 'DOC';
+}
+
+function documentShortNextAction(doc, policy, state) {
+  var label = (state && state.label) || 'Review required';
+  if (!doc) return 'Request from client';
+  if (label === 'Verified') return 'No action required';
+  if (label === 'Manual accepted') return 'Accepted with reason';
+  if (label === 'Pending verification') return 'Wait or re-verify';
+  if (label === 'System issue') return 'Re-verify';
+  if (label === 'Expired' || label === 'Stale') return 'Request replacement';
+  if (label === 'Failed') return 'Request replacement or reject';
+  if (label === 'Rejected') return 'Rejected';
+  if (label === 'Request replacement') return 'Await replacement';
+  if (!policy) return 'Resolve setup issue';
+  return 'Review exception';
+}
+
+function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
+  var chips = [];
+  var issueText = normalizeDetailValue(issue);
+  var blockerText = normalizeDetailValue(blocker);
+  var nextText = normalizeDetailValue(nextAction);
+  var stateLabel = String((state && state.label) || '').toLowerCase();
+  if (issueText && issueText !== '—' && issueText !== 'None') {
+    var issueClass = stateLabel === 'system issue' ? 'system' : 'issue';
+    chips.push('<span class="document-review-chip ' + issueClass + '">Issue: ' + escapeHtml(issueText) + '</span>');
+  } else {
+    chips.push('<span class="document-review-chip neutral">No action required</span>');
+  }
+  if (blockerText && blockerText !== '—' && blockerText !== 'None') {
+    chips.push('<span class="document-review-chip blocking">Blocks: ' + escapeHtml(blockerText) + '</span>');
+  }
+  if (nextText && nextText !== '—') {
+    chips.push('<span class="document-review-chip neutral">Next: ' + escapeHtml(nextText) + '</span>');
+  }
+  return '<div class="document-review-summary-line">' + chips.join('') + '</div>';
+}
+
 function renderDocumentDirectActions(app, doc, groupKey, state) {
   var hasFile = documentHasUploadedFile(doc);
   if (!hasFile) {
     return '<div class="document-review-actions">' +
-      '<button class="doc-action-btn disabled" disabled>No document uploaded</button>' +
       '<button class="doc-action-btn disabled" disabled>View</button>' +
       '<button class="doc-action-btn disabled" disabled>Download</button>' +
+      '<button class="doc-action-btn info" onclick="requestMoreInfo()">Request from client</button>' +
     '</div>';
   }
   var appRef = escapeHtml((app && (app.ref || app.id)) || '');
@@ -8512,15 +8602,15 @@ function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, p
   var auditFacts = [
     renderDocumentReviewField('Document name', documentFileName(doc)),
     renderDocumentReviewField('Document type', expectedTypeLabel),
-    renderDocumentReviewField('Expected from portal slot', expectedSlot ? expectedSlot.label : (linkedRequirement ? expectedTypeLabel : 'Not portal-slot based')),
-    renderDocumentReviewField('Status', (state && state.label) || 'Review required'),
+    renderDocumentReviewField('Expected type/source', expectedSlot ? ('Expected from portal slot: ' + expectedSlot.label) : (linkedRequirement ? ('Requested enhanced evidence: ' + expectedTypeLabel) : 'Not portal-slot based')),
+    renderDocumentReviewField('Document status', (state && state.label) || 'Review required'),
     renderDocumentReviewField('Issue', issue, issue === 'None' ? 'none' : 'issue'),
     renderDocumentReviewField('Blocker', blocker, blocker === 'None' ? 'none' : 'blocking'),
     renderDocumentReviewField('Policy ID/version', policy ? ((policy.policyId || policy.id || 'Policy') + ' / ' + (policy.version || 'v1')) : 'Document type required'),
     renderDocumentReviewField('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)),
     renderDocumentReviewField('Agent run ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id)),
     renderDocumentReviewField('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash)),
-    renderDocumentReviewField('Timestamp', firstMeaningfulDetailValue(doc.verified_at, results.verified_at, results.verification_timestamp, results.completed_at)),
+    renderDocumentReviewField('Verification timestamp', firstMeaningfulDetailValue(doc.verified_at, results.verified_at, results.verification_timestamp, results.completed_at)),
     renderDocumentReviewField('Uploaded by', normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by))
   ].join('');
   var officerHistory = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—' || reviewComment
@@ -8550,31 +8640,27 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot)
   var blocker = documentBlocksDisplay(doc, policy, relianceState, expectedSlot);
   var groupKey = documentReviewGroupKey(doc, policy, relianceState, expectedSlot, linkedRequirement);
   var rowClass = documentReviewRowClass(groupKey, relianceState);
-  var typePrefix = (expectedSlot || linkedRequirement) ? 'Expected from portal slot' : 'Document type';
+  var typePrefix = expectedSlot ? 'Expected from portal slot' : (linkedRequirement ? 'Requested enhanced evidence' : 'Document type');
   var ownerLabel = findDocumentOwnerLabelForApp(app, doc);
   var fileName = documentFileName(doc);
-  var uploadedBy = normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by);
-  var lastVerified = firstMeaningfulDetailValue(doc.verified_at, doc.verification_results && doc.verification_results.verified_at, doc.verification_results && doc.verification_results.completed_at);
-  var issueTone = issue === 'None' ? 'none' : 'issue';
-  var blockerTone = blocker === 'None' ? 'none' : 'blocking';
+  var nextAction = documentShortNextAction(doc, policy, relianceState);
+  var icon = documentReviewIconForType(doc, expectedSlot, linkedRequirement);
   return '<div class="document-review-row ' + rowClass + '">' +
     '<div class="document-review-main">' +
-      '<div class="document-review-title-wrap">' +
-        '<div class="document-review-title">' + escapeHtml(expectedTypeLabel) + '</div>' +
-        '<div class="document-review-subtitle">' + escapeHtml(typePrefix) + ': ' + escapeHtml(expectedTypeLabel) + ' · Owner: ' + escapeHtml(ownerLabel) + '</div>' +
-        '<div class="document-review-file">File: ' + escapeHtml(fileName) + '</div>' +
+      '<div class="document-review-identity">' +
+        '<span class="document-review-icon">' + escapeHtml(icon) + '</span>' +
+        '<div class="document-review-title-wrap">' +
+          '<div class="document-review-title">' + escapeHtml(expectedTypeLabel) + '</div>' +
+          '<div class="document-review-subtitle">' + escapeHtml(typePrefix) + ': ' + escapeHtml(expectedTypeLabel) + ' · Owner: ' + escapeHtml(ownerLabel) + '</div>' +
+          '<div class="document-review-file">File: ' + escapeHtml(fileName) + '</div>' +
+        '</div>' +
       '</div>' +
-      renderRelianceBadge(relianceState) +
+      '<div class="document-review-status-actions">' +
+        renderRelianceBadge(relianceState) +
+        renderDocumentDirectActions(app, doc, groupKey, relianceState) +
+      '</div>' +
     '</div>' +
-    '<div class="document-review-fields">' +
-      renderDocumentReviewField('Status', (relianceState && relianceState.label) || 'Review required') +
-      renderDocumentReviewField('Issue', issue, issueTone) +
-      renderDocumentReviewField('Blocks', blocker, blockerTone) +
-      renderDocumentReviewField('Next action', documentRequiredAction(doc, policy, relianceState), issueTone) +
-      renderDocumentReviewField('Last verified', lastVerified) +
-      renderDocumentReviewField('Uploaded by', uploadedBy) +
-    '</div>' +
-    renderDocumentDirectActions(app, doc, groupKey, relianceState) +
+    renderDocumentCompactSummary(issue, blocker, nextAction, relianceState) +
     renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, policy, relianceState, issue, blocker, expectedTypeLabel) +
   '</div>';
 }
@@ -8674,22 +8760,24 @@ function renderMissingKycDocumentRow(app, expectedSlot) {
     verification_results: {}
   };
   var owner = expectedSlot.owner || 'Application-level document';
+  var state = { label: 'Missing', tone: 'failed' };
+  var icon = documentReviewIconForType(pseudoDoc, expectedSlot, null);
   return '<div class="document-review-row missing">' +
     '<div class="document-review-main">' +
-      '<div class="document-review-title-wrap">' +
-        '<div class="document-review-title">' + escapeHtml(expectedSlot.label) + '</div>' +
-        '<div class="document-review-subtitle">Expected from portal slot: ' + escapeHtml(expectedSlot.label) + ' · Owner: ' + escapeHtml(owner) + '</div>' +
-        '<div class="document-review-file">No document uploaded</div>' +
+      '<div class="document-review-identity">' +
+        '<span class="document-review-icon">' + escapeHtml(icon) + '</span>' +
+        '<div class="document-review-title-wrap">' +
+          '<div class="document-review-title">' + escapeHtml(expectedSlot.label) + '</div>' +
+          '<div class="document-review-subtitle">Expected from portal slot: ' + escapeHtml(expectedSlot.label) + ' · Owner: ' + escapeHtml(owner) + '</div>' +
+          '<div class="document-review-file">No document uploaded</div>' +
+        '</div>' +
       '</div>' +
-      '<span class="reliance-badge failed">Missing</span>' +
+      '<div class="document-review-status-actions">' +
+        '<span class="reliance-badge failed">Missing</span>' +
+        renderDocumentDirectActions(app, null, 'missing', state) +
+      '</div>' +
     '</div>' +
-    '<div class="document-review-fields">' +
-      renderDocumentReviewField('Status', 'Missing', 'blocking') +
-      renderDocumentReviewField('Issue', 'No document uploaded.', 'issue') +
-      renderDocumentReviewField('Blocks', 'Approval', 'blocking') +
-      renderDocumentReviewField('Next action', 'Request the missing required document before approval.') +
-    '</div>' +
-    renderDocumentDirectActions(app, null, 'missing', { label: 'Missing', tone: 'failed' }) +
+    renderDocumentCompactSummary('No document uploaded.', 'Approval', 'Request from client', state) +
   '</div>';
 }
 
