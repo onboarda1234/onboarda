@@ -1,0 +1,18 @@
+{
+  "ready": true,
+  "environment": "staging",
+  "checks": {
+    "encryption": {
+      "status": "ok"
+    },
+    "database": {
+      "status": "ok",
+      "idle_in_transaction_count": 0,
+      "idle_in_transaction_threshold_seconds": 0
+    },
+    "config": {
+      "status": "ok"
+    }
+  },
+  "timestamp": "2026-06-16T10:06:43Z"
+}

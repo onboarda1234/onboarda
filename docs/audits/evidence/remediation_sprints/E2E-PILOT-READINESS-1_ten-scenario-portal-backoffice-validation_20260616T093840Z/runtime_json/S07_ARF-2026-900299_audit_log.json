@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "id": 55669,
+      "timestamp": "2026-06-16 09:58:46.357938",
+      "user_id": "21eb50f952e54634",
+      "user_name": "Aisha Sudally — Onboarding",
+      "user_role": "client",
+      "action": "Create",
+      "target": "ARF-2026-900299",
+      "detail": "New application created: E2E 20260616T093840Z S07 High Risk Activity Ltd",
+      "ip_address": "102.117.172.191",
+      "before_state": null,
+      "after_state": null
+    }
+  ],
+  "total": 1
+}

@@ -1,0 +1,108 @@
+{
+  "baseScreenshots": {
+    "portal_login": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/portal_logged_in_my_apps.png",
+    "backoffice_login": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/backoffice_logged_in.png"
+  },
+  "records": [
+    {
+      "scenario": 1,
+      "ref": "ARF-2026-900293",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S01_ARF-2026-900293_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S01_ARF-2026-900293_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S01_ARF-2026-900293_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S01_ARF-2026-900293_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 2,
+      "ref": "ARF-2026-900294",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S02_ARF-2026-900294_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S02_ARF-2026-900294_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S02_ARF-2026-900294_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S02_ARF-2026-900294_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 3,
+      "ref": "ARF-2026-900295",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S03_ARF-2026-900295_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S03_ARF-2026-900295_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S03_ARF-2026-900295_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S03_ARF-2026-900295_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 4,
+      "ref": "ARF-2026-900296",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S04_ARF-2026-900296_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S04_ARF-2026-900296_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S04_ARF-2026-900296_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S04_ARF-2026-900296_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 5,
+      "ref": "ARF-2026-900297",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S05_ARF-2026-900297_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S05_ARF-2026-900297_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S05_ARF-2026-900297_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S05_ARF-2026-900297_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 6,
+      "ref": "ARF-2026-900298",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S06_ARF-2026-900298_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S06_ARF-2026-900298_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S06_ARF-2026-900298_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S06_ARF-2026-900298_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 7,
+      "ref": "ARF-2026-900299",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S07_ARF-2026-900299_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S07_ARF-2026-900299_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S07_ARF-2026-900299_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S07_ARF-2026-900299_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 8,
+      "ref": "ARF-2026-900300",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S08_ARF-2026-900300_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S08_ARF-2026-900300_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S08_ARF-2026-900300_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S08_ARF-2026-900300_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 9,
+      "ref": "ARF-2026-900301",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S09_ARF-2026-900301_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S09_ARF-2026-900301_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S09_ARF-2026-900301_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S09_ARF-2026-900301_backoffice_activity.png"
+      }
+    },
+    {
+      "scenario": 10,
+      "ref": "ARF-2026-900302",
+      "screenshots": {
+        "portal": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S10_ARF-2026-900302_portal.png",
+        "backoffice_documents": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S10_ARF-2026-900302_backoffice_documents.png",
+        "backoffice_overview": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S10_ARF-2026-900302_backoffice_overview.png",
+        "backoffice_activity": "/private/tmp/onboarda-e2e-pilot/docs/audits/evidence/remediation_sprints/E2E-PILOT-READINESS-1_ten-scenario-portal-backoffice-validation_20260616T093840Z/screenshots/S10_ARF-2026-900302_backoffice_activity.png"
+      }
+    }
+  ]
+}

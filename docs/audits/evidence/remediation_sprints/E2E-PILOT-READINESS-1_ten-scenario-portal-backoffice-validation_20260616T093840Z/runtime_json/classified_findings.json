@@ -1,0 +1,62 @@
+[
+  {
+    "scenario": 1,
+    "severity": "P0",
+    "code": "prescreening_screening_provider_unavailable",
+    "message": "Portal prescreening submit returned 503 before pricing/KYC: {\"error\":\"Screening provider temporarily unavailable. Please retry in a moment.\"}"
+  },
+  {
+    "scenario": 2,
+    "severity": "P0",
+    "code": "prescreening_screening_provider_unavailable",
+    "message": "Portal prescreening submit returned 503 before pricing/KYC: {\"error\":\"Screening provider temporarily unavailable. Please retry in a moment.\"}"
+  },
+  {
+    "scenario": 3,
+    "severity": "P0",
+    "code": "prescreening_screening_provider_unavailable",
+    "message": "Portal prescreening submit returned 503 before pricing/KYC: {\"error\":\"Screening provider temporarily unavailable. Please retry in a moment.\"}"
+  },
+  {
+    "scenario": 4,
+    "severity": "P0",
+    "code": "prescreening_screening_provider_unavailable",
+    "message": "Portal prescreening submit returned 503 before pricing/KYC: {\"error\":\"Screening provider temporarily unavailable. Please retry in a moment.\"}"
+  },
+  {
+    "scenario": 5,
+    "severity": "P0",
+    "code": "prescreening_screening_provider_unavailable",
+    "message": "Portal prescreening submit returned 503 before pricing/KYC: {\"error\":\"Screening provider temporarily unavailable. Please retry in a moment.\"}"
+  },
+  {
+    "scenario": 6,
+    "severity": "P2",
+    "code": "submit_rate_limit_blocked_test_continuation",
+    "message": "Portal prescreening submit was rate-limited after earlier failed attempts: {\"error\":\"Rate limit exceeded for submit. Try again later.\",\"retry_after\":60}"
+  },
+  {
+    "scenario": 7,
+    "severity": "P2",
+    "code": "submit_rate_limit_blocked_test_continuation",
+    "message": "Portal prescreening submit was rate-limited after earlier failed attempts: {\"error\":\"Rate limit exceeded for submit. Try again later.\",\"retry_after\":60}"
+  },
+  {
+    "scenario": 8,
+    "severity": "P2",
+    "code": "submit_rate_limit_blocked_test_continuation",
+    "message": "Portal prescreening submit was rate-limited after earlier failed attempts: {\"error\":\"Rate limit exceeded for submit. Try again later.\",\"retry_after\":60}"
+  },
+  {
+    "scenario": 9,
+    "severity": "P2",
+    "code": "submit_rate_limit_blocked_test_continuation",
+    "message": "Portal prescreening submit was rate-limited after earlier failed attempts: {\"error\":\"Rate limit exceeded for submit. Try again later.\",\"retry_after\":60}"
+  },
+  {
+    "scenario": 10,
+    "severity": "P2",
+    "code": "submit_rate_limit_blocked_test_continuation",
+    "message": "Portal prescreening submit was rate-limited after earlier failed attempts: {\"error\":\"Rate limit exceeded for submit. Try again later.\",\"retry_after\":60}"
+  }
+]

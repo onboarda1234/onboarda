@@ -1,0 +1,8 @@
+{
+  "git_sha": "69f751cf12f7a7694ecfcd67ad5f6134c706f393",
+  "git_sha_short": "69f751c",
+  "build_time": "2026-06-16T09:20:49Z",
+  "image_tag": "69f751cf12f7a7694ecfcd67ad5f6134c706f393",
+  "environment": "staging",
+  "service": "regmind-backend"
+}

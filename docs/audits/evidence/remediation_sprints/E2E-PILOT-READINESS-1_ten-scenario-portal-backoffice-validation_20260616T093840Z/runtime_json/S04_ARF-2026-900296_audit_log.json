@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "id": 55665,
+      "timestamp": "2026-06-16 09:58:31.408229",
+      "user_id": "21eb50f952e54634",
+      "user_name": "Aisha Sudally — Onboarding",
+      "user_role": "client",
+      "action": "Create",
+      "target": "ARF-2026-900296",
+      "detail": "New application created: E2E 20260616T093840Z S04 Person KYC Issue Ltd",
+      "ip_address": "102.117.172.191",
+      "before_state": null,
+      "after_state": null
+    }
+  ],
+  "total": 1
+}

@@ -1,0 +1,28 @@
+{
+  "environment": "staging",
+  "is_demo": false,
+  "is_production": false,
+  "features": {
+    "ENABLE_DEMO_MODE": false,
+    "ENABLE_DEMO_BANNER": false,
+    "ENABLE_PHASE2_FEATURES": true,
+    "ENABLE_REGULATORY_INTELLIGENCE_FULL": true,
+    "ENABLE_MONITORING_DASHBOARD": true,
+    "ENABLE_SAR_WORKFLOW": true,
+    "ENABLE_AI_SUPERVISOR": true,
+    "ENABLE_KPI_DEMO_DATA": false,
+    "ENABLE_ROLE_SWITCHER": false,
+    "ENABLE_DOCUMENT_AI_ANALYSIS": true,
+    "FF_SIZE_CAP_CLIENT_REJECT": true,
+    "FF_UX_SPLIT_UPLOAD_VERIFY": false
+  },
+  "upload_latency_flags": {
+    "FF_SIZE_CAP_CLIENT_REJECT": true,
+    "FF_UX_SPLIT_UPLOAD_VERIFY": false
+  },
+  "backoffice": {
+    "applications_refresh_ms": 30000,
+    "applications_stale_threshold_s": 60
+  },
+  "version": "1.0.0-pilot"
+}

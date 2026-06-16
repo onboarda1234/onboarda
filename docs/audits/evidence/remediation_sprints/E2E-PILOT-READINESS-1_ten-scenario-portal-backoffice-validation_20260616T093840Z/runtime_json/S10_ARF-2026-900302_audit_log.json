@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "id": 55672,
+      "timestamp": "2026-06-16 09:58:47.577773",
+      "user_id": "21eb50f952e54634",
+      "user_name": "Aisha Sudally — Onboarding",
+      "user_role": "client",
+      "action": "Create",
+      "target": "ARF-2026-900302",
+      "detail": "New application created: E2E 20260616T093840Z S10 Manual Acceptance Ltd",
+      "ip_address": "102.117.172.191",
+      "before_state": null,
+      "after_state": null
+    }
+  ],
+  "total": 1
+}

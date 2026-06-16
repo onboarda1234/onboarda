@@ -1,0 +1,19 @@
+{
+  "status": "ok",
+  "service": "RegMind API",
+  "platform": "Onboarda",
+  "version": "1.0.0",
+  "environment": "staging",
+  "timestamp": "2026-06-16T10:06:43Z",
+  "database": {
+    "status": "connected",
+    "type": "postgresql"
+  },
+  "integrations": {
+    "opencorporates": "simulated",
+    "ip_geolocation": "live",
+    "sumsub_identity_verification": "configured",
+    "complyadvantage": "live"
+  },
+  "metrics_enabled": true
+}

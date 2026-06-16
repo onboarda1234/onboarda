@@ -1,0 +1,31 @@
+{
+  "entries": [
+    {
+      "id": 55667,
+      "timestamp": "2026-06-16 09:58:39.875966",
+      "user_id": "21eb50f952e54634",
+      "user_name": "Aisha Sudally — Onboarding",
+      "user_role": "client",
+      "action": "PEP Declaration Recorded",
+      "target": "ARF-2026-900297",
+      "detail": "{\"declared_pep_count\": 1, \"declared_pep_subjects\": [\"director:dir05_1\"], \"source\": \"client_portal\"}",
+      "ip_address": "102.117.172.191",
+      "before_state": null,
+      "after_state": null
+    },
+    {
+      "id": 55666,
+      "timestamp": "2026-06-16 09:58:39.871690",
+      "user_id": "21eb50f952e54634",
+      "user_name": "Aisha Sudally — Onboarding",
+      "user_role": "client",
+      "action": "Create",
+      "target": "ARF-2026-900297",
+      "detail": "New application created: E2E 20260616T093840Z S05 PEP Declared Ltd",
+      "ip_address": "102.117.172.191",
+      "before_state": null,
+      "after_state": null
+    }
+  ],
+  "total": 2
+}

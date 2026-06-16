@@ -1,0 +1,14 @@
+# Memo / Pre-Approval Results
+
+| Scenario | Pre-approval | Memo status | KYC submit | Blockers |
+| --- | --- | --- | --- | --- |
+| S01 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S02 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S03 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S04 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S05 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S06 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S07 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S08 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S09 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
+| S10 | N/A | not_generated | - | [{"id":"case_stage","category":"Case Stage","title":"Application is not in compliance review","description":"Current status is 'draft'. Move the application into compliance review before final approval.","severity":"blocking","blocking":tru... |
