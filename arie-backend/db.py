@@ -7227,6 +7227,61 @@ def _ensure_document_health_monitor_agent(db: DBConnection):
     db.commit()
 
 
+QA_SMOKE_USER_ID = "github-actions:day6-staging-smoke"
+QA_SMOKE_USER_EMAIL = "github-actions-day6-staging-smoke@onboarda.internal"
+QA_SMOKE_USER_NAME = "GitHub Day 6 Staging Smoke"
+QA_SMOKE_USER_ROLE = "sco"
+
+
+def _should_seed_qa_smoke_user() -> bool:
+    environment = (_CFG_ENVIRONMENT or "").strip().lower()
+    return environment in {"staging", "testing", "test"}
+
+
+def ensure_qa_smoke_user(db: DBConnection) -> bool:
+    """Ensure the deterministic staging smoke token subject maps to an active user."""
+    if not _should_seed_qa_smoke_user():
+        return False
+
+    import bcrypt
+
+    no_login_password = secrets.token_urlsafe(48)
+    pw_hash = bcrypt.hashpw(no_login_password.encode(), bcrypt.gensalt()).decode()
+    db.execute(
+        """
+        INSERT OR IGNORE INTO users
+            (id, email, password_hash, full_name, role, status)
+        VALUES (?, ?, ?, ?, ?, 'active')
+        """,
+        (
+            QA_SMOKE_USER_ID,
+            QA_SMOKE_USER_EMAIL,
+            pw_hash,
+            QA_SMOKE_USER_NAME,
+            QA_SMOKE_USER_ROLE,
+        ),
+    )
+    db.execute(
+        """
+        UPDATE users
+           SET full_name = ?,
+               role = ?,
+               status = 'active',
+               updated_at = datetime('now')
+         WHERE id = ?
+        """,
+        (QA_SMOKE_USER_NAME, QA_SMOKE_USER_ROLE, QA_SMOKE_USER_ID),
+    )
+    db.commit()
+    logger.info(
+        "QA smoke user ensured for environment=%s id=%s role=%s",
+        _CFG_ENVIRONMENT,
+        QA_SMOKE_USER_ID,
+        QA_SMOKE_USER_ROLE,
+    )
+    return True
+
+
 def seed_initial_data(db: DBConnection):
     """Seed database with initial admin users, risk config, and AI agents."""
     import bcrypt
@@ -7243,6 +7298,7 @@ def seed_initial_data(db: DBConnection):
 
     if users_count > 0 and agents_count > 0 and checks_count > 0 and risk_count > 0:
         logger.info("Database already seeded, skipping core initialization")
+        ensure_qa_smoke_user(db)
         # Still check if monitoring demo data needs seeding (added post-initial-seed)
         _seed_monitoring_demo_data(db)
         _ensure_document_health_monitor_agent(db)
@@ -7277,6 +7333,7 @@ def seed_initial_data(db: DBConnection):
         )
         db.commit()
         logger.info("Users seeded")
+    ensure_qa_smoke_user(db)
 
     # === RISK CONFIG ===
     if risk_count == 0:

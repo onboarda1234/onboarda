@@ -17,7 +17,7 @@ Every remediation PR must:
 5. Open the PR against `main`.
 6. Merge to `main` only after review and required tests.
 7. Deploy merged `main` to staging.
-8. Confirm staging `/api/version` equals the merged `main` SHA.
+8. Confirm authenticated staging `/api/version.git_sha` and `/api/version.image_tag` equal the merged `main` SHA.
 9. Run staging API and browser validation as applicable.
 10. Mark an issue closed only if merged-main staging evidence proves closure.
 
@@ -39,7 +39,7 @@ Each remediation PR must follow this lifecycle:
 8. Run frontend/static checks where relevant.
 9. Run frontend/browser testing where UI, client, officer, or workflow behavior is affected.
 10. Deploy merged `main` to staging.
-11. Confirm staging `/api/version` matches the merged `main` SHA.
+11. Confirm authenticated staging `/api/version.git_sha` and `/api/version.image_tag` match the merged `main` SHA.
 12. Run staging API smoke tests.
 13. Run staging browser smoke tests where applicable.
 14. Save the evidence pack.
@@ -61,7 +61,7 @@ A P0 issue is closed only when all of the following are true:
 - Browser tests pass when a UI, portal, officer, approval, or workflow surface is affected.
 - The PR is merged to `main`.
 - Merged `main` is deployed to staging.
-- Staging `/api/version` equals the merged `main` SHA.
+- Authenticated staging `/api/version.git_sha` and `/api/version.image_tag` equal the merged `main` SHA.
 - Staging API smoke tests prove the P0 failure no longer reproduces.
 - Staging browser smoke tests prove affected user workflows behave correctly, if applicable.
 - Evidence is saved in the standard evidence-pack folder.
@@ -76,7 +76,7 @@ A P1 issue is closed only when all of the following are true:
 - The full relevant backend suite passes unless the issue is documentation-only and no code path is touched.
 - Browser evidence is captured for affected officer, client, or supervisor workflows.
 - Merged `main` is deployed to staging.
-- Staging `/api/version` equals the merged `main` SHA.
+- Authenticated staging `/api/version.git_sha` and `/api/version.image_tag` equal the merged `main` SHA.
 - Staging API/browser smoke tests prove closure for the affected workflow.
 - Remaining limitations are explicitly documented.
 
@@ -153,8 +153,8 @@ For every defect-closing PR:
 2. Record the merged `main` SHA.
 3. Deploy merged `main` to staging.
 4. Authenticate using approved test credentials or approved secure mechanism.
-5. Call `/api/version`.
-6. Confirm `git_sha` and `image_tag` match the merged `main` SHA.
+5. Call authenticated `/api/version` using approved QA/smoke credentials or the approved short-lived smoke token path.
+6. Confirm `git_sha` and `image_tag` match the merged `main` SHA and `build_time`, `environment`, `service`, and safe provider status summary are present.
 7. Run safe API smoke tests that prove the defect no longer reproduces.
 8. Save raw redacted JSON responses under `runtime_json/`.
 9. Record results in `api_smoke.md` and `closure_report.md`.
@@ -211,7 +211,7 @@ The remediation tracker may only mark an issue `CLOSED` when the closure report 
 - Targeted test results.
 - Full relevant suite results.
 - Staging deploy evidence.
-- `/api/version` evidence matching merged `main`.
+- Authenticated `/api/version` evidence matching merged `main`.
 - API smoke evidence.
 - Browser smoke evidence if applicable.
 - Remaining risks.

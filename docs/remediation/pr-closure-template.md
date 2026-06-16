@@ -93,7 +93,7 @@ Result:
 Endpoint:
 
 ```text
-<staging /api/version URL>
+GET <staging /api/version URL> with approved authenticated QA/smoke bearer token
 ```
 
 Result:
@@ -101,7 +101,12 @@ Result:
 ```json
 {
   "git_sha": "<sha>",
-  "image_tag": "<sha>"
+  "git_sha_short": "<sha7>",
+  "image_tag": "<sha>",
+  "build_time": "<timestamp>",
+  "environment": "staging",
+  "service": "regmind-backend",
+  "provider_status": {}
 }
 ```
 
@@ -109,6 +114,8 @@ Verdict:
 
 - [ ] `git_sha` equals merged main SHA
 - [ ] `image_tag` equals merged main SHA
+- [ ] `build_time`, `environment`, and `service` are present
+- [ ] response contains no secret, password, bearer, credential, or token fields/values
 
 ## API smoke test evidence
 

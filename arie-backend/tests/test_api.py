@@ -214,6 +214,16 @@ class TestAuthRejection:
         assert resp.status_code == 401
 
 
+def _walk_json_keys(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            yield str(key)
+            yield from _walk_json_keys(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _walk_json_keys(item)
+
+
 # ═══════════════════════════════════════════════════════════
 # 3. Authenticated Success Path
 # ═══════════════════════════════════════════════════════════
@@ -226,6 +236,88 @@ class TestAuthenticatedAccess:
         resp = http_requests.get(f"{api_server}/api/applications",
                                  headers={"Authorization": f"Bearer {token}"}, timeout=3)
         assert resp.status_code == 200
+
+    def test_version_requires_authentication(self, api_server):
+        resp = http_requests.get(f"{api_server}/api/version", timeout=3)
+        assert resp.status_code == 401
+
+    def test_authenticated_version_returns_required_release_keys(self, api_server, monkeypatch):
+        from auth import create_token
+
+        monkeypatch.setenv("GIT_SHA", "abcdef1234567890")
+        monkeypatch.setenv("IMAGE_TAG", "abcdef1234567890")
+        monkeypatch.setenv("BUILD_TIME", "2026-06-16T12:00:00Z")
+        monkeypatch.setenv("ENVIRONMENT", "staging")
+        monkeypatch.setenv("SERVICE_NAME", "regmind-backend")
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/version",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("git_sha", "git_sha_short", "image_tag", "build_time", "environment", "service", "provider_status"):
+            assert key in body
+        assert body["git_sha"] == "abcdef1234567890"
+        assert body["git_sha_short"] == "abcdef1"
+        assert body["image_tag"] == "abcdef1234567890"
+        assert body["build_time"] == "2026-06-16T12:00:00Z"
+        assert body["environment"] == "staging"
+        assert body["service"] == "regmind-backend"
+        assert set(body["provider_status"]) == {"aml_screening", "identity_verification", "registry_kyb"}
+
+    def test_version_does_not_return_secret_like_fields_or_values(self, api_server, monkeypatch):
+        from auth import create_token
+
+        secret_values = {
+            "COMPLYADVANTAGE_PASSWORD": "super-secret-password-value",
+            "COMPLYADVANTAGE_USERNAME": "secret-user@example.test",
+            "SUMSUB_SECRET_KEY": "sumsub-secret-value",
+            "ANTHROPIC_API_KEY": "anthropic-secret-value",
+            "JWT_SECRET": "jwt-secret-value",
+        }
+        for key, value in secret_values.items():
+            monkeypatch.setenv(key, value)
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/version",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        serialized = json.dumps(body).lower()
+        for value in secret_values.values():
+            assert value.lower() not in serialized
+        forbidden_key_fragments = ("secret", "password", "credential", "authorization", "bearer", "access_token", "refresh_token", "jwt")
+        leaked_keys = [key for key in _walk_json_keys(body) if any(fragment in key.lower() for fragment in forbidden_key_fragments)]
+        assert leaked_keys == []
+
+    def test_version_missing_env_vars_fail_safe_without_500(self, api_server, monkeypatch):
+        from auth import create_token
+
+        for key in ("GIT_SHA", "IMAGE_TAG", "BUILD_TIME", "SERVICE_NAME"):
+            monkeypatch.delenv(key, raising=False)
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/version",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["git_sha"] == "unknown"
+        assert body["git_sha_short"] == "unknown"
+        assert body["image_tag"] == "unknown"
+        assert body["build_time"] == "unknown"
+        assert body["service"] == "regmind-backend"
 
     def test_screening_status_does_not_expose_unused_provider(self, api_server):
         """Provider status must not advertise deprecated or unused screening providers."""

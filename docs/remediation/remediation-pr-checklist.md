@@ -30,7 +30,7 @@ Copy this checklist into every remediation PR description.
 - [ ] Merged to `main`
 - [ ] Recorded merged main SHA
 - [ ] Deployed `main` to staging
-- [ ] Confirmed staging `/api/version` equals merged main SHA
+- [ ] Confirmed authenticated staging `/api/version.git_sha` and `/api/version.image_tag` equal merged main SHA
 - [ ] Ran staging API smoke tests
 - [ ] Ran staging browser smoke tests where applicable
 
