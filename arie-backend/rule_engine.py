@@ -13,6 +13,7 @@ Provides:
 import json
 import logging
 from datetime import datetime, timezone
+from country_risk import lookup_country_risk, normalize_country_key
 
 logger = logging.getLogger("arie")
 
@@ -536,14 +537,21 @@ def load_risk_config():
 # ══════════════════════════════════════════════════════════
 
 def classify_country(country_name, config_country_scores=None):
-    """Return risk score 1-4 for a country. Uses DB config if provided, else hardcoded FATF lists.
+    """Return risk score 1-4 for a country.
+
+    PR-CR1: source-backed canonical country-risk entries are authoritative for
+    known countries. Legacy risk_config and hardcoded lists remain fallback only.
 
     Handles common prefixes like "Republic of Mauritius" → "mauritius",
     and aliases like "England & Wales" → "united kingdom".
     """
     if not country_name:
         return 2
-    c = country_name.lower().strip()
+    canonical = lookup_country_risk(country_name)
+    if canonical.get("found"):
+        return int(canonical.get("risk_score") or 2)
+
+    c = normalize_country_key(country_name)
 
     # Apply known aliases first
     _ALIASES = {
@@ -598,7 +606,7 @@ def classify_country(country_name, config_country_scores=None):
             if result is not None:
                 return result
 
-    return 2  # standard
+    return 2  # standard / unknown-country safe default, never low
 
 
 def score_sector(sector_name, config_sector_scores=None):
@@ -667,15 +675,49 @@ CANONICAL_THRESHOLDS = [
 
 
 def _is_elevated_jurisdiction(country_name, country_scores=None):
-    """Return True if country is FATF grey-list or elevated (score >= 3)."""
+    """Return True if country is FATF monitored or elevated (score >= 3)."""
     if not country_name:
         return False
-    c = country_name.lower().strip()
+    canonical = lookup_country_risk(country_name)
+    if canonical.get("found"):
+        return (
+            canonical.get("fatf_status") in ("grey", "increased_monitoring", "call_for_action", "black")
+            or int(canonical.get("risk_score") or 0) >= 3
+        )
+    c = normalize_country_key(country_name)
     if c in FATF_GREY:
         return True
     # Also check score >= 3 from DB config
     score = classify_country(c, country_scores)
     return score >= 3
+
+
+def _country_triggers_very_high_floor(country_name):
+    """Return canonical floor-rule decision for sanctioned/FATF call-for-action countries."""
+    if not country_name:
+        return False, "", None
+    canonical = lookup_country_risk(country_name)
+    if canonical.get("found"):
+        fatf_status = canonical.get("fatf_status")
+        sanctions_status = canonical.get("sanctions_status")
+        high_risk_status = canonical.get("high_risk_status")
+        score = int(canonical.get("risk_score") or 0)
+        if score >= 4 and (
+            fatf_status in ("black", "call_for_action")
+            or sanctions_status not in ("", "none", None)
+            or high_risk_status in ("internal_very_high", "secrecy_jurisdiction")
+        ):
+            reason = (
+                fatf_status if fatf_status not in ("", "none", None)
+                else sanctions_status if sanctions_status not in ("", "none", None)
+                else high_risk_status
+            )
+            return True, str(reason), canonical
+        return False, "", canonical
+    key = normalize_country_key(country_name)
+    if key in SANCTIONED or key in FATF_BLACK:
+        return True, "legacy_sanctions_or_fatf_black", canonical
+    return False, "", canonical
 
 
 def _is_high_risk_sector(sector_name, sector_scores=None):
@@ -1098,31 +1140,46 @@ def compute_risk_score(app_data, config_override=None):
     # ── FLOOR RULE 1: Sanctioned / FATF_BLACK incorporation country → force VERY_HIGH ──
     # If the incorporation country is sanctioned or FATF blacklisted,
     # the overall risk level MUST be VERY_HIGH regardless of composite score.
-    inc_country = (data.get("country") or "").lower().strip()
-    if inc_country and (inc_country in SANCTIONED or inc_country in FATF_BLACK):
+    inc_country = normalize_country_key(data.get("country"))
+    country_floor, country_floor_reason, country_floor_source = _country_triggers_very_high_floor(inc_country)
+    if inc_country and country_floor:
         if level != "VERY_HIGH":
-            logger.info(f"FLOOR RULE: Country '{inc_country}' is sanctioned/FATF_BLACK — forcing VERY_HIGH (was {level}, score {composite})")
+            logger.info(
+                "FLOOR RULE: Country '%s' triggers VERY_HIGH via %s — forcing VERY_HIGH (was %s, score %s)",
+                inc_country, country_floor_reason, level, composite,
+            )
         level = "VERY_HIGH"
         composite = max(composite, 70.0)
         escalations.append(f"floor_rule_sanctioned_country:{inc_country}")
-        elevation_reasons.append(f"Sanctioned/FATF-blacklisted country: {inc_country}")
+        elevation_reasons.append(
+            f"Sanctioned/FATF high-risk country: {inc_country} "
+            f"({country_floor_reason}; source snapshot "
+            f"{(country_floor_source or {}).get('snapshot_version', 'legacy')})"
+        )
 
     # ── FLOOR RULE 2: UBO/Director sanctioned nationality → force VERY_HIGH ──
     # If any UBO or director holds nationality of a sanctioned/FATF_BLACK country,
     # the overall risk level MUST be VERY_HIGH regardless of composite score.
-    sanctioned_set = SANCTIONED | FATF_BLACK
     for person in data.get("directors", []) + data.get("ubos", []):
         nat = (person.get("nationality") or "").strip().lower()
         if nat:
             mapped = nat_demonym_map.get(nat, nat)
-            if mapped in sanctioned_set:
+            person_floor, person_floor_reason, person_floor_source = _country_triggers_very_high_floor(mapped)
+            if person_floor:
                 person_name = person.get("full_name") or person.get("name") or "unknown"
                 if level != "VERY_HIGH":
-                    logger.info(f"FLOOR RULE: UBO/Director '{person_name}' nationality '{nat}' maps to sanctioned '{mapped}' — forcing VERY_HIGH (was {level}, score {composite})")
+                    logger.info(
+                        "FLOOR RULE: UBO/Director '%s' nationality '%s' maps to '%s' via %s — forcing VERY_HIGH (was %s, score %s)",
+                        person_name, nat, mapped, person_floor_reason, level, composite,
+                    )
                 level = "VERY_HIGH"
                 composite = max(composite, 70.0)
                 escalations.append(f"floor_rule_sanctioned_nationality:{mapped}")
-                elevation_reasons.append(f"UBO/Director nationality sanctioned: {mapped}")
+                elevation_reasons.append(
+                    f"UBO/Director nationality sanctioned/FATF high-risk: {mapped} "
+                    f"({person_floor_reason}; source snapshot "
+                    f"{(person_floor_source or {}).get('snapshot_version', 'legacy')})"
+                )
                 break  # One match is sufficient
 
     # ── Extract scoring lookups for elevation checks ──
@@ -1248,6 +1305,7 @@ def compute_risk_score(app_data, config_override=None):
     requires_compliance_approval = len(escalations) > 0
 
     elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
+    country_risk_provenance = lookup_country_risk(data.get("country"))
 
     return {
         "score": composite,
@@ -1264,6 +1322,7 @@ def compute_risk_score(app_data, config_override=None):
         "sector_label": data.get("sector") or "",
         "sector_risk_tier": _risk_tier_from_score(d4),
         "jurisdiction_risk_tier": _risk_tier_from_score(d2_inc),
+        "country_risk_provenance": country_risk_provenance,
         "ownership_transparency_status": _ownership_transparency_tier(data.get("ownership_structure")),
     }
 
@@ -1273,14 +1332,26 @@ def compute_risk_score(app_data, config_override=None):
 # ══════════════════════════════════════════════════════════
 
 def _get_risk_config_version(db):
-    """Return the risk_config updated_at timestamp as a version identifier."""
+    """Return the risk_config timestamp plus country-risk snapshot identifier."""
+    risk_config_version = None
     try:
         row = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
         if row and row["updated_at"]:
-            return str(row["updated_at"])
+            risk_config_version = str(row["updated_at"])
     except Exception:
         pass
-    return None
+    try:
+        from country_risk import active_country_risk_snapshot
+        snapshot = active_country_risk_snapshot(db)
+        if snapshot:
+            country_version = str(snapshot.get("version") or snapshot.get("id") or "")
+            checksum = str(snapshot.get("checksum") or "")[:12]
+            if risk_config_version:
+                return f"risk_config:{risk_config_version}|country_risk:{country_version}:{checksum}"
+            return f"country_risk:{country_version}:{checksum}"
+    except Exception:
+        pass
+    return risk_config_version
 
 
 def _apply_edd_routing_floor_for_recompute(db, app, risk):

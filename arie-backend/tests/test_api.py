@@ -6188,6 +6188,33 @@ class TestRiskModelAdminConfigSafety:
         assert after_body["sector_risk_scores"] == before_body["sector_risk_scores"]
         assert after_body["entity_type_scores"] == before_body["entity_type_scores"]
 
+    def test_country_risk_endpoint_exposes_snapshot_provenance(self, api_server):
+        from country_risk import ACTIVE_SNAPSHOT_VERSION, FATF_INCREASED_MONITORING_URL
+
+        headers = self._admin_headers()
+        resp = http_requests.get(
+            f"{api_server}/api/config/country-risk?country=Kuwait",
+            headers=headers,
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+        country_risk = resp.json()["country_risk"]
+        assert country_risk["country_key"] == "kuwait"
+        assert country_risk["risk_score"] == 3
+        assert country_risk["fatf_status"] == "increased_monitoring"
+        assert country_risk["source_url"] == FATF_INCREASED_MONITORING_URL
+        assert country_risk["snapshot_version"] == ACTIVE_SNAPSHOT_VERSION
+
+        list_resp = http_requests.get(
+            f"{api_server}/api/config/country-risk",
+            headers=headers,
+            timeout=5,
+        )
+        assert list_resp.status_code == 200, list_resp.text
+        body = list_resp.json()
+        assert body["snapshot"]["version"] == ACTIVE_SNAPSHOT_VERSION
+        assert any(entry["country_key"] == "kuwait" for entry in body["entries"])
+
     def test_incomplete_dimension_payload_is_rejected_without_mutation(self, api_server):
         self._assert_risk_rejected_unchanged(
             api_server,

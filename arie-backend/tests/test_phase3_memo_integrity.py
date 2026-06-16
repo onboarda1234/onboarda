@@ -80,7 +80,10 @@ def test_memo_has_deterministic_risk_evidence_and_no_false_adverse_clear():
     memo, _, _, validation = build_compliance_memo(_app(), _directors(), _ubos(), _documents())
 
     evidence = memo["metadata"]["risk_evidence"]
-    assert evidence["jurisdiction"]["source"] == "FATF/internal jurisdiction tables"
+    assert evidence["jurisdiction"]["source"]
+    assert evidence["jurisdiction"]["source_url"]
+    assert evidence["jurisdiction"]["effective_date"]
+    assert evidence["jurisdiction"]["snapshot_version"]
     assert evidence["business"]["rating"] == "HIGH"
     assert evidence["business"]["matched_keywords"] == ["crypto"]
     assert "high_risk_keyword:crypto" in evidence["business"]["triggers"]

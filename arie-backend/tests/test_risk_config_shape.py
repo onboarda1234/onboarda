@@ -114,12 +114,12 @@ class TestCountryRiskScoresMalformed:
 
     def test_list_config_logs_error(self, caplog):
         with caplog.at_level(logging.ERROR, logger="arie"):
-            classify_country("Iran", config_country_scores=[1, 2])
+            classify_country("Unlisted Testland", config_country_scores=[1, 2])
         assert any("non-dict" in r.message and "config_country_scores" in r.message for r in caplog.records)
 
-    def test_dict_config_still_works(self):
-        config = {"mauritius": 3}
-        assert classify_country("Mauritius", config) == 3
+    def test_dict_config_still_works_for_unknown_country_fallback(self):
+        config = {"unlisted testland": 3}
+        assert classify_country("Unlisted Testland", config) == 3
 
     def test_none_config_uses_hardcoded(self):
         assert classify_country("Iran", None) == 4
@@ -267,7 +267,7 @@ class TestMalformedConfigLogging:
 
     def test_country_int_emits_log(self, caplog):
         with caplog.at_level(logging.ERROR, logger="arie"):
-            classify_country("Iran", config_country_scores=123)
+            classify_country("Unlisted Testland", config_country_scores=123)
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(error_records) >= 1
         assert "int" in error_records[0].message

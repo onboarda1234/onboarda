@@ -416,20 +416,19 @@ class TestListOfDictsNormalization:
 class TestDBDrivenScoring:
     """Verify that compute_risk_score uses DB config, not hardcoded fallback."""
 
-    def test_compute_uses_db_country_scores(self, temp_db):
-        """DB config should override hardcoded country scores."""
-        # Set Mauritius to score 4 (normally 2 in hardcoded)
+    def test_compute_uses_db_country_scores_for_unknown_fallback_only(self, temp_db):
+        """Legacy DB country config remains a fallback for countries outside the governed snapshot."""
         config = {
             "dimensions": None,
             "thresholds": None,
-            "country_risk_scores": {"mauritius": 4, "france": 1},
+            "country_risk_scores": {"unlisted testland": 4, "france": 1},
             "sector_risk_scores": {"technology": 2},
             "entity_type_scores": {"sme": 2},
         }
-        app_data = {"country": "Mauritius", "sector": "Technology", "entity_type": "SME"}
+        app_data = {"country": "Unlisted Testland", "sector": "Technology", "entity_type": "SME"}
         result = compute_risk_score(app_data, config_override=config)
         assert result["score"] > 0
-        # D2 should use score 4 for Mauritius (not hardcoded 2)
+        # D2 should use the fallback score 4 because Testland is not in the governed snapshot.
         assert result["dimensions"]["d2"] > 2.5  # Should be elevated due to high country score
 
     def test_compute_uses_db_entity_scores(self, temp_db):
@@ -448,7 +447,7 @@ class TestDBDrivenScoring:
 
     def test_db_config_produces_different_score_than_fallback(self, temp_db):
         """Config-driven scoring should produce a measurably different score than defaults."""
-        app_data = {"entity_type": "SME", "country": "Mauritius", "sector": "Technology"}
+        app_data = {"entity_type": "SME", "country": "Unlisted Testland", "sector": "Technology"}
 
         # Score with fallback (None config)
         fallback_config = {
@@ -464,7 +463,7 @@ class TestDBDrivenScoring:
         custom_config = {
             "dimensions": None,
             "thresholds": None,
-            "country_risk_scores": {"mauritius": 4},  # Override: much higher
+            "country_risk_scores": {"unlisted testland": 4},  # Fallback: much higher
             "sector_risk_scores": {"technology": 4},   # Override: much higher
             "entity_type_scores": {"sme": 4},          # Override: much higher
         }
@@ -480,7 +479,7 @@ class TestDBDrivenScoring:
         db = get_db()
         # Write custom config
         custom_entity = json.dumps({"sme": 3, "shell": 4, "listed": 1})
-        custom_country = json.dumps({"mauritius": 3, "france": 1})
+        custom_country = json.dumps({"unlisted testland": 3, "france": 1})
         custom_sector = json.dumps({"technology": 3, "crypto": 4})
         db.execute(
             "UPDATE risk_config SET entity_type_scores=?, country_risk_scores=?, sector_risk_scores=? WHERE id=1",
@@ -493,11 +492,11 @@ class TestDBDrivenScoring:
         config = load_risk_config()
         assert config is not None
         assert config["entity_type_scores"] == {"sme": 3, "shell": 4, "listed": 1}
-        assert config["country_risk_scores"]["mauritius"] == 3
+        assert config["country_risk_scores"]["unlisted testland"] == 3
         assert config["sector_risk_scores"]["technology"] == 3
 
         # Score with loaded config
-        app_data = {"entity_type": "SME", "country": "Mauritius", "sector": "Technology"}
+        app_data = {"entity_type": "SME", "country": "Unlisted Testland", "sector": "Technology"}
         result = compute_risk_score(app_data, config_override=config)
         assert "score" in result
         assert "level" in result

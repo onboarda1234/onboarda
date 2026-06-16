@@ -212,7 +212,7 @@ class TestRecomputeRiskHelper:
         db.close()
 
     def test_recompute_sets_config_version(self, temp_db):
-        """risk_config_version should be set to the config's updated_at."""
+        """risk_config_version should include risk_config and country-risk snapshot provenance."""
         from rule_engine import recompute_risk
         db = _get_db()
         _insert_risk_config(db)
@@ -225,7 +225,8 @@ class TestRecomputeRiskHelper:
         config = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
         assert app["risk_config_version"] is not None
         if config and config["updated_at"]:
-            assert app["risk_config_version"] == str(config["updated_at"])
+            assert app["risk_config_version"].startswith(f"risk_config:{config['updated_at']}")
+            assert "|country_risk:FATF-2026-02-13+REGMIND-POLICY-V1:" in app["risk_config_version"]
         db.close()
 
     def test_recompute_sets_computed_at_timestamp(self, temp_db):

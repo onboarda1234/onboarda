@@ -1,7 +1,8 @@
 """
 Forensic Risk Scoring Audit Tests
 Validates that the system's risk scoring engine matches the approved
-Risk Scoring Model Excel (controlled document / source of truth).
+Risk Scoring Model Excel, with country risk sourced from the governed
+country-risk snapshot introduced by PR-CR1.
 
 Covers:
   1. Dimension weight alignment
@@ -16,7 +17,7 @@ Covers:
   10. Sector risk alignment (spot check 10 sectors)
   11. Escalation rules (VERY_HIGH triggers escalation)
   12. Config propagation (DB config used at runtime)
-  13. No hardcoded override (DB wins over hardcoded)
+  13. Country risk provenance (canonical snapshot wins for known countries)
 """
 import os
 import sys
@@ -741,8 +742,8 @@ class TestConfigDrivenScoring:
         db.commit()
         db.close()
 
-    def test_compute_uses_db_country_scores(self, temp_db):
-        """Change Mauritius from 2 to 3 in DB, verify classify_country returns 3."""
+    def test_canonical_country_snapshot_wins_over_legacy_db_scores(self, temp_db):
+        """Known countries come from the canonical snapshot; legacy DB scores are fallback only."""
         from rule_engine import classify_country, load_risk_config
         from db import get_db
 
@@ -755,16 +756,19 @@ class TestConfigDrivenScoring:
         row = db.execute("SELECT country_risk_scores FROM risk_config WHERE id=1").fetchone()
         scores = json.loads(row["country_risk_scores"])
         scores["mauritius"] = 3
+        scores["unlisted testland"] = 3
         db.execute("UPDATE risk_config SET country_risk_scores=? WHERE id=1", (json.dumps(scores),))
         db.commit()
         db.close()
 
         config2 = load_risk_config()
-        assert classify_country("Mauritius", config2.get("country_risk_scores")) == 3
+        assert classify_country("Mauritius", config2.get("country_risk_scores")) == 2
+        assert classify_country("Unlisted Testland", config2.get("country_risk_scores")) == 3
 
         # Restore
         db = get_db()
         scores["mauritius"] = 2
+        scores.pop("unlisted testland", None)
         db.execute("UPDATE risk_config SET country_risk_scores=? WHERE id=1", (json.dumps(scores),))
         db.commit()
         db.close()
