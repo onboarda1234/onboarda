@@ -96,8 +96,8 @@ def test_audit_chain_navigation_matches_admin_sco_backend_policy():
     html = BACKOFFICE_HTML.read_text()
     show_view_region = _function_region(html, "showView", "signOut")
 
-    assert 'class="snav-item role-sco-only" onclick="showView(\'supervisor-audit\',this)"' in html
-    assert "var scoOnlyViews = ['audit', 'supervisor-audit'];" in show_view_region
+    assert 'data-view="supervisor-audit" data-enterprise-coming-soon="true"' in html
+    assert "var scoOnlyViews = ['audit'];" in show_view_region
 
 
 def test_support_reference_preload_does_not_fetch_users_for_lower_roles():

@@ -52,6 +52,9 @@ a { color:var(--brand); text-decoration:none; }
 .snav-item.active { background:rgba(255,255,255,0.12); color:#fff; border-left-color:#fff; font-weight:600; }
 .snav-item .snav-icon { width:20px; height:20px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .snav-item .snav-icon svg { width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:1.75; stroke-linecap:round; stroke-linejoin:round; }
+.snav-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.snav-badge { margin-left:auto; border:1px solid rgba(255,255,255,0.22); background:rgba(255,255,255,0.14); color:#fff; border-radius:999px; padding:2px 6px; font-size:9px; line-height:1.2; font-weight:800; text-transform:uppercase; letter-spacing:0.02em; white-space:nowrap; }
+.snav-item[data-enterprise-coming-soon="true"] { color:rgba(255,255,255,0.82); }
 .snav-section { font-size:10px; text-transform:uppercase; letter-spacing:1px; color:rgba(255,255,255,0.35); padding:16px 18px 6px; font-weight:600; }
 .sidebar-user { padding:14px 18px; border-top:1px solid rgba(255,255,255,0.12); display:flex; align-items:center; gap:10px; }
 .sidebar-avatar { width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0; }
@@ -73,6 +76,23 @@ a { color:var(--brand); text-decoration:none; }
 /* ── Views ── */
 .view { display:none; }
 .view.active { display:block; }
+
+/* ── Pilot scope placeholders ── */
+.enterprise-coming-soon { min-height:calc(100vh - 130px); display:flex; align-items:center; justify-content:center; padding:32px 0; }
+.enterprise-coming-soon-panel { width:min(760px,100%); background:var(--surface); border:1px solid var(--border1); border-radius:var(--radius); box-shadow:var(--shadow); padding:28px; }
+.enterprise-coming-soon-kicker { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; }
+.enterprise-coming-soon-title { font-size:22px; font-weight:800; margin-bottom:10px; letter-spacing:0; }
+.enterprise-coming-soon-body { color:var(--text2); font-size:14px; line-height:1.65; max-width:680px; }
+.enterprise-coming-soon-note { margin-top:16px; padding:12px 14px; background:var(--surface2); border:1px solid var(--border1); border-radius:8px; color:var(--text2); font-size:13px; line-height:1.5; }
+.enterprise-agent-card { border-color:#cbd5e1; background:linear-gradient(0deg,var(--surface),var(--surface)); }
+.enterprise-agent-card .agent-config-header { cursor:pointer; }
+.enterprise-agent-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin:12px 0 14px; }
+.enterprise-agent-meta-item { border:1px solid var(--border1); border-radius:8px; padding:10px 12px; background:var(--surface2); font-size:12px; }
+.enterprise-agent-meta-label { font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text3); font-weight:800; margin-bottom:4px; }
+.enterprise-agent-copy { border:1px solid #dbe4ef; background:#f8fafc; border-radius:8px; padding:12px 14px; color:#475569; font-size:13px; line-height:1.55; margin-bottom:12px; }
+html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); color:var(--text2); border-color:var(--border1); }
+.toggle-switch.disabled { opacity:0.45; cursor:not-allowed; pointer-events:none; }
+.btn[disabled], .form-input:disabled, .form-select:disabled, .config-input-lg:disabled { cursor:not-allowed; opacity:0.65; }
 
 /* ── Cards & Stats ── */
 .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px; }
@@ -127,6 +147,9 @@ a { color:var(--brand); text-decoration:none; }
 
 /* ── Badges ── */
 .badge { display:inline-flex; align-items:center; padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600; gap:4px; }
+.badge.coming-soon { background:rgba(100,116,139,0.14); color:#475569; border:1px solid rgba(100,116,139,0.22); }
+.badge.enterprise { background:rgba(43,47,143,0.09); color:var(--brand); border:1px solid rgba(43,47,143,0.16); }
+.badge.not-active { background:var(--amber-bg); color:var(--amber); border:1px solid rgba(217,119,6,0.18); }
 .badge.low { background:var(--green-bg); color:var(--green); }
 .badge.medium { background:var(--blue-bg); color:var(--blue); }
 .badge.high { background:var(--amber-bg); color:var(--amber); }
@@ -1040,6 +1063,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   .snav-item.active { border-left:none; border-right-color:#fff; }
   .snav-item .snav-icon { width:24px; height:24px; }
   .snav-item .snav-icon svg { width:18px; height:18px; }
+  .snav-label, .snav-badge { display:none; }
   .sidebar-user { justify-content:center; padding:14px 0; }
   .sidebar-avatar { margin:0; }
   .content { padding:20px; }
@@ -1123,10 +1147,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
     <div class="snav-item" data-view="lifecycle" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
     <div class="snav-item role-reporting" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
-    <div class="snav-item" data-view="reg-intel" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
+    <div class="snav-item" data-view="reg-intel" data-enterprise-coming-soon="true" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span><span class="snav-label">Regulatory Intelligence</span><span class="snav-badge">Coming Soon</span></div>
     <div class="snav-section">AI Compliance Supervisor</div>
-    <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Supervisor Dashboard</div>
-    <div class="snav-item role-sco-only" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span> Audit Chain</div>
+    <div class="snav-item" data-view="supervisor" data-enterprise-coming-soon="true" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="snav-label">Supervisor Dashboard</span><span class="snav-badge">Enterprise</span></div>
+    <div class="snav-item role-sco-only" data-view="supervisor-audit" data-enterprise-coming-soon="true" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><span class="snav-label">Audit Chain</span><span class="snav-badge">Enterprise</span></div>
     <div class="snav-section role-admin-only">Administration</div>
     <div class="snav-item role-admin-only" onclick="showView('users',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> User Management</div>
     <div class="snav-item role-admin-only" onclick="showView('roles',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span> Roles &amp; Permissions</div>
@@ -3044,43 +3068,16 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ REGULATORY INTELLIGENCE VIEW ═══════════════ -->
 <div class="view" id="view-reg-intel">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <div>
-      <h3 style="font-size:16px;font-weight:700;">Regulatory Intelligence</h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Upload regulatory circulars, store the source record, and complete a rule-assisted compliance review when source text is available.</p>
-    </div>
-    <button class="btn btn-primary" onclick="showRegUploadModal()">🏛️ Upload Regulatory Document</button>
-  </div>
-
-  <!-- Stats -->
-  <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);">
-    <div class="stat-card"><div class="stat-card-label">Documents Stored</div><div class="stat-card-value" id="reg-stat-docs">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Records Requiring Action</div><div class="stat-card-value" id="reg-stat-pending" style="color:var(--amber);">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Suggestions Approved</div><div class="stat-card-value" id="reg-stat-approved" style="color:var(--green);">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Last Structured Review</div><div class="stat-card-value" id="reg-stat-last" style="font-size:14px;color:var(--text2);">—</div></div>
-  </div>
-
-  <!-- Main Grid: Document List + Detail Panel -->
-  <div class="reg-intel-grid">
-    <!-- Left: Document List -->
-    <div>
-      <div id="reg-doc-list">
-        <div style="text-align:center;padding:48px 20px;color:var(--text3);">
-          <div style="font-size:40px;margin-bottom:12px;">🏛️</div>
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px;">No regulatory documents yet</div>
-          <div style="font-size:12px;">Upload a circular, notice, or guidance note to get started.</div>
-        </div>
+  <div class="enterprise-coming-soon" data-module="regulatory-intelligence">
+    <div class="enterprise-coming-soon-panel">
+      <div class="enterprise-coming-soon-kicker">
+        <span class="badge coming-soon">Coming Soon</span>
+        <span class="badge enterprise">Enterprise Module</span>
+        <span class="badge not-active">Not active in pilot</span>
       </div>
-    </div>
-
-    <!-- Right: Detail Panel -->
-    <div class="reg-detail-panel">
-      <div id="reg-detail-content">
-        <div class="card" style="text-align:center;padding:32px;">
-          <div style="font-size:32px;margin-bottom:8px;">📄</div>
-          <div style="font-size:13px;color:var(--text3);">Select a document to view storage status and structured review details in this panel</div>
-        </div>
-      </div>
+      <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
+      <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
+      <div class="enterprise-coming-soon-note">Regulatory Intelligence will support regulatory change tracking, source monitoring, impact assessment, and policy update workflows.</div>
     </div>
   </div>
 </div>
@@ -3251,92 +3248,33 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ AI SUPERVISOR DASHBOARD ═══════════════ -->
 <div class="view" id="view-supervisor">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
-    <div>
-      <h3 style="font-size:16px;font-weight:700;">AI Compliance Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support — Rules-Based</span></h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent analysis pipeline — contradiction detection, confidence evaluation, and compliance rule checks. Agents use deterministic rules and heuristic scoring. Results inform officer review but do not directly gate approval. Approval gating is enforced by the memo supervisor (Generate Memo → Validate → Approve).</p>
+  <div class="enterprise-coming-soon" data-module="ai-compliance-supervisor">
+    <div class="enterprise-coming-soon-panel">
+      <div class="enterprise-coming-soon-kicker">
+        <span class="badge coming-soon">Coming Soon</span>
+        <span class="badge enterprise">Enterprise Module</span>
+        <span class="badge not-active">Not active in pilot</span>
+      </div>
+      <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
+      <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
+      <div class="enterprise-coming-soon-note">The AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
     </div>
-    <button class="btn btn-primary" onclick="refreshSupervisorDashboard()">🔄 Refresh</button>
-  </div>
-
-  <!-- Pipeline Stats -->
-  <div class="kpi-grid" id="supervisor-kpi-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:20px;">
-    <div class="card" style="padding:16px;text-align:center;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Pipelines Run</div>
-      <div id="sv-stat-pipelines" style="font-size:24px;font-weight:800;color:var(--brand);margin:4px 0;">0</div>
-    </div>
-    <div class="card" style="padding:16px;text-align:center;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Contradictions Found</div>
-      <div id="sv-stat-contradictions" style="font-size:24px;font-weight:800;color:var(--amber);margin:4px 0;">0</div>
-    </div>
-    <div class="card" style="padding:16px;text-align:center;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Rules Triggered</div>
-      <div id="sv-stat-rules" style="font-size:24px;font-weight:800;color:var(--red);margin:4px 0;">0</div>
-    </div>
-    <div class="card" style="padding:16px;text-align:center;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Pending Reviews</div>
-      <div id="sv-stat-reviews" style="font-size:24px;font-weight:800;color:var(--purple);margin:4px 0;">0</div>
-    </div>
-    <div class="card" style="padding:16px;text-align:center;">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Avg Confidence</div>
-      <div id="sv-stat-confidence" style="font-size:24px;font-weight:800;color:var(--green);margin:4px 0;">—</div>
-    </div>
-  </div>
-
-  <!-- Compliance Rules -->
-  <div class="card" style="margin-bottom:16px;">
-    <div class="card-header"><div class="card-title">Active Compliance Rules</div></div>
-    <div id="sv-rules-list" style="padding:14px;"></div>
-  </div>
-
-  <!-- Recent Pipelines -->
-  <div class="card" style="margin-bottom:16px;">
-    <div class="card-header"><div class="card-title">Recent Pipelines</div></div>
-    <div id="sv-pipelines-list" style="padding:14px;"></div>
-  </div>
-
-  <!-- Pending Escalations -->
-  <div class="card">
-    <div class="card-header"><div class="card-title">Pending Escalations</div></div>
-    <div id="sv-escalations-list" style="padding:14px;"></div>
   </div>
 </div>
 
 <!-- ═══════════════ SUPERVISOR AUDIT CHAIN ═══════════════ -->
 <div class="view" id="view-supervisor-audit">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
-    <div>
-      <h3 style="font-size:16px;font-weight:700;">Supervisor Audit Chain</h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">SHA-256 hash-chained, append-only audit log. Every agent run, validation, contradiction, rule trigger, and officer decision is recorded.</p>
-    </div>
-    <div style="display:flex;gap:8px;">
-      <button class="btn btn-outline" onclick="verifySupervisorAuditChain()">🔗 Verify Chain Integrity</button>
-      <button class="btn btn-primary" onclick="refreshSupervisorAudit()">🔄 Refresh</button>
-    </div>
-  </div>
-
-  <div id="sv-audit-chain-status" style="margin-bottom:14px;"></div>
-
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">Audit Entries</div>
-      <div style="display:flex;gap:8px;">
-        <select class="form-select" id="sv-audit-filter-type" onchange="refreshSupervisorAudit()" style="font-size:12px;padding:4px 8px;">
-          <option value="">All Event Types</option>
-          <option value="pipeline_started">Pipeline Started</option>
-          <option value="pipeline_completed">Pipeline Completed</option>
-          <option value="agent_run_completed">Agent Run Completed</option>
-          <option value="agent_run_failed">Agent Run Failed</option>
-          <option value="schema_validation_passed">Validation Passed</option>
-          <option value="schema_validation_failed">Validation Failed</option>
-          <option value="contradiction_detected">Contradiction Detected</option>
-          <option value="rule_triggered">Rule Triggered</option>
-          <option value="human_review_completed">Human Review</option>
-          <option value="ai_override">AI Override</option>
-        </select>
+  <div class="enterprise-coming-soon" data-module="ai-compliance-supervisor-audit">
+    <div class="enterprise-coming-soon-panel">
+      <div class="enterprise-coming-soon-kicker">
+        <span class="badge coming-soon">Coming Soon</span>
+        <span class="badge enterprise">Enterprise Module</span>
+        <span class="badge not-active">Not active in pilot</span>
       </div>
+      <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
+      <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
+      <div class="enterprise-coming-soon-note">The AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
     </div>
-    <div id="sv-audit-entries" style="padding:14px;max-height:600px;overflow-y:auto;"></div>
   </div>
 </div>
 
@@ -4015,6 +3953,38 @@ var BO_AUTH_TOKEN = '';
 var BO_AUTH_USER = null;
 var BO_AUTH_SESSION_SEQ = 0;
 var BO_ACTIVE_SESSION_ID = 0;
+
+var ENTERPRISE_COMING_SOON_VIEWS = {
+  'reg-intel': true,
+  'supervisor': true,
+  'supervisor-audit': true
+};
+var BACKOFFICE_ROUTE_ALIASES = {
+  'regulatory-intelligence': 'reg-intel',
+  'reg-intel': 'reg-intel',
+  'ai-compliance-supervisor': 'supervisor',
+  'supervisor-dashboard': 'supervisor',
+  'supervisor': 'supervisor',
+  'audit-chain': 'supervisor-audit',
+  'supervisor-audit': 'supervisor-audit',
+  'supervisor-audit-chain': 'supervisor-audit',
+  'ai-agents': 'ai-agents'
+};
+var ENTERPRISE_ROADMAP_AGENT_IDS = { 8: true, 9: true, 10: true };
+
+function normalizeBackofficeRouteView(view) {
+  var raw = String(view || '').replace(/^\/+|\/+$/g, '');
+  if (!raw) return '';
+  return BACKOFFICE_ROUTE_ALIASES[raw] || raw;
+}
+
+function isEnterpriseComingSoonView(name) {
+  return !!ENTERPRISE_COMING_SOON_VIEWS[normalizeBackofficeRouteView(name)];
+}
+
+function isEnterpriseRoadmapAgentId(id) {
+  return !!ENTERPRISE_ROADMAP_AGENT_IDS[Number(id)];
+}
 
 // ─── Environment Detection ────────────────────────────────────
 var APP_ENV = 'production';
@@ -4976,32 +4946,8 @@ async function loadFromAPI() {
     }
   }, failures);
 
-  await safeLoadModule('Regulatory intelligence', async function() {
-    var regResp = await boApiCall('GET', '/regulatory-intelligence');
-    if (regResp.documents) {
-      REG_DOCUMENTS = regResp.documents.map(function(d) {
-      return {
-          id: d.id,
-          title: d.title || 'Untitled document',
-          regulator: d.regulator || '',
-          jurisdiction: d.jurisdiction || '',
-          docType: d.doc_type || 'Document',
-          pubDate: d.publication_date || '',
-          effDate: d.effective_date || '',
-          uploadedBy: d.uploaded_by_name || '',
-          uploadedAt: d.created_at || '',
-          fileName: d.file_name || '',
-          status: d.status || 'uploaded',
-          sourceText: d.source_text || '',
-          aiSummary: d.analysis_summary || null,
-          analysisSource: d.analysis_source || '',
-          auditTrail: d.audit_trail || [],
-          workflowState: d.workflow_state || ''
-        };
-      });
-      if (REG_DOCUMENTS.length > 0 && !REG_CURRENT_DOC_ID) REG_CURRENT_DOC_ID = REG_DOCUMENTS[0].id;
-    }
-  }, failures);
+  REG_DOCUMENTS = [];
+  REG_CURRENT_DOC_ID = null;
 
   await safeLoadModule('Roles and permissions', async function() {
     ROLE_PERMISSIONS = await boApiCall('GET', '/config/roles-permissions');
@@ -5487,6 +5433,7 @@ async function loadRegulatoryIntelligenceFromAPI(options) {
 
 function ensureRegulatoryIntelligenceLoaded(options) {
   options = options || {};
+  if (isEnterpriseComingSoonView('reg-intel')) return Promise.resolve(true);
   if (REG_DOCUMENTS.length && !options.force) return Promise.resolve(true);
   if (REG_INTEL_DATA_PROMISE) return REG_INTEL_DATA_PROMISE;
   REG_INTEL_DATA_PROMISE = loadRegulatoryIntelligenceFromAPI({ suppressAuthReset: true, sessionId: options.sessionId || getCurrentBoSessionId() }).catch(function(e) {
@@ -6047,11 +5994,12 @@ function toggleMobileMenu() {
 // VIEW MANAGEMENT
 // ═══════════════════════════════════════════════════════════
 function showView(name, navItem) {
+  name = typeof normalizeBackofficeRouteView === 'function' ? normalizeBackofficeRouteView(name) : String(name || '');
   var requestedName = name;
   if (name === 'screening-queue') name = 'screening';
   // Enforce frontend role restrictions on admin-only views
   var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'settings'];
-  var scoOnlyViews = ['audit', 'supervisor-audit'];
+  var scoOnlyViews = ['audit'];
   var enhancedSettingsViews = ['enhanced-requirements'];
   var reportingViews = ['reports'];
   var role = currentUser ? currentUser.role : '';
@@ -6081,7 +6029,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'Document Verification Policies', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'Document Verification Policies', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Compliance Supervisor', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
   var globalSearch = document.getElementById('global-search');
   if (globalSearch) globalSearch.placeholder = name === 'screening' ? 'Search screening queue...' : 'Search applications, clients...';
@@ -6089,6 +6037,8 @@ function showView(name, navItem) {
   // Close mobile menu on navigation
   var sidebar = document.querySelector('.sidebar');
   if (sidebar.classList.contains('mobile-open')) { toggleMobileMenu(); }
+
+  if (typeof isEnterpriseComingSoonView === 'function' && isEnterpriseComingSoonView(name)) return;
 
   if (name === 'applications') {
     renderApplications();
@@ -20481,12 +20431,9 @@ function renderPeriodicReviews() {
 // than invented — this panel is a truthful minimal view per the
 // audit brief.
 //
-// NOTE on Agent 9 (Regulatory Impact Agent): intentionally omitted.
-// Its catalog entry has implementation_mode="future_phase" — it is
-// not yet implemented, so surfacing it here would mislead officers
-// into thinking regulatory-impact monitoring is live. Add it to this
-// array when its implementation_mode flips to live/deterministic/
-// hybrid in ai_agent_catalog.py.
+// Agents 8, 9, and 10 are enterprise-roadmap modules for pilot scope.
+// Agent 9 remains omitted from this operational monitoring tab; Agents 8
+// and 10 are visible as Coming Soon and cannot be manually run here.
 var MONITORING_AGENT_CATALOG = [
   { id: 6, name: 'Periodic Review Preparation Agent', icon: '🗂️',
     purpose: 'Prepares periodic reviews: required items, priority score, signals to feed the review.',
@@ -20499,12 +20446,23 @@ var MONITORING_AGENT_CATALOG = [
   { id: 8, name: 'Behaviour & Risk Drift Agent', icon: '📈',
     purpose: 'Compares activity patterns against onboarding baseline; flags velocity anomalies and drift.',
     contributes: 'Behavioural drift & risk-profile deviation',
-    implementation: 'deterministic' },
+    implementation: 'enterprise_roadmap', enterpriseRoadmap: true },
   { id: 10, name: 'Ongoing Compliance Review Agent', icon: '⚖️',
     purpose: 'Consolidates inter-agent findings; verifies document currency, condition compliance and deadlines.',
     contributes: 'Consolidated compliance narrative & escalation / closure recommendation',
-    implementation: 'hybrid' }
+    implementation: 'enterprise_roadmap', enterpriseRoadmap: true }
 ];
+
+function monitoringAgentNumberFromRuntime(ag) {
+  if (!ag) return 0;
+  if (ag.agent_number != null) return Number(ag.agent_number);
+  if (ag.number != null) return Number(ag.number);
+  var text = String((ag.name || '') + ' ' + (ag.agent_type || '')).toLowerCase();
+  if (text.indexOf('behaviour') >= 0 || text.indexOf('behavior') >= 0 || text.indexOf('risk drift') >= 0 || text.indexOf('risk_drift') >= 0) return 8;
+  if (text.indexOf('regulatory impact') >= 0 || text.indexOf('regulatory') >= 0) return 9;
+  if (text.indexOf('ongoing compliance') >= 0 || text.indexOf('ongoing_compliance') >= 0) return 10;
+  return Number(ag.id) || 0;
+}
 
 function monitoringAgentRuntimeMatch(catalogEntry) {
   if (!MONITORING_AGENTS || !MONITORING_AGENTS.length) return null;
@@ -20528,8 +20486,12 @@ function renderMonitoringAgents() {
   MONITORING_AGENT_CATALOG.forEach(function(entry) {
     var runtime = monitoringAgentRuntimeMatch(entry);
     var hasRuntime = !!runtime;
+    var enterpriseAgent = entry.enterpriseRoadmap || isEnterpriseRoadmapAgentId(entry.id);
     var statusLabel, statusBadge;
-    if (hasRuntime) {
+    if (enterpriseAgent) {
+      statusLabel = 'Coming Soon';
+      statusBadge = 'coming-soon';
+    } else if (hasRuntime) {
       var s = (runtime.status || 'active').toLowerCase();
       statusLabel = s === 'active' ? 'Active' : s === 'paused' ? 'Paused' : s === 'error' ? 'Error' : (runtime.status || 'Unknown');
       statusBadge = s === 'active' ? 'approved' : s === 'paused' ? 'pending' : s === 'error' ? 'rejected' : 'draft';
@@ -20537,13 +20499,15 @@ function renderMonitoringAgents() {
       statusLabel = 'Not yet run';
       statusBadge = 'draft';
     }
-    var lastRun = hasRuntime && runtime.lastRun && runtime.lastRun !== '—' ? runtime.lastRun : '—';
-    var nextRun = hasRuntime && runtime.nextRun && runtime.nextRun !== '—' ? runtime.nextRun : '—';
-    var alertsGenerated = hasRuntime ? (runtime.alertsGenerated || 0) : 0;
-    var runtimeTag = hasRuntime
+    var lastRun = enterpriseAgent ? 'Not active in pilot' : (hasRuntime && runtime.lastRun && runtime.lastRun !== '—' ? runtime.lastRun : '—');
+    var nextRun = enterpriseAgent ? 'Future release' : (hasRuntime && runtime.nextRun && runtime.nextRun !== '—' ? runtime.nextRun : '—');
+    var alertsGenerated = enterpriseAgent ? '—' : (hasRuntime ? (runtime.alertsGenerated || 0) : 0);
+    var runtimeTag = enterpriseAgent
+      ? '<span class="badge coming-soon" style="font-size:10px;margin-left:6px;" title="Enterprise roadmap; not active in pilot">Coming Soon</span><span class="badge enterprise" style="font-size:10px;margin-left:6px;">Enterprise</span>'
+      : hasRuntime
       ? '<span class="badge approved" style="font-size:10px;margin-left:6px;" title="Runtime-derived from monitoring_agent_status">runtime</span>'
       : '<span class="badge draft" style="font-size:10px;margin-left:6px;" title="Static catalog entry; no runtime telemetry yet">static</span>';
-    var runBtn = hasRuntime && runtime.id != null
+    var runBtn = !enterpriseAgent && hasRuntime && runtime.id != null
       ? '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + runtime.id + '" onclick="triggerAgentRun(' + runtime.id + ')" style="font-size:11px;padding:3px 8px;" title="Manually trigger this agent">Run Now</button>'
       : '';
     html += '<div class="card" style="margin-bottom:12px;">' +
@@ -20572,26 +20536,28 @@ function renderMonitoringAgents() {
     var catalogNames = {}; MONITORING_AGENT_CATALOG.forEach(function(e) { catalogNames[e.name.toLowerCase()] = 1; });
     MONITORING_AGENTS.forEach(function(ag) {
       if (!ag) return;
-      if (catalogIds[Number(ag.id)]) return;
+      var agentNumber = monitoringAgentNumberFromRuntime(ag);
+      if (catalogIds[Number(agentNumber)] || catalogIds[Number(ag.id)]) return;
       if (ag.name && catalogNames[String(ag.name).toLowerCase()]) return;
+      var enterpriseAgent = isEnterpriseRoadmapAgentId(agentNumber);
       var s = (ag.status || 'active').toLowerCase();
-      var statusLabel = s === 'active' ? 'Active' : s === 'paused' ? 'Paused' : s === 'error' ? 'Error' : (ag.status || 'Unknown');
-      var statusBadge = s === 'active' ? 'approved' : s === 'paused' ? 'pending' : s === 'error' ? 'rejected' : 'draft';
+      var statusLabel = enterpriseAgent ? 'Coming Soon' : (s === 'active' ? 'Active' : s === 'paused' ? 'Paused' : s === 'error' ? 'Error' : (ag.status || 'Unknown'));
+      var statusBadge = enterpriseAgent ? 'coming-soon' : (s === 'active' ? 'approved' : s === 'paused' ? 'pending' : s === 'error' ? 'rejected' : 'draft');
       html += '<div class="card" style="margin-bottom:12px;">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
         '<div style="display:flex;align-items:center;gap:12px;">' +
         '<span style="font-size:24px;">' + (ag.icon || '🤖') + '</span>' +
-        '<div><div style="font-weight:600;font-size:14px;">' + escapeHtml(ag.name || 'Agent') +
-        '<span class="badge approved" style="font-size:10px;margin-left:6px;" title="Runtime-derived">runtime</span></div>' +
-        '<div style="font-size:12px;color:var(--text3);">Registered monitoring agent</div></div></div>' +
+        '<div><div style="font-weight:600;font-size:14px;">' + (enterpriseAgent ? 'Agent ' + agentNumber + ' — ' : '') + escapeHtml(ag.name || 'Agent') +
+        (enterpriseAgent ? '<span class="badge coming-soon" style="font-size:10px;margin-left:6px;">Coming Soon</span><span class="badge enterprise" style="font-size:10px;margin-left:6px;">Enterprise</span>' : '<span class="badge approved" style="font-size:10px;margin-left:6px;" title="Runtime-derived">runtime</span>') + '</div>' +
+        '<div style="font-size:12px;color:var(--text3);">' + (enterpriseAgent ? 'Enterprise roadmap. Not active in pilot.' : 'Registered monitoring agent') + '</div></div></div>' +
         '<div style="display:flex;align-items:center;gap:8px;">' +
         '<span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(statusLabel) + '</span>' +
-        '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + ag.id + '" onclick="triggerAgentRun(' + ag.id + ')" style="font-size:11px;padding:3px 8px;">Run Now</button>' +
+        (enterpriseAgent ? '' : '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + ag.id + '" onclick="triggerAgentRun(' + ag.id + ')" style="font-size:11px;padding:3px 8px;">Run Now</button>') +
         '</div></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:12px;">' +
-        '<div><span style="color:var(--text3);">Last run:</span><br/>' + escapeHtml(ag.lastRun || '—') + '</div>' +
-        '<div><span style="color:var(--text3);">Next run:</span><br/>' + escapeHtml(ag.nextRun || '—') + '</div>' +
-        '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + escapeHtml(String(ag.alertsGenerated || 0)) + '</div>' +
+        '<div><span style="color:var(--text3);">Last run:</span><br/>' + escapeHtml(enterpriseAgent ? 'Not active in pilot' : (ag.lastRun || '—')) + '</div>' +
+        '<div><span style="color:var(--text3);">Next run:</span><br/>' + escapeHtml(enterpriseAgent ? 'Future release' : (ag.nextRun || '—')) + '</div>' +
+        '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + escapeHtml(enterpriseAgent ? '—' : String(ag.alertsGenerated || 0)) + '</div>' +
         '</div></div>';
     });
   }
@@ -20599,6 +20565,11 @@ function renderMonitoringAgents() {
 }
 
 async function triggerAgentRun(agentId) {
+  var runtimeAgent = (MONITORING_AGENTS || []).find(function(ag) { return ag && String(ag.id) === String(agentId); });
+  if (isEnterpriseRoadmapAgentId(monitoringAgentNumberFromRuntime(runtimeAgent))) {
+    showToast('This agent is Coming Soon and not active in pilot');
+    return;
+  }
   var btn = document.getElementById('agent-run-btn-' + agentId);
   if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
   try {
@@ -24618,10 +24589,14 @@ function handleGlobalSearch(q) {
 
 function parseBackofficeHashRoute() {
   var raw = String(window.location.hash || '').replace(/^#/, '');
+  if (!raw && window.location && window.location.pathname) {
+    var pathMatch = String(window.location.pathname || '').match(/^\/backoffice\/(.+)$/);
+    if (pathMatch && pathMatch[1]) raw = pathMatch[1];
+  }
   if (!raw) return { view: '', params: new URLSearchParams('') };
   var parts = raw.split('?');
   return {
-    view: parts[0] || '',
+    view: normalizeBackofficeRouteView(parts[0] || ''),
     params: new URLSearchParams(parts.slice(1).join('?') || '')
   };
 }
@@ -24644,6 +24619,14 @@ function applyBackofficeHashRoute() {
   }
   if (route.view === 'periodic-review-signals') {
     showView('periodic-review-signals');
+    return true;
+  }
+  if (isEnterpriseComingSoonView(route.view)) {
+    showView(route.view);
+    return true;
+  }
+  if (route.view === 'ai-agents') {
+    showView('ai-agents');
     return true;
   }
   if (route.view === 'monitoring') {
@@ -26174,11 +26157,23 @@ function normalizeAIAgentConfig(agent) {
   normalized.agent_number = displayNumber;
   normalized.checks = Array.isArray(normalized.checks) ? normalized.checks : [];
   normalized.enabled = !(normalized.enabled === false || normalized.enabled === 0 || normalized.enabled === '0');
+  if (isEnterpriseRoadmapAgentId(displayNumber)) {
+    normalized.enabled = false;
+    normalized.pilot_status = 'coming_soon';
+    normalized.scope = 'Enterprise roadmap';
+    normalized.availability = 'Not active in pilot';
+  }
   return normalized;
 }
 
 function getAIAgentRecordId(agent) {
   return agent && (agent.dbId || agent.record_id || agent.database_id || agent.id);
+}
+
+function pilotActiveAgentCount() {
+  return AI_AGENTS.filter(function(a) {
+    return a && a.enabled && !isEnterpriseRoadmapAgentId(a.id);
+  }).length;
 }
 
 function renderAgentsPipeline() {
@@ -26187,32 +26182,38 @@ function renderAgentsPipeline() {
   AI_AGENTS = AI_AGENTS.map(normalizeAIAgentConfig);
 
   // Summary stats
-  var enabled = AI_AGENTS.filter(function(a){return a.enabled;}).length;
+  var enabled = pilotActiveAgentCount();
+  var comingSoonCount = AI_AGENTS.filter(function(a){ return isEnterpriseRoadmapAgentId(a.id); }).length;
   var totalChecks = AI_AGENTS.reduce(function(a,b){return a+b.checks.length;},0);
   html += '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">' +
     '<div class="stat-card"><div class="stat-card-label">Total Agents</div><div class="stat-card-value">' + AI_AGENTS.length + '</div></div>' +
-    '<div class="stat-card"><div class="stat-card-label">Active Agents</div><div class="stat-card-value" style="color:var(--green);">' + enabled + '</div></div>' +
-    '<div class="stat-card"><div class="stat-card-label">Disabled Agents</div><div class="stat-card-value" style="color:var(--red);">' + (AI_AGENTS.length - enabled) + '</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Active in Pilot</div><div class="stat-card-value" style="color:var(--green);">' + enabled + '</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Coming Soon</div><div class="stat-card-value" style="color:var(--amber);">' + comingSoonCount + '</div></div>' +
     '<div class="stat-card"><div class="stat-card-label">Pipeline Check Labels</div><div class="stat-card-value" style="color:var(--brand);">' + totalChecks + '</div></div>' +
   '</div>';
 
   AI_AGENTS.forEach(function(agent, ai) {
-    html += '<div class="agent-config-card' + (ai === 0 ? ' open' : '') + '" id="agent-config-' + ai + '">' +
+    var enterpriseAgent = isEnterpriseRoadmapAgentId(agent.id);
+    var disabledAttr = enterpriseAgent ? ' disabled aria-disabled="true"' : '';
+    var stageLabel = enterpriseAgent ? 'Enterprise roadmap' : agent.stage;
+    html += '<div class="agent-config-card' + ((ai === 0 || enterpriseAgent) ? ' open' : '') + (enterpriseAgent ? ' enterprise-agent-card' : '') + '" id="agent-config-' + ai + '" data-agent-number="' + agent.id + '"' + (enterpriseAgent ? ' data-pilot-status="coming-soon"' : '') + '>' +
       '<div class="agent-config-header" onclick="toggleAgentPanel(' + ai + ')">' +
         '<span class="agent-config-icon">' + agent.icon + '</span>' +
         '<div class="agent-config-info">' +
           '<div class="agent-config-name">Agent ' + agent.id + ': ' + agent.name + '</div>' +
           '<div class="agent-config-desc">' + agent.description + '</div>' +
         '</div>' +
-        '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px;">' + agent.stage + '</span>' +
+        (enterpriseAgent ? '<span class="badge coming-soon" style="font-size:10px;">Coming Soon</span><span class="badge enterprise" style="font-size:10px;">Enterprise</span><span class="badge not-active" style="font-size:10px;">Not active in pilot</span>' : '') +
+        '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px;">' + stageLabel + '</span>' +
         '<span class="badge" style="font-size:10px;">' + (agent.id === 1 ? (agent.checks.length + ' configured checks') : (agent.checks.length + ' checks')) + '</span>' +
-        '<div class="toggle-switch' + (agent.enabled ? ' on' : '') + '" onclick="event.stopPropagation();toggleAgent(' + ai + ',this)"></div>' +
+        '<div class="toggle-switch' + (agent.enabled ? ' on' : '') + (enterpriseAgent ? ' disabled' : '') + '"' + (enterpriseAgent ? ' title="Not active in pilot"' : ' onclick="event.stopPropagation();toggleAgent(' + ai + ',this)"') + '></div>' +
       '</div>' +
       '<div class="agent-config-body">' +
+        (enterpriseAgent ? '<div class="enterprise-agent-copy">These agents are not active in the pilot environment. They are part of RegMind’s enterprise automation roadmap.</div><div class="enterprise-agent-meta"><div class="enterprise-agent-meta-item"><div class="enterprise-agent-meta-label">Status</div><div>Coming Soon</div></div><div class="enterprise-agent-meta-item"><div class="enterprise-agent-meta-label">Scope</div><div>Enterprise roadmap</div></div><div class="enterprise-agent-meta-item"><div class="enterprise-agent-meta-label">Availability</div><div>Not active in pilot</div></div></div>' : '') +
         '<div style="display:flex;gap:12px;margin-bottom:14px;">' +
-          '<div class="form-group" style="flex:1;margin-bottom:0;"><div class="form-label">Agent Name</div><input class="form-input agent-name-input" value="' + agent.name + '" data-agent="' + ai + '" /></div>' +
+          '<div class="form-group" style="flex:1;margin-bottom:0;"><div class="form-label">Agent Name</div><input class="form-input agent-name-input" value="' + agent.name + '" data-agent="' + ai + '"' + disabledAttr + ' /></div>' +
           '<div class="form-group" style="width:160px;margin-bottom:0;"><div class="form-label">Pipeline Stage</div>' +
-            '<select class="form-select agent-stage-input" data-agent="' + ai + '">' +
+            '<select class="form-select agent-stage-input" data-agent="' + ai + '"' + disabledAttr + '>' +
               '<option' + (agent.stage==='Pre-Onboarding'?' selected':'') + '>Pre-Onboarding</option>' +
               '<option' + (agent.stage==='Pre-Screening'?' selected':'') + '>Pre-Screening</option>' +
               '<option' + (agent.stage==='KYC Upload'?' selected':'') + '>KYC Upload</option>' +
@@ -26223,22 +26224,21 @@ function renderAgentsPipeline() {
               '<option' + (agent.stage==='Post-Approval'?' selected':'') + '>Post-Approval</option>' +
               '<option' + (agent.stage==='Monitoring'?' selected':'') + '>Monitoring</option>' +
             '</select></div>' +
-          '<div class="form-group" style="width:60px;margin-bottom:0;"><div class="form-label">Icon</div><input class="form-input agent-icon-input" value="' + agent.icon + '" data-agent="' + ai + '" style="text-align:center;font-size:18px;" /></div>' +
+          '<div class="form-group" style="width:60px;margin-bottom:0;"><div class="form-label">Icon</div><input class="form-input agent-icon-input" value="' + agent.icon + '" data-agent="' + ai + '" style="text-align:center;font-size:18px;"' + disabledAttr + ' /></div>' +
         '</div>' +
-        '<div class="form-group"><div class="form-label">Description</div><input class="form-input agent-desc-input" value="' + agent.description.replace(/"/g,'&quot;') + '" data-agent="' + ai + '" /></div>' +
+        '<div class="form-group"><div class="form-label">Description</div><input class="form-input agent-desc-input" value="' + agent.description.replace(/"/g,'&quot;') + '" data-agent="' + ai + '"' + disabledAttr + ' /></div>' +
         '<div class="form-label">Checks / Capabilities</div>';
 
     agent.checks.forEach(function(ch, ci) {
       html += '<div class="config-row">' +
-        '<span style="font-size:14px;color:var(--green);">✅</span>' +
-        '<input class="config-input-lg agent-check-input" value="' + ch.replace(/"/g,'&quot;') + '" data-agent="' + ai + '" data-check="' + ci + '" style="flex:1;" />' +
-        '<button class="btn btn-outline btn-sm" onclick="removeAgentCheck(' + ai + ',' + ci + ')" style="color:var(--red);border-color:var(--red);">✕</button>' +
+        '<span style="font-size:14px;color:' + (enterpriseAgent ? 'var(--text3)' : 'var(--green)') + ';">' + (enterpriseAgent ? '•' : '✅') + '</span>' +
+        '<input class="config-input-lg agent-check-input" value="' + ch.replace(/"/g,'&quot;') + '" data-agent="' + ai + '" data-check="' + ci + '" style="flex:1;"' + disabledAttr + ' />' +
+        (enterpriseAgent ? '' : '<button class="btn btn-outline btn-sm" onclick="removeAgentCheck(' + ai + ',' + ci + ')" style="color:var(--red);border-color:var(--red);">✕</button>') +
       '</div>';
     });
 
     html += '<div style="display:flex;gap:8px;margin-top:10px;">' +
-        '<button class="btn btn-outline btn-sm" onclick="addAgentCheck(' + ai + ')">+ Add Check</button>' +
-        '<button class="btn btn-outline btn-sm" onclick="deleteAgent(' + ai + ')" style="color:var(--red);border-color:var(--red);margin-left:auto;">🗑️ Delete Agent</button>' +
+        (enterpriseAgent ? '<span style="font-size:12px;color:var(--text3);">Operational controls disabled for pilot.</span>' : '<button class="btn btn-outline btn-sm" onclick="addAgentCheck(' + ai + ')">+ Add Check</button><button class="btn btn-outline btn-sm" onclick="deleteAgent(' + ai + ')" style="color:var(--red);border-color:var(--red);margin-left:auto;">🗑️ Delete Agent</button>') +
       '</div>' +
       '</div></div>';
   });
@@ -26251,6 +26251,10 @@ function toggleAgentPanel(idx) {
 }
 
 function toggleAgent(idx, el) {
+  if (isEnterpriseRoadmapAgentId(AI_AGENTS[idx] && AI_AGENTS[idx].id)) {
+    showToast('Agent ' + AI_AGENTS[idx].id + ' is Coming Soon and not active in pilot');
+    return;
+  }
   AI_AGENTS[idx].enabled = !AI_AGENTS[idx].enabled;
   el.classList.toggle('on');
   var state = AI_AGENTS[idx].enabled ? 'enabled' : 'disabled';
@@ -26258,11 +26262,13 @@ function toggleAgent(idx, el) {
 }
 
 function addAgentCheck(agentIdx) {
+  if (isEnterpriseRoadmapAgentId(AI_AGENTS[agentIdx] && AI_AGENTS[agentIdx].id)) return;
   AI_AGENTS[agentIdx].checks.push('New check — define capability');
   renderAgentsPipeline();
 }
 
 function removeAgentCheck(agentIdx, checkIdx) {
+  if (isEnterpriseRoadmapAgentId(AI_AGENTS[agentIdx] && AI_AGENTS[agentIdx].id)) return;
   AI_AGENTS[agentIdx].checks.splice(checkIdx, 1);
   renderAgentsPipeline();
 }
@@ -26280,6 +26286,7 @@ function addNewAgent() {
 
 async function deleteAgent(agentIdx) {
   var agent = AI_AGENTS[agentIdx];
+  if (isEnterpriseRoadmapAgentId(agent && agent.id)) return;
   if (!confirm('Disable Agent ' + agent.id + ': ' + agent.name + '? The agent will remain in the audit trail and can be re-enabled later.')) return;
   var recordId = getAIAgentRecordId(agent);
   try {
@@ -26317,11 +26324,11 @@ function saveAgents() {
       var agentData = { agent_number: agent.id, name: agent.name, icon: agent.icon, stage: agent.stage, description: agent.description, enabled: agent.enabled, checks: agent.checks };
       return boApiCall('PUT', '/config/ai-agents/' + encodeURIComponent(recordId), agentData);
     });
-    Promise.all(savePromises).then(function() {
-      refreshAdminAuditEvidence();
-      renderAgentsPipeline();
-      showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
-    }).catch(function(err) {
+	    Promise.all(savePromises).then(function() {
+	      refreshAdminAuditEvidence();
+	      renderAgentsPipeline();
+	      showToast('✅ AI agent pipeline saved — ' + pilotActiveAgentCount() + ' agents active in pilot');
+	    }).catch(function(err) {
       showToast('Failed to save agent config: ' + (err.message || 'Unknown error'), 'error');
     });
   } else {
@@ -29205,13 +29212,14 @@ async function verifySupervisorAuditChain() {
 
 // Auto-load supervisor dashboard when view is shown
 var _origShowView = window.showView;
-if (typeof _origShowView === 'function') {
-  window.showView = function(view, el) {
-    _origShowView(view, el);
-    if (view === 'supervisor') refreshSupervisorDashboard();
-    if (view === 'supervisor-audit') refreshSupervisorAudit();
-  };
-}
+	if (typeof _origShowView === 'function') {
+	  window.showView = function(view, el) {
+	    _origShowView(view, el);
+	    if (isEnterpriseComingSoonView(view)) return;
+	    if (view === 'supervisor') refreshSupervisorDashboard();
+	    if (view === 'supervisor-audit') refreshSupervisorAudit();
+	  };
+	}
 
 // ── Re-screen application using live APIs ──
 async function reScreenApplication(appRef) {
