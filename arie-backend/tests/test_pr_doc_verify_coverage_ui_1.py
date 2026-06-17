@@ -55,7 +55,7 @@ def test_default_document_row_stays_compact_and_avoids_repeating_audit_payloads(
 
     for expected in [
         "renderDocumentCompactSummary(issue, blocker, nextAction, relianceState)",
-        "renderDocumentDirectActions(app, doc, groupKey, relianceState)",
+        "renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot)",
         "Expected from portal slot",
         "File: ",
     ]:
@@ -82,12 +82,14 @@ def test_uploaded_document_actions_include_view_download_and_reverify():
     for expected in [
         "viewBackofficeDocument",
         "downloadBackofficeDocument",
-        "verifyBackofficeDocument",
         ">View</button>",
         ">Download</button>",
-        ">Re-Verify</button>",
+        "renderDocumentSecondaryActions(app, doc, state)",
     ]:
         assert expected in actions
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    assert "verifyBackofficeDocument" in secondary
+    assert "More ▾" in secondary
 
 
 def test_audit_details_use_technical_drawer_not_repeated_issue_boxes():
@@ -98,6 +100,22 @@ def test_audit_details_use_technical_drawer_not_repeated_issue_boxes():
     assert "renderVerificationCoverageSummary(doc, policy)" in details
     assert "buildVerificationResultsHtml(doc.verification_results, coverage)" in details
     assert "Technical audit details" in technical
-    assert "<summary>Technical audit details</summary>" in technical
-    assert "Why review is required" not in technical
-    assert "Document status" not in technical
+    assert "Material findings" in technical
+    assert "Passed technical checks" in technical
+    assert "Warnings:" not in technical
+    assert "Issues:" not in technical
+
+
+def test_backoffice_upload_supports_expected_slot_person_mapping_and_upload_context():
+    html = _backoffice_html()
+    upload_region = _function_region(html, "toggleBoDocUpload", "viewBackofficeDocument")
+
+    for expected in [
+        "openBoDocUploadForExpectedSlot",
+        "bo-upload-person-id",
+        "bo-upload-person-type",
+        "Expected slot:",
+        "person_id=",
+        "person_type=",
+    ]:
+        assert expected in upload_region

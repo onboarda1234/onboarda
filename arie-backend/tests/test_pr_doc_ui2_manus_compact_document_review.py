@@ -32,7 +32,7 @@ def test_application_review_default_rows_are_compact_and_not_audit_heavy():
     assert "document-review-identity" in default_row
     assert "document-review-status-actions" in default_row
     assert "renderDocumentCompactSummary(issue, blocker, nextAction, relianceState)" in default_row
-    assert "renderDocumentDirectActions(app, doc, groupKey, relianceState)" in default_row
+    assert "renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot)" in default_row
     assert "document-review-fields" not in default_row
     assert "renderDocumentReviewField(" not in default_row
 
@@ -55,6 +55,7 @@ def test_details_are_collapsed_by_default_and_retain_audit_fields():
     html = _backoffice_html()
     details = _function_region(html, "renderDocumentAuditDetails", "renderUnifiedKycDocumentCard")
     actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
 
     assert '<details class="document-review-details">' in details
     assert '<details class="document-review-details" open' not in details
@@ -70,7 +71,8 @@ def test_details_are_collapsed_by_default_and_retain_audit_fields():
         "buildVerificationResultsHtml",
     ]:
         assert audit_field in details
-    assert "Re-Verify" in actions
+    assert "More ▾" in secondary
+    assert "Re-Verify" in secondary
     assert "renderVerificationCoverageSummary(doc, policy)" in details
     assert "buildVerificationResultsHtml(doc.verification_results, coverage)" in details
 
@@ -140,6 +142,7 @@ def test_view_download_are_direct_for_uploaded_docs_and_disabled_only_when_no_fi
     assert ">Download</button>" in actions
     assert "disabled>View</button>" in actions
     assert "disabled>Download</button>" in actions
+    assert ">Upload</button>" in actions
     assert "Request from client" in actions
     assert "No document uploaded" in missing_renderer
 
@@ -183,3 +186,24 @@ def test_portal_upload_ui_contract_is_not_redesigned():
     assert "data-reliance-state" in portal
     assert "document_reliance_state" in portal
     assert "Upload received - verification pending." in portal
+
+
+def test_top_action_bar_keeps_primary_actions_visible_and_moves_secondary_into_more_menu():
+    html = _backoffice_html()
+    detail_view = html[html.index('id="view-app-detail"'):html.index('<div id="detail-case-command-centre">')]
+
+    assert "Approve" in detail_view
+    assert "More Info" in detail_view
+    assert "More ▾" in detail_view
+    assert "rejectApplication()" in detail_view
+    assert "openOverrideModal()" in detail_view
+    assert "escalateCase()" in detail_view
+    assert "reassignCase()" in detail_view
+    assert "openExportPackModal()" in detail_view
+
+
+def test_sumsub_admin_reconciliation_notice_is_suppressed_from_application_review():
+    html = _backoffice_html()
+    notice_helper = _function_region(html, "canViewUnmatchedSumsubWebhookNotice", "renderSumsubIdvPanel")
+
+    assert "return false;" in notice_helper

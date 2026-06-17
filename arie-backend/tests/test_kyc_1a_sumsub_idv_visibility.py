@@ -440,10 +440,11 @@ def test_backoffice_idv_default_rows_hide_operational_fields_inside_details():
 def test_backoffice_unmatched_webhook_notice_is_compact_admin_sco_only():
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
     assert "function canViewUnmatchedSumsubWebhookNotice()" in html
-    assert "role === 'admin' || role === 'sco'" in html
     assert "idv-admin-notice" in html
     assert "Admin notice:" in html
     assert "Open reconciliation" in html
+    helper = html[html.index("function canViewUnmatchedSumsubWebhookNotice()"):html.index("function renderSumsubIdvPanel(app)")]
+    assert "return false;" in helper
     assert "Unmatched Sumsub webhook events:" not in html
 
 

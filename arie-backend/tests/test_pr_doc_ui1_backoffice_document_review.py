@@ -65,6 +65,7 @@ def test_portal_slot_document_shows_expected_type_not_unclassified():
 def test_view_and_download_are_visible_for_uploaded_documents():
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
 
     assert "documentHasUploadedFile(doc)" in actions
     assert "viewBackofficeDocument" in actions
@@ -73,7 +74,7 @@ def test_view_and_download_are_visible_for_uploaded_documents():
     assert ">Download<" in actions
     assert "Accept with reason" in actions
     assert "Request replacement" in actions
-    assert "Reject" in actions
+    assert "Reject" in secondary
 
 
 def test_missing_documents_disable_view_and_download():
