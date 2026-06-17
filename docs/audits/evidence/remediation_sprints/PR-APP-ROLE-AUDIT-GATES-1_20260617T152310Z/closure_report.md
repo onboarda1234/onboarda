@@ -2,6 +2,9 @@
 
 Status: not closed.
 
+Draft PR: https://github.com/onboarda1234/onboarda/pull/525
+Current PR head SHA: d3fedd3c7658833cc2c422c8c131ae0c36a1f704
+
 Implemented in this PR:
 
 - Application reassignment requires non-empty `reassignment_reason` in backend and UI.
