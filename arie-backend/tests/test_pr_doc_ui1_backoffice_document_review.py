@@ -66,9 +66,13 @@ def test_portal_slot_document_shows_expected_type_not_unclassified():
 def test_uploaded_document_actions_move_into_more_menu_while_primary_cta_stays_compact():
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
-    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    audit_toggle = _function_region(html, "renderDocumentAuditToggleAction", "toggleDocumentTechnicalAudit")
+    toggle = _function_region(html, "toggleDocumentTechnicalAudit", "renderDocumentPrimaryAction")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentAuditToggleAction")
     primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
 
+    assert "renderDocumentAuditToggleAction(doc)" in actions
+    assert actions.index("renderDocumentAuditToggleAction(doc)") < actions.index("renderDocumentPrimaryAction(app, doc, state, expectedSlot)")
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
     assert "openBoDocUploadForExpectedSlot" in primary
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
@@ -79,7 +83,10 @@ def test_uploaded_document_actions_move_into_more_menu_while_primary_cta_stays_c
     assert "Accept with reason" in secondary
     assert "Request replacement" in secondary
     assert "Reject" in secondary
-    assert "Technical audit details" in secondary
+    assert "Technical audit details" not in secondary
+    assert "Technical audit details" in audit_toggle
+    assert 'aria-expanded="false"' in audit_toggle
+    assert "panel.hidden = !willOpen;" in toggle
     assert "Review required" not in primary
     assert ">Upload</button>" in primary
 
@@ -89,7 +96,7 @@ def test_missing_documents_disable_view_and_download():
     missing_renderer = _function_region(html, "renderMissingKycDocumentRow", "renderDocumentActionGroupShell")
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
     primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
-    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentAuditToggleAction")
 
     assert "No document uploaded" in missing_renderer
     assert "Corporate entity document" in missing_renderer

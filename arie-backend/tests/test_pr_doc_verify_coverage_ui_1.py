@@ -75,14 +75,19 @@ def test_default_document_row_stays_compact_and_avoids_repeating_audit_payloads(
 def test_row_actions_keep_one_visible_primary_action_and_move_secondary_actions_into_more():
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
+    audit_toggle = _function_region(html, "renderDocumentAuditToggleAction", "toggleDocumentTechnicalAudit")
+    toggle = _function_region(html, "toggleDocumentTechnicalAudit", "renderDocumentPrimaryAction")
     primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
 
     for expected in [
+        "renderDocumentAuditToggleAction(doc)",
         "renderDocumentPrimaryAction(app, doc, state, expectedSlot)",
         "renderDocumentSecondaryActions(app, doc, state)",
     ]:
         assert expected in actions
-    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    assert actions.index("renderDocumentAuditToggleAction(doc)") < actions.index("renderDocumentPrimaryAction(app, doc, state, expectedSlot)")
+    assert actions.index("renderDocumentPrimaryAction(app, doc, state, expectedSlot)") < actions.index("renderDocumentSecondaryActions(app, doc, state)")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentAuditToggleAction")
     for expected in [
         "downloadBackofficeDocument",
         "Accept with reason",
@@ -90,9 +95,13 @@ def test_row_actions_keep_one_visible_primary_action_and_move_secondary_actions_
         "Reject",
         "Re-Verify",
         "More ▾",
-        "Technical audit details",
     ]:
         assert expected in secondary
+    assert "Technical audit details" not in secondary
+    assert "Technical audit details" in audit_toggle
+    assert 'aria-expanded="false"' in audit_toggle
+    assert "panel.hidden = !willOpen;" in toggle
+    assert "setAttribute('aria-expanded', willOpen ? 'true' : 'false')" in toggle
     assert "verifyBackofficeDocument" in secondary
     assert "viewBackofficeDocument" in primary
     assert ">View</button>" in primary
