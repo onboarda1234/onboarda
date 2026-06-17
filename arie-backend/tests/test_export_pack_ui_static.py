@@ -29,10 +29,11 @@ def _extract_function(html, name):
 
 def test_export_pack_button_is_in_application_review_topbar_after_reassign():
     html = _read(BACKOFFICE_PATH)
-    topbar_start = html.index('id="case-management-actions-topbar"')
-    topbar_end = html.index("</div>", topbar_start)
+    topbar_start = html.index("<!-- Top bar: back button + action buttons (horizontal) -->")
+    topbar_end = html.index('<div id="detail-case-command-centre">', topbar_start)
     topbar = html[topbar_start:topbar_end]
 
+    assert 'topbar-more-dropdown' in topbar
     assert 'id="btn-reassign"' in topbar
     assert 'id="btn-export-pack"' in topbar
     assert 'onclick="openExportPackModal()"' in topbar
@@ -46,7 +47,7 @@ def test_export_pack_frontend_permission_guard_matches_backend_roles():
 
     assert "role === 'admin' || role === 'sco'" in fn
     assert "setDetailActionVisibility('btn-export-pack', canExportPacks);" in sync
-    assert "(canReassignCases || canExportPacks)" in sync
+    assert "caseManagementCard.style.display = 'none';" in sync
     assert "You do not have permission to export evidence packs." in html
 
 
