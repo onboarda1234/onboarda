@@ -109,6 +109,7 @@ def test_audit_details_use_technical_drawer_not_repeated_issue_boxes():
 def test_backoffice_upload_supports_expected_slot_person_mapping_and_upload_context():
     html = _backoffice_html()
     upload_region = _function_region(html, "toggleBoDocUpload", "viewBackofficeDocument")
+    direct_actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
 
     for expected in [
         "openBoDocUploadForExpectedSlot",
@@ -119,3 +120,4 @@ def test_backoffice_upload_supports_expected_slot_person_mapping_and_upload_cont
         "person_type=",
     ]:
         assert expected in upload_region
+    assert "onclick=\\'openBoDocUploadForExpectedSlot(" in direct_actions
