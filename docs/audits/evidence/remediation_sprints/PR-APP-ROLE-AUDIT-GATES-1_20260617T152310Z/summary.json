@@ -2,7 +2,6 @@
   "status": "not_closed",
   "checked_at": "2026-06-17T15:23:10Z",
   "pr": "https://github.com/onboarda1234/onboarda/pull/525",
-  "pr_head_sha": "d3fedd3c7658833cc2c422c8c131ae0c36a1f704",
   "merge_sha": null,
   "evidence_folder": "docs/audits/evidence/remediation_sprints/PR-APP-ROLE-AUDIT-GATES-1_20260617T152310Z/",
   "implementation_summary": [
