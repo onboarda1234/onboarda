@@ -2437,6 +2437,145 @@ class TestAuthenticatedAccess:
         assert detail_data["documents"][0]["reviewed_by"] == "admin001"
         assert detail_data["documents"][0]["reviewed_by_name"]
 
+    def test_document_reject_requires_non_empty_reason_without_mutation(self, api_server):
+        """Rejecting a document without a reason must fail before document state changes."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM documents WHERE id = ?", ("doc_reject_blank_reason",))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_reject_blank_reason",))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "app_reject_blank_reason",
+            "ARF-2026-REJBLANK",
+            "testclient001",
+            "Reject Blank Ltd",
+            "Mauritius",
+            "in_review",
+        ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, doc_type, doc_name, file_path, verification_status, review_status, review_comment
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_reject_blank_reason",
+            "app_reject_blank_reason",
+            "cert_inc",
+            "certificate.pdf",
+            "/tmp/certificate.pdf",
+            "flagged",
+            "pending",
+            None,
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_reject_blank_reason/review",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "rejected", "comment": "   "},
+            timeout=3,
+        )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["error"] == "rejection_reason_required"
+
+        conn = get_db()
+        doc = conn.execute(
+            "SELECT review_status, review_comment, reviewed_by FROM documents WHERE id=?",
+            ("doc_reject_blank_reason",),
+        ).fetchone()
+        audit_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ?",
+            ("ARF-2026-REJBLANK",),
+        ).fetchone()["c"]
+        conn.close()
+        assert doc["review_status"] == "pending"
+        assert doc["review_comment"] is None
+        assert doc["reviewed_by"] is None
+        assert audit_count == 0
+
+    def test_document_reject_valid_reason_persists_and_audits_context(self, api_server):
+        """A valid rejection reason must persist and be visible in audit context."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", ("ARF-2026-REJVALID",))
+        conn.execute("DELETE FROM documents WHERE id = ?", ("doc_reject_valid_reason",))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_reject_valid_reason",))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "app_reject_valid_reason",
+            "ARF-2026-REJVALID",
+            "testclient001",
+            "Reject Valid Ltd",
+            "Mauritius",
+            "in_review",
+        ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, doc_type, doc_name, file_path, verification_status, review_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_reject_valid_reason",
+            "app_reject_valid_reason",
+            "proof_addr",
+            "address-proof.pdf",
+            "/tmp/address-proof.pdf",
+            "flagged",
+            "pending",
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        reason = "Document is expired and cannot support approval."
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_reject_valid_reason/review",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "rejected", "comment": reason},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["review_status"] == "rejected"
+        assert body["review_comment"] == reason
+
+        conn = get_db()
+        audit = conn.execute(
+            "SELECT action, target, detail, after_state, user_id, timestamp FROM audit_log WHERE target = ? ORDER BY id DESC LIMIT 1",
+            ("ARF-2026-REJVALID",),
+        ).fetchone()
+        doc = conn.execute(
+            "SELECT review_status, review_comment, reviewed_by FROM documents WHERE id=?",
+            ("doc_reject_valid_reason",),
+        ).fetchone()
+        conn.close()
+
+        assert doc["review_status"] == "rejected"
+        assert doc["review_comment"] == reason
+        assert doc["reviewed_by"] == "admin001"
+        assert audit is not None
+        assert audit["action"] == "Document Review"
+        assert audit["target"] == "ARF-2026-REJVALID"
+        assert "doc_reject_valid_reason" in audit["detail"]
+        assert "app_reject_valid_reason" in audit["detail"]
+        assert reason in audit["detail"]
+        after_state = json.loads(audit["after_state"])
+        assert after_state["review_status"] == "rejected"
+        assert after_state["review_comment"] == reason
+        assert after_state["reviewed_by"] == "admin001"
+        assert audit["user_id"] == "admin001"
+        assert audit["timestamp"]
+
     def test_document_evidence_classification_persists_and_audits(self, api_server):
         """Compliance officers can classify pilot evidence without altering review/verification gates."""
         from auth import create_token

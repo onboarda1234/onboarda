@@ -10012,6 +10012,8 @@ class DocumentReviewHandler(BaseHandler):
         allowed_statuses = {"pending", "accepted", "rejected", "info_requested"}
         if review_status not in allowed_statuses:
             return self.error("Invalid document review status", 400)
+        if review_status == "rejected" and not review_comment:
+            return self.error("rejection_reason_required", 400)
 
         db = get_db()
         doc = db.execute(
@@ -10108,7 +10110,8 @@ class DocumentReviewHandler(BaseHandler):
         else:
             audit_action = "Document Review"
             audit_detail = (
-                f"Document {doc['doc_name']} marked {review_status}"
+                f"Document {doc['doc_name']} (document_id={doc_id}, application_id={app['id']}) "
+                f"marked {review_status}"
                 + (f" — {review_comment}" if review_comment else "")
             )
 
@@ -10719,7 +10722,8 @@ class DocumentDownloadHandler(BaseHandler):
                         requesting_user_role=user.get("role") or user.get("type", ""),
                         db_connection=db,
                         expiry=900,
-                        response_filename=doc["doc_name"]
+                        response_filename=doc["doc_name"],
+                        content_disposition=disposition,
                     )
                     if success:
                         action = "View" if inline_view else "Download"

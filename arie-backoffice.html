@@ -3532,7 +3532,11 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <input type="hidden" id="document-review-doc-id" />
       <input type="hidden" id="document-review-app-ref" />
       <input type="hidden" id="document-review-status" />
-      <div class="form-group"><div class="form-label" id="document-review-label">Comment (Optional)</div><textarea class="form-input" rows="4" id="document-review-comment" placeholder="Add context for the document review..." style="resize:vertical;"></textarea></div>
+      <div class="form-group">
+        <div class="form-label" id="document-review-label">Comment</div>
+        <textarea class="form-input" rows="4" id="document-review-comment" placeholder="Add context for the document review..." style="resize:vertical;"></textarea>
+        <div id="document-review-comment-error" style="display:none;margin-top:8px;color:#991b1b;font-size:12px;font-weight:650;"></div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-document-review')">Cancel</button>
@@ -8530,6 +8534,18 @@ function renderDocumentSecondaryActions(app, doc, state) {
   '</details>';
 }
 
+function closeDocumentReviewMoreMenus(exceptMenu) {
+  try {
+    var menus = document.querySelectorAll ? document.querySelectorAll('.document-review-more[open]') : [];
+    Array.prototype.forEach.call(menus, function(menu) {
+      if (exceptMenu && menu === exceptMenu) return;
+      menu.open = false;
+    });
+  } catch (err) {
+    console.warn('Unable to close document review action menu', err);
+  }
+}
+
 function renderDocumentAuditToggleAction(doc) {
   if (!doc) return '';
   return '<button class="doc-action-btn secondary document-review-audit-toggle" aria-expanded="false" onclick="toggleDocumentTechnicalAudit(this)">Technical audit details</button>';
@@ -8557,6 +8573,25 @@ function toggleDocumentTechnicalAudit(trigger) {
     console.warn('Unable to toggle document review audit panel', err);
   }
 }
+
+document.addEventListener('click', function(event) {
+  var target = event.target;
+  if (!target || !target.closest) return;
+  var menu = target.closest('.document-review-more');
+  if (!menu) {
+    closeDocumentReviewMoreMenus();
+    return;
+  }
+  if (target.closest('.document-review-more-item')) {
+    setTimeout(function() { closeDocumentReviewMoreMenus(); }, 0);
+  } else {
+    closeDocumentReviewMoreMenus(menu);
+  }
+});
+
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape') closeDocumentReviewMoreMenus();
+});
 
 function renderDocumentPrimaryAction(app, doc, state, expectedSlot) {
   if (!doc) {
@@ -28032,6 +28067,12 @@ function openBoDocUploadForExpectedSlot(docType, label, personId, personType, ow
   try { panel.scrollIntoView({ behavior:'smooth', block:'center' }); } catch (err) {}
 }
 
+async function refreshCurrentKycDocumentsDetail(appRef) {
+  var ref = appRef || (currentApp && (currentApp.ref || currentApp.id));
+  if (!ref) return;
+  await openAppDetail(ref, { initialTab: 'kyc-docs' });
+}
+
 async function submitBoDocUpload() {
   if (!currentApp) { showToast('No application selected'); return; }
   if (!BO_AUTH_TOKEN) { showToast('Back-office upload requires a live authenticated backend session'); return; }
@@ -28070,7 +28111,7 @@ async function submitBoDocUpload() {
     await loadFromAPI();
     refreshAdminAuditEvidence();
     toggleBoDocUpload();
-    openAppDetail(currentApp.ref);
+    await refreshCurrentKycDocumentsDetail(currentApp.ref);
     showToast('Document uploaded to the application record.');
   } catch(e) {
     console.warn('Back-office document upload failed:', e);
@@ -28139,7 +28180,7 @@ async function verifyBackofficeDocument(docId, appRef) {
     var result = await boApiCall('POST', '/documents/' + docId + '/verify');
     showToast('Document verification completed: ' + ((result && result.status) || 'review required'));
     await loadFromAPI();
-    openAppDetail(appRef || (currentApp && currentApp.ref));
+    await refreshCurrentKycDocumentsDetail(appRef || (currentApp && currentApp.ref));
   } catch (e) {
     showToast(e.message || 'Document verification failed');
   }
@@ -28148,28 +28189,48 @@ async function verifyBackofficeDocument(docId, appRef) {
 async function reviewBackofficeDocument(docId, appRef, status) {
   if (!docId) { showToast('Document record is missing a review identifier'); return; }
   var labels = {
-    accepted: { title: 'Accept Document', label: 'Acceptance Note (Optional)', placeholder: 'Add context for accepting this document...' },
-    rejected: { title: 'Reject Document', label: 'Rejection Reason (Optional)', placeholder: 'Add the reason this document is being rejected...' },
-    info_requested: { title: 'Request Replacement', label: 'Replacement Request (Optional)', placeholder: 'Describe what replacement document or clarification is needed...' }
+    accepted: { title: 'Accept Document', label: 'Acceptance note', placeholder: 'Add context for accepting this document...' },
+    rejected: { title: 'Reject Document', label: 'Rejection reason', placeholder: 'Add the reason this document is being rejected...' },
+    info_requested: { title: 'Request Replacement', label: 'Replacement request note', placeholder: 'Describe what replacement document or clarification is needed...' }
   };
-  var cfg = labels[status] || { title: 'Review Document', label: 'Comment (Optional)', placeholder: 'Add context for the document review...' };
+  var cfg = labels[status] || { title: 'Review Document', label: 'Comment', placeholder: 'Add context for the document review...' };
+  var commentEl = document.getElementById('document-review-comment');
+  var errorEl = document.getElementById('document-review-comment-error');
   document.getElementById('document-review-doc-id').value = docId;
   document.getElementById('document-review-app-ref').value = appRef || '';
   document.getElementById('document-review-status').value = status;
   document.getElementById('document-review-title').textContent = cfg.title;
   document.getElementById('document-review-label').textContent = cfg.label;
-  document.getElementById('document-review-comment').value = '';
-  document.getElementById('document-review-comment').placeholder = cfg.placeholder;
+  commentEl.value = '';
+  commentEl.placeholder = cfg.placeholder;
+  commentEl.removeAttribute('aria-invalid');
+  commentEl.dataset.reasonRequired = status === 'rejected' ? 'true' : 'false';
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.style.display = 'none';
+  }
   document.getElementById('modal-document-review').classList.add('open');
-  document.getElementById('document-review-comment').focus();
+  commentEl.focus();
 }
 
 async function confirmDocumentReview() {
   var docId = document.getElementById('document-review-doc-id').value;
   var appRef = document.getElementById('document-review-app-ref').value;
   var status = document.getElementById('document-review-status').value;
-  var comment = document.getElementById('document-review-comment').value.trim();
+  var commentEl = document.getElementById('document-review-comment');
+  var errorEl = document.getElementById('document-review-comment-error');
+  var comment = commentEl.value.trim();
   if (!docId || !status) { showToast('Document review context is missing', 'error'); return; }
+  if (status === 'rejected' && !comment) {
+    if (errorEl) {
+      errorEl.textContent = 'Rejection reason is required.';
+      errorEl.style.display = 'block';
+    }
+    commentEl.setAttribute('aria-invalid', 'true');
+    commentEl.focus();
+    showToast('Rejection reason is required.', 'error');
+    return;
+  }
   try {
     await boApiCall('POST', '/documents/' + docId + '/review', {
       status: status,
@@ -28178,7 +28239,7 @@ async function confirmDocumentReview() {
     showToast('Document review saved: ' + status.replace(/_/g, ' '));
     closeModal('modal-document-review');
     await loadFromAPI();
-    openAppDetail(appRef || (currentApp && currentApp.ref));
+    await refreshCurrentKycDocumentsDetail(appRef || (currentApp && currentApp.ref));
   } catch (e) {
     showToast(e.message || 'Document review could not be saved');
   }
