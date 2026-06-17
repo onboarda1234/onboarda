@@ -109,7 +109,7 @@ class TestDocumentDownloadSafety:
         )
 
         class FakeS3Client:
-            def get_presigned_url_with_ownership(self, key, requesting_user_id, requesting_user_role, db_connection=None, expiry=900, response_filename=None):
+            def get_presigned_url_with_ownership(self, key, requesting_user_id, requesting_user_role, db_connection=None, expiry=900, response_filename=None, content_disposition="attachment"):
                 # This query will fail if the connection has already been closed.
                 row = db_connection.execute("SELECT 1 AS ok").fetchone()
                 assert row and row["ok"] == 1
@@ -127,6 +127,48 @@ class TestDocumentDownloadSafety:
         body = resp.json()
         assert body["source"] == "s3"
         assert body["download_url"] == "https://example.test/presigned"
+
+    def test_s3_preview_requests_inline_disposition_and_download_requests_attachment(self, api_server):
+        from auth import create_token
+
+        _seed_app_and_doc(
+            app_id="app_s3_inline_preview",
+            app_ref="ARF-S3-INLINE",
+            client_id="client_s3_inline",
+            doc_id="doc_s3_inline_preview",
+            file_path="unused-local-path.pdf",
+            doc_name="inline-preview.pdf",
+            mime_type="application/pdf",
+            s3_key="documents/app_s3_inline_preview/inline-preview.pdf",
+        )
+
+        calls = []
+
+        class FakeS3Client:
+            def get_presigned_url_with_ownership(self, key, requesting_user_id, requesting_user_role, db_connection=None, expiry=900, response_filename=None, content_disposition="attachment"):
+                calls.append(content_disposition)
+                return True, f"https://example.test/{content_disposition}/presigned"
+
+        token = create_token("client_s3_inline", "client", "S3 Inline", "client")
+        with patch("server.HAS_S3", True), patch("server.get_s3_client", return_value=FakeS3Client()):
+            preview_resp = http_requests.get(
+                f"{api_server}/api/documents/doc_s3_inline_preview/download?view=inline",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+            download_resp = http_requests.get(
+                f"{api_server}/api/documents/doc_s3_inline_preview/download",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+
+        assert preview_resp.status_code == 200, preview_resp.text
+        assert download_resp.status_code == 200, download_resp.text
+        assert preview_resp.json()["download_url"] == "https://example.test/inline/presigned"
+        assert preview_resp.json()["disposition"] == "inline"
+        assert download_resp.json()["download_url"] == "https://example.test/attachment/presigned"
+        assert download_resp.json()["disposition"] == "attachment"
+        assert calls == ["inline", "attachment"]
 
     def test_local_relative_file_resolves_under_upload_dir(self, api_server):
         from auth import create_token

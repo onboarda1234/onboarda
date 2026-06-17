@@ -314,7 +314,8 @@ class S3Client:
         requesting_user_role: str,
         db_connection=None,
         expiry: int = 900,
-        response_filename: Optional[str] = None
+        response_filename: Optional[str] = None,
+        content_disposition: str = "attachment",
     ) -> Tuple[bool, str]:
         """
         H-04 FIX: Generate presigned URL with ownership validation.
@@ -329,6 +330,7 @@ class S3Client:
             db_connection: Database connection for ownership lookup
             expiry: URL expiry in seconds
             response_filename: Optional filename for Content-Disposition
+            content_disposition: Browser handling for the response; "attachment" or "inline"
 
         Returns:
             Tuple[bool, str]: (success, url_or_error_message)
@@ -340,7 +342,7 @@ class S3Client:
                 f"H-04 AUDIT: Officer {requesting_user_id} ({requesting_user_role}) "
                 f"accessed document: {key}"
             )
-            return self.get_presigned_url(key, expiry, response_filename)
+            return self.get_presigned_url(key, expiry, response_filename, content_disposition)
 
         # Clients: validate ownership through application_id
         # Extract application_id from key path (format: documents/{app_id}/...)
@@ -386,13 +388,14 @@ class S3Client:
         logger.info(
             f"H-04 AUDIT: Client {requesting_user_id} accessed owned document: {key}"
         )
-        return self.get_presigned_url(key, expiry, response_filename)
+        return self.get_presigned_url(key, expiry, response_filename, content_disposition)
 
     def get_presigned_url(
         self,
         key: str,
         expiry: int = 900,
-        response_filename: Optional[str] = None
+        response_filename: Optional[str] = None,
+        content_disposition: str = "attachment",
     ) -> Tuple[bool, str]:
         """
         Generate a temporary presigned URL for document download.
@@ -404,6 +407,7 @@ class S3Client:
             key (str): S3 object key
             expiry (int): URL expiry time in seconds (default: 900 = 15 min, max: 3600 = 1 hour)
             response_filename (str, optional): Filename for Content-Disposition header
+            content_disposition (str): "attachment" for downloads or "inline" for browser preview
 
         Returns:
             Tuple[bool, str]: (success, url_or_error_message)
@@ -430,7 +434,8 @@ class S3Client:
             if response_filename:
                 # H-04: Sanitize filename to prevent header injection
                 safe_filename = re.sub(r'[^\w\s\-.]', '_', response_filename)[:255]
-                params['ResponseContentDisposition'] = f'attachment; filename="{safe_filename}"'
+                disposition = "inline" if content_disposition == "inline" else "attachment"
+                params['ResponseContentDisposition'] = f'{disposition}; filename="{safe_filename}"'
 
             url = self.s3_client.generate_presigned_url(
                 'get_object',

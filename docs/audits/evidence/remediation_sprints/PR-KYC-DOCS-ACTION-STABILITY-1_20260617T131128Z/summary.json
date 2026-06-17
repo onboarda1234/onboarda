@@ -1,0 +1,35 @@
+{
+  "task": "PR-KYC-DOCS-ACTION-STABILITY-1",
+  "status": "in_progress",
+  "base_origin_main_sha": "53352ce74c04202de96a2e24beb4b72e300ae604",
+  "branch": "codex/pr-kyc-docs-action-stability-1",
+  "local_changes": [
+    "Reject document review now requires a non-empty reason in the UI and backend.",
+    "KYC document upload, reject/review, and re-verify refresh back to the Documents & Evidence tab.",
+    "View uses the inline preview endpoint/new tab path while Download remains the attachment path.",
+    "S3 presigned URLs now preserve authorization and support inline Content-Disposition for previewable documents.",
+    "Document row More dropdown closes on outside click, Escape, and after action selection."
+  ],
+  "non_goals_confirmed": [
+    "No Agent 1 verification logic change",
+    "No approval gate change",
+    "No document policy engine change",
+    "No Change Management change",
+    "No Periodic Review change",
+    "No CA Production validation",
+    "No SAR/STR activation",
+    "No PR-7 work",
+    "No unrelated remediation closure"
+  ],
+  "local_tests": {
+    "focused": "36 passed",
+    "document_storage_download_policy": "35 passed",
+    "rmi_requests": "5 passed",
+    "diff_check": "passed"
+  },
+  "post_merge_staging": {
+    "version": "pending",
+    "api_smoke": "pending",
+    "browser_smoke": "pending"
+  }
+}
