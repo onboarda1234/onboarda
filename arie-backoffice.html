@@ -8529,7 +8529,7 @@ function renderDocumentDirectActions(app, doc, groupKey, state, expectedSlot) {
     return '<div class="document-review-actions">' +
       '<button class="doc-action-btn disabled" disabled>View</button>' +
       '<button class="doc-action-btn disabled" disabled>Download</button>' +
-      '<button class="doc-action-btn secondary" onclick="openBoDocUploadForExpectedSlot(' + JSON.stringify(expectedDocType) + ',' + JSON.stringify(expectedLabel) + ',' + JSON.stringify(expectedPersonId) + ',' + JSON.stringify(expectedPersonType) + ',' + JSON.stringify(expectedOwner) + ')">Upload</button>' +
+      '<button class="doc-action-btn secondary" onclick=\'openBoDocUploadForExpectedSlot(' + JSON.stringify(expectedDocType) + ',' + JSON.stringify(expectedLabel) + ',' + JSON.stringify(expectedPersonId) + ',' + JSON.stringify(expectedPersonType) + ',' + JSON.stringify(expectedOwner) + ')\'>Upload</button>' +
       '<button class="doc-action-btn info" onclick="requestMoreInfo()">Request from client</button>' +
     '</div>';
   }
