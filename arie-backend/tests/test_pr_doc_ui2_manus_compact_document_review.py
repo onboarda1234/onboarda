@@ -60,25 +60,23 @@ def test_details_are_collapsed_by_default_and_retain_technical_audit_fields_only
     secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
-    assert '<details class="document-review-details">' in details
-    assert '<details class="document-review-details" open' not in details
+    assert '<div class="document-review-audit-panel" hidden>' in details
     for audit_field in [
-        "Policy ID/version",
-        "Lifecycle context",
-        "Agent run ID",
-        "Evidence hash",
         "Verification timestamp",
         "Uploaded by",
         "Officer action history",
-        "Portal slot/source",
         "buildVerificationResultsHtml(doc.verification_results, coverage, auditContext)",
     ]:
         assert audit_field in details or audit_field in technical
     assert "More ▾" in secondary
     assert "Re-Verify" in secondary
+    assert "Technical audit details" in secondary
     assert "renderVerificationCoverageSummary(doc, policy)" not in details
     assert "Verification coverage" not in details
     assert "Verification details" not in details
+    assert "Portal slot/source" not in technical
+    assert "Lifecycle context" not in technical
+    assert "Document type" not in technical
 
 
 def test_large_ai_advisory_banner_is_reduced_in_kyc_documents_tab():
@@ -145,12 +143,13 @@ def test_secondary_menu_contains_view_download_and_missing_state_keeps_disabled_
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
     assert "openBoDocUploadForExpectedSlot" in primary
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
-    assert "viewBackofficeDocument" in secondary
+    assert "viewBackofficeDocument" in primary
     assert "downloadBackofficeDocument" in secondary
-    assert '>View</button>' in secondary
+    assert '>View</button>' in primary
     assert '>Download</button>' in secondary
     assert 'disabled>View</button>' in secondary
     assert 'disabled>Download</button>' in secondary
+    assert "Technical audit details" in secondary
     assert ">Upload</button>" in primary
     assert "Request from client" in secondary
     assert "No document uploaded" in missing_renderer
@@ -168,12 +167,14 @@ def test_officer_friendly_labels_replace_internal_default_row_language():
         "Red Flags",
         "Material issues and reliance evidence",
         "Technical / audit details",
+        "Portal slot/source",
+        "Lifecycle context",
     ]:
         assert old_label not in default_row
 
     assert "System setup issue: verification policy missing." in html
     assert "Issue" in html
-    assert "Details" in html
+    assert "<summary>Details</summary>" not in html
 
 
 def test_show_more_is_available_for_long_issue_copy_only_inside_compact_summary():

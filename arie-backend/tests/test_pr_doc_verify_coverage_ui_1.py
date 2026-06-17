@@ -63,6 +63,11 @@ def test_default_document_row_stays_compact_and_avoids_repeating_audit_payloads(
         "Full check result list",
         "Expected from portal slot",
         "Verification details",
+        "Portal slot/source",
+        "Lifecycle context",
+        "Document type",
+        "Blocks:",
+        "Next:",
     ]:
         assert hidden not in default_row
 
@@ -79,18 +84,20 @@ def test_row_actions_keep_one_visible_primary_action_and_move_secondary_actions_
         assert expected in actions
     secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
     for expected in [
-        "viewBackofficeDocument",
         "downloadBackofficeDocument",
         "Accept with reason",
         "Request replacement",
         "Reject",
         "Re-Verify",
         "More ▾",
+        "Technical audit details",
     ]:
         assert expected in secondary
     assert "verifyBackofficeDocument" in secondary
-    for label in ["Resolve issue", "Review required", "Upload", "Waiting", "Verified"]:
-        assert label in primary
+    assert "viewBackofficeDocument" in primary
+    assert ">View</button>" in primary
+    assert ">Upload</button>" in primary
+    assert "Review required" not in primary
 
 
 def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_or_material_panels():
@@ -101,14 +108,31 @@ def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_
     assert "buildVerificationResultsHtml(doc.verification_results, coverage, auditContext)" in details
     assert "Technical audit details" in technical
     assert "Passed technical checks" in technical
-    assert "Portal slot/source" in technical
-    assert "Lifecycle context" in technical
-    assert "Policy ID/version" in technical
+    assert "Portal slot/source" not in technical
+    assert "Lifecycle context" not in technical
+    assert "Policy ID/version" not in technical
+    assert "Document type" not in technical
     assert "Check ID:" in technical
     assert "Warnings:" not in technical
     assert "Issues:" not in technical
     assert "Material findings" not in technical
     assert "Verification coverage" not in technical
+    assert '<div class="document-review-audit-panel" hidden>' in details
+    assert "Technical audit details</summary>" not in technical
+
+
+def test_three_routine_passed_checks_are_hidden_but_other_passed_checks_remain():
+    html = _backoffice_html()
+    technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
+
+    for expected in [
+        "normalizedLabel === 'file format'",
+        "normalizedLabel === 'file size'",
+        "normalizedLabel === 'duplicate detection'",
+        "hideRoutinePass",
+        "Passed technical checks",
+    ]:
+        assert expected in technical
 
 
 def test_backoffice_upload_supports_expected_slot_person_mapping_and_upload_context():
