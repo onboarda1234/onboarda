@@ -4,6 +4,8 @@
   "evidence_timestamp": "20260617T163021Z",
   "branch": "codex/pr-rmi-continuation-1",
   "local_base_sha": "41b3fd2b3df6f9e44ccda1de00b4e145ed40b632",
+  "implementation_commit": "153dc7c27c87fde9fdf050d92394053fdd3bbfcd",
+  "pr_url": "https://github.com/onboarda1234/onboarda/pull/526",
   "implemented_changes": [
     "controlled_rmi_sent_continuation",
     "rmi_replacement_canonical_slot_mapping",

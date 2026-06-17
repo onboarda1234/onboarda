@@ -4,6 +4,10 @@ Closure status: NOT CLOSED
 
 Reason: implementation and local regression are complete, but the closure rule requires PR merge, staging deployment from merged main, matching `/api/version.git_sha` and image tag, passing CI, API smoke, authenticated browser smoke, and completed evidence.
 
+Draft PR: https://github.com/onboarda1234/onboarda/pull/526
+
+Implementation commit: `153dc7c27c87fde9fdf050d92394053fdd3bbfcd`
+
 Implemented:
 - Controlled `rmi_sent` continuation to `kyc_documents`, `kyc_submitted`, or `compliance_review`.
 - Continuation blocked unless active RMI items are accepted and linked to documents.
