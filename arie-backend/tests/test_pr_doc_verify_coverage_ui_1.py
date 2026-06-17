@@ -30,33 +30,23 @@ def test_verification_coverage_helper_tracks_expected_checks_and_system_blockers
         assert expected in helper
 
 
-def test_verification_coverage_summary_exposes_pass_fail_skip_not_run_and_system_state():
+def test_verification_coverage_helper_is_not_rendered_in_main_details_panel():
     html = _backoffice_html()
-    summary = _function_region(html, "renderVerificationCoverageSummary", "renderDocumentCompactSummary")
+    details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
 
-    for expected in [
-        "Verification coverage",
-        "Checks passed",
-        "Checks failed",
-        "Warnings",
-        "Skipped",
-        "Not run",
-        "System-blocked",
-        "Expected checks:",
-        "Persisted checks:",
-    ]:
-        assert expected in summary
+    assert "renderVerificationCoverageSummary(doc, policy)" not in details
+    assert "Verification coverage" not in details
 
 
 def test_default_document_row_stays_compact_and_avoids_repeating_audit_payloads():
     html = _backoffice_html()
-    card = _function_region(html, "renderUnifiedKycDocumentCard", "enhancedRequirementBackOfficeGroup")
+    card = _function_region(html, "renderUnifiedKycDocumentCard", "renderMissingKycDocumentRow")
     default_row = card.split("renderDocumentAuditDetails", 1)[0]
 
     for expected in [
         "renderDocumentCompactSummary(issue, blocker, nextAction, relianceState)",
         "renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot)",
-        "Expected from portal slot",
+        "documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)",
         "File: ",
     ]:
         assert expected in default_row
@@ -71,45 +61,60 @@ def test_default_document_row_stays_compact_and_avoids_repeating_audit_payloads(
         "Uploaded by",
         "Confidence",
         "Full check result list",
+        "Expected from portal slot",
+        "Verification details",
     ]:
         assert hidden not in default_row
 
 
-def test_uploaded_document_actions_include_view_download_and_reverify():
+def test_row_actions_keep_one_visible_primary_action_and_move_secondary_actions_into_more():
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
+    primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
 
     for expected in [
-        "viewBackofficeDocument",
-        "downloadBackofficeDocument",
-        ">View</button>",
-        ">Download</button>",
+        "renderDocumentPrimaryAction(app, doc, state, expectedSlot)",
         "renderDocumentSecondaryActions(app, doc, state)",
     ]:
         assert expected in actions
     secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    for expected in [
+        "viewBackofficeDocument",
+        "downloadBackofficeDocument",
+        "Accept with reason",
+        "Request replacement",
+        "Reject",
+        "Re-Verify",
+        "More ▾",
+    ]:
+        assert expected in secondary
     assert "verifyBackofficeDocument" in secondary
-    assert "More ▾" in secondary
+    for label in ["Resolve issue", "Review required", "Upload", "Waiting", "Verified"]:
+        assert label in primary
 
 
-def test_audit_details_use_technical_drawer_not_repeated_issue_boxes():
+def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_or_material_panels():
     html = _backoffice_html()
-    details = _function_region(html, "renderDocumentAuditDetails", "renderUnifiedKycDocumentCard")
+    details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
-    assert "renderVerificationCoverageSummary(doc, policy)" in details
-    assert "buildVerificationResultsHtml(doc.verification_results, coverage)" in details
+    assert "buildVerificationResultsHtml(doc.verification_results, coverage, auditContext)" in details
     assert "Technical audit details" in technical
-    assert "Material findings" in technical
     assert "Passed technical checks" in technical
+    assert "Portal slot/source" in technical
+    assert "Lifecycle context" in technical
+    assert "Policy ID/version" in technical
+    assert "Check ID:" in technical
     assert "Warnings:" not in technical
     assert "Issues:" not in technical
+    assert "Material findings" not in technical
+    assert "Verification coverage" not in technical
 
 
 def test_backoffice_upload_supports_expected_slot_person_mapping_and_upload_context():
     html = _backoffice_html()
     upload_region = _function_region(html, "toggleBoDocUpload", "viewBackofficeDocument")
-    direct_actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
+    primary_actions = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
 
     for expected in [
         "openBoDocUploadForExpectedSlot",
@@ -120,4 +125,5 @@ def test_backoffice_upload_supports_expected_slot_person_mapping_and_upload_cont
         "person_type=",
     ]:
         assert expected in upload_region
-    assert "onclick=\\'openBoDocUploadForExpectedSlot(" in direct_actions
+    assert "onclick=\\'openBoDocUploadForExpectedSlot(" in primary_actions
+    assert "Corporate entity document" in html

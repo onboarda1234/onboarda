@@ -760,10 +760,18 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-file { font-size:11px; color:var(--text2); margin-top:2px; overflow-wrap:anywhere; }
 .document-review-status-actions { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:wrap; }
 .document-review-summary-line { margin-top:7px; }
+.document-review-issue-stack { display:grid; gap:5px; }
 .document-review-issue-line { font-size:12px; line-height:1.45; color:var(--text2); font-weight:650; }
 .document-review-issue-line.issue { color:#92400e; }
 .document-review-issue-line.system { color:#1d4ed8; }
 .document-review-issue-line.ok { color:#475569; }
+.document-review-issue-text.clamped { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; }
+.document-review-issue-more { width:max-content; }
+.document-review-issue-more > summary { cursor:pointer; list-style:none; color:var(--brand); font-size:11px; font-weight:750; }
+.document-review-issue-more > summary::-webkit-details-marker { display:none; }
+.document-review-issue-more-copy { font-size:12px; line-height:1.45; color:var(--text2); margin-top:4px; max-width:680px; }
+.document-review-issue-more-copy.issue { color:#92400e; }
+.document-review-issue-more-copy.system { color:#1d4ed8; }
 .document-review-tag-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px; }
 .document-review-chip { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:3px 8px; border:1px solid var(--border1); background:var(--surface2); font-size:11px; font-weight:750; color:var(--text2); }
 .document-review-chip.neutral { border-color:rgba(43,47,143,.16); background:rgba(43,47,143,.045); color:var(--text2); }
@@ -819,13 +827,6 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .verification-technical-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
 .verification-audit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:7px; margin:0 0 8px; }
 .verification-audit-fact { border:1px solid var(--border1); border-radius:8px; background:var(--surface2); padding:6px 8px; font-size:11px; color:var(--text2); overflow-wrap:anywhere; }
-.verification-material-summary { border:1px solid rgba(217,119,6,.18); border-radius:10px; background:rgba(217,119,6,.05); padding:10px 11px; margin:8px 0; }
-.verification-material-summary.system { border-color:rgba(37,99,235,.18); background:rgba(37,99,235,.05); }
-.verification-material-title { font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text3); margin-bottom:6px; }
-.verification-material-list { display:grid; gap:5px; }
-.verification-material-item { font-size:12px; color:var(--text1); line-height:1.45; }
-.verification-coverage-inline { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-.verification-coverage-inline .verification-coverage-chip { margin-top:0; }
 .document-status-strip { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 12px; }
 .topbar-more-menu { position:relative; }
 .topbar-more-menu > summary { list-style:none; }
@@ -8489,6 +8490,13 @@ function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
   var issueLine = issueText && issueText !== '—' && issueText !== 'None'
     ? 'Issue: ' + issueText
     : 'No action required.';
+  var issueHtml = '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text">' + escapeHtml(issueLine) + '</span></div>';
+  if (issueLine.length > 180) {
+    issueHtml = '<div class="document-review-issue-stack">' +
+      '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text clamped">' + escapeHtml(issueLine) + '</span></div>' +
+      '<details class="document-review-issue-more"><summary>Show more</summary><div class="document-review-issue-more-copy ' + issueClass + '">' + escapeHtml(issueLine) + '</div></details>' +
+    '</div>';
+  }
   if (blockerText && blockerText !== '—' && blockerText !== 'None') {
     tags.push('<span class="document-review-chip blocking">Blocks: ' + escapeHtml(blockerText) + '</span>');
   }
@@ -8496,72 +8504,86 @@ function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
     tags.push('<span class="document-review-chip neutral">Next: ' + escapeHtml(nextText) + '</span>');
   }
   return '<div class="document-review-summary-line">' +
-    '<div class="document-review-issue-line ' + issueClass + '">' + escapeHtml(issueLine) + '</div>' +
+    issueHtml +
     (tags.length ? '<div class="document-review-tag-row">' + tags.join('') + '</div>' : '') +
   '</div>';
 }
 
 function renderDocumentSecondaryActions(app, doc, state) {
-  if (!doc) return '';
+  var label = (state && state.label) || '';
+  if (!doc) {
+    return '<details class="document-review-more">' +
+      '<summary class="doc-action-btn secondary">More ▾</summary>' +
+      '<div class="document-review-more-menu">' +
+        '<button class="document-review-more-item" disabled>View</button>' +
+        '<button class="document-review-more-item" disabled>Download</button>' +
+        '<button class="document-review-more-item" onclick="requestMoreInfo()">Request from client</button>' +
+      '</div>' +
+    '</details>';
+  }
   var appRef = escapeHtml((app && (app.ref || app.id)) || '');
   var docId = escapeHtml(doc.id || doc.document_id || '');
-  var label = (state && state.label) || '';
   var items = [
-    '<button class="document-review-more-item" onclick="verifyBackofficeDocument(\'' + docId + '\',\'' + appRef + '\')">Re-Verify</button>'
+    '<button class="document-review-more-item" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>',
+    '<button class="document-review-more-item" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>'
   ];
   if (label !== 'Verified' && label !== 'Manual accepted') {
+    items.push('<button class="document-review-more-item" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'accepted\')">Accept with reason</button>');
+    items.push('<button class="document-review-more-item" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'info_requested\')">Request replacement</button>');
     items.push('<button class="document-review-more-item danger" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'rejected\')">Reject</button>');
   }
+  items.push('<button class="document-review-more-item" onclick="verifyBackofficeDocument(\'' + docId + '\',\'' + appRef + '\')">Re-Verify</button>');
   return '<details class="document-review-more">' +
     '<summary class="doc-action-btn secondary">More ▾</summary>' +
     '<div class="document-review-more-menu">' + items.join('') + '</div>' +
   '</details>';
 }
 
+function openDocumentReviewDetails(trigger) {
+  try {
+    var row = trigger && trigger.closest ? trigger.closest('.document-review-row') : null;
+    var details = row ? row.querySelector('.document-review-details') : null;
+    if (!details) return;
+    details.open = true;
+    var summary = details.querySelector('summary');
+    if (summary && typeof summary.focus === 'function') summary.focus();
+    if (typeof details.scrollIntoView === 'function') {
+      details.scrollIntoView({ behavior:'smooth', block:'nearest' });
+    }
+  } catch (err) {
+    console.warn('Unable to open document review details', err);
+  }
+}
+
+function renderDocumentPrimaryAction(app, doc, state, expectedSlot) {
+  var label = (state && state.label) || 'Review required';
+  if (!doc) {
+    var expectedDocType = expectedSlot && expectedSlot.doc_type ? expectedSlot.doc_type : '';
+    var expectedLabel = expectedSlot && expectedSlot.label ? expectedSlot.label : '';
+    var expectedPersonId = expectedSlot && expectedSlot.person_id ? expectedSlot.person_id : '';
+    var expectedPersonType = expectedSlot && expectedSlot.person_type ? expectedSlot.person_type : '';
+    var expectedOwner = expectedSlot && expectedSlot.owner ? expectedSlot.owner : '';
+    return '<button class="doc-action-btn secondary" onclick=\'openBoDocUploadForExpectedSlot(' + JSON.stringify(expectedDocType) + ',' + JSON.stringify(expectedLabel) + ',' + JSON.stringify(expectedPersonId) + ',' + JSON.stringify(expectedPersonType) + ',' + JSON.stringify(expectedOwner) + ')\'>Upload</button>';
+  }
+  var buttonLabel = 'Review required';
+  if (label === 'Verified' || label === 'Manual accepted') {
+    buttonLabel = 'Verified';
+  } else if (label === 'Pending verification') {
+    buttonLabel = 'Waiting';
+  } else if (label === 'System issue' || label === 'Failed' || label === 'Expired' || label === 'Stale' || label === 'Request replacement' || label === 'Rejected') {
+    buttonLabel = 'Resolve issue';
+  }
+  return '<button class="doc-action-btn secondary" onclick="openDocumentReviewDetails(this)">' + escapeHtml(buttonLabel) + '</button>';
+}
+
 function renderDocumentDirectActions(app, doc, groupKey, state, expectedSlot) {
-  var hasFile = documentHasUploadedFile(doc);
-  var expectedDocType = expectedSlot && expectedSlot.doc_type ? expectedSlot.doc_type : '';
-  var expectedLabel = expectedSlot && expectedSlot.label ? expectedSlot.label : '';
-  var expectedPersonId = expectedSlot && expectedSlot.person_id ? expectedSlot.person_id : '';
-  var expectedPersonType = expectedSlot && expectedSlot.person_type ? expectedSlot.person_type : '';
-  var expectedOwner = expectedSlot && expectedSlot.owner ? expectedSlot.owner : '';
-  if (!hasFile) {
-    return '<div class="document-review-actions">' +
-      '<button class="doc-action-btn disabled" disabled>View</button>' +
-      '<button class="doc-action-btn disabled" disabled>Download</button>' +
-      '<button class="doc-action-btn secondary" onclick=\'openBoDocUploadForExpectedSlot(' + JSON.stringify(expectedDocType) + ',' + JSON.stringify(expectedLabel) + ',' + JSON.stringify(expectedPersonId) + ',' + JSON.stringify(expectedPersonType) + ',' + JSON.stringify(expectedOwner) + ')\'>Upload</button>' +
-      '<button class="doc-action-btn info" onclick="requestMoreInfo()">Request from client</button>' +
-    '</div>';
-  }
-  var appRef = escapeHtml((app && (app.ref || app.id)) || '');
-  var docId = escapeHtml(doc.id || doc.document_id || '');
-  var label = (state && state.label) || '';
-  var primaryAction = '';
-  if (label === 'System issue') {
-    primaryAction = '<button class="doc-action-btn secondary" onclick="verifyBackofficeDocument(\'' + docId + '\',\'' + appRef + '\')">Re-Verify</button>';
-  } else if (label === 'Expired' || label === 'Stale' || label === 'Request replacement') {
-    primaryAction = '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'info_requested\')">Request replacement</button>';
-  } else if (label === 'Verified' || label === 'Manual accepted') {
-    primaryAction = '';
-  } else if (label === 'Failed') {
-    primaryAction = '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'info_requested\')">Request replacement</button>';
-  } else {
-    primaryAction = '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'accepted\')">Accept with reason</button>';
-  }
-  var followUpAction = '';
-  if (label !== 'Verified' && label !== 'Manual accepted' && label !== 'Expired' && label !== 'Stale' && label !== 'Request replacement' && label !== 'Failed' && label !== 'System issue') {
-    followUpAction = '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'info_requested\')">Request replacement</button>';
-  }
   return '<div class="document-review-actions">' +
-    '<button class="doc-action-btn neutral" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>' +
-    '<button class="doc-action-btn neutral" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>' +
-    primaryAction +
-    followUpAction +
+    renderDocumentPrimaryAction(app, doc, state, expectedSlot) +
     renderDocumentSecondaryActions(app, doc, state) +
   '</div>';
 }
 
-function buildVerificationResultsHtml(results, coverage) {
+function buildVerificationResultsHtml(results, coverage, auditContext) {
   if (!results || (typeof results === 'object' && !Array.isArray(results) && Object.keys(results).length === 0)) {
     return '<details class="verification-technical-details"><summary>Technical audit details</summary><div style="padding:0 10px 10px;font-size:12px;color:var(--text3);">Verification details are not available yet.</div></details>';
   }
@@ -8569,20 +8591,16 @@ function buildVerificationResultsHtml(results, coverage) {
   var technicalItems = [];
   var sourceBanner = '';
   var classificationLegend = '';
-  var materialFindings = [];
-  var materialMessages = {};
   function pushAuditFact(label, value) {
     var normalized = normalizeDetailValue(value);
     if (normalized === '—') return;
     technicalItems.push('<div class="verification-audit-fact"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
   }
-  function pushMaterialFinding(message) {
-    var normalized = normalizeDetailValue(message);
-    if (normalized === '—') return;
-    if (materialMessages[normalized]) return;
-    materialMessages[normalized] = true;
-    materialFindings.push('<div class="verification-material-item">' + escapeHtml(normalized) + '</div>');
-  }
+  auditContext = auditContext || {};
+  pushAuditFact('Document type', auditContext.documentType);
+  pushAuditFact('Portal slot/source', auditContext.portalSource);
+  pushAuditFact('Lifecycle context', auditContext.lifecycleContext);
+  pushAuditFact('Uploaded by', auditContext.uploadedBy);
 
   if (typeof results === 'object' && !Array.isArray(results)) {
     var aiSource = String(firstMeaningfulDetailValue(results.ai_source, results.aiSource) || '').toLowerCase();
@@ -8605,7 +8623,7 @@ function buildVerificationResultsHtml(results, coverage) {
     }
     pushAuditFact('Method', firstMeaningfulDetailValue(results.verification_method, results.method, results.check_method));
     pushAuditFact('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
-    pushAuditFact('Agent execution ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id));
+    pushAuditFact('Agent run ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id));
     pushAuditFact('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash));
     pushAuditFact('Verification timestamp', firstMeaningfulDetailValue(results.verified_at, results.verification_timestamp, results.completed_at));
     pushAuditFact('Policy ID/version', firstMeaningfulDetailValue(results.policy_id, results.policyId) && firstMeaningfulDetailValue(results.policy_version, results.policyVersion)
@@ -8640,6 +8658,7 @@ function buildVerificationResultsHtml(results, coverage) {
     if (classificationLabel) meta.push('Method: ' + classificationLabel);
     if (check.confidence != null) meta.push('Confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
     if (check.ps_field) meta.push('Pre-screening field: ' + check.ps_field);
+    if (check.id || check.check_id || check.key) meta.push('Check ID: ' + firstMeaningfulDetailValue(check.id, check.check_id, check.key));
     var rowHtml = '<div style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border2,#e5e7eb);gap:8px;">' +
       '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:44px;padding:2px 6px;border-radius:999px;background:' + resultColor + '14;color:' + resultColor + ';font-size:10px;font-weight:800;text-transform:uppercase;">' + escapeHtml(result.replace(/_/g, ' ')) + '</span>' +
       '<div style="min-width:0;flex:1;"><div style="font-size:12px;font-weight:800;color:var(--text1);">' + label + '</div>' +
@@ -8650,7 +8669,6 @@ function buildVerificationResultsHtml(results, coverage) {
       passedCheckRows.push(rowHtml);
     } else {
       checkRows.push(rowHtml);
-      pushMaterialFinding(message || (firstMeaningfulDetailValue(check.label, check.name) || 'Verification check requires review.'));
     }
   });
 
@@ -8658,27 +8676,11 @@ function buildVerificationResultsHtml(results, coverage) {
   if (hasClassifiedChecks) {
     classificationLegend = '<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>';
   }
-  if (Array.isArray(results.warnings)) results.warnings.forEach(pushMaterialFinding);
-  if (Array.isArray(results.red_flags)) results.red_flags.forEach(pushMaterialFinding);
-  if (Array.isArray(results.issues)) results.issues.forEach(pushMaterialFinding);
-  if (results.system_warning || results.systemWarning) {
-    pushMaterialFinding(String(results.system_warning || results.systemWarning).replace(/_/g, ' '));
-  }
-  var coverageChips = [
-    renderVerificationCoverageChip('Passed', coverage.counts.pass, 'pass'),
-    renderVerificationCoverageChip('Failed', coverage.counts.fail, 'fail'),
-    renderVerificationCoverageChip('Warnings', coverage.counts.warn, 'warn'),
-    renderVerificationCoverageChip('Skipped', coverage.counts.skipped, 'pending'),
-    renderVerificationCoverageChip('Not run', coverage.counts.not_run, 'pending'),
-    renderVerificationCoverageChip('System blocked', coverage.systemBlocked ? 'Yes' : 'No', coverage.systemBlocked ? 'system' : 'none')
-  ].join('');
-  var materialTone = coverage.systemBlocked ? ' system' : '';
 
   return '<details class="verification-technical-details">' +
     '<summary>Technical audit details</summary>' +
     '<div style="padding:0 10px 10px;">' +
       sourceBanner +
-      (materialFindings.length ? '<div class="verification-material-summary' + materialTone + '"><div class="verification-material-title">Material findings</div><div class="verification-material-list">' + materialFindings.join('') + '</div><div class="verification-coverage-inline">' + coverageChips + '</div></div>' : '<div class="verification-coverage-inline">' + coverageChips + '</div>') +
       (technicalItems.length ? '<div class="verification-audit-grid">' + technicalItems.join('') + '</div>' : '') +
       classificationLegend +
       '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:4px 0 6px;">Checks requiring attention</div>' +
@@ -8694,37 +8696,48 @@ function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, p
   var coverage = buildDocumentVerificationCoverage(doc, policy);
   var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
   var reviewComment = doc.review_comment ? doc.review_comment : '';
-  var auditFacts = [
-    renderDocumentReviewField('Document name', documentFileName(doc)),
-    renderDocumentReviewField('Document type', expectedTypeLabel),
-    renderDocumentReviewField('Expected type/source', expectedSlot ? ('Expected from portal slot: ' + expectedSlot.label) : (linkedRequirement ? ('Requested enhanced evidence: ' + expectedTypeLabel) : 'Not portal-slot based')),
-    renderDocumentReviewField('Document status', (state && state.label) || 'Review required'),
-    renderDocumentReviewField('Issue', issue, issue === 'None' ? 'none' : 'issue'),
-    renderDocumentReviewField('Blocker', blocker, blocker === 'None' ? 'none' : 'blocking'),
-    renderDocumentReviewField('Policy ID/version', policy ? ((policy.policyId || policy.id || 'Policy') + ' / ' + (policy.version || 'v1')) : (expectedSlot ? 'Policy missing for expected type' : 'Document type required')),
-    renderDocumentReviewField('Lifecycle context', documentLifecycleLabel(doc, policy, linkedRequirement)),
-    renderDocumentReviewField('Agent run ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id)),
-    renderDocumentReviewField('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash)),
-    renderDocumentReviewField('Verification timestamp', firstMeaningfulDetailValue(doc.verified_at, results.verified_at, results.verification_timestamp, results.completed_at)),
-    renderDocumentReviewField('Uploaded by', normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by))
-  ].join('');
   var officerHistory = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—' || reviewComment
     ? '<div class="evidence-action-panel" style="margin-top:9px;"><div class="evidence-action-label">Officer action history</div><div class="evidence-action-copy">' +
       escapeHtml('Reviewed by: ' + reviewerLabel + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + normalizeDetailValue(doc.reviewed_at) : '') + (reviewComment ? ' | Comment: ' + reviewComment : '')) +
       '</div></div>'
     : '';
   var typePanel = documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot) ? renderEvidenceClassificationPanel(doc) : '';
+  var auditContext = {
+    documentType: expectedTypeLabel,
+    portalSource: expectedSlot ? ('Expected from portal slot: ' + expectedSlot.label) : (linkedRequirement ? ('Requested enhanced evidence: ' + expectedTypeLabel) : 'Not portal-slot based'),
+    lifecycleContext: documentLifecycleLabel(doc, policy, linkedRequirement),
+    uploadedBy: normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by)
+  };
   return '<details class="document-review-details">' +
     '<summary>Details</summary>' +
     '<div class="document-review-details-body">' +
-      '<div class="evidence-material-title">Verification details</div>' +
-      '<div class="document-review-details-grid">' + auditFacts + '</div>' +
       officerHistory +
       typePanel +
-      renderVerificationCoverageSummary(doc, policy) +
-      buildVerificationResultsHtml(doc.verification_results, coverage) +
+      buildVerificationResultsHtml(doc.verification_results, coverage, auditContext) +
     '</div>' +
   '</details>';
+}
+
+function documentReviewContextLine(app, doc, linkedRequirement, expectedSlot) {
+  if (linkedRequirement) {
+    if (linkedRequirement.subject_name) return 'Requested enhanced evidence · ' + linkedRequirement.subject_name;
+    return 'Requested enhanced evidence';
+  }
+  if (expectedSlot) {
+    if (expectedSlot.person_id) {
+      var partyLabel = expectedSlot.person_type === 'director'
+        ? 'Director'
+        : expectedSlot.person_type === 'ubo'
+          ? 'UBO'
+          : expectedSlot.person_type === 'intermediary'
+            ? 'Intermediary'
+            : 'Person';
+      return partyLabel + (expectedSlot.owner ? ' · ' + expectedSlot.owner : '');
+    }
+    return 'Corporate entity document';
+  }
+  var ownerLabel = findDocumentOwnerLabelForApp(app, doc);
+  return ownerLabel === 'Application-level document' ? 'Supporting document' : ownerLabel;
 }
 
 function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot) {
@@ -8735,8 +8748,6 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot)
   var blocker = documentBlocksDisplay(doc, policy, relianceState, expectedSlot);
   var groupKey = documentReviewGroupKey(doc, policy, relianceState, expectedSlot, linkedRequirement);
   var rowClass = documentReviewRowClass(groupKey, relianceState);
-  var typePrefix = expectedSlot ? 'Expected from portal slot' : (linkedRequirement ? 'Requested enhanced evidence' : 'Document type');
-  var ownerLabel = findDocumentOwnerLabelForApp(app, doc);
   var fileName = documentFileName(doc);
   var nextAction = documentShortNextAction(doc, policy, relianceState);
   var icon = documentReviewIconForType(doc, expectedSlot, linkedRequirement);
@@ -8746,7 +8757,7 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot)
         '<span class="document-review-icon">' + escapeHtml(icon) + '</span>' +
         '<div class="document-review-title-wrap">' +
           '<div class="document-review-title">' + escapeHtml(expectedTypeLabel) + '</div>' +
-          '<div class="document-review-subtitle">' + escapeHtml(typePrefix) + ': ' + escapeHtml(expectedTypeLabel) + ' · Owner: ' + escapeHtml(ownerLabel) + '</div>' +
+          '<div class="document-review-subtitle">' + escapeHtml(documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)) + '</div>' +
           '<div class="document-review-file">File: ' + escapeHtml(fileName) + '</div>' +
         '</div>' +
       '</div>' +
@@ -8863,7 +8874,7 @@ function renderMissingKycDocumentRow(app, expectedSlot) {
         '<span class="document-review-icon">' + escapeHtml(icon) + '</span>' +
         '<div class="document-review-title-wrap">' +
           '<div class="document-review-title">' + escapeHtml(expectedSlot.label) + '</div>' +
-          '<div class="document-review-subtitle">Expected from portal slot: ' + escapeHtml(expectedSlot.label) + ' · Owner: ' + escapeHtml(owner) + '</div>' +
+          '<div class="document-review-subtitle">' + escapeHtml(expectedSlot.person_id ? ((expectedSlot.person_type === 'director' ? 'Director' : expectedSlot.person_type === 'ubo' ? 'UBO' : 'Person') + (owner ? ' · ' + owner : '')) : 'Corporate entity document') + '</div>' +
           '<div class="document-review-file">No document uploaded</div>' +
         '</div>' +
       '</div>' +
