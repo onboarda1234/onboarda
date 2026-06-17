@@ -1,0 +1,37 @@
+{
+  "status": "local_regression_passed_staging_pending",
+  "local_checks": [
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest arie-backend/tests/test_document_reliance_gate.py -q",
+      "result": "11 passed"
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest arie-backend/tests/test_phase5_p1_hardening.py -q -k \"rmi_replacement_upload_maps_to_canonical_required_slot or unfulfilled_rmi_sent_cannot_continue or fulfilled_rmi_sent_can_continue_to_kyc_documents_and_audits or rmi_sent_direct_kyc_submitted_still_requires_document_gate or rmi_sent_rejects_arbitrary_status_transition\"",
+      "result": "5 passed, 10 deselected"
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest arie-backend/tests/test_phase5_p1_hardening.py -q -k \"not edd\"",
+      "result": "12 passed, 3 deselected"
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m py_compile arie-backend/server.py arie-backend/document_reliance_gate.py",
+      "result": "passed"
+    }
+  ],
+  "full_phase5_result": {
+    "command": "/opt/homebrew/bin/python3.11 -m pytest arie-backend/tests/test_phase5_p1_hardening.py -q",
+    "result": "13 passed, 2 failed",
+    "residual_failures": [
+      "test_edd_requires_sla_and_findings_before_senior_review: fixture senior_reviewer sco001 is not seeded as SCO/Admin",
+      "test_edd_findings_require_recommendation_plus_evidence: fixture senior_reviewer sco001 is not seeded as SCO/Admin"
+    ],
+    "classification": "unrelated EDD test fixture issue, not changed by PR-RMI-CONTINUATION-1"
+  },
+  "staging_checks": {
+    "liveness": "pending",
+    "health": "pending",
+    "authenticated_version": "pending",
+    "focused_rmi_continuation_api": "pending",
+    "memo_generation_after_replacement": "pending"
+  }
+}

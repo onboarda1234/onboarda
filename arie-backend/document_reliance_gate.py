@@ -27,7 +27,7 @@ from verification_state import (
 )
 
 
-POLICY_VERSION = "document_reliance_gate_v1"
+POLICY_VERSION = "document_reliance_gate_v2"
 ACTIVE_DOCUMENT_SQL = "COALESCE(is_current, TRUE) = TRUE"
 MANUAL_ACCEPTANCE_ROLES = {"admin", "sco"}
 DEFAULT_STALE_DAYS = int(os.environ.get("DOCUMENT_VERIFICATION_STALE_DAYS", "365") or "365")
@@ -370,6 +370,148 @@ def _index_documents(docs: Iterable[Mapping[str, Any]]) -> Tuple[Dict[str, Dict[
     return by_slot, by_id
 
 
+def _rmi_item_text(item: Mapping[str, Any]) -> str:
+    return " ".join(
+        str(item.get(key) or "")
+        for key in ("label", "description")
+        if item.get(key) is not None
+    ).lower()
+
+
+def resolve_rmi_replacement_slot(
+    db: Any,
+    app: Mapping[str, Any],
+    rmi_item: Mapping[str, Any],
+    *,
+    doc_type: Any = None,
+    expectations: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Resolve an RMI item to the original required KYC slot when possible.
+
+    Structured RMI items predate an explicit canonical-slot column. Existing
+    requests therefore carry only doc_type plus human labels such as
+    ``entity:reg_sh`` or ``ubo_1:passport``. This resolver is intentionally
+    conservative: it only maps when the item can be matched to one required
+    KYC expectation by exact canonical slot, person/doc shorthand, or an
+    unambiguous entity/person doc_type fallback.
+    """
+    requested_doc_type = _normalize_document_type(doc_type or rmi_item.get("doc_type"))
+    if not requested_doc_type:
+        return None
+    app_dict = _row_to_dict(app)
+    expected_items = [
+        dict(expectation)
+        for expectation in (expectations or build_required_document_expectations(db, app_dict))
+        if _normalize_document_type(expectation.get("doc_type")) == requested_doc_type
+    ]
+    if not expected_items:
+        return None
+
+    text = _rmi_item_text(rmi_item)
+    exact_matches = [
+        expectation for expectation in expected_items
+        if str(expectation.get("slot_key") or "").lower()
+        and str(expectation.get("slot_key") or "").lower() in text
+    ]
+    if len(exact_matches) == 1:
+        return dict(exact_matches[0])
+
+    shorthand_matches = []
+    for expectation in expected_items:
+        person_id = str(expectation.get("person_id") or "").strip()
+        if not person_id:
+            continue
+        shorthand = f"{person_id}:{requested_doc_type}".lower()
+        if shorthand in text:
+            shorthand_matches.append(expectation)
+    if len(shorthand_matches) == 1:
+        return dict(shorthand_matches[0])
+
+    entity_matches = [expectation for expectation in expected_items if not expectation.get("person_id")]
+    if len(entity_matches) == 1 and (f"entity:{requested_doc_type}" in text or len(expected_items) == 1):
+        return dict(entity_matches[0])
+
+    person_matches = [expectation for expectation in expected_items if expectation.get("person_id")]
+    if len(person_matches) == 1 and not entity_matches:
+        return dict(person_matches[0])
+
+    return None
+
+
+def _apply_rmi_document_slot_aliases(
+    db: Any,
+    app: Mapping[str, Any],
+    expectations: Iterable[Mapping[str, Any]],
+    docs_by_slot: Dict[str, Dict[str, Any]],
+    docs_by_id: Dict[Any, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    app_id = _row_get(app, "id")
+    if db is None or not app_id or not docs_by_id:
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT i.id AS rmi_item_id,
+                   i.request_id AS rmi_request_id,
+                   i.doc_type,
+                   i.label,
+                   i.description,
+                   i.status AS rmi_item_status,
+                   i.document_id,
+                   r.status AS rmi_request_status
+              FROM rmi_request_items i
+              JOIN rmi_requests r ON r.id = i.request_id
+             WHERE r.application_id = ?
+               AND i.document_id IS NOT NULL
+               AND LOWER(COALESCE(r.status, 'open')) <> 'cancelled'
+            """,
+            (app_id,),
+        ).fetchall()
+    except Exception:
+        return []
+
+    aliases: List[Dict[str, Any]] = []
+    for row in rows:
+        item = _row_to_dict(row)
+        if str(item.get("rmi_item_status") or "").strip().lower() == "rejected":
+            continue
+        doc = docs_by_id.get(item.get("document_id"))
+        if not doc:
+            continue
+        rmi_slot_key = f"rmi:{item.get('rmi_item_id')}"
+        current_slot = str(doc.get("slot_key") or "").strip()
+        if current_slot and current_slot != rmi_slot_key and current_slot in docs_by_slot:
+            continue
+        expectation = resolve_rmi_replacement_slot(
+            db,
+            app,
+            item,
+            doc_type=doc.get("doc_type") or item.get("doc_type"),
+            expectations=expectations,
+        )
+        if not expectation:
+            continue
+        canonical_slot = expectation.get("slot_key")
+        if not canonical_slot or canonical_slot in docs_by_slot:
+            continue
+        alias_doc = dict(doc)
+        alias_doc["_rmi_trace"] = {
+            "rmi_request_id": item.get("rmi_request_id"),
+            "rmi_item_id": item.get("rmi_item_id"),
+            "rmi_item_status": item.get("rmi_item_status"),
+            "rmi_request_status": item.get("rmi_request_status"),
+            "rmi_slot_key": rmi_slot_key,
+            "canonical_slot_key": canonical_slot,
+        }
+        docs_by_slot[canonical_slot] = alias_doc
+        aliases.append({
+            **alias_doc["_rmi_trace"],
+            "document_id": doc.get("id"),
+            "doc_type": doc.get("doc_type"),
+        })
+    return aliases
+
+
 def manual_acceptance_details(doc: Mapping[str, Any]) -> Dict[str, Any]:
     role = str(doc.get("reviewer_role") or "").strip().lower()
     reason = str(doc.get("review_comment") or "").strip()
@@ -477,7 +619,7 @@ def _blocker(
 
 
 def _snapshot_base(expectation: Mapping[str, Any], doc: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-    return {
+    snapshot = {
         "required_document_type": expectation.get("doc_type"),
         "label": expectation.get("label"),
         "slot_key": expectation.get("slot_key"),
@@ -490,6 +632,10 @@ def _snapshot_base(expectation: Mapping[str, Any], doc: Optional[Mapping[str, An
         "verified_at": doc.get("verified_at") if doc else None,
         "review_status": doc.get("review_status") if doc else None,
     }
+    if doc and isinstance(doc.get("_rmi_trace"), dict):
+        snapshot["rmi_trace"] = dict(doc["_rmi_trace"])
+        snapshot["canonical_slot_satisfied_by_rmi"] = True
+    return snapshot
 
 
 def _evaluate_document(
@@ -617,7 +763,14 @@ def evaluate_document_reliance_gate(
     app_id = app_dict.get("id")
     expectations = build_required_document_expectations(db, app_dict)
     docs = [dict(doc) for doc in documents] if documents is not None else _load_active_documents(db, app_id)
-    docs_by_slot, _docs_by_id = _index_documents(docs)
+    docs_by_slot, docs_by_id = _index_documents(docs)
+    rmi_slot_aliases = _apply_rmi_document_slot_aliases(
+        db,
+        app_dict,
+        expectations,
+        docs_by_slot,
+        docs_by_id,
+    )
 
     snapshots: List[Dict[str, Any]] = []
     blockers: List[Dict[str, Any]] = []
@@ -663,6 +816,7 @@ def evaluate_document_reliance_gate(
             "timestamp_required": True,
             "audit_required": True,
         },
+        "rmi_slot_aliases": rmi_slot_aliases,
         "stale_days": stale_days,
         "require_agent_execution": require_agent_execution,
     }

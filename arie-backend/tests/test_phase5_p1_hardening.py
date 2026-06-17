@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -137,6 +138,86 @@ def _create_edd_case(app_id, *, stage="analysis", sla_due_at=None, senior_review
     return case_id
 
 
+def _create_rmi_item(app_id, *, doc_type="reg_sh", label="Replacement required for entity:reg_sh",
+                     item_status="requested", request_status="open", document_id=None):
+    from db import get_db
+
+    conn = get_db()
+    app = conn.execute("SELECT id, client_id FROM applications WHERE id=?", (app_id,)).fetchone()
+    request_id = uuid.uuid4().hex[:16]
+    item_id = uuid.uuid4().hex[:16]
+    conn.execute(
+        """INSERT INTO rmi_requests
+           (id, application_id, client_id, status, reason, deadline, created_by, created_by_name, fulfilled_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            request_id,
+            app_id,
+            app["client_id"] if app else "",
+            request_status,
+            "Missing required document",
+            "2026-12-31",
+            "admin001",
+            "Phase 5 Officer",
+            datetime.now(timezone.utc).isoformat() if request_status == "fulfilled" else None,
+        ),
+    )
+    conn.execute(
+        """INSERT INTO rmi_request_items
+           (id, request_id, doc_type, label, description, status, document_id, uploaded_at, reviewed_at)
+           VALUES (?, ?, ?, ?, '', ?, ?, ?, ?)""",
+        (
+            item_id,
+            request_id,
+            doc_type,
+            label,
+            item_status,
+            document_id,
+            datetime.now(timezone.utc).isoformat() if document_id else None,
+            datetime.now(timezone.utc).isoformat() if item_status in ("accepted", "rejected") else None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return request_id, item_id
+
+
+def _insert_rmi_document(app_id, item_id, *, doc_type="reg_sh", slot_key=None, status="verified"):
+    from db import get_db
+
+    conn = get_db()
+    doc_id = uuid.uuid4().hex[:16]
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    conn.execute(
+        """INSERT INTO documents
+           (id, application_id, doc_type, doc_name, file_path, slot_key,
+            verification_status, verification_results, verified_at, review_status,
+            review_comment, reviewed_by, reviewer_role, reviewed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted',
+                   'Accepted RMI replacement for workflow continuation.', 'admin001', 'admin', datetime('now'))""",
+        (
+            doc_id,
+            app_id,
+            doc_type,
+            f"{doc_type}.pdf",
+            f"/tmp/{app_id}/{doc_type}.pdf",
+            slot_key or f"rmi:{item_id}",
+            status,
+            json.dumps({"overall": status, "checks": [{"result": "pass"}], "verified_at": verified_at}),
+            verified_at,
+        ),
+    )
+    conn.execute(
+        """INSERT INTO agent_executions
+           (application_id, document_id, agent_name, agent_number, status, checks_json, requires_review)
+           VALUES (?, ?, 'verify_document', 1, ?, ?, 0)""",
+        (app_id, doc_id, status, json.dumps([{"result": "pass"}])),
+    )
+    conn.commit()
+    conn.close()
+    return doc_id
+
+
 def _insert_edd_findings(case_id):
     from db import get_db
 
@@ -184,6 +265,123 @@ def test_legacy_general_doc_type_maps_to_supporting_document(phase5_api_server):
 
     assert resp.status_code == 201, resp.text
     assert resp.json()["doc_type"] == "supporting_document"
+
+
+def test_rmi_replacement_upload_maps_to_canonical_required_slot(phase5_api_server):
+    from db import get_db
+
+    client_id, app_id, _ = _seed_app(app_id="phase5_rmi_upload_slot", ref="ARF-2026-P5-020", status="rmi_sent")
+    request_id, item_id = _create_rmi_item(app_id)
+
+    resp = requests.post(
+        f"{phase5_api_server}/api/applications/{app_id}/documents?doc_type=reg_sh&rmi_item_id={item_id}",
+        headers=_client_headers(client_id),
+        files={"file": ("shareholder-register.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=5,
+    )
+
+    assert resp.status_code == 201, resp.text
+    payload = resp.json()
+    assert payload["slot_key"] == "entity:reg_sh"
+    assert payload["canonical_slot_key"] == "entity:reg_sh"
+    assert payload["rmi_trace_slot_key"] == f"rmi:{item_id}"
+    assert payload["rmi_item_id"] == item_id
+
+    conn = get_db()
+    item = conn.execute("SELECT status, document_id FROM rmi_request_items WHERE id=?", (item_id,)).fetchone()
+    doc = conn.execute("SELECT slot_key FROM documents WHERE id=?", (payload["id"],)).fetchone()
+    audit = conn.execute(
+        "SELECT detail FROM audit_log WHERE target=? AND action='RMI Replacement Uploaded' ORDER BY timestamp DESC, id DESC LIMIT 1",
+        ("ARF-2026-P5-020",),
+    ).fetchone()
+    conn.close()
+    assert item["status"] == "uploaded"
+    assert item["document_id"] == payload["id"]
+    assert doc["slot_key"] == "entity:reg_sh"
+    assert audit and item_id in audit["detail"] and request_id in audit["detail"]
+
+
+def test_unfulfilled_rmi_sent_cannot_continue(phase5_api_server):
+    _, app_id, _ = _seed_app(app_id="phase5_rmi_unfulfilled", ref="ARF-2026-P5-021", status="rmi_sent")
+    _create_rmi_item(app_id)
+
+    resp = requests.patch(
+        f"{phase5_api_server}/api/applications/{app_id}",
+        json={"status": "kyc_documents"},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+
+    assert resp.status_code == 409
+    assert "All active RMI items must be uploaded and officer-accepted" in resp.text
+
+
+def test_fulfilled_rmi_sent_can_continue_to_kyc_documents_and_audits(phase5_api_server):
+    from db import get_db
+
+    _, app_id, ref = _seed_app(app_id="phase5_rmi_continue", ref="ARF-2026-P5-022", status="rmi_sent")
+    request_id, item_id = _create_rmi_item(app_id, item_status="accepted", request_status="fulfilled")
+    doc_id = _insert_rmi_document(app_id, item_id)
+    conn = get_db()
+    conn.execute("UPDATE rmi_request_items SET document_id=? WHERE id=?", (doc_id, item_id))
+    conn.commit()
+    conn.close()
+
+    resp = requests.patch(
+        f"{phase5_api_server}/api/applications/{app_id}",
+        json={"status": "kyc_documents"},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+
+    assert resp.status_code == 200, resp.text
+    conn = get_db()
+    app = conn.execute("SELECT status FROM applications WHERE id=?", (app_id,)).fetchone()
+    audit = conn.execute(
+        "SELECT detail, before_state, after_state FROM audit_log WHERE target=? AND action='RMI Continuation' ORDER BY timestamp DESC, id DESC LIMIT 1",
+        (ref,),
+    ).fetchone()
+    conn.close()
+    assert app["status"] == "kyc_documents"
+    assert audit and request_id in audit["detail"]
+    assert '"status": "rmi_sent"' in audit["before_state"]
+    assert '"status": "kyc_documents"' in audit["after_state"]
+
+
+def test_rmi_sent_direct_kyc_submitted_still_requires_document_gate(phase5_api_server):
+    _, app_id, _ = _seed_app(app_id="phase5_rmi_direct_gate", ref="ARF-2026-P5-023", status="rmi_sent")
+    _, item_id = _create_rmi_item(app_id, item_status="accepted", request_status="fulfilled")
+    doc_id = _insert_rmi_document(app_id, item_id)
+    from db import get_db
+
+    conn = get_db()
+    conn.execute("UPDATE rmi_request_items SET document_id=? WHERE id=?", (doc_id, item_id))
+    conn.commit()
+    conn.close()
+
+    resp = requests.patch(
+        f"{phase5_api_server}/api/applications/{app_id}",
+        json={"status": "kyc_submitted"},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+
+    assert resp.status_code == 409
+    assert "Document evidence gate failed for RMI continuation" in resp.text
+
+
+def test_rmi_sent_rejects_arbitrary_status_transition(phase5_api_server):
+    _, app_id, _ = _seed_app(app_id="phase5_rmi_arbitrary", ref="ARF-2026-P5-024", status="rmi_sent")
+
+    resp = requests.patch(
+        f"{phase5_api_server}/api/applications/{app_id}",
+        json={"status": "approved"},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+
+    assert resp.status_code == 400
+    assert "Invalid workflow transition" in resp.text
 
 
 def test_rmi_custom_items_use_supporting_document_and_invalid_explicit_type_rejected():
