@@ -697,7 +697,8 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "function enhancedRequirementNeedsAttention(req)" in html
     assert "<summary>Details</summary>" in html
     assert "<summary>Technical audit details</summary>" in html
-    assert "Full check result list" in html
+    assert "Checks requiring attention" in html
+    assert "Passed technical checks" in html
     assert "function buildDocumentVerificationCoverage(doc, policy)" in html
     assert "function renderVerificationCoverageSummary(doc, policy)" in html
     assert "Expected checks missing" in html

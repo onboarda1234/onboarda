@@ -26,12 +26,13 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
     renderer = _verification_renderer(html)
 
     assert "Technical audit details" in renderer
-    assert "Full check result list" in renderer
+    assert "Checks requiring attention" in renderer
+    assert "Passed technical checks" in renderer
     assert "Agent execution ID" in renderer
     assert "Evidence hash" in renderer
     assert "Verification timestamp" in renderer
     assert "Policy ID/version" in renderer
-    assert "System warning" in renderer
+    assert "Material findings" in renderer
     assert "Expected checks missing" in renderer
     assert "Failed or warning checks" not in renderer
     assert "Overall Result" not in renderer
