@@ -695,8 +695,8 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "Technical/control tracker. Primary document execution now happens in the KYC Documents groups above." not in html
     assert "function kycDocumentNeedsAttention(doc)" in html
     assert "function enhancedRequirementNeedsAttention(req)" in html
-    assert "<summary>Details</summary>" in html
-    assert "<summary>Technical audit details</summary>" in html
+    assert "<summary>Details</summary>" not in html
+    assert "Technical audit details" in html
     assert "Checks requiring attention" in html
     assert "Passed technical checks" in html
     assert "function buildDocumentVerificationCoverage(doc, policy)" in html

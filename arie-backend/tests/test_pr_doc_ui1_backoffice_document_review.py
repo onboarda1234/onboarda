@@ -72,15 +72,16 @@ def test_uploaded_document_actions_move_into_more_menu_while_primary_cta_stays_c
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
     assert "openBoDocUploadForExpectedSlot" in primary
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
-    assert "viewBackofficeDocument" in secondary
+    assert "viewBackofficeDocument" in primary
     assert "downloadBackofficeDocument" in secondary
-    assert ">View<" in secondary
+    assert ">View<" in primary
     assert ">Download<" in secondary
     assert "Accept with reason" in secondary
     assert "Request replacement" in secondary
     assert "Reject" in secondary
-    for label in ["Resolve issue", "Review required", "Upload", "Waiting", "Verified"]:
-        assert label in primary
+    assert "Technical audit details" in secondary
+    assert "Review required" not in primary
+    assert ">Upload</button>" in primary
 
 
 def test_missing_documents_disable_view_and_download():
@@ -111,13 +112,14 @@ def test_default_row_is_action_first_and_details_hold_audit_fields():
         assert hidden_by_default not in default_row
 
     for audit_field in [
-        "Policy ID/version",
-        "Agent run ID",
-        "Evidence hash",
-        "Portal slot/source",
-        "<summary>Details</summary>",
+        "Verification timestamp",
+        "Uploaded by",
+        "Technical audit details",
     ]:
         assert audit_field in details or audit_field in technical or audit_field in html
+    assert "Portal slot/source" not in technical
+    assert "Lifecycle context" not in technical
+    assert "<summary>Details</summary>" not in details
 
 
 def test_approval_blocking_uses_warning_or_error_styling_not_green():

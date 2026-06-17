@@ -765,7 +765,7 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-issue-line.issue { color:#92400e; }
 .document-review-issue-line.system { color:#1d4ed8; }
 .document-review-issue-line.ok { color:#475569; }
-.document-review-issue-text.clamped { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; }
+.document-review-issue-text.clamped { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 .document-review-issue-more { width:max-content; }
 .document-review-issue-more > summary { cursor:pointer; list-style:none; color:var(--brand); font-size:11px; font-weight:750; }
 .document-review-issue-more > summary::-webkit-details-marker { display:none; }
@@ -794,13 +794,9 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-more-item:hover { background:var(--surface2); }
 .document-review-more-item.danger { color:#b91c1c; }
 .document-review-more-item.danger:hover { background:rgba(220,38,38,.08); }
-.document-review-details { margin-top:7px; border:0; border-radius:10px; background:transparent; overflow:visible; }
-.document-review-details[open] { border:1px solid var(--border1); background:var(--surface2); padding:8px; }
-.document-review-details summary { cursor:pointer; display:inline-flex; align-items:center; gap:5px; width:max-content; padding:5px 9px; border:1px solid rgba(43,47,143,.18); border-radius:6px; background:var(--surface2); font-size:11px; font-weight:800; color:var(--brand); list-style:none; }
-.document-review-details summary::-webkit-details-marker { display:none; }
-.document-review-details[open] summary { margin-bottom:8px; background:var(--surface); }
-.document-review-details-body { padding:0; }
-.document-review-details-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin:0 0 9px; }
+.document-review-audit-panel { margin-top:7px; border:1px solid var(--border1); border-radius:10px; background:var(--surface2); padding:8px; }
+.document-review-audit-panel[hidden] { display:none !important; }
+.document-review-audit-panel-body { padding:0; }
 .verification-coverage-panel { border:1px solid var(--border1); border-radius:10px; background:var(--surface); padding:10px 11px; margin-top:8px; }
 .verification-coverage-header { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap; }
 .verification-coverage-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; }
@@ -825,6 +821,7 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .reliance-badge.manual-accepted { background:rgba(43,47,143,.08); color:var(--brand); border-color:rgba(43,47,143,.24); }
 .verification-technical-details { margin-top:8px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); overflow:hidden; }
 .verification-technical-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
+.verification-technical-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }
 .verification-audit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:7px; margin:0 0 8px; }
 .verification-audit-fact { border:1px solid var(--border1); border-radius:8px; background:var(--surface2); padding:6px 8px; font-size:11px; color:var(--text2); overflow-wrap:anywhere; }
 .document-status-strip { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 12px; }
@@ -8486,26 +8483,20 @@ function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
   var nextText = normalizeDetailValue(nextAction);
   var stateLabel = String((state && state.label) || '').toLowerCase();
   var issueClass = stateLabel === 'system issue' ? 'system' : (issueText && issueText !== '—' && issueText !== 'None' ? 'issue' : 'ok');
-  var tags = [];
-  var issueLine = issueText && issueText !== '—' && issueText !== 'None'
-    ? 'Issue: ' + issueText
-    : 'No action required.';
+  var summaryParts = [];
+  if (issueText && issueText !== '—' && issueText !== 'None') summaryParts.push(issueText);
+  if (blockerText && blockerText !== '—' && blockerText !== 'None') summaryParts.push(blockerText + '.');
+  if (nextText && nextText !== '—' && nextText !== 'No action required') summaryParts.push('Next: ' + nextText + '.');
+  var issueLine = summaryParts.length ? summaryParts.join(' ') : 'No action required.';
   var issueHtml = '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text">' + escapeHtml(issueLine) + '</span></div>';
-  if (issueLine.length > 180) {
+  if (issueLine.length > 220) {
     issueHtml = '<div class="document-review-issue-stack">' +
       '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text clamped">' + escapeHtml(issueLine) + '</span></div>' +
       '<details class="document-review-issue-more"><summary>Show more</summary><div class="document-review-issue-more-copy ' + issueClass + '">' + escapeHtml(issueLine) + '</div></details>' +
     '</div>';
   }
-  if (blockerText && blockerText !== '—' && blockerText !== 'None') {
-    tags.push('<span class="document-review-chip blocking">Blocks: ' + escapeHtml(blockerText) + '</span>');
-  }
-  if (nextText && nextText !== '—' && nextText !== 'No action required') {
-    tags.push('<span class="document-review-chip neutral">Next: ' + escapeHtml(nextText) + '</span>');
-  }
   return '<div class="document-review-summary-line">' +
     issueHtml +
-    (tags.length ? '<div class="document-review-tag-row">' + tags.join('') + '</div>' : '') +
   '</div>';
 }
 
@@ -8524,7 +8515,6 @@ function renderDocumentSecondaryActions(app, doc, state) {
   var appRef = escapeHtml((app && (app.ref || app.id)) || '');
   var docId = escapeHtml(doc.id || doc.document_id || '');
   var items = [
-    '<button class="document-review-more-item" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>',
     '<button class="document-review-more-item" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>'
   ];
   if (label !== 'Verified' && label !== 'Manual accepted') {
@@ -8533,30 +8523,33 @@ function renderDocumentSecondaryActions(app, doc, state) {
     items.push('<button class="document-review-more-item danger" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'rejected\')">Reject</button>');
   }
   items.push('<button class="document-review-more-item" onclick="verifyBackofficeDocument(\'' + docId + '\',\'' + appRef + '\')">Re-Verify</button>');
+  items.push('<button class="document-review-more-item" onclick="toggleDocumentTechnicalAudit(this)">Technical audit details</button>');
   return '<details class="document-review-more">' +
     '<summary class="doc-action-btn secondary">More ▾</summary>' +
     '<div class="document-review-more-menu">' + items.join('') + '</div>' +
   '</details>';
 }
 
-function openDocumentReviewDetails(trigger) {
+function toggleDocumentTechnicalAudit(trigger) {
   try {
     var row = trigger && trigger.closest ? trigger.closest('.document-review-row') : null;
-    var details = row ? row.querySelector('.document-review-details') : null;
-    if (!details) return;
-    details.open = true;
-    var summary = details.querySelector('summary');
-    if (summary && typeof summary.focus === 'function') summary.focus();
-    if (typeof details.scrollIntoView === 'function') {
-      details.scrollIntoView({ behavior:'smooth', block:'nearest' });
+    var panel = row ? row.querySelector('.document-review-audit-panel') : null;
+    if (!panel) return;
+    var willOpen = panel.hidden;
+    panel.hidden = !willOpen ? true : false;
+    if (trigger.closest) {
+      var moreMenu = trigger.closest('.document-review-more');
+      if (moreMenu) moreMenu.open = false;
+    }
+    if (willOpen && typeof panel.scrollIntoView === 'function') {
+      panel.scrollIntoView({ behavior:'smooth', block:'nearest' });
     }
   } catch (err) {
-    console.warn('Unable to open document review details', err);
+    console.warn('Unable to toggle document review audit panel', err);
   }
 }
 
 function renderDocumentPrimaryAction(app, doc, state, expectedSlot) {
-  var label = (state && state.label) || 'Review required';
   if (!doc) {
     var expectedDocType = expectedSlot && expectedSlot.doc_type ? expectedSlot.doc_type : '';
     var expectedLabel = expectedSlot && expectedSlot.label ? expectedSlot.label : '';
@@ -8565,15 +8558,8 @@ function renderDocumentPrimaryAction(app, doc, state, expectedSlot) {
     var expectedOwner = expectedSlot && expectedSlot.owner ? expectedSlot.owner : '';
     return '<button class="doc-action-btn secondary" onclick=\'openBoDocUploadForExpectedSlot(' + JSON.stringify(expectedDocType) + ',' + JSON.stringify(expectedLabel) + ',' + JSON.stringify(expectedPersonId) + ',' + JSON.stringify(expectedPersonType) + ',' + JSON.stringify(expectedOwner) + ')\'>Upload</button>';
   }
-  var buttonLabel = 'Review required';
-  if (label === 'Verified' || label === 'Manual accepted') {
-    buttonLabel = 'Verified';
-  } else if (label === 'Pending verification') {
-    buttonLabel = 'Waiting';
-  } else if (label === 'System issue' || label === 'Failed' || label === 'Expired' || label === 'Stale' || label === 'Request replacement' || label === 'Rejected') {
-    buttonLabel = 'Resolve issue';
-  }
-  return '<button class="doc-action-btn secondary" onclick="openDocumentReviewDetails(this)">' + escapeHtml(buttonLabel) + '</button>';
+  var docId = escapeHtml(doc.id || doc.document_id || '');
+  return '<button class="doc-action-btn secondary" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>';
 }
 
 function renderDocumentDirectActions(app, doc, groupKey, state, expectedSlot) {
@@ -8585,7 +8571,7 @@ function renderDocumentDirectActions(app, doc, groupKey, state, expectedSlot) {
 
 function buildVerificationResultsHtml(results, coverage, auditContext) {
   if (!results || (typeof results === 'object' && !Array.isArray(results) && Object.keys(results).length === 0)) {
-    return '<details class="verification-technical-details"><summary>Technical audit details</summary><div style="padding:0 10px 10px;font-size:12px;color:var(--text3);">Verification details are not available yet.</div></details>';
+    return '<div class="verification-technical-details"><div class="verification-technical-title">Technical audit details</div><div style="padding:0 10px 10px;font-size:12px;color:var(--text3);">Verification details are not available yet.</div></div>';
   }
 
   var technicalItems = [];
@@ -8597,9 +8583,6 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
     technicalItems.push('<div class="verification-audit-fact"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
   }
   auditContext = auditContext || {};
-  pushAuditFact('Document type', auditContext.documentType);
-  pushAuditFact('Portal slot/source', auditContext.portalSource);
-  pushAuditFact('Lifecycle context', auditContext.lifecycleContext);
   pushAuditFact('Uploaded by', auditContext.uploadedBy);
 
   if (typeof results === 'object' && !Array.isArray(results)) {
@@ -8621,14 +8604,7 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
       }
       pushAuditFact('AI source', aiSourceLabel);
     }
-    pushAuditFact('Method', firstMeaningfulDetailValue(results.verification_method, results.method, results.check_method));
-    pushAuditFact('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
-    pushAuditFact('Agent run ID', firstMeaningfulDetailValue(results.agent_execution_id, results.agentExecutionId, results.execution_id));
-    pushAuditFact('Evidence hash', firstMeaningfulDetailValue(results.evidence_hash, results.file_sha256, results.sha256, results.hash));
     pushAuditFact('Verification timestamp', firstMeaningfulDetailValue(results.verified_at, results.verification_timestamp, results.completed_at));
-    pushAuditFact('Policy ID/version', firstMeaningfulDetailValue(results.policy_id, results.policyId) && firstMeaningfulDetailValue(results.policy_version, results.policyVersion)
-      ? firstMeaningfulDetailValue(results.policy_id, results.policyId) + ' / ' + firstMeaningfulDetailValue(results.policy_version, results.policyVersion)
-      : firstMeaningfulDetailValue(results.policy_id, results.policyId, results.policy_version, results.policyVersion));
     if (coverage && coverage.missingExpectedChecks && coverage.missingExpectedChecks.length) {
       pushAuditFact('Expected checks missing', coverage.missingExpectedChecks.join(', '));
     }
@@ -8659,12 +8635,21 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
     if (check.confidence != null) meta.push('Confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
     if (check.ps_field) meta.push('Pre-screening field: ' + check.ps_field);
     if (check.id || check.check_id || check.key) meta.push('Check ID: ' + firstMeaningfulDetailValue(check.id, check.check_id, check.key));
+    var normalizedLabel = String(firstMeaningfulDetailValue(check.label, check.name) || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    var hideRoutinePass = result === 'pass' && (
+      normalizedLabel === 'file format' ||
+      normalizedLabel === 'file size' ||
+      normalizedLabel === 'duplicate detection'
+    );
     var rowHtml = '<div style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border2,#e5e7eb);gap:8px;">' +
       '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:44px;padding:2px 6px;border-radius:999px;background:' + resultColor + '14;color:' + resultColor + ';font-size:10px;font-weight:800;text-transform:uppercase;">' + escapeHtml(result.replace(/_/g, ' ')) + '</span>' +
       '<div style="min-width:0;flex:1;"><div style="font-size:12px;font-weight:800;color:var(--text1);">' + label + '</div>' +
       (message ? '<div style="font-size:12px;color:var(--text2);margin-top:2px;">' + escapeHtml(message) + '</div>' : '') +
       (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:3px;">' + escapeHtml(meta.join(' · ')) + '</div>' : '') +
       '</div></div>';
+    if (hideRoutinePass) {
+      return;
+    }
     if (result === 'pass') {
       passedCheckRows.push(rowHtml);
     } else {
@@ -8677,8 +8662,8 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
     classificationLegend = '<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>';
   }
 
-  return '<details class="verification-technical-details">' +
-    '<summary>Technical audit details</summary>' +
+  return '<div class="verification-technical-details">' +
+    '<div class="verification-technical-title">Technical audit details</div>' +
     '<div style="padding:0 10px 10px;">' +
       sourceBanner +
       (technicalItems.length ? '<div class="verification-audit-grid">' + technicalItems.join('') + '</div>' : '') +
@@ -8687,7 +8672,7 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
       (checkRows.length ? checkRows.join('') : '<div style="font-size:12px;color:var(--text3);">No failed or warning checks were stored for this document.</div>') +
       (passedCheckRows.length ? '<details class="verification-technical-details" style="margin-top:8px;"><summary>Passed technical checks</summary><div style="padding:0 10px 10px;">' + passedCheckRows.join('') + '</div></details>' : '') +
     '</div>' +
-  '</details>';
+  '</div>';
 }
 
 function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, policy, state, issue, blocker, expectedTypeLabel) {
@@ -8703,19 +8688,15 @@ function renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, p
     : '';
   var typePanel = documentNeedsTypeSelection(doc, linkedRequirement, policy, expectedSlot) ? renderEvidenceClassificationPanel(doc) : '';
   var auditContext = {
-    documentType: expectedTypeLabel,
-    portalSource: expectedSlot ? ('Expected from portal slot: ' + expectedSlot.label) : (linkedRequirement ? ('Requested enhanced evidence: ' + expectedTypeLabel) : 'Not portal-slot based'),
-    lifecycleContext: documentLifecycleLabel(doc, policy, linkedRequirement),
     uploadedBy: normalizeDetailValue(doc.uploaded_by_name || doc.uploadedBy || doc.uploaded_by)
   };
-  return '<details class="document-review-details">' +
-    '<summary>Details</summary>' +
-    '<div class="document-review-details-body">' +
+  return '<div class="document-review-audit-panel" hidden>' +
+    '<div class="document-review-audit-panel-body">' +
       officerHistory +
       typePanel +
       buildVerificationResultsHtml(doc.verification_results, coverage, auditContext) +
     '</div>' +
-  '</details>';
+  '</div>';
 }
 
 function documentReviewContextLine(app, doc, linkedRequirement, expectedSlot) {
