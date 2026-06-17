@@ -10195,7 +10195,19 @@ function renderRMIPanel(app) {
     return;
   }
   section.style.display = 'block';
-  panel.innerHTML = requests.map(function(req) {
+  var appStatus = String((app && (app.statusRaw || app.status)) || '').toLowerCase();
+  var allFulfilled = requests.length > 0 && requests.every(function(req) {
+    return String(req.status || '').toLowerCase() === 'fulfilled';
+  });
+  var continuationHtml = '';
+  if (appStatus === 'rmi_sent' && allFulfilled) {
+    continuationHtml =
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;border:1px solid #bbf7d0;border-radius:8px;background:#ecfdf5;color:#166534;">' +
+        '<div style="font-size:12px;font-weight:600;">Additional information is fulfilled. Continue the application workflow.</div>' +
+        '<button class="btn btn-success btn-sm" id="btn-rmi-continue" onclick="continueRMIReview()" style="font-size:11px;">Continue Review</button>' +
+      '</div>';
+  }
+  panel.innerHTML = continuationHtml + requests.map(function(req) {
     var items = Array.isArray(req.items) ? req.items : [];
     var itemRows = items.map(function(item) {
       var status = String(item.status || 'requested').replace(/_/g, ' ');
@@ -10217,6 +10229,25 @@ function renderRMIPanel(app) {
       '<table class="data-table" style="font-size:12px;"><thead><tr><th>Document</th><th>Notes</th><th>Status</th><th>Upload</th></tr></thead><tbody>' + itemRows + '</tbody></table>' +
     '</div>';
   }).join('');
+}
+
+async function continueRMIReview(targetStatus) {
+  if (!currentApp || !currentApp.id) return;
+  if (!targetStatus && currentApp.documentRelianceSummary && currentApp.documentRelianceSummary.passed) {
+    targetStatus = 'kyc_submitted';
+  }
+  var target = targetStatus === 'kyc_submitted' ? 'kyc_submitted' : 'kyc_documents';
+  var btn = document.getElementById('btn-rmi-continue');
+  if (btn) btn.disabled = true;
+  try {
+    await boApiCall('PATCH', '/applications/' + encodeURIComponent(currentApp.id), { status: target });
+    await refreshCurrentAppDetail();
+    showToast('RMI continuation recorded.');
+  } catch (e) {
+    showToast((e && e.message) || 'RMI continuation failed.', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════

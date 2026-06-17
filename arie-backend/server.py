@@ -119,6 +119,7 @@ from document_reliance_gate import (
     document_reliance_error_message,
     evaluate_document_reliance_gate,
     format_document_reliance_blockers,
+    resolve_rmi_replacement_slot,
 )
 from screening_freshness_metadata import populate_screening_freshness_metadata
 from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
@@ -6109,6 +6110,7 @@ class ApplicationDetailHandler(BaseHandler):
                 "in_review": ["edd_required", "approved", "rejected"],
                 "under_review": ["edd_required", "approved", "rejected"],
                 "edd_required": ["under_review", "in_review", "approved", "rejected"],
+                "rmi_sent": ["kyc_documents", "kyc_submitted", "compliance_review"],
                 "approved": [],  # Terminal state
                 "rejected": ["draft"],  # Can reopen to draft
             }
@@ -6132,6 +6134,36 @@ class ApplicationDetailHandler(BaseHandler):
                         f"Pre-approval decision: {app.get('pre_approval_decision') or 'none'}",
                         400
                     )
+
+            rmi_continuation = None
+            if current_status == "rmi_sent":
+                rmi_continuation = _rmi_continuation_readiness(db, app, target_status=new_status)
+                if not rmi_continuation.get("can_continue"):
+                    message = "Cannot continue from RMI: " + " ".join(rmi_continuation.get("blockers") or [])
+                    self.log_audit(
+                        user,
+                        "RMI Continuation Blocked",
+                        app["ref"],
+                        json.dumps({
+                            "event": "rmi_continuation_blocked",
+                            "from_status": current_status,
+                            "target_status": new_status,
+                            "blockers": rmi_continuation.get("blockers") or [],
+                            "request_count": rmi_continuation.get("request_count"),
+                            "open_request_count": rmi_continuation.get("open_request_count"),
+                        }, sort_keys=True),
+                        db=db,
+                        commit=False,
+                        before_state=snapshot_app_state(app),
+                        after_state={
+                            "status": current_status,
+                            "attempted_status": new_status,
+                            "rmi_continuation": rmi_continuation,
+                        },
+                    )
+                    db.commit()
+                    db.close()
+                    return self.error(message, 409)
 
             # ── H-05 FIX: High-risk cases MUST go through compliance review before approval ──
             if new_status == "approved" and risk_level in ("HIGH", "VERY_HIGH"):
@@ -6211,7 +6243,41 @@ class ApplicationDetailHandler(BaseHandler):
                 audit_detail += (
                     f" | onboarding_lane: {app.get('onboarding_lane') or ''} → EDD"
                 )
-            self.log_audit(user, "Status Change", app["ref"], audit_detail, db=db)
+            if rmi_continuation:
+                audit_detail += " | RMI continuation"
+            self.log_audit(
+                user,
+                "Status Change",
+                app["ref"],
+                audit_detail,
+                db=db,
+                before_state=snapshot_app_state(app),
+                after_state={
+                    "status": new_status,
+                    "rmi_continuation": rmi_continuation,
+                } if rmi_continuation else {"status": new_status},
+            )
+            if rmi_continuation:
+                self.log_audit(
+                    user,
+                    "RMI Continuation",
+                    app["ref"],
+                    json.dumps({
+                        "event": "rmi_continuation",
+                        "from_status": current_status,
+                        "to_status": new_status,
+                        "request_count": rmi_continuation.get("request_count"),
+                        "open_request_count": rmi_continuation.get("open_request_count"),
+                        "request_ids": [req.get("id") for req in (rmi_continuation.get("requests") or [])],
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state=snapshot_app_state(app),
+                    after_state={
+                        "status": new_status,
+                        "rmi_continuation": rmi_continuation,
+                    },
+                )
 
         # Handle assignment — keep API enforcement aligned with ROLE_PERMISSION_MATRIX.
         if "assigned_to" in data:
@@ -8995,6 +9061,18 @@ class DocumentUploadHandler(BaseHandler):
             else:
                 person_type = person_resolved.get("person_type") or requested_person_type
 
+        rmi_upload_target = _resolve_rmi_upload_slot(
+            db,
+            app,
+            rmi_target,
+            doc_type,
+            person_id=person_id,
+            person_type=person_type,
+        )
+        if rmi_upload_target.get("canonical_slot_key"):
+            person_id = rmi_upload_target.get("person_id")
+            person_type = rmi_upload_target.get("person_type")
+
         logger.info(
             f"[doc-upload] app={app['id']} doc_id={doc_id} doc_type={doc_type} "
             f"person_id={person_id!r} person_type={person_type!r} person_resolved={'yes' if person_resolved else 'no'} "
@@ -9012,15 +9090,18 @@ class DocumentUploadHandler(BaseHandler):
             "verification_triggered": False,
             "verification_trigger_path": "/api/documents/{document_id}/verify",
         }
+        if rmi_item_id:
+            verification_metadata.update({
+                "rmi_request_id": rmi_upload_target.get("rmi_request_id") or "",
+                "rmi_item_id": rmi_upload_target.get("rmi_item_id") or rmi_item_id,
+                "rmi_trace_slot_key": rmi_upload_target.get("rmi_trace_slot_key") or f"rmi:{rmi_item_id}",
+                "canonical_slot_key": rmi_upload_target.get("canonical_slot_key") or "",
+                "replacement_upload": True,
+            })
         verification_queue = None
 
         try:
-            slot_key = _document_slot_key(
-                doc_type,
-                person_id,
-                person_type=person_type,
-                rmi_item_id=rmi_item_id,
-            )
+            slot_key = rmi_upload_target["slot_key"]
             replacement = _prepare_document_slot_replacement(
                 db,
                 application_id=app["id"],
@@ -9062,7 +9143,40 @@ class DocumentUploadHandler(BaseHandler):
                 audit_detail += f" person_id={person_id}"
             if rmi_fulfilled_item_id:
                 audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
+                if rmi_upload_target.get("canonical_slot_key"):
+                    audit_detail += f" canonical_slot={rmi_upload_target['canonical_slot_key']}"
             self.log_audit(user, "Upload", app["ref"], audit_detail, db=db, commit=False)
+            if rmi_fulfilled_item_id:
+                self.log_audit(
+                    user,
+                    "RMI Replacement Uploaded",
+                    app["ref"],
+                    json.dumps({
+                        "event": "rmi_replacement_uploaded",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "document_id": doc_id,
+                        "doc_type": doc_type,
+                        "person_id": person_id,
+                        "person_type": person_type,
+                        "rmi_request_id": rmi_upload_target.get("rmi_request_id") or "",
+                        "rmi_item_id": rmi_fulfilled_item_id,
+                        "rmi_trace_slot_key": rmi_upload_target.get("rmi_trace_slot_key") or f"rmi:{rmi_fulfilled_item_id}",
+                        "canonical_slot_key": rmi_upload_target.get("canonical_slot_key") or "",
+                        "stored_slot_key": replacement["slot_key"],
+                        "actor": user.get("sub", ""),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state=dict(rmi_target) if rmi_target else None,
+                    after_state={
+                        "document_id": doc_id,
+                        "slot_key": replacement["slot_key"],
+                        "canonical_slot_key": rmi_upload_target.get("canonical_slot_key") or "",
+                        "rmi_item_status": "uploaded",
+                    },
+                )
             if previous_documents:
                 self.log_audit(
                     user,
@@ -9160,6 +9274,8 @@ class DocumentUploadHandler(BaseHandler):
         }
         if rmi_fulfilled_item_id:
             response["rmi_item_id"] = rmi_fulfilled_item_id
+            response["rmi_trace_slot_key"] = rmi_upload_target.get("rmi_trace_slot_key") or f"rmi:{rmi_fulfilled_item_id}"
+            response["canonical_slot_key"] = rmi_upload_target.get("canonical_slot_key") or ""
         self.success(response, 201)
 
 
@@ -23796,6 +23912,98 @@ def _sync_rmi_request_status(db, request_id):
         )
 
 
+def _rmi_continuation_readiness(db, app, target_status=None):
+    app_id = app.get("id") if app else None
+    summary = {
+        "can_continue": False,
+        "application_id": app_id,
+        "target_status": target_status,
+        "request_count": 0,
+        "open_request_count": 0,
+        "blockers": [],
+        "requests": [],
+        "document_gate": None,
+    }
+    if not app_id:
+        summary["blockers"].append("Application not found.")
+        return summary
+
+    rows = db.execute(
+        """
+        SELECT * FROM rmi_requests
+         WHERE application_id = ?
+           AND LOWER(COALESCE(status, 'open')) <> 'cancelled'
+         ORDER BY created_at DESC, id DESC
+        """,
+        (app_id,),
+    ).fetchall()
+    if not rows:
+        summary["blockers"].append("No active request-for-more-information record exists for this application.")
+        return summary
+
+    request_ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in request_ids)
+    item_rows = db.execute(
+        f"""
+        SELECT * FROM rmi_request_items
+         WHERE request_id IN ({placeholders})
+         ORDER BY created_at ASC, id ASC
+        """,
+        request_ids,
+    ).fetchall()
+    items_by_request = {request_id: [] for request_id in request_ids}
+    for item in item_rows:
+        items_by_request.setdefault(item["request_id"], []).append(dict(item))
+
+    unfulfilled = []
+    for row in rows:
+        req = dict(row)
+        items = items_by_request.get(req["id"], [])
+        item_statuses = [str(item.get("status") or "requested").lower() for item in items]
+        fulfilled = bool(items) and all(
+            status == "accepted" and bool(item.get("document_id"))
+            for status, item in zip(item_statuses, items)
+        )
+        if req.get("status") != "fulfilled" and fulfilled:
+            db.execute(
+                "UPDATE rmi_requests SET status = 'fulfilled', fulfilled_at = COALESCE(fulfilled_at, datetime('now')), updated_at = datetime('now') WHERE id = ?",
+                (req["id"],),
+            )
+            req["status"] = "fulfilled"
+        request_summary = {
+            "id": req.get("id"),
+            "status": req.get("status"),
+            "fulfilled": fulfilled and req.get("status") == "fulfilled",
+            "item_count": len(items),
+            "items": [
+                {
+                    "id": item.get("id"),
+                    "doc_type": item.get("doc_type"),
+                    "status": item.get("status"),
+                    "document_id": item.get("document_id"),
+                }
+                for item in items
+            ],
+        }
+        summary["requests"].append(request_summary)
+        if not request_summary["fulfilled"]:
+            unfulfilled.append(request_summary)
+
+    summary["request_count"] = len(summary["requests"])
+    summary["open_request_count"] = len(unfulfilled)
+    if unfulfilled:
+        summary["blockers"].append("All active RMI items must be uploaded and officer-accepted before continuation.")
+
+    if target_status in ("kyc_submitted", "compliance_review"):
+        document_gate = _kyc_verified_required_document_gate(db, app)
+        summary["document_gate"] = document_gate
+        if not document_gate.get("passed"):
+            summary["blockers"].append(document_reliance_error_message(document_gate, action="RMI continuation"))
+
+    summary["can_continue"] = not summary["blockers"]
+    return summary
+
+
 def _create_structured_rmi_request(db, app, user, reason, deadline, items):
     request_id = uuid.uuid4().hex[:16]
     db.execute(
@@ -23871,6 +24079,42 @@ def _validate_rmi_upload_target(db, application_id, rmi_item_id):
     if row.get("status") == "accepted":
         return None, "Requested document slot has already been accepted"
     return row, None
+
+
+def _resolve_rmi_upload_slot(db, app, rmi_target, doc_type, *, person_id=None, person_type=None):
+    rmi_item_id = rmi_target.get("id") if rmi_target else None
+    rmi_trace_slot_key = f"rmi:{rmi_item_id}" if rmi_item_id else ""
+    target = {
+        "slot_key": _document_slot_key(
+            doc_type,
+            person_id,
+            person_type=person_type,
+            rmi_item_id=rmi_item_id,
+        ),
+        "person_id": person_id,
+        "person_type": person_type,
+        "canonical_slot_key": "",
+        "rmi_trace_slot_key": rmi_trace_slot_key,
+        "rmi_request_id": rmi_target.get("request_id") if rmi_target else "",
+        "rmi_item_id": rmi_item_id or "",
+    }
+    if not rmi_target:
+        return target
+
+    expectation = resolve_rmi_replacement_slot(
+        db,
+        app,
+        rmi_target,
+        doc_type=doc_type,
+    )
+    if not expectation or not expectation.get("slot_key"):
+        return target
+
+    target["slot_key"] = expectation["slot_key"]
+    target["canonical_slot_key"] = expectation["slot_key"]
+    target["person_id"] = expectation.get("person_id") or person_id
+    target["person_type"] = expectation.get("person_type") or person_type
+    return target
 
 
 def _mark_rmi_item_uploaded(db, application_id, doc_id, doc_type, rmi_item_id=None):

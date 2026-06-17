@@ -1,0 +1,6 @@
+{
+  "status": "pending_staging_deploy",
+  "endpoint": "/api/liveness",
+  "result": null,
+  "reason": "Closure smoke must run only after PR merge and staging deployment from merged main."
+}

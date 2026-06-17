@@ -1,0 +1,34 @@
+{
+  "task": "PR-RMI-CONTINUATION-1",
+  "status": "implementation_complete_not_closed",
+  "evidence_timestamp": "20260617T163021Z",
+  "branch": "codex/pr-rmi-continuation-1",
+  "local_base_sha": "41b3fd2b3df6f9e44ccda1de00b4e145ed40b632",
+  "implemented_changes": [
+    "controlled_rmi_sent_continuation",
+    "rmi_replacement_canonical_slot_mapping",
+    "legacy_rmi_slot_alias_in_document_reliance_gate",
+    "memo_gate_uses_updated_document_reliance_gate",
+    "rmi_replacement_and_continuation_audit_events",
+    "backoffice_rmi_continue_action"
+  ],
+  "local_verification": {
+    "document_reliance_gate": "11 passed",
+    "rmi_api_regression_subset": "5 passed",
+    "phase5_non_edd_subset": "12 passed, 3 deselected",
+    "py_compile": "passed",
+    "rmi_panel_js_parse": "passed",
+    "full_phase5": "13 passed, 2 unrelated EDD fixture failures"
+  },
+  "staging_verification": "pending_pr_merge_and_deploy",
+  "closed": false,
+  "blocks_paid_pilot_before_deploy": true,
+  "residual_issues": [
+    {
+      "id": "RESIDUAL-EDD-FIXTURE-001",
+      "classification": "non_blocking_for_pr_rmi_scope",
+      "description": "Full Phase 5 local suite has two unrelated EDD fixture failures because sco001 is not seeded as SCO/Admin.",
+      "blocks_pr_rmi_functionality": false
+    }
+  ]
+}

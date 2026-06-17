@@ -146,6 +146,28 @@ def _insert_required_documents(db, app_id, **overrides):
     return target_doc_id
 
 
+def _insert_rmi_item(db, app_id, *, item_id, request_id, doc_id, doc_type="reg_sh",
+                     label="Replacement required for entity:reg_sh", item_status="accepted",
+                     request_status="fulfilled"):
+    app = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+    db.execute(
+        """
+        INSERT INTO rmi_requests
+        (id, application_id, client_id, status, reason, deadline, created_by, created_by_name, fulfilled_at)
+        VALUES (?, ?, ?, ?, 'Missing evidence replacement', '2026-12-31', 'admin001', 'Admin', datetime('now'))
+        """,
+        (request_id, app_id, app["client_id"], request_status),
+    )
+    db.execute(
+        """
+        INSERT INTO rmi_request_items
+        (id, request_id, doc_type, label, description, status, document_id, uploaded_at, reviewed_at)
+        VALUES (?, ?, ?, ?, '', ?, ?, datetime('now'), datetime('now'))
+        """,
+        (item_id, request_id, doc_type, label, item_status, doc_id),
+    )
+
+
 def _gate(db, app):
     from document_reliance_gate import evaluate_document_reliance_gate
 
@@ -311,3 +333,81 @@ def test_approval_gate_blocks_document_evidence_and_passes_when_fixed(db):
     _insert_required_documents(db, app["id"])
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
     assert can_approve is True, message
+
+
+def test_rmi_replacement_alias_satisfies_canonical_required_slot(db):
+    app = _insert_app(db)
+    for doc_type in REQUIRED_DOC_TYPES:
+        if doc_type != "reg_sh":
+            _insert_document(db, app["id"], doc_type)
+    item_id = f"rmi-item-{uuid.uuid4().hex[:8]}"
+    doc_id = _insert_document(
+        db,
+        app["id"],
+        "reg_sh",
+        slot_key=f"rmi:{item_id}",
+    )
+    _insert_rmi_item(db, app["id"], item_id=item_id, request_id=f"rmi-{uuid.uuid4().hex[:8]}", doc_id=doc_id)
+    db.commit()
+
+    gate = _gate(db, app)
+    shareholder = next(item for item in gate["documents"] if item["slot_key"] == "entity:reg_sh")
+
+    assert gate["passed"] is True
+    assert shareholder["document_id"] == doc_id
+    assert shareholder["canonical_slot_satisfied_by_rmi"] is True
+    assert shareholder["rmi_trace"]["rmi_item_id"] == item_id
+    assert gate["rmi_slot_aliases"][0]["canonical_slot_key"] == "entity:reg_sh"
+
+
+def test_rejected_rmi_replacement_does_not_satisfy_canonical_slot(db):
+    app = _insert_app(db)
+    for doc_type in REQUIRED_DOC_TYPES:
+        if doc_type != "reg_sh":
+            _insert_document(db, app["id"], doc_type)
+    item_id = f"rmi-item-{uuid.uuid4().hex[:8]}"
+    doc_id = _insert_document(
+        db,
+        app["id"],
+        "reg_sh",
+        slot_key=f"rmi:{item_id}",
+    )
+    _insert_rmi_item(
+        db,
+        app["id"],
+        item_id=item_id,
+        request_id=f"rmi-{uuid.uuid4().hex[:8]}",
+        doc_id=doc_id,
+        item_status="rejected",
+        request_status="pending_review",
+    )
+    db.commit()
+
+    gate = _gate(db, app)
+
+    assert gate["passed"] is False
+    assert any(
+        blocker["code"] == "missing_required_document" and blocker["slot_key"] == "entity:reg_sh"
+        for blocker in gate["blockers"]
+    )
+
+
+def test_memo_generation_stage_sees_rmi_replacement_alias(db):
+    from document_reliance_gate import evaluate_document_reliance_gate
+
+    app = _insert_app(db)
+    for doc_type in REQUIRED_DOC_TYPES:
+        if doc_type != "reg_sh":
+            _insert_document(db, app["id"], doc_type)
+    item_id = f"rmi-item-{uuid.uuid4().hex[:8]}"
+    doc_id = _insert_document(db, app["id"], "reg_sh", slot_key=f"rmi:{item_id}")
+    _insert_rmi_item(db, app["id"], item_id=item_id, request_id=f"rmi-{uuid.uuid4().hex[:8]}", doc_id=doc_id)
+    db.commit()
+
+    gate = evaluate_document_reliance_gate(db, app, stage="memo_generation")
+
+    assert gate["passed"] is True
+    assert not any(
+        blocker["code"] == "missing_required_document" and blocker["slot_key"] == "entity:reg_sh"
+        for blocker in gate["blockers"]
+    )

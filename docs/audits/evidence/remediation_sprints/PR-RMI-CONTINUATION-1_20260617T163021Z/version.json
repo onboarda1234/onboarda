@@ -1,0 +1,8 @@
+{
+  "status": "pending_staging_deploy",
+  "reason": "Implementation branch is not merged to main and staging has not been redeployed from the merge SHA.",
+  "local_base_sha": "41b3fd2b3df6f9e44ccda1de00b4e145ed40b632",
+  "branch": "codex/pr-rmi-continuation-1",
+  "authenticated_staging_version": null,
+  "git_sha_matches_image_tag": false
+}

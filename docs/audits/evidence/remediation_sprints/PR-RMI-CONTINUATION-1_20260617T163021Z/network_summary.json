@@ -1,0 +1,6 @@
+{
+  "status": "pending_browser_smoke",
+  "blocking_console_errors": null,
+  "blocking_network_errors": null,
+  "notes": "Network capture must be collected during authenticated staging browser smoke after deployment."
+}
