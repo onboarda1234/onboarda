@@ -3286,11 +3286,16 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="modal">
     <div class="modal-header"><h3>Reassign Case</h3><button class="modal-close" onclick="closeModal('modal-reassign')">&times;</button></div>
     <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+        <div><div class="form-label">Current Assignee</div><div id="reassign-current-assignee" style="font-size:13px;font-weight:700;color:var(--text1);">Unassigned</div></div>
+        <div><div class="form-label">New Assignee</div><div id="reassign-new-assignee" style="font-size:13px;font-weight:700;color:var(--text1);">Unassigned</div></div>
+      </div>
       <div class="form-group"><div class="form-label">Assign To</div>
-        <select class="form-select" id="reassign-to">
+        <select class="form-select" id="reassign-to" onchange="updateReassignAssigneePreview()">
         </select>
       </div>
-      <div class="form-group"><div class="form-label">Reason</div><textarea class="form-input" rows="3" id="reassign-reason" placeholder="Reason for reassignment..."></textarea></div>
+      <div class="form-group"><div class="form-label">Reason <span style="color:var(--red);">*</span></div><textarea class="form-input" rows="3" id="reassign-reason" required aria-required="true" placeholder="Reason for reassignment..."></textarea></div>
+      <div id="reassign-error" style="display:none;color:var(--red);font-size:12px;font-weight:700;"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-reassign')">Cancel</button>
@@ -24312,7 +24317,50 @@ async function confirmRMIRequest() {
 async function reassignCase() {
   await ensureRolePermissionsLoaded();
   if (!assertPermission('assign_reassign_cases')) return;
+  setReassignError('');
+  var currentLabel = (currentApp && currentApp.assigned) || 'Unassigned';
+  var currentEl = document.getElementById('reassign-current-assignee');
+  if (currentEl) currentEl.textContent = currentLabel;
+  var selectEl = document.getElementById('reassign-to');
+  if (selectEl && currentApp && currentApp.assignedId) selectEl.value = currentApp.assignedId;
+  var reasonEl = document.getElementById('reassign-reason');
+  if (reasonEl) reasonEl.value = '';
+  updateReassignAssigneePreview();
   document.getElementById('modal-reassign').classList.add('open');
+  if (reasonEl) setTimeout(function() { reasonEl.focus(); }, 50);
+}
+
+function selectedReassignAssigneeName() {
+  var selectEl = document.getElementById('reassign-to');
+  if (!selectEl || selectEl.selectedIndex < 0) return 'Unassigned';
+  var selected = selectEl.options[selectEl.selectedIndex];
+  return selected ? selected.textContent : 'Unassigned';
+}
+
+function updateReassignAssigneePreview() {
+  var newEl = document.getElementById('reassign-new-assignee');
+  if (newEl) newEl.textContent = selectedReassignAssigneeName();
+}
+
+function setReassignError(message) {
+  var el = document.getElementById('reassign-error');
+  if (!el) return;
+  if (!message) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function currentApplicationReviewTab() {
+  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'alerts', 'activity'];
+  for (var i = 0; i < tabs.length; i++) {
+    var panel = document.getElementById('detail-tab-' + tabs[i]);
+    if (panel && panel.style.display !== 'none') return tabs[i];
+  }
+  return 'overview';
 }
 
 function setExportPackError(message) {
@@ -24476,27 +24524,38 @@ async function confirmReassign() {
   if (!currentApp) return;
   await ensureRolePermissionsLoaded();
   if (!assertPermission('assign_reassign_cases')) return;
+  var reasonEl = document.getElementById('reassign-reason');
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  if (!reason) {
+    setReassignError('Reassignment reason is required.');
+    showToast('Reassignment reason is required.', 'error');
+    if (reasonEl) reasonEl.focus();
+    return;
+  }
+  setReassignError('');
+  var reviewTab = currentApplicationReviewTab();
   var to = document.getElementById('reassign-to').value;
   var assignUser = USERS.find(function(u) { return u.id === to; });
   var assigneeLabel = assignUser ? assignUser.name : 'Unassigned';
   if (BO_AUTH_TOKEN && currentApp.id) {
     try {
-      await boApiCall('PATCH', '/applications/' + currentApp.id, { assigned_to: assignUser ? assignUser.id : '' });
+      await boApiCall('PATCH', '/applications/' + currentApp.id, {
+        assigned_to: assignUser ? assignUser.id : '',
+        reassignment_reason: reason
+      });
       currentApp.assignedId = assignUser ? assignUser.id : '';
       currentApp.assigned = assigneeLabel;
       closeModal('modal-reassign');
       showToast('Case reassigned to ' + assigneeLabel);
-      openAppDetail(currentApp.ref);
+      openAppDetail(currentApp.ref, { initialTab: reviewTab });
     } catch(e) {
       var msg = (e && e.message) ? e.message : 'Reassignment failed. You may not have permission.';
+      setReassignError(msg);
       showToast(msg, 'error');
     }
   } else {
-    currentApp.assignedId = assignUser ? assignUser.id : '';
-    currentApp.assigned = assigneeLabel;
-    closeModal('modal-reassign');
-    showToast('Case reassigned to ' + assigneeLabel);
-    openAppDetail(currentApp.ref);
+    setReassignError('Sign in again before reassigning this case.');
+    showToast('Sign in again before reassigning this case.', 'error');
   }
 }
 

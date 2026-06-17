@@ -555,7 +555,24 @@ class TestReassignSecurity:
         from server import ApplicationDetailHandler
         src = inspect.getsource(ApplicationDetailHandler.patch)
         assert "Reassign" in src
-        assert "old_assigned" in src or "from" in src.lower()
+        assert "previous_assignee_id" in src
+        assert "new_assignee_id" in src
+        assert "before_state" in src
+        assert "after_state" in src
+
+    def test_reassignment_reason_is_required_in_frontend(self):
+        """Frontend modal marks reassignment reason as required and validates it."""
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            html = f.read()
+        assert 'id="reassign-reason" required aria-required="true"' in html
+        assert "Reassignment reason is required." in html
+        assert "reassignment_reason: reason" in html
+        assert "currentApplicationReviewTab()" in html
+        assert "reassign-current-assignee" in html
+        assert "reassign-new-assignee" in html
 
     def test_frontend_shows_error_on_failure(self):
         """Frontend must show error toast if reassignment fails."""
@@ -1222,4 +1239,5 @@ class TestAuditTrailHardening:
         import inspect
         from server import ApplicationDetailHandler
         src = inspect.getsource(ApplicationDetailHandler.patch)
-        assert "Reassigned from" in src
+        assert "previous_assignee_id" in src
+        assert "new_assignee_id" in src

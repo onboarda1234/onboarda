@@ -1,0 +1,6 @@
+{
+  "status": "pending_post_merge_staging_browser_smoke",
+  "checked_at": "2026-06-17T15:23:10Z",
+  "unexpected_failed_requests": null,
+  "notes": "Authenticated browser network capture must be completed after merge and staging deploy."
+}

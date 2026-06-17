@@ -1,0 +1,38 @@
+{
+  "status": "not_closed",
+  "checked_at": "2026-06-17T15:23:10Z",
+  "pr": null,
+  "merge_sha": null,
+  "evidence_folder": "docs/audits/evidence/remediation_sprints/PR-APP-ROLE-AUDIT-GATES-1_20260617T152310Z/",
+  "implementation_summary": [
+    "Backend requires non-empty reassignment_reason for application reassignment.",
+    "Backend persists structured reassignment audit metadata and before/after snapshots.",
+    "Backoffice reassignment modal marks reason required, shows current/new assignee, and preserves Application Review tab context.",
+    "Sensitive risk/model/config endpoints use backoffice read/write role gates.",
+    "Analyst/read-only mutation attempts return 403 and are audit logged on protected write paths."
+  ],
+  "local_validation": {
+    "pytest_governance_attempt_audit": "37 passed",
+    "pytest_admin_rbac_risk_config": "24 passed",
+    "pytest_backoffice_review_audit": "97 passed",
+    "pytest_ex12_client_security": "83 passed",
+    "py_compile": "passed",
+    "git_diff_check": "passed"
+  },
+  "closure_gates": {
+    "pr_merged_to_main": false,
+    "staging_deployed_from_merged_main": false,
+    "version_matches_merge_sha": false,
+    "ci_passes": false,
+    "api_smoke_passes": false,
+    "browser_smoke_passes": false,
+    "evidence_folder_complete": true,
+    "closure_report_complete": true
+  },
+  "residual_issues": [
+    {
+      "classification": "blocker",
+      "description": "Post-merge staging deploy, authenticated version proof, API smoke, and browser smoke are pending."
+    }
+  ]
+}

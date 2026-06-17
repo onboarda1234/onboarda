@@ -1,0 +1,9 @@
+{
+  "status": "pending_post_merge_staging_deploy",
+  "checked_at": "2026-06-17T15:23:10Z",
+  "source": "staging /api/version not yet checked",
+  "git_sha": null,
+  "image_tag": null,
+  "expected_merge_sha": null,
+  "notes": "Closure requires authenticated staging /api/version.git_sha and image_tag to match the merge SHA after this PR is merged and deployed."
+}
