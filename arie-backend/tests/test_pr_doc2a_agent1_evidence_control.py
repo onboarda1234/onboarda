@@ -28,15 +28,16 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
     assert "Technical audit details" in renderer
     assert "Checks requiring attention" in renderer
     assert "Passed technical checks" in renderer
-    assert "Agent execution ID" in renderer
+    assert "Agent run ID" in renderer
     assert "Evidence hash" in renderer
     assert "Verification timestamp" in renderer
     assert "Policy ID/version" in renderer
-    assert "Material findings" in renderer
     assert "Expected checks missing" in renderer
+    assert "Portal slot/source" in renderer
     assert "Failed or warning checks" not in renderer
     assert "Overall Result" not in renderer
     assert "Show technical verification checks" not in renderer
+    assert "Material findings" not in renderer
 
 
 def test_doc2a_evidence_control_card_surfaces_required_reliance_fields():

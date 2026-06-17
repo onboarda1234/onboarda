@@ -26,13 +26,14 @@ def _kyc_region(html: str) -> str:
 
 def test_application_review_default_rows_are_compact_and_not_audit_heavy():
     html = _backoffice_html()
-    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "enhancedRequirementBackOfficeGroup")
+    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "renderMissingKycDocumentRow")
     default_row = card_renderer.split("renderDocumentAuditDetails", 1)[0]
 
     assert "document-review-identity" in default_row
     assert "document-review-status-actions" in default_row
     assert "renderDocumentCompactSummary(issue, blocker, nextAction, relianceState)" in default_row
     assert "renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot)" in default_row
+    assert "documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)" in default_row
     assert "document-review-fields" not in default_row
     assert "renderDocumentReviewField(" not in default_row
 
@@ -46,21 +47,22 @@ def test_application_review_default_rows_are_compact_and_not_audit_heavy():
         "Uploaded by",
         "Full check result list",
         "buildVerificationResultsHtml",
+        "Expected from portal slot",
+        "Verification details",
     ]
     for label in hidden_by_default:
         assert label not in default_row
 
 
-def test_details_are_collapsed_by_default_and_retain_audit_fields():
+def test_details_are_collapsed_by_default_and_retain_technical_audit_fields_only():
     html = _backoffice_html()
-    details = _function_region(html, "renderDocumentAuditDetails", "renderUnifiedKycDocumentCard")
-    actions = _function_region(html, "renderDocumentDirectActions", "buildVerificationResultsHtml")
+    details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
     secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
     assert '<details class="document-review-details">' in details
     assert '<details class="document-review-details" open' not in details
     for audit_field in [
-        "Verification details",
         "Policy ID/version",
         "Lifecycle context",
         "Agent run ID",
@@ -68,13 +70,15 @@ def test_details_are_collapsed_by_default_and_retain_audit_fields():
         "Verification timestamp",
         "Uploaded by",
         "Officer action history",
-        "buildVerificationResultsHtml",
+        "Portal slot/source",
+        "buildVerificationResultsHtml(doc.verification_results, coverage, auditContext)",
     ]:
-        assert audit_field in details
+        assert audit_field in details or audit_field in technical
     assert "More ▾" in secondary
     assert "Re-Verify" in secondary
-    assert "renderVerificationCoverageSummary(doc, policy)" in details
-    assert "buildVerificationResultsHtml(doc.verification_results, coverage)" in details
+    assert "renderVerificationCoverageSummary(doc, policy)" not in details
+    assert "Verification coverage" not in details
+    assert "Verification details" not in details
 
 
 def test_large_ai_advisory_banner_is_reduced_in_kyc_documents_tab():
@@ -110,12 +114,13 @@ def test_action_grouping_and_backoffice_sections_are_preserved():
 def test_portal_slot_documents_show_expected_slot_not_unclassified():
     html = _backoffice_html()
     type_helper = _function_region(html, "documentExpectedTypeLabel", "documentPrimaryIssue")
-    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "enhancedRequirementBackOfficeGroup")
+    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "renderMissingKycDocumentRow")
     needs_type_helper = _function_region(html, "documentNeedsTypeSelection", "documentExpectedTypeLabel")
 
     assert "if (expectedSlot && expectedSlot.label) return expectedSlot.label;" in type_helper
     assert "if (expectedSlot || linkedRequirement) return false;" in needs_type_helper
-    assert "Expected from portal slot" in card_renderer
+    assert "documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)" in card_renderer
+    assert "Expected from portal slot" not in card_renderer
     assert "Unclassified" not in card_renderer
 
 
@@ -130,20 +135,24 @@ def test_unknown_ad_hoc_documents_can_still_show_needs_document_type():
     assert "unclassified" in needs_type_helper
 
 
-def test_view_download_are_direct_for_uploaded_docs_and_disabled_only_when_no_file():
+def test_secondary_menu_contains_view_download_and_missing_state_keeps_disabled_items():
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
+    primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
     missing_renderer = _function_region(html, "renderMissingKycDocumentRow", "renderDocumentActionGroupShell")
 
-    assert "documentHasUploadedFile(doc)" in actions
-    assert "viewBackofficeDocument" in actions
-    assert "downloadBackofficeDocument" in actions
-    assert ">View</button>" in actions
-    assert ">Download</button>" in actions
-    assert "disabled>View</button>" in actions
-    assert "disabled>Download</button>" in actions
-    assert ">Upload</button>" in actions
-    assert "Request from client" in actions
+    assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
+    assert "openBoDocUploadForExpectedSlot" in primary
+    assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
+    assert "viewBackofficeDocument" in secondary
+    assert "downloadBackofficeDocument" in secondary
+    assert '>View</button>' in secondary
+    assert '>Download</button>' in secondary
+    assert 'disabled>View</button>' in secondary
+    assert 'disabled>Download</button>' in secondary
+    assert ">Upload</button>" in primary
+    assert "Request from client" in secondary
     assert "No document uploaded" in missing_renderer
 
 
@@ -163,9 +172,17 @@ def test_officer_friendly_labels_replace_internal_default_row_language():
         assert old_label not in default_row
 
     assert "System setup issue: verification policy missing." in html
-    assert "Document status" in html
     assert "Issue" in html
     assert "Details" in html
+
+
+def test_show_more_is_available_for_long_issue_copy_only_inside_compact_summary():
+    html = _backoffice_html()
+    summary = _function_region(html, "renderDocumentCompactSummary", "renderDocumentSecondaryActions")
+
+    assert "Show more" in summary
+    assert "document-review-issue-text clamped" in summary
+    assert "document-review-issue-more" in summary
 
 
 def test_system_file_access_issue_is_marked_as_system_issue_not_document_failure():

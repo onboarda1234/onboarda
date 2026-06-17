@@ -54,59 +54,70 @@ def test_application_review_preserves_backoffice_kyc_taxonomy_sections():
 def test_portal_slot_document_shows_expected_type_not_unclassified():
     html = _backoffice_html()
     type_helper = _function_region(html, "documentExpectedTypeLabel", "documentPrimaryIssue")
-    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "enhancedRequirementBackOfficeGroup")
+    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "renderMissingKycDocumentRow")
 
     assert "if (expectedSlot && expectedSlot.label) return expectedSlot.label;" in type_helper
-    assert "Expected from portal slot" in card_renderer
+    assert "documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)" in card_renderer
+    assert "Expected from portal slot" not in card_renderer
     assert "Needs document type" in type_helper
     assert "Unclassified" not in card_renderer
 
 
-def test_view_and_download_are_visible_for_uploaded_documents():
+def test_uploaded_document_actions_move_into_more_menu_while_primary_cta_stays_compact():
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
     secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
 
-    assert "documentHasUploadedFile(doc)" in actions
-    assert "viewBackofficeDocument" in actions
-    assert "downloadBackofficeDocument" in actions
-    assert ">View<" in actions
-    assert ">Download<" in actions
-    assert "Accept with reason" in actions
-    assert "Request replacement" in actions
+    assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
+    assert "openBoDocUploadForExpectedSlot" in primary
+    assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
+    assert "viewBackofficeDocument" in secondary
+    assert "downloadBackofficeDocument" in secondary
+    assert ">View<" in secondary
+    assert ">Download<" in secondary
+    assert "Accept with reason" in secondary
+    assert "Request replacement" in secondary
     assert "Reject" in secondary
+    for label in ["Resolve issue", "Review required", "Upload", "Waiting", "Verified"]:
+        assert label in primary
 
 
 def test_missing_documents_disable_view_and_download():
     html = _backoffice_html()
     missing_renderer = _function_region(html, "renderMissingKycDocumentRow", "renderDocumentActionGroupShell")
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
+    primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
 
     assert "No document uploaded" in missing_renderer
-    assert "disabled>View</button>" in actions
-    assert "disabled>Download</button>" in actions
+    assert "Corporate entity document" in missing_renderer
+    assert "disabled>View</button>" in secondary
+    assert "disabled>Download</button>" in secondary
+    assert ">Upload</button>" in primary
 
 
 def test_default_row_is_action_first_and_details_hold_audit_fields():
     html = _backoffice_html()
-    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "enhancedRequirementBackOfficeGroup")
+    card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "renderMissingKycDocumentRow")
     default_row = card_renderer.split("renderDocumentAuditDetails", 1)[0]
-    details = _function_region(html, "renderDocumentAuditDetails", "renderUnifiedKycDocumentCard")
+    details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
+    technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
-    for visible in ["renderDocumentCompactSummary", "document-review-status-actions", "View", "Download"]:
+    for visible in ["renderDocumentCompactSummary", "document-review-status-actions", "documentReviewContextLine", "renderDocumentPrimaryAction"]:
         assert visible in default_row or visible in _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
 
-    for hidden_by_default in ["Policy ID/version", "Agent run ID", "Evidence hash", "Verification timestamp", "Uploaded by", "Lifecycle context"]:
+    for hidden_by_default in ["Policy ID/version", "Agent run ID", "Evidence hash", "Verification timestamp", "Uploaded by", "Lifecycle context", "Verification details", "Expected from portal slot"]:
         assert hidden_by_default not in default_row
 
     for audit_field in [
-        "Verification details",
         "Policy ID/version",
         "Agent run ID",
         "Evidence hash",
+        "Portal slot/source",
         "<summary>Details</summary>",
     ]:
-        assert audit_field in details or audit_field in html
+        assert audit_field in details or audit_field in technical or audit_field in html
 
 
 def test_approval_blocking_uses_warning_or_error_styling_not_green():
