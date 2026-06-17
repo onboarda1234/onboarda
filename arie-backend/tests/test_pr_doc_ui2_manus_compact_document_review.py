@@ -57,7 +57,8 @@ def test_application_review_default_rows_are_compact_and_not_audit_heavy():
 def test_details_are_collapsed_by_default_and_retain_technical_audit_fields_only():
     html = _backoffice_html()
     details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
-    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentAuditToggleAction")
+    audit_toggle = _function_region(html, "renderDocumentAuditToggleAction", "toggleDocumentTechnicalAudit")
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
     assert '<div class="document-review-audit-panel" hidden>' in details
@@ -70,7 +71,9 @@ def test_details_are_collapsed_by_default_and_retain_technical_audit_fields_only
         assert audit_field in details or audit_field in technical
     assert "More ▾" in secondary
     assert "Re-Verify" in secondary
-    assert "Technical audit details" in secondary
+    assert "Technical audit details" not in secondary
+    assert "Technical audit details" in audit_toggle
+    assert 'aria-expanded="false"' in audit_toggle
     assert "renderVerificationCoverageSummary(doc, policy)" not in details
     assert "Verification coverage" not in details
     assert "Verification details" not in details
@@ -137,9 +140,12 @@ def test_secondary_menu_contains_view_download_and_missing_state_keeps_disabled_
     html = _backoffice_html()
     actions = _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
     primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
-    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentDirectActions")
+    audit_toggle = _function_region(html, "renderDocumentAuditToggleAction", "toggleDocumentTechnicalAudit")
+    secondary = _function_region(html, "renderDocumentSecondaryActions", "renderDocumentAuditToggleAction")
     missing_renderer = _function_region(html, "renderMissingKycDocumentRow", "renderDocumentActionGroupShell")
 
+    assert "renderDocumentAuditToggleAction(doc)" in actions
+    assert actions.index("renderDocumentAuditToggleAction(doc)") < actions.index("renderDocumentPrimaryAction(app, doc, state, expectedSlot)")
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
     assert "openBoDocUploadForExpectedSlot" in primary
     assert "renderDocumentPrimaryAction(app, doc, state, expectedSlot)" in actions
@@ -149,7 +155,8 @@ def test_secondary_menu_contains_view_download_and_missing_state_keeps_disabled_
     assert '>Download</button>' in secondary
     assert 'disabled>View</button>' in secondary
     assert 'disabled>Download</button>' in secondary
-    assert "Technical audit details" in secondary
+    assert "Technical audit details" not in secondary
+    assert "Technical audit details" in audit_toggle
     assert ">Upload</button>" in primary
     assert "Request from client" in secondary
     assert "No document uploaded" in missing_renderer

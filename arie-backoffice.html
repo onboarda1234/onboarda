@@ -794,6 +794,7 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-more-item:hover { background:var(--surface2); }
 .document-review-more-item.danger { color:#b91c1c; }
 .document-review-more-item.danger:hover { background:rgba(220,38,38,.08); }
+.document-review-audit-toggle[aria-expanded="true"] { border-color:#bfdbfe; background:#eff6ff; color:#1d4ed8; }
 .document-review-audit-panel { margin-top:7px; border:1px solid var(--border1); border-radius:10px; background:var(--surface2); padding:8px; }
 .document-review-audit-panel[hidden] { display:none !important; }
 .document-review-audit-panel-body { padding:0; }
@@ -8523,11 +8524,15 @@ function renderDocumentSecondaryActions(app, doc, state) {
     items.push('<button class="document-review-more-item danger" onclick="reviewBackofficeDocument(\'' + docId + '\',\'' + appRef + '\',\'rejected\')">Reject</button>');
   }
   items.push('<button class="document-review-more-item" onclick="verifyBackofficeDocument(\'' + docId + '\',\'' + appRef + '\')">Re-Verify</button>');
-  items.push('<button class="document-review-more-item" onclick="toggleDocumentTechnicalAudit(this)">Technical audit details</button>');
   return '<details class="document-review-more">' +
     '<summary class="doc-action-btn secondary">More ▾</summary>' +
     '<div class="document-review-more-menu">' + items.join('') + '</div>' +
   '</details>';
+}
+
+function renderDocumentAuditToggleAction(doc) {
+  if (!doc) return '';
+  return '<button class="doc-action-btn secondary document-review-audit-toggle" aria-expanded="false" onclick="toggleDocumentTechnicalAudit(this)">Technical audit details</button>';
 }
 
 function toggleDocumentTechnicalAudit(trigger) {
@@ -8536,7 +8541,11 @@ function toggleDocumentTechnicalAudit(trigger) {
     var panel = row ? row.querySelector('.document-review-audit-panel') : null;
     if (!panel) return;
     var willOpen = panel.hidden;
-    panel.hidden = !willOpen ? true : false;
+    panel.hidden = !willOpen;
+    var toggles = row.querySelectorAll ? row.querySelectorAll('.document-review-audit-toggle') : [];
+    Array.prototype.forEach.call(toggles, function(btn) {
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
     if (trigger.closest) {
       var moreMenu = trigger.closest('.document-review-more');
       if (moreMenu) moreMenu.open = false;
@@ -8564,6 +8573,7 @@ function renderDocumentPrimaryAction(app, doc, state, expectedSlot) {
 
 function renderDocumentDirectActions(app, doc, groupKey, state, expectedSlot) {
   return '<div class="document-review-actions">' +
+    renderDocumentAuditToggleAction(doc) +
     renderDocumentPrimaryAction(app, doc, state, expectedSlot) +
     renderDocumentSecondaryActions(app, doc, state) +
   '</div>';
