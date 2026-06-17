@@ -1,0 +1,44 @@
+{
+  "status": "implementation_tests_passed_staging_smoke_pending",
+  "checked_at": "2026-06-17T15:23:10Z",
+  "local_tests": [
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest tests/test_api.py::TestGovernanceAttemptAudit",
+      "result": "passed",
+      "tests": 37
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest tests/test_api.py::TestAdminPilotMutationAuditabilityAndRBAC tests/test_api.py::TestRiskModelAdminConfigSafety",
+      "result": "passed",
+      "tests": 24
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest tests/test_backoffice_review_audit.py",
+      "result": "passed",
+      "tests": 97
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m pytest tests/test_ex12_client_security.py",
+      "result": "passed",
+      "tests": 83
+    },
+    {
+      "command": "/opt/homebrew/bin/python3.11 -m py_compile server.py base_handler.py tests/test_api.py tests/test_backoffice_review_audit.py",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "staging_smoke": {
+    "status": "pending_post_merge_staging_deploy",
+    "required_endpoints": [
+      "/api/liveness",
+      "/api/health",
+      "authenticated /api/version",
+      "focused reassignment API checks",
+      "focused sensitive endpoint role checks"
+    ]
+  }
+}

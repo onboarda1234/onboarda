@@ -1,0 +1,3 @@
+Status: pending post-merge staging browser smoke.
+
+No browser console capture has been taken yet. Closure requires authenticated staging browser smoke after merge and deploy.

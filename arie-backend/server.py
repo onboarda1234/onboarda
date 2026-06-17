@@ -6232,12 +6232,56 @@ class ApplicationDetailHandler(BaseHandler):
                 )
                 db.close()
                 return self.error(reason, 403)
-            old_assigned = app.get("assigned_to") or "Unassigned"
-            new_assigned = data["assigned_to"] or "Unassigned"
+
+            reassignment_reason = str(data.get("reassignment_reason") or "").strip()
+            if not reassignment_reason:
+                db.close()
+                return self.error("reassignment_reason_required", 400)
+
+            previous_assignee_id = app.get("assigned_to") or None
+            new_assignee_id = data["assigned_to"] or None
+            previous_assignee_name = resolve_user_display_name(db, previous_assignee_id) or "Unassigned"
+            new_assignee_name = resolve_user_display_name(db, new_assignee_id) or "Unassigned"
+            audit_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            audit_detail = {
+                "event": "application_reassigned",
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "previous_assignee_id": previous_assignee_id,
+                "previous_assignee_name": previous_assignee_name,
+                "new_assignee_id": new_assignee_id,
+                "new_assignee_name": new_assignee_name,
+                "actor_user_id": user.get("sub"),
+                "actor_email": user.get("email", ""),
+                "actor_role": user.get("role"),
+                "reassignment_reason": reassignment_reason,
+                "timestamp": audit_timestamp,
+                "source_surface": "backoffice/application_review",
+            }
+            before_state = {
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "assigned_to": previous_assignee_id,
+                "assigned_name": previous_assignee_name,
+            }
+            after_state = {
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "assigned_to": new_assignee_id,
+                "assigned_name": new_assignee_name,
+            }
             db.execute("UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
-                       (data["assigned_to"], real_id))
-            self.log_audit(user, "Reassign", app["ref"],
-                           f"Reassigned from {old_assigned} to {new_assigned}", db=db)
+                       (new_assignee_id, real_id))
+            self.log_audit(
+                user,
+                "Reassign",
+                app["ref"],
+                json.dumps(audit_detail, sort_keys=True),
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
 
         db.commit()
         db.close()
@@ -11800,6 +11844,10 @@ class UserDetailHandler(BaseHandler):
 # RISK CONFIG ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+SENSITIVE_CONFIG_READ_ROLES = ["admin", "sco", "co", "analyst"]
+SENSITIVE_CONFIG_WRITE_ROLES = ["admin"]
+
+
 class RiskConfigHandler(BaseHandler):
     """GET/PUT /api/config/risk-model"""
 
@@ -11926,7 +11974,10 @@ class RiskConfigHandler(BaseHandler):
         return normalized
 
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_READ_ROLES,
+            resource="config/risk-model",
+        )
         if not user:
             return
         db = get_db()
@@ -11951,7 +12002,10 @@ class RiskConfigHandler(BaseHandler):
                          "country_risk_scores": {}, "sector_risk_scores": {}, "entity_type_scores": {}})
 
     def put(self):
-        user = self.require_auth(roles=["admin"])
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_WRITE_ROLES,
+            resource="config/risk-model",
+        )
         if not user:
             return
         data = dict(self.get_json() or {})
@@ -12063,7 +12117,10 @@ class CountryRiskConfigHandler(BaseHandler):
     """GET /api/config/country-risk - active manual country-risk settings."""
 
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_READ_ROLES,
+            resource="config/country-risk",
+        )
         if not user:
             return
         country = (self.get_argument("country", "") or "").strip()
@@ -12217,7 +12274,10 @@ class VersionHandler(BaseHandler):
 class SystemSettingsHandler(BaseHandler):
     """GET/PUT /api/config/system-settings"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_READ_ROLES,
+            resource="config/system-settings",
+        )
         if not user:
             return
         db = get_db()
@@ -12239,7 +12299,10 @@ class SystemSettingsHandler(BaseHandler):
         self.success(dict(row))
 
     def put(self):
-        user = self.require_auth(roles=["admin"])
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_WRITE_ROLES,
+            resource="config/system-settings",
+        )
         if not user:
             return
         data = self.get_json()
@@ -13358,7 +13421,10 @@ class RolesPermissionsHandler(BaseHandler):
 class AIAgentsHandler(BaseHandler):
     """GET/POST /api/config/ai-agents"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_READ_ROLES,
+            resource="config/ai-agents",
+        )
         if not user:
             return
         db = get_db()
@@ -13378,7 +13444,10 @@ class AIAgentsHandler(BaseHandler):
         self.success({"agents": agents})
 
     def post(self):
-        user = self.require_auth(roles=["admin"])
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_WRITE_ROLES,
+            resource="config/ai-agents",
+        )
         if not user:
             return
         data = self.get_json()
@@ -13415,7 +13484,10 @@ class AIAgentsHandler(BaseHandler):
 class AIAgentDetailHandler(BaseHandler):
     """PUT/DELETE /api/config/ai-agents/:id"""
     def put(self, agent_id):
-        user = self.require_auth(roles=["admin"])
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_WRITE_ROLES,
+            resource="config/ai-agents",
+        )
         if not user:
             return
         data = self.get_json()
@@ -13490,7 +13562,10 @@ class AIAgentDetailHandler(BaseHandler):
         self.success({"status": "updated", "updated_at": updated_row["updated_at"] if updated_row else None})
 
     def delete(self, agent_id):
-        user = self.require_auth(roles=["admin"])
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_WRITE_ROLES,
+            resource="config/ai-agents",
+        )
         if not user:
             return
         db = get_db()
@@ -13528,7 +13603,10 @@ class AIAgentDetailHandler(BaseHandler):
 class VerificationChecksHandler(BaseHandler):
     """GET/PUT /api/config/verification-checks"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_READ_ROLES,
+            resource="config/verification-checks",
+        )
         if not user:
             return
         db = get_db()
@@ -13552,7 +13630,10 @@ class VerificationChecksHandler(BaseHandler):
         self.success({"entity": entity, "person": person, **policy_payload})
 
     def put(self):
-        user = self.require_auth(roles=["admin"])
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_WRITE_ROLES,
+            resource="config/verification-checks",
+        )
         if not user:
             return
         data = self.get_json()
@@ -13622,7 +13703,10 @@ class VerificationChecksHandler(BaseHandler):
 class DocumentPoliciesHandler(BaseHandler):
     """GET /api/config/document-policies"""
     def get(self):
-        user = self.require_auth()
+        user = self.require_backoffice_auth(
+            roles=SENSITIVE_CONFIG_READ_ROLES,
+            resource="config/document-policies",
+        )
         if not user:
             return
         self.success(build_document_policy_payload())

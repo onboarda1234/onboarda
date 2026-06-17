@@ -4803,6 +4803,92 @@ class TestGovernanceAttemptAudit:
         assert "Pre-approval blocked" in resp.text
         assert "Compliance Officer" in resp.text
 
+    def test_reassignment_empty_reason_returns_400_and_does_not_persist(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_assign_empty_reason"
+        app_ref = "ARF-2026-PHASE1B-ASG-EMPTY"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, assigned_to, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Assign Empty Reason Ltd",
+            "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
+            "admin001", self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.patch(
+            f"{api_server}/api/applications/{app_id}",
+            json={"assigned_to": "co001", "reassignment_reason": ""},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "reassignment_reason_required" in resp.text
+
+        conn = get_db()
+        app_row = conn.execute("SELECT assigned_to FROM applications WHERE id = ?", (app_id,)).fetchone()
+        audit_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ? AND action = 'Reassign'",
+            (app_ref,),
+        ).fetchone()["c"]
+        conn.close()
+
+        assert app_row["assigned_to"] == "admin001"
+        assert audit_count == 0
+
+    def test_reassignment_whitespace_reason_returns_400_and_does_not_persist(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_assign_whitespace_reason"
+        app_ref = "ARF-2026-PHASE1B-ASG-SPACE"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, assigned_to, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Assign Space Reason Ltd",
+            "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
+            "admin001", self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.patch(
+            f"{api_server}/api/applications/{app_id}",
+            json={"assigned_to": "co001", "reassignment_reason": "   \n\t  "},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "reassignment_reason_required" in resp.text
+
+        conn = get_db()
+        app_row = conn.execute("SELECT assigned_to FROM applications WHERE id = ?", (app_id,)).fetchone()
+        audit_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ? AND action = 'Reassign'",
+            (app_ref,),
+        ).fetchone()["c"]
+        conn.close()
+
+        assert app_row["assigned_to"] == "admin001"
+        assert audit_count == 0
+
     def test_admin_can_assign_preapproval_review_application_and_audit_it(self, api_server):
         from auth import create_token
         from db import get_db
@@ -4820,7 +4906,7 @@ class TestGovernanceAttemptAudit:
         """, (
             app_id, app_ref, "phase1b_client", "Phase 1B Assign Admin Ltd",
             "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
-            None, self._live_prescreening(),
+            "admin001", self._live_prescreening(),
         ))
         conn.commit()
         conn.close()
@@ -4828,7 +4914,7 @@ class TestGovernanceAttemptAudit:
         token = create_token("admin001", "admin", "Test Admin", "officer")
         resp = http_requests.patch(
             f"{api_server}/api/applications/{app_id}",
-            json={"assigned_to": "co001"},
+            json={"assigned_to": "co001", "reassignment_reason": "Workload balancing for urgent review"},
             headers={"Authorization": f"Bearer {token}"},
             timeout=3,
         )
@@ -4841,7 +4927,7 @@ class TestGovernanceAttemptAudit:
         ).fetchone()
         audit_row = conn.execute(
             """
-            SELECT action, detail FROM audit_log
+            SELECT action, detail, before_state, after_state FROM audit_log
             WHERE target = ?
             ORDER BY id DESC LIMIT 1
             """,
@@ -4852,7 +4938,22 @@ class TestGovernanceAttemptAudit:
         assert app_row["assigned_to"] == "co001"
         assert audit_row is not None
         assert audit_row["action"] == "Reassign"
-        assert "co001" in audit_row["detail"]
+        detail = json.loads(audit_row["detail"])
+        before_state = json.loads(audit_row["before_state"])
+        after_state = json.loads(audit_row["after_state"])
+        assert detail["event"] == "application_reassigned"
+        assert detail["application_id"] == app_id
+        assert detail["application_ref"] == app_ref
+        assert detail["previous_assignee_id"] == "admin001"
+        assert detail["new_assignee_id"] == "co001"
+        assert detail["actor_user_id"] == "admin001"
+        assert detail["actor_email"]
+        assert detail["actor_role"] == "admin"
+        assert detail["reassignment_reason"] == "Workload balancing for urgent review"
+        assert detail["source_surface"] == "backoffice/application_review"
+        assert detail["timestamp"]
+        assert before_state["assigned_to"] == "admin001"
+        assert after_state["assigned_to"] == "co001"
 
     def test_co_assignment_is_role_blocked_with_specific_403(self, api_server):
         from auth import create_token
@@ -6697,6 +6798,21 @@ class TestAdminPilotMutationAuditabilityAndRBAC:
         assert row is not None
         return row
 
+    def _authz_denial_row(self, target, actor_id):
+        from db import get_db
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE action='authz_denied_internal_api' AND target=? AND user_id=?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (target, actor_id),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        return json.loads(row["detail"])
+
     def _assert_before_after_no_secrets(self, row):
         assert row["after_state"]
         blob = f"{row['before_state'] or ''} {row['after_state'] or ''} {row['detail'] or ''}".lower()
@@ -6735,8 +6851,63 @@ class TestAdminPilotMutationAuditabilityAndRBAC:
         assert http_requests.get(f"{api_server}/api/users", headers=self._headers("sco"), timeout=5).status_code == 200
         assert http_requests.get(f"{api_server}/api/users", headers=self._headers("co"), timeout=5).status_code == 403
         assert http_requests.get(f"{api_server}/api/config/risk-model", headers=self._headers("analyst"), timeout=5).status_code == 200
+        assert http_requests.get(f"{api_server}/api/config/country-risk", headers=self._headers("analyst"), timeout=5).status_code == 200
+        assert http_requests.get(f"{api_server}/api/config/ai-agents", headers=self._headers("analyst"), timeout=5).status_code == 200
+        assert http_requests.get(f"{api_server}/api/config/verification-checks", headers=self._headers("analyst"), timeout=5).status_code == 200
         assert http_requests.get(f"{api_server}/api/settings/enhanced-requirements", headers=self._headers("co"), timeout=5).status_code == 200
         assert http_requests.get(f"{api_server}/api/settings/enhanced-requirements", headers=self._headers("analyst"), timeout=5).status_code == 403
+
+    def test_analyst_risk_config_mutation_returns_403_and_is_audited(self, api_server):
+        headers = self._headers("analyst")
+        resp = http_requests.put(
+            f"{api_server}/api/config/risk-model",
+            headers=headers,
+            json={"country_risk_scores": {"blockedland": 4}},
+            timeout=5,
+        )
+        assert resp.status_code == 403, resp.text
+        detail = self._authz_denial_row("config/risk-model", "analyst001")
+        assert detail["event"] == "authz_denied_internal_api"
+        assert detail["actor_role"] == "analyst"
+        assert detail["allowed_roles"] == ["admin"]
+        assert detail["method"] == "PUT"
+
+    def test_analyst_ai_config_mutation_returns_403_and_is_audited(self, api_server):
+        agents = http_requests.get(f"{api_server}/api/config/ai-agents", headers=self._headers(), timeout=5).json()["agents"]
+        agent = agents[0]
+        headers = self._headers("analyst")
+        resp = http_requests.put(
+            f"{api_server}/api/config/ai-agents/{agent['id']}",
+            headers=headers,
+            json={"enabled": not bool(agent["enabled"])},
+            timeout=5,
+        )
+        assert resp.status_code == 403, resp.text
+        detail = self._authz_denial_row("config/ai-agents", "analyst001")
+        assert detail["event"] == "authz_denied_internal_api"
+        assert detail["actor_role"] == "analyst"
+        assert detail["allowed_roles"] == ["admin"]
+        assert detail["method"] == "PUT"
+
+    def test_read_only_roles_cannot_mutate_alternate_ai_config_endpoints(self, api_server):
+        agents = http_requests.get(f"{api_server}/api/config/ai-agents", headers=self._headers(), timeout=5).json()["agents"]
+        agent = agents[0]
+        headers = self._headers("analyst")
+        checks = [
+            ("POST", "/api/config/ai-agents", {"agent_number": 902, "name": "Blocked", "stage": "Monitoring", "enabled": True, "checks": []}),
+            ("PUT", f"/api/config/ai-agents/{agent['id']}", {"enabled": not bool(agent["enabled"])}),
+            ("DELETE", f"/api/config/ai-agents/{agent['id']}", None),
+            ("PUT", "/api/config/verification-checks", {"category": "entity", "doc_type": "blocked_doc", "doc_name": "Blocked", "checks": []}),
+        ]
+        for method, path, payload in checks:
+            resp = http_requests.request(
+                method,
+                f"{api_server}{path}",
+                headers=headers,
+                json=payload,
+                timeout=5,
+            )
+            assert resp.status_code == 403, (method, path, resp.text)
 
     def test_ai_agent_update_creates_before_after_audit(self, api_server):
         agents = http_requests.get(f"{api_server}/api/config/ai-agents", headers=self._headers(), timeout=5).json()["agents"]

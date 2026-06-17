@@ -1,0 +1,7 @@
+{
+  "status": "pending_post_merge_staging_deploy",
+  "checked_at": "2026-06-17T15:23:10Z",
+  "endpoint": "/api/health",
+  "response": null,
+  "notes": "Staging health smoke must be captured after merge and deployment."
+}
