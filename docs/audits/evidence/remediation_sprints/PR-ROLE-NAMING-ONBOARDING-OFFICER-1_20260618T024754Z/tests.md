@@ -2,6 +2,8 @@
 
 Timestamp: 2026-06-18T02:47:54Z
 
+Updated: 2026-06-18T03:06:20Z
+
 ## Passed
 
 ```bash
@@ -15,6 +17,26 @@ python3.11 -m pytest \
 ```
 
 Result: `59 passed in 5.03s`
+
+```bash
+python3.11 -m pytest \
+  arie-backend/tests/test_inline_screening_runtime.py::TestInlineScreeningRuntime::test_activity_log_formats_screening_reviews_for_officers \
+  arie-backend/tests/test_inline_screening_runtime.py::TestInlineScreeningRuntime::test_activity_log_filters_and_unknown_fallback_are_safe
+```
+
+Result: `2 passed in 0.29s`
+
+```bash
+python3.11 -m pytest arie-backend/tests/test_inline_screening_runtime.py
+```
+
+Result: `13 passed in 1.26s`
+
+```bash
+python3.11 -m pytest arie-backend/tests/test_role_naming_onboarding_officer_static.py
+```
+
+Result: `5 passed in 0.57s`
 
 ```bash
 python3.11 -m pytest \
@@ -33,6 +55,15 @@ git diff --check
 ```
 
 Result: passed.
+
+## CI Status
+
+- GitHub Actions run `27733581288`, job `82045590231`, failed on 2026-06-18 in `Run tests with coverage`.
+- Failure was limited to two Node-based audit activity runtime tests:
+  - `tests/test_inline_screening_runtime.py::TestInlineScreeningRuntime::test_activity_log_formats_screening_reviews_for_officers`
+  - `tests/test_inline_screening_runtime.py::TestInlineScreeningRuntime::test_activity_log_filters_and_unknown_fallback_are_safe`
+- Root cause: the isolated Node harness extracted the audit rendering region but did not include the display-only `formatRoleLabel` helper introduced for this PR.
+- Fix scope: test harness only. Added the role label helper to the isolated audit runtime harness and asserted `co` audit output renders `Onboarding Officer` without the old `Compliance Officer` label.
 
 ## Expected Environment Note
 
@@ -58,5 +89,5 @@ Result: 58 passed, 1 failed during collection/import of repo code with `TypeErro
 
 ## Not Run
 
-- Browser smoke was not run for this pre-merge draft PR evidence set.
+- Browser smoke was not run for this pre-merge PR evidence set.
 - Staging API smoke was not run because this branch is not merged to main and not deployed.

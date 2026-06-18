@@ -6,7 +6,9 @@ Status: **Not closed**
 
 Recorded status update: 2026-06-18T02:53:06Z
 
-Operating status: **IMPLEMENTED / DRAFT PR OPEN / NOT CLOSED**
+Latest evidence update: 2026-06-18T03:06:20Z
+
+Operating status: **IMPLEMENTED / PR READY / NOT CLOSED**
 
 ## Summary
 
@@ -16,8 +18,8 @@ Current blockers are only closure gates. If PR review requests permission, autho
 
 ## Current Closure Blockers
 
-1. CI must finish and pass.
-2. PR #527 must be marked ready and merged.
+1. CI must pass after the narrow test-harness fix.
+2. PR #527 must be merged.
 3. Staging must deploy from merged main.
 4. Authenticated `/api/version.git_sha` and `image_tag` must match the merge SHA.
 5. API smoke must pass.
@@ -28,10 +30,11 @@ Current blockers are only closure gates. If PR review requests permission, autho
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| PR merged to main | Not complete | Draft PR pending. |
+| PR marked ready | Complete | PR #527 was marked ready on 2026-06-18. |
+| PR merged to main | Not complete | PR #527 remains open pending a passing CI run. |
 | Staging deployed from merged main | Not complete | No merge/deploy performed. |
 | Authenticated `/api/version` `git_sha` and `image_tag` match merge SHA | Not complete | No merged SHA or staging deploy exists yet. |
-| CI passes | Not complete | GitHub `lint-and-test` was still in progress at 2026-06-18T02:53:06Z. |
+| CI passes | Not complete | GitHub `lint-and-test` run `27733581288` failed in two audit runtime tests because the isolated Node harness missed `formatRoleLabel`. A test-only harness fix was applied and verified locally; CI must pass on the pushed fix. |
 | API smoke passes | Not complete | Local focused API tests passed; staging API smoke not run. |
 | Browser smoke: user management role label | Not complete | Not run pre-merge. |
 | Browser smoke: application assignment/reassignment label | Not complete | Not run pre-merge. |
@@ -43,6 +46,23 @@ Current blockers are only closure gates. If PR review requests permission, autho
 ## Tests Run
 
 See `tests.md`.
+
+## CI Failure Follow-Up
+
+GitHub Actions run `27733581288`, job `82045590231`, failed in `Run tests with coverage`.
+
+Observed failure:
+
+- `tests/test_inline_screening_runtime.py::TestInlineScreeningRuntime::test_activity_log_formats_screening_reviews_for_officers`
+- `tests/test_inline_screening_runtime.py::TestInlineScreeningRuntime::test_activity_log_filters_and_unknown_fallback_are_safe`
+- Runtime error: `ReferenceError: formatRoleLabel is not defined`
+
+Resolution:
+
+- Added the display-only `ROLE_LABELS` / `formatRoleLabel` helper to the isolated audit activity Node harness.
+- Added an assertion that the audit card renders `Aisha Sudally · Onboarding Officer`.
+- Added an assertion that the old `Compliance Officer` label is absent from the rendered audit HTML.
+- No permission, approval-gate, workflow, role-key, or role-matrix code was changed.
 
 ## Staging Deploy Proof
 
@@ -67,10 +87,10 @@ Not run. No screenshots were produced.
 | Blocker for closure | PR must be merged to main. |
 | Blocker for closure | Staging must deploy from merged main. |
 | Blocker for closure | Authenticated `/api/version` must prove `git_sha` and `image_tag` match the merge SHA. |
-| Blocker for closure | CI must finish and pass. |
+| Blocker for closure | CI must pass after the test-harness fix. |
 | Blocker for closure | Staging API smoke must pass. |
 | Blocker for closure | Browser smoke must cover user management role label, application assignment/reassignment label, audit trail role display, and no permission change. |
-| Non-blocking for draft PR | System Python 3.9 cannot run import-heavy repo tests; repo requires Python >=3.11 and tests passed with `python3.11`. |
+| Non-blocking for PR | System Python 3.9 cannot run import-heavy repo tests; repo requires Python >=3.11 and tests passed with `python3.11`. |
 
 ## Closure Decision
 

@@ -851,7 +851,15 @@ def _activity_log_runtime_js(html):
                 var BO_AUTH_TOKEN = 'token';
                 var container = { innerHTML: '' };
                 var window = { _currentDetailApp: null };
+                var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Onboarding Officer', analyst:'Analyst' };
                 function renderCaseCommandCentre() {}
+                function formatRoleLabel(role) {
+                  const raw = role == null ? '' : String(role);
+                  const normalized = raw.trim().toLowerCase();
+                  if (ROLE_LABELS[normalized]) return ROLE_LABELS[normalized];
+                  if (normalized === 'compliance officer') return ROLE_LABELS.co;
+                  return raw;
+                }
                 function escapeHtml(value) {
                   return String(value == null ? '' : value)
                     .replace(/&/g, '&amp;')
@@ -1278,6 +1286,8 @@ class TestInlineScreeningRuntime:
         assert "Show technical details" in result["html"]
         assert "Copy technical details" in result["html"]
         assert "Status Change" in result["html"]
+        assert "Aisha Sudally · Onboarding Officer" in result["html"]
+        assert "Compliance Officer" not in result["html"]
         assert "raw-provider-123" not in result["firstCardVisible"]
 
     def test_activity_log_filters_and_unknown_fallback_are_safe(self):
