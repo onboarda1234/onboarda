@@ -293,6 +293,24 @@ def _build_trigger_context(app, review, question, answer_entry, generation_sourc
     }
 
 
+ALLOWED_SUBJECT_SCOPES = {
+    "company",
+    "director",
+    "ubo",
+    "controller",
+    "application",
+    "screening_subject",
+}
+
+
+def _coerce_subject_scope(value):
+    """PR-PRS-B (P2-EV4): keep subject_scope within the allowed set used by the
+    upload/monitoring paths; default unknown scopes to 'application' rather than
+    passing an arbitrary string downstream."""
+    scope = str(value or "").strip().lower()
+    return scope if scope in ALLOWED_SUBJECT_SCOPES else "application"
+
+
 def _build_requirement_payload(app, review, question, answer_entry, template, *, actor_fk, now, generation_source):
     trigger_key = _review_trigger_key(review.get("id"), question.get("key"))
     trigger_context = _build_trigger_context(app, review, question, answer_entry, generation_source)
@@ -306,7 +324,7 @@ def _build_requirement_payload(app, review, question, answer_entry, template, *,
         "requirement_description": template["requirement_description"],
         "audience": "client",
         "requirement_type": "document",
-        "subject_scope": template.get("subject_scope") or "application",
+        "subject_scope": _coerce_subject_scope(template.get("subject_scope")),
         "blocking_approval": 0,
         "waivable": 1,
         "waiver_roles": json.dumps([]),
