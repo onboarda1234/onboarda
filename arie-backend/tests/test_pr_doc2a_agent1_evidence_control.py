@@ -75,7 +75,7 @@ def test_doc2a_agent1_settings_keeps_simple_check_configuration():
     assert "Underlying Verification Check Configuration" in settings_view
     assert "Entity Documents" in settings_view
     assert "Person / KYC Documents" in settings_view
-    assert "Enhanced / EDD Documents" in settings_view
+    assert "Enhanced Evidence Documents" in settings_view
 
     assert "Agent 1 Evidence Control Layer" not in settings_view
     assert "Document Policy Registry" not in settings_view

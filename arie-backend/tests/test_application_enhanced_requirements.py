@@ -228,6 +228,20 @@ def _requirement_id_by_key_prefix(db, app_id, requirement_key_prefix):
     return row["id"]
 
 
+def _requirement_ids_by_key_prefix(db, app_id, requirement_key_prefix):
+    rows = db.execute(
+        """
+        SELECT id FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key LIKE ?
+        ORDER BY id
+        """,
+        (app_id, requirement_key_prefix + "%"),
+    ).fetchall()
+    ids = [row["id"] for row in rows]
+    assert ids
+    return ids
+
+
 def _insert_document(db, app_id, doc_id=None, *, review_status="pending"):
     doc_id = doc_id or ("doc_" + uuid.uuid4().hex[:10])
     db.execute(
@@ -262,6 +276,16 @@ def _count_app_reqs(db, app_id, trigger_key):
         "SELECT COUNT(*) AS c FROM application_enhanced_requirements WHERE application_id=? AND trigger_key=?",
         (app_id, trigger_key),
     ).fetchone()["c"]
+
+
+def _app_req_keys(db, app_id):
+    return {
+        row["requirement_key"]
+        for row in db.execute(
+            "SELECT requirement_key FROM application_enhanced_requirements WHERE application_id=?",
+            (app_id,),
+        ).fetchall()
+    }
 
 
 def _apply_auto_generation(
@@ -469,7 +493,10 @@ def test_client_declared_pep_director_routes_and_generates_fk_safe_requirements(
     summary = build_enhanced_requirement_operational_summary(db, app_id)
     assert summary["enhanced_review_active"] is True
     assert summary["status_label"] != "Clear"
-    assert summary["total"] == _count_rules(db, "pep")
+    assert summary["total"] == _count_rules(db, "pep") + _count_app_reqs(
+        db, app_id, "standard_kyc_section_b"
+    )
+    assert _count_app_reqs(db, app_id, "standard_kyc_section_b") == 2
 
 
 def test_client_declared_pep_ubo_routes_and_generates_fk_safe_requirements(enhanced_app_db):
@@ -630,8 +657,8 @@ def test_operational_summary_counts_and_next_actions(enhanced_app_db):
     db.commit()
     resolved = build_enhanced_requirement_operational_summary(db, app_id)
     assert resolved["approval_blocked"] is False
-    assert resolved["next_action_code"] == "awaiting_client"
-    assert resolved["unresolved_count"] >= 1
+    assert resolved["next_action_code"] == "resolved"
+    assert resolved["unresolved_count"] == 1
 
 
 def test_operational_summary_invalid_waiver_blocks(enhanced_app_db):
@@ -743,7 +770,7 @@ def test_non_terminal_possible_match_metadata_does_not_generate_screening_concer
     assert _count_app_reqs(db, app_id, "screening_concern") == 0
 
 
-def test_terminal_material_screening_match_generates_screening_concern(enhanced_app_db):
+def test_terminal_material_screening_match_does_not_generate_enhanced_screening_rows(enhanced_app_db):
     db = enhanced_app_db
     app_id = _insert_application(
         db,
@@ -758,8 +785,14 @@ def test_terminal_material_screening_match_generates_screening_concern(enhanced_
 
     result = _generate(db, app_id)
 
-    assert "screening_concern" in result["triggers"]
-    assert _count_app_reqs(db, app_id, "screening_concern") == _count_rules(db, "screening_concern")
+    assert "screening_concern" not in result["triggers"]
+    assert _count_app_reqs(db, app_id, "screening_concern") == 0
+    assert not {
+        "screening_disposition",
+        "false_positive_rationale",
+        "adverse_media_pep_sanctions_assessment",
+        "material_screening_senior_review",
+    }.intersection(_app_req_keys(db, app_id))
 
 
 @pytest.mark.parametrize(
@@ -889,11 +922,6 @@ def test_high_volume_plus_pep_routes_edd_due_to_pep_not_volume(enhanced_app_db):
         ({"risk_level": "LOW", "ownership_structure": "Complex nominee trust"}, None, "opaque_ownership"),
         ({"risk_level": "LOW", "country": "Iran"}, None, "high_risk_jurisdiction"),
         (
-            {"risk_level": "LOW", "prescreening": {"screening_report": {"total_hits": 1}}},
-            None,
-            "screening_concern",
-        ),
-        (
             {"risk_level": "LOW", "prescreening": {"monthly_volume": "Over USD 5,000,000 per month", "existing_bank_account": "Yes"}},
             None,
             "high_volume",
@@ -963,13 +991,13 @@ def test_generation_is_idempotent_and_preserves_reviewed_records(enhanced_app_db
 
 def test_missing_config_returns_config_not_ok_and_audits(enhanced_app_db):
     db = enhanced_app_db
-    db.execute("UPDATE enhanced_requirement_rules SET active=0 WHERE trigger_key='screening_concern'")
+    db.execute("UPDATE enhanced_requirement_rules SET active=0 WHERE trigger_key='high_volume'")
     db.commit()
     app_id = _insert_application(db, risk_level="HIGH")
     result = _generate(db, app_id)
     assert result["config_ok"] is False
     assert result["generated_count"] == 0
-    assert any("screening_concern" in error for error in result["errors"])
+    assert any("high_volume" in error for error in result["errors"])
     audit = db.execute(
         "SELECT COUNT(*) AS c FROM audit_log WHERE action='application_enhanced_requirements.config_invalid'"
     ).fetchone()
@@ -1308,29 +1336,38 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     assert "Deputy Minister" in rendered
     assert "United Arab Emirates" in rendered
 
-    jurisdiction = by_key["pep_jurisdiction"]
-    assert jurisdiction["requirement_display_type"] == "portal_disclosure"
-    assert jurisdiction["portal_disclosure"]["fields"][0]["value"] == "United Arab Emirates"
-    assert jurisdiction["status_display_label"] == "Pending officer review"
+    adverse_media = by_key["pep_adverse_media_assessment"]
+    assert adverse_media["requirement_display_type"] == "internal_control"
+    assert adverse_media["accepts_document_upload"] is False
+    assert adverse_media["audience"] == "backoffice"
+    assert adverse_media["section"] == "F"
 
-    role = by_key["pep_role_position"]
-    assert role["requirement_display_type"] == "portal_disclosure"
-    assert "Deputy Minister" in json.dumps(role["portal_disclosure"])
-    assert role["status_display_label"] == "Pending officer review"
-
-    senior = by_key["mandatory_senior_review"]
-    assert senior["requirement_display_type"] == "internal_control"
-    assert senior["accepts_document_upload"] is False
-    assert senior["internal_control"]["resolve_label"] == "Open AI Compliance Supervisor"
-
-    monitoring = by_key["ongoing_monitoring_flag"]
+    monitoring = by_key["pep_enhanced_monitoring_flag"]
     assert monitoring["requirement_display_type"] == "internal_control"
     assert monitoring["accepts_document_upload"] is False
-    assert monitoring["internal_control"]["resolve_label"] == "View monitoring status"
+    assert monitoring["audience"] == "backoffice"
+    assert monitoring["section"] == "F"
+
+    bank_reference_rows = [
+        item for item in body["requirements"]
+        if item["requirement_key"].startswith("bankref_")
+    ]
+    sow_rows = [
+        item for item in body["requirements"]
+        if item["requirement_key"].startswith("source_wealth_")
+    ]
+    assert {row["subject_name"] for row in bank_reference_rows} == {"Amina Public"}
+    assert {row["subject_name"] for row in sow_rows} == {"Amina Public"}
+    assert all(row["section"] == "B" for row in bank_reference_rows + sow_rows)
+    assert all(row["canonical_doc_type"] in {"bankref", "source_wealth"} for row in bank_reference_rows + sow_rows)
+    assert "pep_jurisdiction" not in by_key
+    assert "pep_role_position" not in by_key
+    assert "mandatory_senior_review" not in by_key
+    assert "ongoing_monitoring_flag" not in by_key
 
     type_counts = body["enhanced_review_summary"]["type_counts"]
     assert type_counts["evidence"] > 0
-    assert type_counts["portal_disclosure"] >= 3
+    assert type_counts["portal_disclosure"] >= 1
     assert type_counts["internal_control"] >= 2
 
 
@@ -1390,23 +1427,23 @@ def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhance
         """
         SELECT requirement_key, requirement_label, subject_scope, trigger_context
         FROM application_enhanced_requirements
-        WHERE application_id=? AND (requirement_key LIKE 'pep_sow_evidence_%' OR requirement_key LIKE 'pep_bank_reference_%')
+        WHERE application_id=? AND (requirement_key LIKE 'source_wealth_%' OR requirement_key LIKE 'bankref_%')
         ORDER BY requirement_key
         """,
         (app_id,),
     ).fetchall()
     assert len(rows) == 4
     labels = {row["requirement_label"] for row in rows}
-    assert "Source of Wealth Evidence — Amina Public" in labels
-    assert "Source of Wealth Evidence — Uma Public" in labels
-    assert "Bank Reference Letter — Amina Public" in labels
-    assert "Bank Reference Letter — Uma Public" in labels
+    assert "Source of Wealth evidence - Amina Public" in labels
+    assert "Source of Wealth evidence - Uma Public" in labels
+    assert "Bank Reference Letter - Amina Public" in labels
+    assert "Bank Reference Letter - Uma Public" in labels
     assert all(row["subject_scope"] in {"director", "ubo"} for row in rows)
     assert conn.execute(
         """
         SELECT COUNT(*) AS c
         FROM application_enhanced_requirements
-        WHERE application_id=? AND requirement_key='pep_sow_evidence'
+        WHERE application_id=? AND requirement_key IN ('pep_sow_evidence', 'pep_bank_reference')
         """,
         (app_id,),
     ).fetchone()["c"] == 0
@@ -1422,11 +1459,11 @@ def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhance
     assert resp.status_code == 200, resp.text
     sow_rows = [
         item for item in resp.json()["requirements"]
-        if item["requirement_key"].startswith("pep_sow_evidence_")
+        if item["requirement_key"].startswith("source_wealth_")
     ]
     bank_reference_rows = [
         item for item in resp.json()["requirements"]
-        if item["requirement_key"].startswith("pep_bank_reference_")
+        if item["requirement_key"].startswith("bankref_")
     ]
     assert len(sow_rows) == 2
     assert len(bank_reference_rows) == 2
@@ -1434,6 +1471,248 @@ def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhance
     assert all(row["requirement_display_type"] == "evidence" for row in sow_rows)
     assert {row["subject_name"] for row in bank_reference_rows} == {"Amina Public", "Uma Public"}
     assert all(row["requirement_display_type"] == "evidence" for row in bank_reference_rows)
+
+
+def test_standard_kyc_section_b_bankref_and_source_wealth_conditions(enhanced_app_db):
+    from enhanced_requirements import serialize_application_requirement
+
+    conn = enhanced_app_db
+    high_app = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        "INSERT INTO directors (id, application_id, person_key, full_name, is_pep) VALUES (?,?,?,?,?)",
+        ("dir_high", high_app, "director-high", "High Risk Director", "No"),
+    )
+    conn.execute(
+        "INSERT INTO ubos (id, application_id, person_key, full_name, ownership_pct, is_pep) VALUES (?,?,?,?,?,?)",
+        ("ubo_high", high_app, "ubo-high", "High Risk UBO", 55, "No"),
+    )
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='intermediaries'").fetchone():
+        conn.execute(
+            "INSERT INTO intermediaries (id, application_id, person_key, entity_name) VALUES (?,?,?,?)",
+            ("int_high", high_app, "int-high", "High Risk Intermediary"),
+        )
+    conn.commit()
+    _generate(conn, high_app)
+
+    rows = conn.execute(
+        """
+        SELECT * FROM application_enhanced_requirements
+        WHERE application_id=? AND trigger_key='standard_kyc_section_b'
+        ORDER BY requirement_key
+        """,
+        (high_app,),
+    ).fetchall()
+    items = [serialize_application_requirement(row) for row in rows]
+    assert len(items) == 4
+    assert {item["subject_scope"] for item in items} == {"director", "ubo"}
+    assert {item["subject_name"] for item in items} == {"High Risk Director", "High Risk UBO"}
+    assert {item["canonical_doc_type"] for item in items} == {"bankref", "source_wealth"}
+    assert all(item["section"] == "B" for item in items)
+    assert all(item["mandatory"] is True and item["blocking_approval"] is True for item in items)
+    assert all(item["subject_id"] in {"dir_high", "ubo_high"} for item in items)
+
+    low_app = _insert_application(conn, risk_level="MEDIUM")
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (low_app, "Medium Risk Director", "No"),
+    )
+    conn.commit()
+    _generate(conn, low_app)
+    assert _count_app_reqs(conn, low_app, "standard_kyc_section_b") == 0
+
+    pep_app = _insert_application(conn, risk_level="LOW")
+    conn.execute(
+        "INSERT INTO directors (id, application_id, person_key, full_name, is_pep) VALUES (?,?,?,?,?)",
+        ("dir_pep_section_b", pep_app, "director-pep", "PEP Director", "Yes"),
+    )
+    conn.commit()
+    _generate(conn, pep_app)
+    pep_rows = [
+        serialize_application_requirement(row)
+        for row in conn.execute(
+            """
+            SELECT * FROM application_enhanced_requirements
+            WHERE application_id=? AND trigger_key='standard_kyc_section_b'
+            ORDER BY requirement_key
+            """,
+            (pep_app,),
+        ).fetchall()
+    ]
+    assert len(pep_rows) == 2
+    assert {item["canonical_doc_type"] for item in pep_rows} == {"bankref", "source_wealth"}
+    assert {item["subject_id"] for item in pep_rows} == {"dir_pep_section_b"}
+
+
+def test_standard_kyc_required_document_expectations_include_v5_section_b(enhanced_app_db):
+    from server import _kyc_required_document_expectations
+
+    conn = enhanced_app_db
+    high_app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        "INSERT INTO directors (id, application_id, person_key, full_name, is_pep) VALUES (?,?,?,?,?)",
+        ("dir_kyc_high", high_app_id, "dir-high", "High Director", "No"),
+    )
+    conn.execute(
+        "INSERT INTO ubos (id, application_id, person_key, full_name, ownership_pct, is_pep) VALUES (?,?,?,?,?,?)",
+        ("ubo_kyc_high", high_app_id, "ubo-high", "High UBO", 60, "No"),
+    )
+    conn.commit()
+    high_app = conn.execute("SELECT * FROM applications WHERE id=?", (high_app_id,)).fetchone()
+    high_expected = _kyc_required_document_expectations(conn, high_app)
+    section_b_pairs = {
+        (item.get("doc_type"), item.get("person_type"), item.get("person_id"))
+        for item in high_expected
+        if item.get("doc_type") in {"bankref", "source_wealth"}
+    }
+    assert section_b_pairs == {
+        ("bankref", "director", "dir-high"),
+        ("source_wealth", "director", "dir-high"),
+        ("bankref", "ubo", "ubo-high"),
+        ("source_wealth", "ubo", "ubo-high"),
+    }
+
+    low_app_id = _insert_application(conn, risk_level="MEDIUM")
+    conn.execute(
+        "INSERT INTO directors (id, application_id, person_key, full_name, is_pep) VALUES (?,?,?,?,?)",
+        ("dir_kyc_low", low_app_id, "dir-low", "Medium Director", "No"),
+    )
+    conn.commit()
+    low_app = conn.execute("SELECT * FROM applications WHERE id=?", (low_app_id,)).fetchone()
+    low_expected = _kyc_required_document_expectations(conn, low_app)
+    assert not [
+        item for item in low_expected
+        if item.get("doc_type") in {"bankref", "source_wealth"}
+        and item.get("person_id") == "dir-low"
+    ]
+
+    pep_app_id = _insert_application(conn, risk_level="LOW")
+    conn.execute(
+        "INSERT INTO directors (id, application_id, person_key, full_name, is_pep) VALUES (?,?,?,?,?)",
+        ("dir_kyc_pep", pep_app_id, "dir-pep", "PEP Director", "Yes"),
+    )
+    conn.commit()
+    pep_app = conn.execute("SELECT * FROM applications WHERE id=?", (pep_app_id,)).fetchone()
+    pep_expected = _kyc_required_document_expectations(conn, pep_app)
+    pep_pairs = {
+        (item.get("doc_type"), item.get("person_type"), item.get("person_id"))
+        for item in pep_expected
+        if item.get("person_id") == "dir-pep"
+        and item.get("doc_type") in {"bankref", "source_wealth"}
+    }
+    assert pep_pairs == {
+        ("bankref", "director", "dir-pep"),
+        ("source_wealth", "director", "dir-pep"),
+    }
+
+
+def test_v5_removed_edd_keys_do_not_generate_for_new_applications(enhanced_app_db):
+    conn = enhanced_app_db
+    app_id = _insert_application(
+        conn,
+        risk_level="HIGH",
+        country="Iran",
+        sector="Crypto / Digital Assets Exchange",
+        ownership_structure="Complex nominee trust",
+        prescreening={
+            "country_of_incorporation": "Iran",
+            "monthly_volume": "Over USD 5,000,000 per month",
+            "expected_volume": "Over USD 5,000,000 per month",
+            "existing_bank_account": "Yes",
+        },
+    )
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Declared PEP Director", "Yes"),
+    )
+    conn.execute(
+        "INSERT INTO ubos (application_id, full_name, ownership_pct, is_pep) VALUES (?,?,?,?)",
+        (app_id, "Material PEP UBO", 60, "Yes"),
+    )
+    conn.commit()
+
+    _generate(conn, app_id)
+    keys = _app_req_keys(conn, app_id)
+
+    removed = {
+        "enhanced_business_activity_explanation",
+        "company_bank_statements_6m",
+        "material_ubo_sow_evidence",
+        "pep_role_position",
+        "pep_jurisdiction",
+        "pep_sow_evidence",
+        "pep_bank_reference",
+        "pep_linked_sof_evidence",
+        "crypto_source_of_funds_evidence",
+        "licence_or_registration_evidence",
+        "crypto_enhanced_monitoring_flag",
+        "crypto_regulatory_status_assessment",
+        "ownership_chain_documents",
+        "enhanced_ubo_evidence",
+        "jurisdiction_licensing_regulatory_evidence",
+        "high_volume_bank_statements",
+        "screening_disposition",
+        "false_positive_rationale",
+        "adverse_media_pep_sanctions_assessment",
+        "material_screening_senior_review",
+        "client_clarification_screening",
+        "manual_edd_pack",
+        "money_services_pack",
+        "regulated_financial_services_pack",
+        "cross_border_pack",
+        "high_risk_product_pack",
+    }
+    assert not removed.intersection(keys)
+    assert {
+        "company_bank_reference",
+        "company_sof_evidence",
+        "pep_declaration_details",
+        "pep_adverse_media_assessment",
+        "pep_enhanced_monitoring_flag",
+        "aml_cft_policy",
+        "trust_nominee_foundation_documents",
+        "jurisdiction_exposure_rationale",
+        "jurisdiction_risk_assessment",
+        "contracts_invoices",
+        "major_counterparties_explanation",
+        "volume_rationale_vs_business_size",
+    }.issubset(keys)
+    assert any(key.startswith("bankref_") for key in keys)
+    assert any(key.startswith("source_wealth_") for key in keys)
+
+
+def test_jurisdiction_rows_follow_v5_section_mapping_and_inactive_defaults(enhanced_app_db):
+    from enhanced_requirements import serialize_application_requirement
+
+    conn = enhanced_app_db
+    app_id = _insert_application(
+        conn,
+        risk_level="LOW",
+        country="Iran",
+        prescreening={"country_of_incorporation": "Iran", "existing_bank_account": "Yes"},
+    )
+
+    _generate(conn, app_id)
+    rows = {
+        row["requirement_key"]: serialize_application_requirement(row)
+        for row in conn.execute(
+            "SELECT * FROM application_enhanced_requirements WHERE application_id=?",
+            (app_id,),
+        ).fetchall()
+    }
+
+    rationale = rows["jurisdiction_exposure_rationale"]
+    assert rationale["requirement_type"] == "explanation"
+    assert rationale["audience"] == "client"
+    assert rationale["section"] == "E"
+    assert rationale["portal_section"] == "E"
+
+    assessment = rows["jurisdiction_risk_assessment"]
+    assert assessment["requirement_type"] == "review_task"
+    assert assessment["audience"] == "backoffice"
+    assert assessment["section"] == "F"
+    assert assessment["portal_section"] == ""
+
+    assert "jurisdiction_sof_evidence" not in rows
 
 
 def test_pr6g_jurisdiction_rationale_is_backoffice_portal_disclosure(enhanced_app_api_server):
@@ -1552,8 +1831,10 @@ def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     portal_html = open(os.path.join(repo_root, "arie-portal.html"), encoding="utf-8").read()
     backoffice_html = open(os.path.join(repo_root, "arie-backoffice.html"), encoding="utf-8").read()
 
-    assert "C — Additional Required Documents" in portal_html
+    assert "C — Enhanced Evidence Documents" in portal_html
+    assert "E — Portal Disclosures" in portal_html
     assert "portalEnhancedRequirementPersonPanel" in portal_html
+    assert "portal-disclosures-container" in portal_html
     assert "portal-enhanced-requirements" in portal_html
     assert "f-jurisdiction-rationale" in portal_html
     assert "jurisdiction_exposure_rationale" in portal_html
@@ -1572,6 +1853,7 @@ def test_pr6g_portal_and_backoffice_static_copy_is_safe():
     assert "Upload Supporting Documents" not in portal_html
     assert "Upload supporting document" not in portal_html
     assert "handlePEPUpload" not in portal_html
+    assert "pep-bankref-row" not in portal_html
     assert "supporting_document_names" not in portal_html
     assert "apiErr.status = res.status" in backoffice_html
     assert "Enhanced requirement details are restricted for this role" in backoffice_html
@@ -1756,6 +2038,11 @@ def test_lifecycle_api_permissions_and_status_updates(enhanced_app_api_server):
 
     conn = get_db()
     app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Section B Director", "No"),
+    )
+    conn.commit()
     _generate(conn, app_id)
     req_admin = _first_requirement_id(conn, app_id, offset=0)
     req_sco = _first_requirement_id(conn, app_id, offset=1)
@@ -2095,6 +2382,11 @@ def test_backoffice_enhanced_requirement_upload_validation_permissions_and_gates
         app_id = _insert_application(conn, risk_level="HIGH", status="kyc_documents")
         other_app_id = _insert_application(conn, risk_level="HIGH", status="kyc_documents")
         locked_app_id = _insert_application(conn, risk_level="HIGH", status="submitted")
+        for target_app_id in (app_id, other_app_id, locked_app_id):
+            conn.execute(
+                "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+                (target_app_id, "Section B Director", "No"),
+            )
         conn.execute(
             "UPDATE applications SET pre_approval_decision='PRE_APPROVE' WHERE id IN (?,?)",
             (app_id, other_app_id),
@@ -2301,11 +2593,16 @@ def test_request_from_client_permissions_status_and_audit(enhanced_app_api_serve
 
     conn = get_db()
     app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Section B Director", "No"),
+    )
+    conn.commit()
     _generate(conn, app_id)
     admin_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
     sco_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    co_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    denied_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    co_req = _requirement_id_by_key_prefix(conn, app_id, "source_wealth_")
+    denied_req = _requirement_id_by_key_prefix(conn, app_id, "bankref_")
     linked_req = denied_req
     doc_id = _insert_document(conn, app_id, "doc_request_preserved", review_status="pending")
     conn.execute(
@@ -2446,9 +2743,9 @@ def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_se
     _generate(conn, app_id)
     accepted_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
     waived_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    cancelled_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    uploaded_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
-    unsafe_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
+    cancelled_req = _requirement_id_by_key_prefix(conn, app_id, "source_wealth_")
+    uploaded_req = _requirement_id_by_key_prefix(conn, app_id, "bankref_")
+    unsafe_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -2489,7 +2786,7 @@ def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_se
     )
     conn.commit()
     _generate(conn, pep_app_id)
-    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "mandatory_senior_review")
+    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "pep_adverse_media_assessment")
     conn.close()
 
     for req_id in (accepted_req, waived_req, cancelled_req, uploaded_req):
@@ -2539,17 +2836,23 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
         "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
         (app_id, "Declared Person", "Yes"),
     )
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Second Declared Person", "Yes"),
+    )
     conn.commit()
     _generate(conn, app_id)
 
     requested_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
     uploaded_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    under_review_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    rejected_req = _requirement_id_by_key_prefix(conn, app_id, "pep_sow_evidence_")
-    accepted_req = _requirement_id_by_key_prefix(conn, app_id, "pep_bank_reference_")
-    waived_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
+    source_wealth_reqs = _requirement_ids_by_key_prefix(conn, app_id, "source_wealth_")
+    bankref_reqs = _requirement_ids_by_key_prefix(conn, app_id, "bankref_")
+    under_review_req = source_wealth_reqs[0]
+    rejected_req = bankref_reqs[0]
+    accepted_req = source_wealth_reqs[1]
+    waived_req = bankref_reqs[1]
     pep_requested_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
-    backoffice_req = _requirement_id_by_key(conn, app_id, "mandatory_senior_review")
+    backoffice_req = _requirement_id_by_key(conn, app_id, "pep_adverse_media_assessment")
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -2772,10 +3075,11 @@ def test_generation_disables_enhanced_bank_statement_rule_without_suppressing_ba
     ).fetchall()
     keys = {row["requirement_key"] for row in rows}
 
-    assert "company_bank_reference" in keys
+    assert "company_bank_reference" not in keys
     assert "company_bank_statements_6m" not in keys
     assert "company_sof_evidence" in keys
-    assert result["skipped_count"] == 0
+    assert result["skipped_count"] == 1
+    assert any("existing_bank_account_not_declared_yes" in warning for warning in result["warnings"])
 
 
 def test_generation_prefills_jurisdiction_rationale_from_prescreening(enhanced_app_db):
@@ -2937,7 +3241,12 @@ def test_portal_text_response_fulfils_and_resubmits_requested_enhanced_requireme
         "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
         (client_id, "client001@example.com", "hash", "Client One"),
     )
-    app_id = _insert_application(conn, risk_level="HIGH")
+    app_id = _insert_application(
+        conn,
+        risk_level="LOW",
+        country="Iran",
+        prescreening={"country_of_incorporation": "Iran", "existing_bank_account": "Yes"},
+    )
     conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
     conn.execute(
         "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
@@ -2945,7 +3254,7 @@ def test_portal_text_response_fulfils_and_resubmits_requested_enhanced_requireme
     )
     conn.commit()
     _generate(conn, app_id)
-    req_id = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    req_id = _requirement_id_by_key(conn, app_id, "jurisdiction_exposure_rationale")
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -3037,7 +3346,12 @@ def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanc
         "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
         (other_client_id, "client002@example.com", "hash", "Client Two"),
     )
-    app_id = _insert_application(conn, risk_level="HIGH")
+    app_id = _insert_application(
+        conn,
+        risk_level="HIGH",
+        country="Iran",
+        prescreening={"country_of_incorporation": "Iran", "existing_bank_account": "Yes"},
+    )
     conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
     conn.execute(
         "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
@@ -3047,9 +3361,9 @@ def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanc
     _generate(conn, app_id)
     generated_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
     document_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
-    explanation_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
-    accepted_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
-    waived_req = _requirement_id_by_key_prefix(conn, app_id, "pep_sow_evidence_")
+    explanation_req = _requirement_id_by_key(conn, app_id, "jurisdiction_exposure_rationale")
+    accepted_req = _requirement_id_by_key_prefix(conn, app_id, "source_wealth_")
+    waived_req = _requirement_id_by_key_prefix(conn, app_id, "bankref_")
     cancelled_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
     conn.execute(
         """
@@ -3087,7 +3401,7 @@ def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanc
     )
     conn.commit()
     _generate(conn, pep_app_id)
-    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "mandatory_senior_review")
+    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "pep_adverse_media_assessment")
     conn.execute(
         "UPDATE application_enhanced_requirements SET status='requested', requested_at=datetime('now'), requested_by='co001' WHERE id=?",
         (backoffice_req,),

@@ -8125,6 +8125,18 @@ def _party_requirement_key(person):
     return (person or {}).get("person_key") or (person or {}).get("id")
 
 
+def _kyc_party_is_pep(person):
+    person = person or {}
+    declaration = safe_json_loads(person.get("pep_declaration")) if person.get("pep_declaration") else {}
+    if not isinstance(declaration, dict):
+        declaration = {}
+    return (
+        _truthy_prescreening_value(person.get("is_pep"))
+        or _truthy_prescreening_value(declaration.get("declared_pep"))
+        or _truthy_prescreening_value(declaration.get("client_declared_pep"))
+    )
+
+
 def _kyc_required_document_expectations(db, app):
     """Return the required KYC document slots for the current application."""
     app_dict = dict(app or {})
@@ -8132,6 +8144,7 @@ def _kyc_required_document_expectations(db, app):
     if not isinstance(ps_data, dict):
         ps_data = {}
     risk_level = str(app_dict.get("final_risk_level") or app_dict.get("risk_level") or "").upper()
+    high_or_very_high = risk_level in ("HIGH", "VERY_HIGH")
     expectations = [
         {"doc_type": "cert_inc", "label": "Certificate of Incorporation", "person_id": None},
         {"doc_type": "memarts", "label": "Memorandum of Association", "person_id": None},
@@ -8161,6 +8174,19 @@ def _kyc_required_document_expectations(db, app):
                 "person_id": person_id,
                 "person_type": party_type,
             })
+            if high_or_very_high or _kyc_party_is_pep(person):
+                expectations.append({
+                    "doc_type": "bankref",
+                    "label": f"Bank Reference Letter for {owner}",
+                    "person_id": person_id,
+                    "person_type": party_type,
+                })
+                expectations.append({
+                    "doc_type": "source_wealth",
+                    "label": f"Source of Wealth evidence for {owner}",
+                    "person_id": person_id,
+                    "person_type": party_type,
+                })
     for person in intermediaries or []:
         person_id = _party_requirement_key(person)
         if not person_id:

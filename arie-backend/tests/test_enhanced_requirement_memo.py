@@ -136,7 +136,15 @@ def test_enhanced_review_memo_summary_redacts_client_text_and_raw_context(memo_e
     from enhanced_requirements import build_enhanced_review_memo_summary
     from memo_handler import build_compliance_memo
 
-    app_id = _insert_application(memo_enhanced_db, risk_level="HIGH")
+    app_id = _insert_application(
+        memo_enhanced_db,
+        risk_level="HIGH",
+        prescreening={
+            "screening_report": {"screening_mode": "not_configured"},
+            "expected_volume": "Over USD 5,000,000 per month",
+            "existing_bank_account": "Yes",
+        },
+    )
     generated = _generate(memo_enhanced_db, app_id)
     assert generated["generated_count"] > 0
 
@@ -144,7 +152,7 @@ def test_enhanced_review_memo_summary_redacts_client_text_and_raw_context(memo_e
     _set_requirement(
         memo_enhanced_db,
         app_id,
-        "enhanced_business_activity_explanation",
+        "major_counterparties_explanation",
         status="uploaded",
         client_response_text=secret_response,
         client_response_at="2026-05-07T08:00:00Z",
@@ -164,7 +172,7 @@ def test_enhanced_review_memo_summary_redacts_client_text_and_raw_context(memo_e
     _set_requirement(
         memo_enhanced_db,
         app_id,
-        "company_bank_statements_6m",
+        "contracts_invoices",
         status="accepted",
         reviewed_at="2026-05-07T09:00:00Z",
         reviewed_by="co001",
@@ -181,7 +189,7 @@ def test_enhanced_review_memo_summary_redacts_client_text_and_raw_context(memo_e
     _set_requirement(
         memo_enhanced_db,
         app_id,
-        "material_ubo_sow_evidence",
+        "volume_rationale_vs_business_size",
         status="rejected",
         reviewed_at="2026-05-07T11:00:00Z",
         reviewed_by="co001",
@@ -253,20 +261,25 @@ def test_enhanced_review_memo_complete_only_after_mandatory_items_resolved(memo_
     assert "requirements have been resolved" in memo["sections"]["enhanced_review_edd"]["content"]
 
 
-def test_enhanced_review_memo_includes_backoffice_only_and_senior_review_items(memo_enhanced_db):
+def test_enhanced_review_memo_includes_backoffice_only_v5_internal_controls(memo_enhanced_db):
     from enhanced_requirements import build_enhanced_review_memo_summary
     from memo_handler import build_compliance_memo
 
     app_id = _insert_application(
         memo_enhanced_db,
         risk_level="LOW",
-        prescreening={"screening_report": {"total_hits": 1}},
+        prescreening={"screening_report": {"screening_mode": "not_configured"}},
     )
+    memo_enhanced_db.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Declared PEP Director", "Yes"),
+    )
+    memo_enhanced_db.commit()
     _generate(memo_enhanced_db, app_id)
 
     summary = build_enhanced_review_memo_summary(memo_enhanced_db, app_id)
     assert summary["backoffice_only_count"] > 0
-    assert summary["senior_review_items"]
+    assert not summary["senior_review_items"]
 
     memo, _, _, _ = build_compliance_memo(
         _app_for_memo(memo_enhanced_db, app_id, summary),
@@ -276,7 +289,7 @@ def test_enhanced_review_memo_includes_backoffice_only_and_senior_review_items(m
     )
     section_text = memo["sections"]["enhanced_review_edd"]["content"]
     assert "back-office/internal" in section_text
-    assert "Senior review tasks" in section_text
+    assert "Senior review tasks" not in section_text
 
 
 def test_enhanced_review_memo_copy_does_not_blend_onboarding_with_edd(memo_enhanced_db):

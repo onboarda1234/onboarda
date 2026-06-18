@@ -21,7 +21,7 @@ def test_document_verification_policies_page_removes_registry_dashboard():
     assert "Underlying Verification Check Configuration" in view
     assert "Entity Documents" in view
     assert "Person / KYC Documents" in view
-    assert "Enhanced / EDD Documents" in view
+    assert "Enhanced Evidence Documents" in view
 
     assert "Agent 1 Evidence Control Layer" not in view
     assert "Document Policy Registry" not in view

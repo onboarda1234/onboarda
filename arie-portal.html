@@ -1422,9 +1422,6 @@
   .pep-sow-checklist input[type="checkbox"]:checked + span,
   .pep-sow-checklist label:has(input:checked) { border-color:#d97706; background:rgba(217,119,6,0.06); font-weight:500; }
 
-  /* PEP Bank Reference */
-  .pep-bank-ref-doc { background:rgba(245,158,11,0.05); border:1px dashed rgba(245,158,11,0.4); border-radius:var(--radius-sm); padding:12px; margin-top:2px; }
-
   /* Review step bar */
   .step-bar { display:flex; margin-bottom:24px; border-bottom:2px solid var(--border1); }
   .step-bar .step { flex:1; text-align:center; padding:12px 8px; font-size:13px; font-weight:500; color:var(--text3); position:relative; }
@@ -3588,11 +3585,6 @@
                   <input type="url" id="kyc-linkedin-dir1" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
                   <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
                 </div>
-                <div class="pep-bank-ref-doc" id="pep-bankref-row-dir1" style="display:none;">
-                  <label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏦 Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>
-                  <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-bankref-dir1')" id="kyc-bankref-area-dir1"><span>📎</span><span id="kyc-bankref-lbl-dir1">Click to upload bank reference letter</span></div>
-                  <input type="file" id="kyc-bankref-dir1" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload('dir1','bankref',this)" />
-                </div>
               </div>
             </div>
 
@@ -3691,11 +3683,6 @@
                   <input type="url" id="kyc-linkedin-ubo1" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
                   <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
                 </div>
-                <div class="pep-bank-ref-doc" id="pep-bankref-row-ubo1" style="display:none;">
-                  <label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏦 Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>
-                  <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-bankref-ubo1')" id="kyc-bankref-area-ubo1"><span>📎</span><span id="kyc-bankref-lbl-ubo1">Click to upload bank reference letter</span></div>
-                  <input type="file" id="kyc-bankref-ubo1" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload('ubo1','bankref',this)" />
-                </div>
               </div>
             </div>
 
@@ -3763,12 +3750,12 @@
         <!-- AI checks handled in back office only -->
       </div>
 
-      <!-- Section C: Additional Required Documents -->
+      <!-- Section C: Enhanced Evidence Documents -->
       <div class="card">
         <div class="card-header">
           <div class="card-icon green">📄</div>
           <div>
-            <div class="card-title">C — Additional Required Documents</div>
+            <div class="card-title">C — Enhanced Evidence Documents</div>
             <div class="card-sub">Additional documents requested by Compliance for this application</div>
           </div>
         </div>
@@ -3864,6 +3851,20 @@
         </div>
       </div>
 
+      <!-- Section E: Portal Disclosures -->
+      <div class="card" id="portal-disclosures-card" style="display:none;">
+        <div class="card-header">
+          <div class="card-icon" style="background:linear-gradient(135deg,#0ea5e9,#0369a1);color:#fff;">✍️</div>
+          <div>
+            <div class="card-title">E — Portal Disclosures</div>
+            <div class="card-sub">Additional information requested by Compliance for this application</div>
+          </div>
+        </div>
+        <div style="padding:0 16px 12px;">
+          <div class="doc-grid" id="portal-disclosures-container"></div>
+        </div>
+      </div>
+
       <!-- Final Declaration before submission -->
       <div class="consent-section" style="margin-top:20px;">
         <div class="consent-section-title">✍️ Final Submission Declaration</div>
@@ -3924,7 +3925,7 @@
 
       <!-- Section C Review -->
       <div class="review-section">
-        <div class="review-section-header">🏢 Section C — Additional Required Documents <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:8px;">(Includes optional supporting documents)</span></div>
+        <div class="review-section-header">🏢 Section C — Enhanced Evidence Documents <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:8px;">(Includes optional supporting documents)</span></div>
         <div class="review-items" id="review-section-c"></div>
       </div>
 
@@ -3932,6 +3933,12 @@
       <div class="review-section" id="review-section-d-wrapper" style="display:none;">
         <div class="review-section-header">📂 Section D — Other Documents</div>
         <div class="review-items" id="review-section-d"></div>
+      </div>
+
+      <!-- Section E Review -->
+      <div class="review-section" id="review-section-e-wrapper" style="display:none;">
+        <div class="review-section-header">✍️ Section E — Portal Disclosures</div>
+        <div class="review-items" id="review-section-e"></div>
       </div>
 
       <!-- Actions -->
@@ -4894,12 +4901,14 @@ function syncConditionalFormState() {
 }
 
 function resetPortalReviewState() {
-  ['review-section-a', 'review-section-b', 'review-section-c', 'review-section-d', 'review-prescreening-summary'].forEach(function(id) {
+  ['review-section-a', 'review-section-b', 'review-section-c', 'review-section-d', 'review-section-e', 'review-prescreening-summary'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.innerHTML = '';
   });
   var sectionDWrapper = document.getElementById('review-section-d-wrapper');
   if (sectionDWrapper) sectionDWrapper.style.display = 'none';
+  var sectionEWrapper = document.getElementById('review-section-e-wrapper');
+  if (sectionEWrapper) sectionEWrapper.style.display = 'none';
   var stats = {
     'review-uploaded-count': '0',
     'review-missing-count': '0',
@@ -6146,11 +6155,6 @@ function buildUploadPanelHTML(p) {
         '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
         '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>' +
       '</div>' +
-      '<div class="pep-bank-ref-doc" id="pep-bankref-row-' + p.id + '" style="display:' + (p.isPEP ? 'block' : 'none') + ';">' +
-        '<label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127974; Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>' +
-        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-bankref-' + p.id + '\')" id="kyc-bankref-area-' + p.id + '"><span>&#128206;</span><span id="kyc-bankref-lbl-' + p.id + '">Click to upload bank reference letter</span></div>' +
-        '<input type="file" id="kyc-bankref-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'bankref\',this,\'' + p.type + '\')" />' +
-      '</div>' +
     '</div>';
   }
 }
@@ -7347,24 +7351,20 @@ function checkPEPAndShowDeclaration() {
     if (sel && sel.value === 'Yes') uboPeps.push(i);
   });
 
-  // Toggle PEP panels + bank reference rows for all directors
+  // Toggle PEP panels for all directors
   dirRows.forEach(function(row, i) {
     var personId = 'dir' + (i + 1);
     var isPEP = dirPeps.indexOf(i) !== -1;
     var pepPanel = document.getElementById('pep-panel-' + personId);
-    var bankRefRow = document.getElementById('pep-bankref-row-' + personId);
     if (pepPanel) { if (isPEP) { pepPanel.classList.add('visible'); } else { pepPanel.classList.remove('visible'); } }
-    if (bankRefRow) { bankRefRow.style.display = isPEP ? '' : 'none'; }
   });
 
-  // Toggle PEP panels + bank reference rows for all UBOs
+  // Toggle PEP panels for all UBOs
   uboRows.forEach(function(row, i) {
     var personId = 'ubo' + (i + 1);
     var isPEP = uboPeps.indexOf(i) !== -1;
     var pepPanel = document.getElementById('pep-panel-' + personId);
-    var bankRefRow = document.getElementById('pep-bankref-row-' + personId);
     if (pepPanel) { if (isPEP) { pepPanel.classList.add('visible'); } else { pepPanel.classList.remove('visible'); } }
-    if (bankRefRow) { bankRefRow.style.display = isPEP ? '' : 'none'; }
   });
 }
 
@@ -9059,6 +9059,26 @@ function buildReviewScreen() {
     }
   }
 
+  // Section E (requested portal disclosures)
+  var sectionEWrapper = document.getElementById('review-section-e-wrapper');
+  var sectionE = document.getElementById('review-section-e');
+  if (sectionE && sectionEWrapper) {
+    sectionE.innerHTML = '';
+    var disclosureRows = (currentEnhancedRequirements || []).filter(function(req) {
+      var type = String(req && req.requirement_type || '').toLowerCase();
+      return type === 'declaration' || type === 'explanation';
+    });
+    if (disclosureRows.length > 0) {
+      sectionEWrapper.style.display = '';
+      disclosureRows.forEach(function(req) {
+        var tone = portalEnhancedRequirementTone(req.status);
+        sectionE.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(req.label || 'Additional information') + '</span><span class="review-status ' + (tone.cls === 'uploaded' ? 'uploaded' : 'optional') + '">' + escapeHtml(tone.text) + '</span></div>';
+      });
+    } else {
+      sectionEWrapper.style.display = 'none';
+    }
+  }
+
   // Update summary stats
   document.getElementById('review-uploaded-count').textContent = uploadedCount;
   document.getElementById('review-missing-count').textContent = missingCount;
@@ -9596,14 +9616,19 @@ function renderPortalEnhancedRequirements(requirements) {
   currentEnhancedRequirements = Array.isArray(requirements) ? requirements : [];
   var card = document.getElementById('additional-info-required-card');
   var container = document.getElementById('additional-info-required-container');
-  if (!card || !container) return;
+  var disclosureCard = document.getElementById('portal-disclosures-card');
+  var disclosureContainer = document.getElementById('portal-disclosures-container');
+  if (!card || !container || !disclosureCard || !disclosureContainer) return;
   clearPortalEnhancedRequirementHolders();
   if (!currentEnhancedRequirements.length) {
     card.style.display = 'none';
     container.innerHTML = '';
+    disclosureCard.style.display = 'none';
+    disclosureContainer.innerHTML = '';
     return;
   }
   var applicationLevel = [];
+  var disclosureLevel = [];
   currentEnhancedRequirements.forEach(function(req) {
     var panel = portalEnhancedRequirementPersonPanel(req);
     var html = portalEnhancedRequirementCardHtml(req);
@@ -9615,6 +9640,11 @@ function renderPortalEnhancedRequirements(requirements) {
         return;
       }
     }
+    var type = String(req && req.requirement_type || '').toLowerCase();
+    if (type === 'declaration' || type === 'explanation') {
+      disclosureLevel.push(html);
+      return;
+    }
     applicationLevel.push(html);
   });
   if (applicationLevel.length) {
@@ -9623,6 +9653,13 @@ function renderPortalEnhancedRequirements(requirements) {
   } else {
     card.style.display = 'none';
     container.innerHTML = '';
+  }
+  if (disclosureLevel.length) {
+    disclosureCard.style.display = '';
+    disclosureContainer.innerHTML = disclosureLevel.join('');
+  } else {
+    disclosureCard.style.display = 'none';
+    disclosureContainer.innerHTML = '';
   }
 }
 
@@ -11061,11 +11098,6 @@ function addKYCPerson() {
           <input type="url" id="kyc-linkedin-${id}" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
           <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
         </div>
-        <div class="pep-bank-ref-doc" id="pep-bankref-row-${id}" style="display:none;">
-          <label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏦 Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>
-          <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-bankref-${id}')" id="kyc-bankref-area-${id}"><span>📎</span><span id="kyc-bankref-lbl-${id}">Click to upload bank reference letter</span></div>
-          <input type="file" id="kyc-bankref-${id}" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload('${id}','bankref',this)" />
-        </div>
       </div>
     </div>
     ${buildPepDeclarationPanelHTML(id, false)}
@@ -11093,8 +11125,6 @@ function toggleKYCPepPanel(personId, value) {
   if (panel) {
     if (isPEP) { panel.classList.add('visible'); } else { panel.classList.remove('visible'); }
   }
-  var bankRefRow = document.getElementById('pep-bankref-row-' + personId);
-  if (bankRefRow) { bankRefRow.style.display = isPEP ? '' : 'none'; }
 }
 
 // ─── KYC: update person names from form fields ─────────────────────────────
