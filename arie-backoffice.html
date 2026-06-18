@@ -1233,8 +1233,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;">0</span></button>
     <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="login-as-select" onchange="switchUser(this.value)">
       <option value="admin">Login as: Admin</option>
-      <option value="sco">Login as: Senior CO</option>
-      <option value="co">Login as: Compliance Officer</option>
+      <option value="sco">Login as: Senior Compliance Officer</option>
+      <option value="co">Login as: Onboarding Officer</option>
       <option value="analyst">Login as: Analyst</option>
     </select>
   </div>
@@ -2704,7 +2704,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="perm-table">
       <thead>
-        <tr><th style="width:30%;">Permission</th><th>Administrator</th><th>Senior CO</th><th>Compliance Officer</th><th>Analyst</th></tr>
+        <tr><th style="width:30%;">Permission</th><th>Administrator</th><th>Senior Compliance Officer</th><th>Onboarding Officer</th><th>Analyst</th></tr>
       </thead>
       <tbody id="roles-permissions-body">
         <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:18px;">Loading backend role matrix...</td></tr>
@@ -2894,7 +2894,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <span style="font-size:11px;color:var(--text3);width:80px;text-align:right;" id="review-vhigh-label">6 months</span>
     </div>
     <div style="margin-top:12px;padding:10px 14px;background:var(--surface2);border-radius:var(--radius-sm);font-size:11px;color:var(--text3);">
-      <strong>Reminder logic:</strong> When a review date is due within 30 days, a notification will appear on the dashboard and be sent to the assigned compliance officer. Overdue reviews are flagged in red.
+      <strong>Reminder logic:</strong> When a review date is due within 30 days, a notification will appear on the dashboard and be sent to the assigned onboarding officer. Overdue reviews are flagged in red.
     </div>
   </div>
 
@@ -3169,7 +3169,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="card-title" style="margin-bottom:12px;">Approval Requirements</div>
       <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">
         <div><strong>All applications:</strong> Require compliance memo (generated, validated, supervisor-approved), live screening, and no flagged documents</div>
-        <div><strong>Low / Medium Risk:</strong> Single officer approval (Admin, SCO, or CO)</div>
+        <div><strong>Low / Medium Risk:</strong> Single officer approval (Admin, SCO, or Onboarding Officer)</div>
         <div><strong>High / Very High Risk:</strong> Dual approval by two different officers + pre-approval before KYC</div>
       </div>
       <div style="font-size:11px;color:var(--text3);margin-top:8px;">All approvals are human-initiated. No auto-approval exists regardless of risk score.</div>
@@ -3235,7 +3235,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="form-group"><div class="form-label">Role</div>
         <select class="form-select" id="new-user-role">
           <option value="analyst">Analyst</option>
-          <option value="co">Compliance Officer</option>
+          <option value="co">Onboarding Officer</option>
           <option value="sco">Senior Compliance Officer</option>
           <option value="admin">Administrator</option>
         </select>
@@ -3259,7 +3259,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="form-group"><div class="form-label">Role</div>
         <select class="form-select" id="edit-user-role">
           <option value="analyst">Analyst</option>
-          <option value="co">Compliance Officer</option>
+          <option value="co">Onboarding Officer</option>
           <option value="sco">Senior Compliance Officer</option>
           <option value="admin">Administrator</option>
         </select>
@@ -4154,7 +4154,7 @@ function syncCurrentUserUI() {
   var roleEl = document.getElementById('sidebar-user-role');
   var avatarEl = document.getElementById('sidebar-avatar');
   if (nameEl) nameEl.textContent = user.name || 'Signed-in user';
-  if (roleEl) roleEl.textContent = ROLE_LABELS[user.role] || user.role || '';
+  if (roleEl) roleEl.textContent = formatRoleLabel(user.role);
   if (avatarEl) {
     var avatarSource = String(user.name || user.email || 'SU').trim();
     avatarEl.textContent = avatarSource.split(/\s+/).filter(Boolean).map(function(part) { return part.charAt(0); }).join('').slice(0, 3).toUpperCase() || 'SU';
@@ -5559,7 +5559,16 @@ function isDashboardEddRoutedApplication(app) {
 var USERS = [];
 // Populated from API via loadFromAPI().
 
-var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Compliance Officer', analyst:'Analyst' };
+var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Onboarding Officer', analyst:'Analyst' };
+
+function formatRoleLabel(role) {
+  var value = String(role || '').trim();
+  if (!value) return '';
+  var normalized = value.toLowerCase();
+  if (ROLE_LABELS[normalized]) return ROLE_LABELS[normalized];
+  if (normalized === 'compliance officer') return ROLE_LABELS.co;
+  return value;
+}
 
 // ── Demo role switcher (called by #login-as-select onchange) ──
 function switchUser(role) {
@@ -5570,7 +5579,7 @@ function switchUser(role) {
   }
   var match = USERS.find(function(u) { return u.role === role; });
   if (!match) {
-    match = { id: 0, name: ROLE_LABELS[role] || role, email: '', role: role, initials: '--', status: 'active' };
+    match = { id: 0, name: formatRoleLabel(role), email: '', role: role, initials: '--', status: 'active' };
   }
   currentUser = match;
   setAuthenticatedBodyState(true, role || 'admin');
@@ -5578,10 +5587,10 @@ function switchUser(role) {
   var roleEl = document.getElementById('sidebar-user-role');
   var avatarEl = document.getElementById('sidebar-avatar');
   if (nameEl) nameEl.textContent = currentUser.name;
-  if (roleEl) roleEl.textContent = ROLE_LABELS[role] || role;
+  if (roleEl) roleEl.textContent = formatRoleLabel(role);
   if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
   showView('dashboard');
-  showToast('Switched to ' + (ROLE_LABELS[role] || role));
+  showToast('Switched to ' + formatRoleLabel(role));
 }
 
 var APPLICATIONS = [];
@@ -5927,7 +5936,7 @@ function populateOfficerDropdowns() {
     USERS.forEach(function(u) {
       var opt = document.createElement('option');
       opt.value = u.id;
-      opt.textContent = u.name + ' (' + (ROLE_LABELS[u.role] || u.role) + ')';
+      opt.textContent = u.name + ' (' + formatRoleLabel(u.role) + ')';
       reassignTo.appendChild(opt);
     });
   }
@@ -5979,10 +5988,10 @@ function showView(name, navItem) {
     showToast('Access restricted to senior compliance officers', 'error'); return;
   }
   if (enhancedSettingsViews.indexOf(name) >= 0 && ['admin','sco','co'].indexOf(role) < 0) {
-    showToast('Access restricted to compliance officers', 'error'); return;
+    showToast('Access restricted to onboarding or senior compliance roles', 'error'); return;
   }
   if (reportingViews.indexOf(name) >= 0 && !canViewDirectorsUboReport()) {
-    showToast('Access restricted to compliance officers', 'error'); return;
+    showToast('Access restricted to onboarding or senior compliance roles', 'error'); return;
   }
 
   document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
@@ -6567,7 +6576,7 @@ function sortDirectorsUboTable(field) {
 function loadDirectorsUboReport(options) {
   options = options || {};
   if (!canViewDirectorsUboReport()) {
-    DIRECTORS_UBO_REPORT.error = 'Access restricted to compliance officers';
+    DIRECTORS_UBO_REPORT.error = 'Access restricted to onboarding or senior compliance roles';
     renderDirectorsUboReport();
     return Promise.resolve();
   }
@@ -6600,7 +6609,7 @@ function directorsUboCsvFilename(res) {
 
 function exportDirectorsUboCSV() {
   if (!canViewDirectorsUboReport()) {
-    showToast('Access restricted to compliance officers', 'error');
+    showToast('Access restricted to onboarding or senior compliance roles', 'error');
     return;
   }
   var headers = {};
@@ -9078,7 +9087,7 @@ function renderEvidenceClassificationPanel(doc) {
         '<input class="form-input" id="' + noteId + '" value="' + escapeHtml(note) + '" placeholder="Classification note (optional)" style="font-size:12px;padding:7px 9px;" />' +
         '<button class="btn btn-outline btn-sm" onclick="saveDocumentEvidenceClassification(\'' + doc.id + '\')">Save document type</button>' +
       '</div>'
-    : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Compliance officer, SCO, or admin access is required to classify evidence.</div>';
+    : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Onboarding Officer, SCO, or admin access is required to classify evidence.</div>';
   var workflowBanner = workflowAccepted
     ? '<div style="margin-top:8px;padding:8px 10px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:11px;line-height:1.4;">' +
         '<strong>Workflow-only accepted synthetic evidence.</strong> Verification remains ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '; this does not count as approval proof.' +
@@ -11487,7 +11496,7 @@ function renderUsers() {
     var safeRole = escapeHtml(u.role);
     card.innerHTML = '<div class="user-avatar ' + safeRole + '">' + escapeHtml(u.initials) + '</div>' +
       '<div class="user-info"><div class="user-name">' + escapeHtml(u.name) + '</div><div class="user-email">' + escapeHtml(u.email) + '</div></div>' +
-      '<span class="user-role-badge ' + safeRole + '">' + escapeHtml(ROLE_LABELS[u.role]) + '</span>' +
+      '<span class="user-role-badge ' + safeRole + '">' + escapeHtml(formatRoleLabel(u.role)) + '</span>' +
       '<span class="badge ' + (u.status === 'active' ? 'approved' : 'rejected') + '">' + escapeHtml(u.status) + '</span>' +
       (currentUser && (currentUser.sub === u.id || currentUser.id === u.id) ? '' :
         '<button class="btn btn-outline btn-sm" onclick="editUser(\'' + escapeHtml(String(u.id)) + '\')">Edit</button>' +
@@ -11500,7 +11509,7 @@ function mapAuditEntry(e) {
   return {
     ts: e.timestamp || '',
     user: e.user_name || '',
-    role: e.user_role || '',
+    role: formatRoleLabel(e.user_role || ''),
     action: e.action || '',
     target: e.target || '',
     detail: e.detail || '',
@@ -12553,7 +12562,7 @@ async function submitInlineScreeningDisposition(applicationRef, subjectType, sub
     return;
   }
   if (disposition === 'cleared' && !canClearScreeningDisposition()) {
-    state.error = 'Clear as False Positive requires Compliance Officer, SCO, or Admin role.';
+    state.error = 'Clear as False Positive requires Onboarding Officer, SCO, or Admin role.';
     renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
     return;
   }
@@ -14584,7 +14593,7 @@ function screeningDispositionValidationState(disposition, rationale, disposition
     return { valid: false, message: 'Select a screening action to enable save.' };
   }
   if (disposition === 'cleared' && options.requireClearPermission && !canClearScreeningDisposition()) {
-    return { valid: false, message: 'Clear as False Positive requires Compliance Officer, SCO, or Admin role.' };
+    return { valid: false, message: 'Clear as False Positive requires Onboarding Officer, SCO, or Admin role.' };
   }
   if (disposition === 'match' && !String(dispositionCode || '').trim()) {
     return { valid: false, message: 'Select Confirm True Match to enable save.' };
@@ -14774,7 +14783,7 @@ async function submitScreeningDisposition() {
   var evidenceReference = (document.getElementById('screening-disposition-evidence').value || '').trim();
   if (!code) { setScreeningDispositionError('Select a disposition code.'); return; }
   if (disposition === 'cleared' && !canClearScreeningDisposition()) {
-    setScreeningDispositionError('Clear as False Positive requires Compliance Officer, SCO, or Admin role.');
+    setScreeningDispositionError('Clear as False Positive requires Onboarding Officer, SCO, or Admin role.');
     return;
   }
   var rationaleError = screeningDispositionRationaleError(disposition, rationale);
@@ -14848,7 +14857,7 @@ async function renderScreening(options) {
         if (canClearScreeningDisposition()) {
           actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">Clear as False Positive</button>';
         } else {
-          actions += ' <button class="btn btn-outline btn-sm" disabled title="Clear as False Positive requires Compliance Officer, SCO, or Admin role.">Clear as False Positive</button>';
+          actions += ' <button class="btn btn-outline btn-sm" disabled title="Clear as False Positive requires Onboarding Officer, SCO, or Admin role.">Clear as False Positive</button>';
         }
         if (row.review_four_eyes_status !== 'pending_second_review') {
           actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'match\')">Confirm True Match</button>';
@@ -14941,7 +14950,7 @@ function eddSeniorReviewerOptions(selected) {
   var eligible = USERS.filter(function(u) { return u.role === 'admin' || u.role === 'sco'; });
   var html = '<option value="">Select senior reviewer…</option>';
   eligible.forEach(function(u) {
-    html += '<option value="' + escapeHtml(u.id) + '"' + (u.id === selected ? ' selected' : '') + '>' + escapeHtml(u.name || u.id) + ' (' + escapeHtml(ROLE_LABELS[u.role] || u.role) + ')</option>';
+    html += '<option value="' + escapeHtml(u.id) + '"' + (u.id === selected ? ' selected' : '') + '>' + escapeHtml(u.name || u.id) + ' (' + escapeHtml(formatRoleLabel(u.role)) + ')</option>';
   });
   return html;
 }
@@ -17760,7 +17769,7 @@ function lifecycleManualLegacyBaselineControls(reviewId, reviewDetail, projectio
       (baseline.frequency_months ? lifecycleDetailBadge('Cadence: ' + baseline.frequency_months + ' months', 'slate') : '') +
     '</div>' +
     '<div style="font-size:12px;color:var(--text2);line-height:1.45;margin-bottom:12px;">' + escapeHtml(statusCopy) + '</div>' +
-    (!canEdit ? '<div style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);">Compliance officer, SCO, or admin access is required to edit the legacy baseline.</div>' : '') +
+    (!canEdit ? '<div style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);">Onboarding Officer, SCO, or admin access is required to edit the legacy baseline.</div>' : '') +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-items:end;">' +
       '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Last review date</div><input id="lifecycle-legacy-last-review-' + reviewId + '" class="form-input" type="date" value="' + escapeHtml(String(lastReview || '')) + '" oninput="toggleLifecycleLegacyEvidence(\'' + reviewId + '\')"' + disabled + ' /></div>' +
       '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Source type</div><select id="lifecycle-legacy-source-type-' + reviewId + '" class="form-select"' + disabled + '>' + lifecycleLegacySourceOptions(sourceType) + '</select></div>' +
@@ -20071,7 +20080,7 @@ function renderMonitoringAssignmentSection(alert) {
   var canAssignOthers = role === 'admin' || role === 'sco';
   var users = USERS.filter(function(u) { return !u.status || u.status === 'active'; });
   var opts = users.map(function(u) {
-    var label = (u.name || u.email || u.id) + (u.role ? ' — ' + (ROLE_LABELS[u.role] || u.role) : '');
+    var label = (u.name || u.email || u.id) + (u.role ? ' — ' + formatRoleLabel(u.role) : '');
     return '<option value="' + escapeHtml(u.id) + '">' + escapeHtml(label) + '</option>';
   }).join('');
   var currentOwner = alert.owner && alert.owner !== 'Unassigned' ? alert.owner : 'Unassigned';
@@ -20173,7 +20182,7 @@ function renderMonitoringAuditHistory(alert, history) {
   if (created) rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="font-weight:700;font-size:13px;">Alert created</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(created).replace('T', ' ').slice(0, 19)) + '</div></div>');
   (history || []).forEach(function(item) {
     var detail = monitoringAuditReadableDetail(item);
-    rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div style="font-weight:700;font-size:13px;">' + escapeHtml(monitoringAuditLabel(item.action)) + '</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(item.timestamp || '').replace('T', ' ').slice(0, 19)) + '</div></div><div style="font-size:12px;color:var(--text3);margin-top:3px;">' + escapeHtml(item.user_name || item.user_id || 'System') + (item.user_role ? ' · ' + escapeHtml(ROLE_LABELS[item.user_role] || item.user_role) : '') + '</div>' + (detail ? '<div style="font-size:12px;color:var(--text2);margin-top:6px;white-space:pre-wrap;">' + escapeHtml(String(detail)) + '</div>' : '') + '</div>');
+    rows.push('<div style="padding:10px 0;border-bottom:1px solid var(--border1);"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div style="font-weight:700;font-size:13px;">' + escapeHtml(monitoringAuditLabel(item.action)) + '</div><div style="font-size:12px;color:var(--text3);">' + escapeHtml(String(item.timestamp || '').replace('T', ' ').slice(0, 19)) + '</div></div><div style="font-size:12px;color:var(--text3);margin-top:3px;">' + escapeHtml(item.user_name || item.user_id || 'System') + (item.user_role ? ' · ' + escapeHtml(formatRoleLabel(item.user_role)) : '') + '</div>' + (detail ? '<div style="font-size:12px;color:var(--text2);margin-top:6px;white-space:pre-wrap;">' + escapeHtml(String(detail)) + '</div>' : '') + '</div>');
   });
   return monitoringDetailCard('Audit History', rows.length ? rows.join('') : '<div style="font-size:13px;color:var(--text3);">No audit events are available for this alert yet.</div>');
 }
@@ -21613,7 +21622,7 @@ function renderAuditEventCard(entry, idx) {
   var summary = buildAuditSummary(entry || {}, detail, beforeState, afterState, category);
   var ts = (entry && entry.timestamp || '').replace('T', ' ').slice(0, 19) || 'Timestamp not recorded';
   var actor = entry && (entry.user_name || entry.user_id) || 'System';
-  var role = entry && entry.user_role ? ' · ' + entry.user_role : '';
+  var role = entry && entry.user_role ? ' · ' + formatRoleLabel(entry.user_role) : '';
   var techId = 'audit-technical-' + idx;
   var technical = safeStringifyAuditValue(buildAuditTechnicalPayload(entry || {}, detail, beforeState, afterState));
   var statusChip = status ? '<span class="audit-chip status ' + escapeHtml(auditStatusClass(status)) + '">' + escapeHtml(normalizeAuditStatusLabel(status)) + '</span>' : '';
@@ -21747,7 +21756,7 @@ async function loadNotes() {
       var ts = (n.created_at || '').replace('T', ' ').slice(0, 19);
       return '<div style="padding:8px 12px;border-bottom:1px solid var(--border1);font-size:12px;">' +
         '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(n.user_name || n.user_id || 'Officer') +
-        ' <span style="font-weight:400;color:var(--text3);">' + escapeHtml(n.user_role || '') + '</span></div>' +
+        ' <span style="font-weight:400;color:var(--text3);">' + escapeHtml(formatRoleLabel(n.user_role || '')) + '</span></div>' +
         '<div style="margin-top:4px;color:var(--text2);white-space:pre-wrap;">' + escapeHtml(n.content) + '</div>' +
         '<div style="margin-top:3px;font-size:10px;color:var(--text3);">' + escapeHtml(ts) + '</div>' +
       '</div>';
@@ -25058,7 +25067,7 @@ function renderKPIDashboard() {
         '<div class="kpi-card-sub">' + sanctionsHits + ' screening hit' + (sanctionsHits !== 1 ? 's' : '') + ' across all persons screened</div>' +
         '<div class="kpi-target on-track">● Monitored</div>' +
       '</div>' +
-      '<div class="kpi-card"><div class="kpi-card-label">CO Override Rate</div>' +
+      '<div class="kpi-card"><div class="kpi-card-label">Onboarding Officer Override Rate</div>' +
         '<div class="kpi-card-value" style="color:var(--text3);">\u2014</div>' +
         '<div class="kpi-card-sub" style="color:var(--text3);">Requires override tracking</div>' +
       '</div>' +
@@ -25118,7 +25127,7 @@ function renderKPIDashboard() {
             var approvalRateU = completed > 0 ? Math.round((approvedU / completed) * 100) + '%' : 'N/A';
             var capacity = 15;
             var workload = active > 0 ? Math.min(100, Math.round((active / capacity) * 100)) : 0;
-            rows += officerRow(u.name, ROLE_LABELS[u.role] || u.role, active, completed, '\u2014', approvalRateU, workload);
+            rows += officerRow(u.name, formatRoleLabel(u.role), active, completed, '\u2014', approvalRateU, workload);
           });
           return rows;
         })() +
@@ -27023,7 +27032,7 @@ function applyAuthenticatedShellState() {
   var roleEl = document.getElementById('sidebar-user-role');
   var avatarEl = document.getElementById('sidebar-avatar');
   if (nameEl) nameEl.textContent = currentUser.name;
-  if (roleEl) roleEl.textContent = ROLE_LABELS[currentUser.role] || currentUser.role;
+  if (roleEl) roleEl.textContent = formatRoleLabel(currentUser.role);
   if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){ return w[0]; }).join('');
   setAuthenticatedBodyState(true, currentUser && currentUser.role);
 }
@@ -27723,7 +27732,7 @@ function getRegWorkflowStateMeta(state) {
   }
   return {
     title: 'Structured Review Available',
-    description: 'Structured review output is available for this record and should still be checked by a compliance officer.',
+    description: 'Structured review output is available for this record and should still be checked by an onboarding officer.',
     badgeText: '📋 Structured Review',
     badgeClass: 'approved',
     bg: 'rgba(34, 197, 94, 0.08)',

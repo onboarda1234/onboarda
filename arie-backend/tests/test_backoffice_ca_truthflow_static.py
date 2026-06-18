@@ -508,7 +508,7 @@ def test_backoffice_screening_disposition_modal_matches_api_contract():
     assert "screening_evidence=true" in html
     assert "evidence_reference: evidenceReference" in submit_region
     assert "evidence_document_id: uploadedEvidence ? uploadedEvidence.id : ''" in submit_region
-    assert "Clear as False Positive requires Compliance Officer, SCO, or Admin role" in submit_region
+    assert "Clear as False Positive requires Onboarding Officer, SCO, or Admin role" in submit_region
     assert "False-positive clearance requires an evidence / provider reference" not in submit_region
 
 
@@ -526,7 +526,7 @@ def test_backoffice_screening_disposition_history_surfaces_evidence_reference():
     assert "review_evidence_reference" in history_region
     assert "Evidence/reference:" in history_region
     assert "canClearScreeningDisposition()" in queue_region
-    assert "Clear as False Positive requires Compliance Officer, SCO, or Admin role." in queue_region
+    assert "Clear as False Positive requires Onboarding Officer, SCO, or Admin role." in queue_region
 
 
 def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_clear():
