@@ -1,0 +1,61 @@
+{
+  "task": "ROLE-AUTHORITY-DESIGN-AUDIT-1",
+  "source_of_truth": "origin/main",
+  "audit_type": "design_only_no_application_code_changes",
+  "statuses": {
+    "submitted_to_compliance_exists": false,
+    "notable_current": [
+      "pricing_review",
+      "pre_approval_review",
+      "pre_approved",
+      "kyc_documents",
+      "kyc_submitted",
+      "compliance_review",
+      "edd_required",
+      "rmi_sent",
+      "approved",
+      "rejected"
+    ]
+  },
+  "critical_findings": [
+    {
+      "id": "P0-1",
+      "title": "Generic PATCH endpoint can mutate terminal decision statuses",
+      "severity": "P0"
+    },
+    {
+      "id": "P0-2",
+      "title": "High-risk approval role control inconsistent across endpoints",
+      "severity": "P0"
+    }
+  ],
+  "finding_counts": {
+    "P0": 2,
+    "P1": 4,
+    "P2": 2
+  },
+  "target_authority_rules": {
+    "onboarding_officer_approve_low_medium_clean_only": true,
+    "onboarding_officer_approve_high_very_high": false,
+    "onboarding_officer_approve_pep_material_edd_second_review_pending_override_cases": false,
+    "sco_approve_high_and_escalated_after_gates": true,
+    "analyst_can_approve": false,
+    "admin_must_be_explicitly_defined": true
+  },
+  "submit_to_compliance_design": {
+    "new_status": "submitted_to_compliance",
+    "new_endpoint": "POST /api/applications/:id/submit-to-compliance",
+    "non_terminal": true,
+    "distinct_from_approve": true,
+    "requires_reason": true,
+    "queue_visibility": "SCO queue with reason/tags/risk/age"
+  },
+  "recommended_prs": [
+    "PR-1: decision authority hardening",
+    "PR-2: submit-to-compliance backend",
+    "PR-3: SCO queue routing",
+    "PR-4: UI alignment",
+    "PR-5: blocker model separation",
+    "PR-6: regression tests and audit assertions"
+  ]
+}
