@@ -265,7 +265,7 @@ def test_idv_resolution_role_rules_are_enforced():
         "senior_exception_approved",
         "other",
     )
-    assert "Only CO" in _idv_resolution_role_error(
+    assert "Only Onboarding Officer" in _idv_resolution_role_error(
         {"risk_level": "LOW"},
         {"role": "analyst"},
         "manual_verification_completed",

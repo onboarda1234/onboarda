@@ -65,7 +65,15 @@ def _runtime_js(html, scenario):
             document.getElementById('kpi-period').value = 'all';
             var APPLICATIONS = [];
             var USERS = [];
-            var ROLE_LABELS = {};
+            var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Onboarding Officer', analyst:'Analyst' };
+            function formatRoleLabel(role) {
+              var value = String(role || '').trim();
+              if (!value) return '';
+              var normalized = value.toLowerCase();
+              if (ROLE_LABELS[normalized]) return ROLE_LABELS[normalized];
+              if (normalized === 'compliance officer') return ROLE_LABELS.co;
+              return value;
+            }
             function getPersonScreeningResult() { return null; }
 
             function app(statusRaw, status) {

@@ -92,5 +92,4 @@ def test_directors_ubos_ui_role_visibility_and_denial_are_present():
     assert "body.role-co .role-reporting" in html
     assert "function canViewDirectorsUboReport()" in html
     assert "reportingViews = ['reports']" in html
-    assert "Access restricted to compliance officers" in html
-
+    assert "Access restricted to onboarding or senior compliance roles" in html

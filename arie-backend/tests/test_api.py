@@ -4801,7 +4801,7 @@ class TestGovernanceAttemptAudit:
         )
         assert resp.status_code == 403
         assert "Pre-approval blocked" in resp.text
-        assert "Compliance Officer" in resp.text
+        assert "Onboarding Officer" in resp.text
 
     def test_reassignment_empty_reason_returns_400_and_does_not_persist(self, api_server):
         from auth import create_token
@@ -4986,7 +4986,7 @@ class TestGovernanceAttemptAudit:
         )
         assert resp.status_code == 403
         assert "Assignment blocked" in resp.text
-        assert "Compliance Officer" in resp.text
+        assert "Onboarding Officer" in resp.text
 
     def test_accepted_screening_review_attempt_is_audited(self, api_server):
         """Accepted screening dispositions must write a Governance Attempt row."""

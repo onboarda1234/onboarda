@@ -108,7 +108,15 @@ def _login_runtime_js(html, scenario):
                 var ROLE_PERMISSIONS = null;
                 var EDD_CASES = [];
                 var currentUser = { id: '', sub: '', name: 'System', email: '', role: 'admin', initials: 'SY', status: 'active' };
-                var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Compliance Officer', analyst:'Analyst' };
+                var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Onboarding Officer', analyst:'Analyst' };
+                function formatRoleLabel(role) {
+                  var value = String(role || '').trim();
+                  if (!value) return '';
+                  var normalized = value.toLowerCase();
+                  if (ROLE_LABELS[normalized]) return ROLE_LABELS[normalized];
+                  if (normalized === 'compliance officer') return ROLE_LABELS.co;
+                  return value;
+                }
                 var applicationsApiTotal = 0;
                 var _applicationsLastRefreshed = null;
                 var _applicationsRefreshInterval = null;

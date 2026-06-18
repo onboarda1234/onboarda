@@ -5476,7 +5476,7 @@ def _idv_resolution_role_error(app_row, user, outcome, reason):
     role = str(user.get("role") or "").lower()
     risk = str((app_row or {}).get("final_risk_level") or (app_row or {}).get("risk_level") or "").upper()
     if role not in {"co", "sco", "admin"}:
-        return "Only CO, SCO, or Admin users can resolve identity verification."
+        return "Only Onboarding Officer, SCO, or Admin users can resolve identity verification."
     senior_required = (
         risk in {"HIGH", "VERY_HIGH"}
         or outcome in {"senior_exception_approved", "reject_due_to_failed_idv"}
@@ -6284,7 +6284,7 @@ class ApplicationDetailHandler(BaseHandler):
             if user.get("role") not in ("admin", "sco"):
                 reason = (
                     f"Assignment blocked: {_role_label(user.get('role'))} role cannot assign or reassign cases. "
-                    "Allowed roles: Administrator, Senior CO."
+                    "Allowed roles: Administrator, Senior Compliance Officer."
                 )
                 self.log_governance_attempt(
                     user,
@@ -8627,7 +8627,7 @@ class PreApprovalDecisionHandler(BaseHandler):
         if user.get("role") not in ("admin", "sco"):
             reason = (
                 f"Pre-approval blocked: {_role_label(user.get('role'))} role cannot submit pre-approval decisions "
-                "for HIGH/VERY_HIGH-risk applications. Allowed roles: Administrator, Senior CO."
+                "for HIGH/VERY_HIGH-risk applications. Allowed roles: Administrator, Senior Compliance Officer."
             )
             self.log_governance_attempt(
                 user, "application.pre_approval_decision", attempt_target, "rejected", 403,
@@ -11185,7 +11185,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
             doc_id = uuid.uuid4().hex[:16]
 
         created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-        audit_trail = [{"time": created_at, "action": f"Document uploaded by {user.get('name', 'Compliance Officer')}"}]
+        audit_trail = [{"time": created_at, "action": f"Document uploaded by {user.get('name', 'Onboarding Officer')}"}]
 
         if source_text:
             analysis_summary = build_regulatory_analysis({
@@ -11325,13 +11325,13 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
 
         reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         suggestion["status"] = decision
-        suggestion["reviewedBy"] = user.get("name", "Compliance Officer")
+        suggestion["reviewedBy"] = user.get("name", "Onboarding Officer")
         suggestion["reviewedAt"] = reviewed_at
         suggestion["notes"] = note or suggestion.get("notes") or ""
 
         audit_trail.append({
             "time": reviewed_at,
-            "action": f"Suggestion {suggestion_id} {decision} by {user.get('name', 'Compliance Officer')}" + (f' — "{note}"' if note else "")
+            "action": f"Suggestion {suggestion_id} {decision} by {user.get('name', 'Onboarding Officer')}" + (f' — "{note}"' if note else "")
         })
 
         db.execute(
@@ -11393,7 +11393,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         audit_trail.append({
             "time": reviewed_at,
             "action": (
-                f"Manual source text {'updated' if prior_source_text else 'added'} by {user.get('name', 'Compliance Officer')}" +
+                f"Manual source text {'updated' if prior_source_text else 'added'} by {user.get('name', 'Onboarding Officer')}" +
                 (f' — "{note}"' if note else "")
             )
         })
@@ -13501,8 +13501,8 @@ ROLE_PERMISSION_MATRIX = [
 
 ROLE_LABELS = {
     "admin": "Administrator",
-    "sco": "Senior CO",
-    "co": "Compliance Officer",
+    "sco": "Senior Compliance Officer",
+    "co": "Onboarding Officer",
     "analyst": "Analyst",
 }
 
@@ -13521,8 +13521,8 @@ class RolesPermissionsHandler(BaseHandler):
         self.success({
             "roles": [
                 {"id": "admin", "label": "Administrator"},
-                {"id": "sco", "label": "Senior CO"},
-                {"id": "co", "label": "Compliance Officer"},
+                {"id": "sco", "label": "Senior Compliance Officer"},
+                {"id": "co", "label": "Onboarding Officer"},
                 {"id": "analyst", "label": "Analyst"},
             ],
             "permissions": ROLE_PERMISSION_MATRIX,
@@ -20699,10 +20699,10 @@ class ScreeningReviewHandler(BaseHandler):
         if canonical_disposition == "false_positive_cleared" and user.get("role") not in ("admin", "sco", "co"):
             self.log_governance_attempt(
                 user, "screening.review_disposition", app["ref"], "rejected", 403,
-                "No Match screening disposition requires CO, SCO, or admin role",
+                "No Match screening disposition requires Onboarding Officer, SCO, or admin role",
                 attempt_summary, db=db)
             db.close()
-            return self.error("No Match screening disposition requires CO, SCO, or admin role", 403)
+            return self.error("No Match screening disposition requires Onboarding Officer, SCO, or admin role", 403)
 
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         reviewer_name = user.get("name") or user.get("full_name") or user["sub"]
@@ -25174,7 +25174,7 @@ class ApplicationDecisionHandler(BaseHandler):
             # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
             if user.get("role") == "co" and approval_risk_level in ("HIGH", "VERY_HIGH"):
                 reason = (
-                    "Approval blocked: Compliance Officers cannot approve HIGH or VERY_HIGH risk applications. "
+                    "Approval blocked: Onboarding Officers cannot approve HIGH or VERY_HIGH risk applications. "
                     "Only Admin or Senior Compliance Officer roles may approve at this risk level."
                 )
                 self.log_governance_attempt(
@@ -26139,7 +26139,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     requested_assignee = str(requested_assignee or "").strip()
                     if not _monitoring_alert_assignment_allowed(user, requested_assignee):
                         reason_text = (
-                            "Assignment blocked: only Administrator and Senior CO roles can assign "
+                            "Assignment blocked: only Administrator and Senior Compliance Officer roles can assign "
                             "monitoring alerts to another officer."
                         )
                         self.log_governance_attempt(
