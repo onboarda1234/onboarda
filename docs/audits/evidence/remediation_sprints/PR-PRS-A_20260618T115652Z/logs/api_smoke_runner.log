@@ -1,0 +1,174 @@
+{
+  "status": "passed",
+  "results": {
+    "default_queue_actionable_only": {
+      "passed": true,
+      "pending_review_id": 1,
+      "completed_review_id": 2,
+      "cancelled_review_id": 3,
+      "default_contains": [
+        1
+      ],
+      "completed_filter_contains": [
+        2
+      ]
+    },
+    "completion_next_cycle_anniversary_anchor": {
+      "passed": true,
+      "first_review_id": 4,
+      "first_completion_status": "periodic_review_completed",
+      "first_next_cycle": {
+        "status": "created",
+        "periodic_review_id": 5,
+        "next_review_date": "2027-01-01",
+        "due_date": "2027-01-01",
+        "review_cycle_number": 2,
+        "anchor_date": "2025-01-01",
+        "frequency_months": 12,
+        "calculation_basis": "risk_level:HIGH",
+        "policy_version": "v2",
+        "risk_level": "HIGH",
+        "late_completion_days": 168,
+        "skipped_anniversary_count": 0
+      },
+      "recompletion_status": 409,
+      "second_review_id": 5,
+      "second_next_cycle": {
+        "status": "created",
+        "periodic_review_id": 6,
+        "next_review_date": "2028-01-01",
+        "due_date": "2028-01-01",
+        "review_cycle_number": 3,
+        "anchor_date": "2025-01-01",
+        "frequency_months": 12,
+        "calculation_basis": "risk_level:HIGH",
+        "policy_version": "v2",
+        "risk_level": "HIGH",
+        "late_completion_days": null,
+        "skipped_anniversary_count": 0
+      },
+      "schedule_dates": [
+        "2027-01-01",
+        "2028-01-01"
+      ],
+      "first_audit": {
+        "anchor_date": "2025-01-01",
+        "application_id": "prprs-a-final-anchor",
+        "calculation_basis": "risk_level:HIGH",
+        "completed_review_id": 4,
+        "completion_date": "2026-06-18",
+        "current_due_date": "2026-01-01",
+        "frequency_months": 12,
+        "late_completion_days": 168,
+        "next_review_date": "2027-01-01",
+        "next_review_id": 5,
+        "skipped_anniversary_count": 0
+      },
+      "skip_review_id": 7,
+      "skip_next_cycle": {
+        "status": "created",
+        "periodic_review_id": 8,
+        "next_review_date": "2027-01-01",
+        "due_date": "2027-01-01",
+        "review_cycle_number": 2,
+        "anchor_date": "2023-01-01",
+        "frequency_months": 12,
+        "calculation_basis": "risk_level:HIGH",
+        "policy_version": "v2",
+        "risk_level": "HIGH",
+        "late_completion_days": 899,
+        "skipped_anniversary_count": 2
+      },
+      "skip_audit": {
+        "anchor_date": "2023-01-01",
+        "application_id": "prprs-a-final-skip",
+        "calculation_basis": "risk_level:HIGH",
+        "completed_review_id": 7,
+        "completion_date": "2026-06-18",
+        "current_due_date": "2024-01-01",
+        "frequency_months": 12,
+        "late_completion_days": 899,
+        "next_review_date": "2027-01-01",
+        "next_review_id": 8,
+        "skipped_anniversary_count": 2
+      }
+    },
+    "completed_reviews_frozen": {
+      "passed": true,
+      "review_id": 9,
+      "statuses": {
+        "findings": 409,
+        "risk_change": 409,
+        "rationale": 409,
+        "evidence_link": 409
+      },
+      "errors": {
+        "findings": "periodic_review id=9 is completed and cannot be modified",
+        "risk_change": "periodic_review id=9 is completed and cannot be modified",
+        "rationale": "periodic_review id=9 is completed and cannot be modified",
+        "evidence_link": "periodic_review id=9 is completed and cannot be modified"
+      }
+    },
+    "legacy_decision_canonical_gates": {
+      "passed": true,
+      "blocked_review_id": 11,
+      "blocked_status": 409,
+      "blocking_items": [
+        {
+          "item_type": "client_attestation_required",
+          "label": "Client attestation has not been submitted",
+          "severity": "high",
+          "source": "periodic_reviews",
+          "source_id": 11,
+          "completion_only": false
+        }
+      ],
+      "blocked_row": {
+        "status": "in_progress",
+        "decision": null,
+        "outcome": null
+      },
+      "clean_review_id": 12,
+      "clean_status": 200,
+      "clean_row": {
+        "status": "completed",
+        "decision": null,
+        "outcome": "no_change",
+        "closed_at": "2026-06-18T12:11:52+00:00",
+        "next_review_date": "2027-01-01"
+      }
+    },
+    "edd_awaiting_and_feedback_completion": {
+      "passed": true,
+      "review_id": 14,
+      "edd_case_id": 1,
+      "awaiting_status": "awaiting_edd",
+      "awaiting_row": {
+        "status": "awaiting_edd",
+        "completed_at": null,
+        "closed_at": null,
+        "linked_edd_case_id": 1
+      },
+      "approval_status": 200,
+      "final_row": {
+        "status": "completed",
+        "outcome": "edd_required",
+        "completed_at": "2026-06-18T12:11:52+00:00",
+        "closed_at": "2026-06-18T12:11:52+00:00",
+        "linked_edd_case_id": 1
+      },
+      "next_cycle": {
+        "id": 15,
+        "status": "pending",
+        "due_date": "2027-01-01",
+        "next_review_date": "2027-01-01",
+        "review_cycle_number": 2
+      },
+      "edd_row": {
+        "stage": "edd_approved",
+        "decision": "edd_approved",
+        "linked_periodic_review_id": 14
+      }
+    }
+  }
+}
