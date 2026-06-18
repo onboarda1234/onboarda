@@ -83,7 +83,8 @@ from security_hardening import (
     PasswordPolicy, ApplicationSchema, FileUploadValidator,
     TokenRevocationList, token_revocation_list,
     get_safe_health_response, determine_screening_mode,
-    store_screening_mode, PIIEncryptor, collect_approval_gate_blockers
+    store_screening_mode, PIIEncryptor, collect_approval_gate_blockers,
+    screening_second_review_pending_summary,
 )
 HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
@@ -6195,6 +6196,36 @@ class ApplicationDetailHandler(BaseHandler):
                 if not memo:
                     db.close()
                     return self.error("Cannot approve: compliance memo must be generated before decision.", 400)
+                second_review_summary = _screening_second_review_summary_if_blocked(db, app)
+                if second_review_summary:
+                    reason = "Approval blocked: screening_second_review_pending"
+                    _audit_approval_blocked_screening_second_review(
+                        self,
+                        db,
+                        app,
+                        user,
+                        second_review_summary,
+                        "application_status_patch",
+                    )
+                    self.log_governance_attempt(
+                        user,
+                        "application.status_change",
+                        app["ref"],
+                        "rejected",
+                        400,
+                        reason,
+                        _governance_summary(data, ("status", "notes")),
+                        db=db,
+                        commit=False,
+                    )
+                    db.commit()
+                    db.close()
+                    return _write_screening_second_review_block_response(
+                        self,
+                        second_review_summary,
+                        reason,
+                        400,
+                    )
                 stale = _ensure_memo_fresh_or_mark_stale(
                     db,
                     app,
@@ -6217,6 +6248,36 @@ class ApplicationDetailHandler(BaseHandler):
                 app_dict["prescreening_data"] = prescreening
                 can_approve, gate_error = ApprovalGateValidator.validate_approval(app_dict, db)
                 if not can_approve:
+                    second_review_summary = _screening_second_review_summary_if_blocked(db, app_dict)
+                    if second_review_summary:
+                        reason = "Approval blocked: screening_second_review_pending"
+                        _audit_approval_blocked_screening_second_review(
+                            self,
+                            db,
+                            app_dict,
+                            user,
+                            second_review_summary,
+                            "application_status_patch",
+                        )
+                        self.log_governance_attempt(
+                            user,
+                            "application.status_change",
+                            app["ref"],
+                            "rejected",
+                            400,
+                            reason,
+                            _governance_summary(data, ("status", "notes")),
+                            db=db,
+                            commit=False,
+                        )
+                        db.commit()
+                        db.close()
+                        return _write_screening_second_review_block_response(
+                            self,
+                            second_review_summary,
+                            reason,
+                            400,
+                        )
                     _audit_enhanced_requirement_approval_block_if_applicable(
                         db, app_dict, user, gate_error
                     )
@@ -20696,6 +20757,17 @@ class ScreeningReviewHandler(BaseHandler):
             db.close()
             return self.error("Second screening reviewer must be distinct from first reviewer", 409)
 
+        if is_second_review and user.get("role") not in ("admin", "sco"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 403,
+                "Screening second review requires SCO/admin role",
+                attempt_summary, db=db)
+            db.close()
+            return self.error(
+                "Screening second review requires Senior Compliance Officer (SCO) or admin role",
+                403,
+            )
+
         if canonical_disposition == "false_positive_cleared" and user.get("role") not in ("admin", "sco", "co"):
             self.log_governance_attempt(
                 user, "screening.review_disposition", app["ref"], "rejected", 403,
@@ -23410,6 +23482,85 @@ def _audit_enhanced_requirement_approval_block_if_applicable(db, app, user, gate
         )
 
 
+def _screening_second_review_summary_if_blocked(db, app):
+    try:
+        app_dict = dict(app)
+    except Exception:
+        app_dict = app if isinstance(app, dict) else {}
+    try:
+        summary = screening_second_review_pending_summary(db, app_dict)
+    except Exception as exc:
+        logger.error(
+            "Failed to evaluate screening second-review approval gate for %s: %s",
+            app_dict.get("ref") or "unknown",
+            exc,
+            exc_info=True,
+        )
+        return {
+            "blocked": True,
+            "code": "screening_second_review_pending",
+            "message": "screening_second_review_pending",
+            "pending_review_ids": [],
+            "blockers": [{
+                "id": "screening_second_review_lookup_failed",
+                "code": "screening_second_review_pending",
+                "category": "Screening",
+                "title": "Screening second review pending",
+                "description": "Screening second-review state could not be verified. Approval is blocked.",
+                "required_reviewer_role": "SCO/admin",
+                "reason": "second review state lookup failed",
+                "blocking": True,
+            }],
+        }
+    return summary if summary.get("blocked") else None
+
+
+def _audit_approval_blocked_screening_second_review(handler, db, app, user, summary, source_surface):
+    try:
+        app = dict(app)
+    except Exception:
+        app = app if isinstance(app, dict) else {}
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    detail = {
+        "action": "approval_blocked_screening_second_review_pending",
+        "application_id": app.get("id"),
+        "application_ref": app.get("ref"),
+        "actor_user_id": user.get("sub"),
+        "actor_role": user.get("role"),
+        "pending_screening_review_ids": summary.get("pending_review_ids") or [],
+        "timestamp": now_utc,
+        "source_surface": source_surface,
+        "blocker_code": summary.get("code"),
+        "blockers": summary.get("blockers") or [],
+    }
+    handler.log_audit(
+        user,
+        "approval_blocked_screening_second_review_pending",
+        app.get("ref") or app.get("id") or "application",
+        json.dumps(detail, default=str, sort_keys=True),
+        db=db,
+        commit=False,
+        before_state=snapshot_app_state(app),
+        after_state={
+            "status": app.get("status"),
+            "approval_blocked": True,
+            "blocker_code": summary.get("code"),
+            "pending_screening_review_ids": summary.get("pending_review_ids") or [],
+        },
+    )
+
+
+def _write_screening_second_review_block_response(handler, summary, reason, status_code=400):
+    handler.set_status(status_code)
+    handler.write({
+        "error": reason,
+        "code": "screening_second_review_pending",
+        "blocker_code": "screening_second_review_pending",
+        "screening_second_review": summary,
+        "blockers": summary.get("blockers") or [],
+    })
+
+
 def _normalize_document_type(value):
     """Return a canonical, bounded document type suitable for DB matching."""
     raw = str(value or "general").strip()
@@ -25195,6 +25346,36 @@ class ApplicationDecisionHandler(BaseHandler):
                     reason, attempt_summary, db=db)
                 db.close()
                 return self.error(reason, 400)
+            second_review_summary = _screening_second_review_summary_if_blocked(db, app)
+            if second_review_summary:
+                reason = "Approval blocked: screening_second_review_pending"
+                _audit_approval_blocked_screening_second_review(
+                    self,
+                    db,
+                    app,
+                    user,
+                    second_review_summary,
+                    "application_decision",
+                )
+                self.log_governance_attempt(
+                    user,
+                    "application.decision",
+                    attempt_target,
+                    "rejected",
+                    400,
+                    reason,
+                    attempt_summary,
+                    db=db,
+                    commit=False,
+                )
+                db.commit()
+                db.close()
+                return _write_screening_second_review_block_response(
+                    self,
+                    second_review_summary,
+                    reason,
+                    400,
+                )
             stale = _ensure_memo_fresh_or_mark_stale(
                 db,
                 app,
@@ -25218,6 +25399,36 @@ class ApplicationDecisionHandler(BaseHandler):
             can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
             if not can_approve:
                 reason = f"Approval blocked: {gate_error}"
+                second_review_summary = _screening_second_review_summary_if_blocked(db, app)
+                if second_review_summary:
+                    reason = "Approval blocked: screening_second_review_pending"
+                    _audit_approval_blocked_screening_second_review(
+                        self,
+                        db,
+                        app,
+                        user,
+                        second_review_summary,
+                        "application_decision",
+                    )
+                    self.log_governance_attempt(
+                        user,
+                        "application.decision",
+                        attempt_target,
+                        "rejected",
+                        400,
+                        reason,
+                        attempt_summary,
+                        db=db,
+                        commit=False,
+                    )
+                    db.commit()
+                    db.close()
+                    return _write_screening_second_review_block_response(
+                        self,
+                        second_review_summary,
+                        reason,
+                        400,
+                    )
                 if "Document evidence gate failed" in str(gate_error):
                     document_gate = evaluate_document_reliance_gate(
                         db,

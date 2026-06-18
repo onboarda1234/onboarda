@@ -22300,6 +22300,7 @@ function runCaseCommandAction(actionId) {
 function caseCommandSanitizeText(text) {
   var value = String(text || '').replace(/\s+/g, ' ').trim();
   value = value.replace(/\s*\((?:[^)]*provider=[^)]*|[^)]*review_answer=[^)]*|[^)]*source=derived[^)]*)\)\.?/gi, '');
+  value = value.replace(/screening_second_review_pending/gi, 'Screening second review pending');
   value = value.replace(/Compliance memo validation_status is 'pending'\.?/gi, 'Memo validation has not been completed.');
   value = value.replace(/Compliance memo validation_status is '([^']+)'\.?/gi, function(_, status) {
     return 'Memo validation needs attention: ' + String(status).replace(/_/g, ' ') + '.';

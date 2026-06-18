@@ -889,6 +889,22 @@ class TestDayThreeApprovalBlockerUX:
         assert "Compliance memo has not been approved" in html
         assert "Screening has not been run" in html
 
+    def test_screening_second_review_blocker_is_officer_readable_and_focuses_screening(self):
+        html = self._read_backoffice()
+        assert "Screening second review pending" in html
+        assert "'screening.resolve': { target_view:'application_review', target_tab:'screening'" in html
+        assert "target_section:'detail-screening-review'" in html
+        assert "scroll_anchor:'detail-screening-review'" in html
+
+    def test_screening_second_review_blocker_not_rendered_in_client_portal(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-portal.html"
+        ), "r", encoding="utf-8") as f:
+            portal = f.read()
+        assert "screening_second_review_pending" not in portal
+        assert "Screening second review pending" not in portal
+
     def test_memo_validation_panel_has_visible_approval_blockers(self):
         html = self._read_backoffice()
         assert 'id="memo-approval-blockers"' in html
