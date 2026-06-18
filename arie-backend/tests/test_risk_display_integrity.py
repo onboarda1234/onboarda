@@ -67,10 +67,11 @@ class TestPortalRiskSourceOfTruth:
         assert "computedRiskLevel" not in collect_src
         assert "computedRiskScore" not in collect_src
 
-    def test_missing_server_risk_renders_unavailable_not_low_zero(self):
+    def test_missing_server_risk_renders_neutral_status_not_low_zero(self):
         html = _portal_html()
 
-        assert "Risk unavailable — recalculation required" in html
+        assert "Application status unavailable. Please contact our team if this continues." in html
+        assert "Risk unavailable — recalculation required" not in html
         assert "function hasAuthoritativeRisk(app)" in html
         assert "function renderRiskDisplay(appOrState)" in html
         assert "app.has_authoritative_risk === false" in html

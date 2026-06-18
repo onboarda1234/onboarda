@@ -1,0 +1,10 @@
+{
+  "task": "PR-PORTAL-PILOT-BOUNDARY-1",
+  "timestamp_utc": "20260618T030901Z",
+  "endpoint": "/api/liveness",
+  "environment": "staging",
+  "collected": false,
+  "ok": null,
+  "closure_status": "not_closed",
+  "reason": "Staging liveness evidence must be collected after merge and deployment from main."
+}

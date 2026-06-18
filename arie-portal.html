@@ -1565,7 +1565,7 @@
     <div class="landing">
       <div class="landing-tag">⚡ FSC Licensed · Mauritius PIS</div>
       <h1>Your gateway to<br/><span class="gradient">seamless payments</span></h1>
-      <p>Open your corporate account in minutes. AI-powered verification, bank-grade security, and full FSC compliance — all in one intelligent portal.</p>
+      <p>Open your corporate account through a secure guided workflow with bank-grade security and clear application updates.</p>
       <div class="btn-group">
         <button class="btn btn-primary" onclick="showView('register')">
           🚀 Start Application
@@ -1576,7 +1576,7 @@
       </div>
       <div class="stats-row">
         <div class="stat"><span class="val">< 48h</span><span class="lbl">Average Decision</span></div>
-        <div class="stat"><span class="val">AI</span><span class="lbl">Document Verification</span></div>
+        <div class="stat"><span class="val">24/7</span><span class="lbl">Application Tracking</span></div>
         <div class="stat"><span class="val">100%</span><span class="lbl">FSC Compliant</span></div>
         <div class="stat"><span class="val">AML</span><span class="lbl">Automated Screening</span></div>
       </div>
@@ -1823,7 +1823,7 @@
           <div class="card-icon blue">📝</div>
           <div>
             <div class="card-title">Change Requests</div>
-            <div class="card-sub">Request changes to your approved entity profile. All changes are reviewed by our compliance team before implementation.</div>
+            <div class="card-sub">Request changes to your approved entity profile. All changes are reviewed by our team before implementation.</div>
           </div>
         </div>
         <div style="margin-top:16px;display:flex;justify-content:flex-end;">
@@ -1935,7 +1935,7 @@
           <div class="dash-cta-card secondary" onclick="startNewApplication()">
             <div class="dash-cta-icon">➕</div>
             <div class="dash-cta-title">Start New Application</div>
-            <div class="dash-cta-desc">Open an account for a new company. Our AI agent will pre-fill the form from global registries.</div>
+            <div class="dash-cta-desc">Open an account for a new company. We will guide you through the required application details.</div>
             <div class="dash-cta-arrow" style="color:var(--gold);">→</div>
           </div>
         </div>
@@ -2045,7 +2045,7 @@
             <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">ℹ️ What happens next</div>
             <div style="font-size:12px;color:var(--text2);line-height:1.5;">
               Your company details will pre-fill the application form. You'll be able to review and edit all fields before submitting.
-              Company registry verification will be performed by the compliance team during the review process.
+              Company registry verification will be completed by our team during the review process.
             </div>
           </div>
 
@@ -2054,10 +2054,10 @@
           </button>
         </div>
 
-        <!-- Loading state: AI search animation -->
+        <!-- Loading state: registry search animation -->
         <div id="lookup-loading" style="display:none;text-align:center;padding:20px 0;">
           <div class="ai-orbit" style="margin:0 auto 24px;"></div>
-          <div style="font-size:16px;font-weight:700;margin-bottom:6px;">AI Agent Searching…</div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Searching registry records…</div>
           <div style="font-size:13px;color:var(--text2);margin-bottom:24px);">Querying live company registries</div>
           <ul class="ai-step-list" id="lookup-steps" style="max-width:340px;margin:20px auto 0;">
             <li id="ls1" class="waiting"><span class="step-icon"></span>Connecting to OpenCorporates API…</li>
@@ -2089,8 +2089,8 @@
             <div class="ai-agent-header">
               <div class="ai-agent-icon blue">🏛️</div>
               <div>
-                <div class="ai-agent-name">Corporate Structure & UBO Mapping Agent</div>
-                <div class="ai-agent-sub">Registry vs. client input cross-reference</div>
+                <div class="ai-agent-name">Company Information Review</div>
+                <div class="ai-agent-sub">Registry and application details</div>
               </div>
               <span class="ai-agent-badge running" id="cda-badge">Analysing</span>
             </div>
@@ -2132,7 +2132,7 @@
             </div>
             <div style="font-size:12px;color:var(--text2);line-height:1.6;">
               This may happen if the company is newly registered, incorporated in a jurisdiction with limited public registry data, or if the name/number entered differs from the official record. <br/><br/>
-              You can <strong>proceed manually</strong> — your application form will be blank and you will need to fill in all details yourself. Our compliance team will verify your documents during review.
+              You can <strong>proceed manually</strong> — your application form will be blank and you will need to fill in all details yourself. Our team will review your documents during review.
             </div>
           </div>
 
@@ -2158,7 +2158,7 @@
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Register</div></div>
         <div class="step active" id="step-1"><div class="step-circle">2</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step" id="step-2"><div class="step-circle">3</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step" id="step-2"><div class="step-circle">3</div><div class="step-label">Application Review</div></div>
         <div class="step" id="step-3"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
         <div class="step" id="step-4"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
       </div>
@@ -2476,7 +2476,7 @@
             <div class="form-group span-3" id="jurisdiction-rationale-group" style="display:none;border:1px solid rgba(217,119,6,0.25);background:rgba(217,119,6,0.05);border-radius:12px;padding:12px;">
               <label>Jurisdiction exposure rationale <span class="req">*</span></label>
               <textarea id="f-jurisdiction-rationale" placeholder="Please explain why the entity is incorporated in, operates from, or has exposure to this jurisdiction."></textarea>
-              <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required when the country of incorporation is high-risk, FATF-monitored, FATF-blacklisted, sanctioned, or otherwise enhanced-risk.</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required when the country of incorporation is monitored, restricted, sanctioned, or otherwise requires additional information.</div>
             </div>
             <div class="form-group">
               <label>Registration / BRN Number <span class="req">*</span></label>
@@ -2705,9 +2705,9 @@
               <select id="f-txn-complexity" required>
                 <option value="">Select transaction type…</option>
                 <option value="Simple — single currency, domestic corridors">Single currency, domestic only</option>
-                <option value="Standard — multi-currency, low-risk corridors">Multi-currency, established corridors</option>
+                <option value="Standard — multi-currency, established corridors">Multi-currency, established corridors</option>
                 <option value="Complex — multiple international corridors">Multiple international corridors</option>
-                <option value="Very complex — includes high-risk corridors">International corridors including high-risk regions</option>
+                <option value="Very complex — includes monitored corridors">International corridors including monitored regions</option>
               </select>
             </div>
             <!-- Currency moved to Account Preferences section as multi-select -->
@@ -2997,7 +2997,7 @@
             <div class="consent-section-title">🔒 Data Protection Notice</div>
             <div class="consent-check">
               <input type="checkbox" id="f-consent-dpa" required />
-              <p><strong>Data Processing Consent <span class="req">*</span></strong><br/>I consent to Onboarda Ltd collecting, processing, and storing the personal and corporate data provided in this application for the purposes of client onboarding, due diligence, risk assessment, and ongoing compliance monitoring, in accordance with the <span class="legal-link" onclick="showToast('info','Data Protection Act','The Mauritius Data Protection Act 2017 governs the processing of personal data. Full policy available upon request.')">Mauritius Data Protection Act 2017</span> and applicable regulations.</p>
+              <p><strong>Data Processing Consent <span class="req">*</span></strong><br/>I consent to Onboarda Ltd collecting, processing, and storing the personal and corporate data provided in this application for the purposes of client onboarding, due diligence, application review, and ongoing compliance obligations, in accordance with the <span class="legal-link" onclick="showToast('info','Data Protection Act','The Mauritius Data Protection Act 2017 governs the processing of personal data. Full policy available upon request.')">Mauritius Data Protection Act 2017</span> and applicable regulations.</p>
             </div>
             <div class="consent-check">
               <input type="checkbox" id="f-consent-sharing" required />
@@ -3045,40 +3045,24 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done" id="s2-1"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">Application Review</div></div>
         <div class="step" id="s2-3"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step" id="s2-4"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="status-hero">
         <div class="status-icon-lg pending">⏳</div>
-        <h2>Application Submitted for Compliance Review</h2>
-        <p>Your application has been flagged for enhanced compliance review due to an elevated risk profile. Our compliance team will review your application and notify you by email within 24–48 hours.</p>
+        <h2>Application Under Compliance Review</h2>
+        <p>Your application has been submitted and is being reviewed. No action is required at this time unless our team contacts you for additional information.</p>
         <div class="ref-number" id="ref-display">ARF-2024-XXXXXX</div>
       </div>
 
-      <!-- Risk Rating Card -->
-      <div class="card" id="pending-risk-card" style="border-left:4px solid var(--amber);background:rgba(245,158,11,0.06);">
-        <div style="display:flex;gap:14px;align-items:center;">
-          <div style="font-size:28px;flex-shrink:0;">📊</div>
-          <div style="flex:1;">
-            <div class="font-semibold" style="margin-bottom:4px;">Your Risk Assessment</div>
-            <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">Based on the AI-powered 5-dimension risk scoring analysis of your application.</p>
-            <div style="display:flex;gap:16px;align-items:center;">
-              <div id="pending-risk-level-badge" style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:0.5px;background:#d97706;color:#fff;">HIGH RISK</div>
-              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pending-risk-score">—</strong> / 100</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Compliance note for client -->
       <div class="card" style="border-color:var(--brand-dim);background:rgba(43,47,143,0.04);">
         <div style="display:flex;gap:14px;align-items:flex-start;">
           <div style="font-size:28px;flex-shrink:0;">🔒</div>
           <div>
-            <div class="font-semibold" style="margin-bottom:6px;">Enhanced Compliance Review</div>
-            <p style="font-size:13px;color:var(--text2);line-height:1.7;">Due to the risk profile of your application, it has been referred for enhanced compliance review. This is a standard regulatory process for higher-risk corporate accounts. Our Senior Compliance Officer will assess your application and you will be notified by email once a decision has been made.</p>
+            <div class="font-semibold" style="margin-bottom:6px;">No Action Required</div>
+            <p style="font-size:13px;color:var(--text2);line-height:1.7;">Your application is with our team for review. We will notify you when the next step is available or if additional information is required to complete your application.</p>
           </div>
         </div>
       </div>
@@ -3099,12 +3083,12 @@
           <div class="timeline-item active">
             <div class="timeline-dot"></div>
             <div class="timeline-date">In progress</div>
-            <div class="timeline-text">Automated AI & compliance screening</div>
+            <div class="timeline-text">Application review in progress</div>
           </div>
           <div class="timeline-item">
             <div class="timeline-dot"></div>
             <div class="timeline-date">Within 24–48h</div>
-            <div class="timeline-text">Compliance team review & decision</div>
+            <div class="timeline-text">Review and next-step update</div>
           </div>
           <div class="timeline-item">
             <div class="timeline-dot"></div>
@@ -3124,27 +3108,27 @@
 
 
   <!-- ══════════════════════════════════════
-       VIEW: AI RISK SCORING (animated)
+       VIEW: APPLICATION PROCESSING
   ══════════════════════════════════════ -->
   <div id="view-risk-scoring" class="hidden">
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step active"><div class="step-circle">2</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step active"><div class="step-circle">2</div><div class="step-label">Application Review</div></div>
         <div class="step"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="risk-computing-overlay" id="risk-computing">
         <div class="risk-spinner"></div>
-        <h2>Computing Risk Profile</h2>
-        <p style="color:var(--text3);max-width:480px;margin:0 auto;">We are calculating your submitted risk profile using our backend compliance scoring workflow across five weighted dimensions.</p>
+        <h2>Processing Your Application</h2>
+        <p style="color:var(--text3);max-width:480px;margin:0 auto;">We are preparing the next step for your application. This usually takes a few moments.</p>
         <div class="risk-dimension-bars" id="risk-dim-bars">
-          <div class="risk-dim-row"><div class="risk-dim-label"><span>Customer / Entity Risk</span><span id="dim1-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim1-bar"></div></div></div>
-          <div class="risk-dim-row"><div class="risk-dim-label"><span>Geographic Risk</span><span id="dim2-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim2-bar"></div></div></div>
-          <div class="risk-dim-row"><div class="risk-dim-label"><span>Product / Service Risk</span><span id="dim3-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim3-bar"></div></div></div>
-          <div class="risk-dim-row"><div class="risk-dim-label"><span>Industry / Sector Risk</span><span id="dim4-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim4-bar"></div></div></div>
-          <div class="risk-dim-row"><div class="risk-dim-label"><span>Delivery Channel Risk</span><span id="dim5-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim5-bar"></div></div></div>
+          <div class="risk-dim-row"><div class="risk-dim-label"><span>Company Details</span><span id="dim1-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim1-bar"></div></div></div>
+          <div class="risk-dim-row"><div class="risk-dim-label"><span>Jurisdiction Details</span><span id="dim2-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim2-bar"></div></div></div>
+          <div class="risk-dim-row"><div class="risk-dim-label"><span>Account Needs</span><span id="dim3-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim3-bar"></div></div></div>
+          <div class="risk-dim-row"><div class="risk-dim-label"><span>Business Activity</span><span id="dim4-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim4-bar"></div></div></div>
+          <div class="risk-dim-row"><div class="risk-dim-label"><span>Submission Review</span><span id="dim5-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim5-bar"></div></div></div>
         </div>
 
       </div>
@@ -3153,29 +3137,26 @@
         <div class="risk-result-card">
           <div style="text-align:center;">
             <div id="risk-result-icon" style="font-size:48px;margin-bottom:8px;"></div>
-            <h2 style="margin-bottom:4px;">Risk Assessment Complete</h2>
-            <div id="risk-result-badge" class="risk-badge"></div>
-            <div class="risk-score-big" id="risk-result-score"></div>
-            <p style="font-size:13px;color:var(--text3);">Composite Risk Score (0–100)</p>
+            <h2 style="margin-bottom:4px;">Application Step Ready</h2>
+            <div id="risk-result-badge" class="risk-badge" style="display:none;"></div>
+            <div class="risk-score-big" id="risk-result-score" style="display:none;"></div>
+            <p style="font-size:13px;color:var(--text3);">Please continue to the next step shown below.</p>
           </div>
           <div class="risk-detail-grid" id="risk-detail-grid"></div>
 
-          <!-- AI Explainability Summary (Client-Facing) -->
-          <div id="portal-explain-section" style="margin-top:24px;text-align:left;">
+          <div id="portal-explain-section" style="display:none;margin-top:24px;text-align:left;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border1);">
               <span style="font-size:18px;">🧠</span>
-              <span style="font-size:14px;font-weight:700;color:var(--brand);">How was this score calculated?</span>
-              <span style="font-size:10px;color:var(--text3);margin-left:auto;">AI Transparency</span>
+              <span style="font-size:14px;font-weight:700;color:var(--brand);">Application processing details</span>
+              <span style="font-size:10px;color:var(--text3);margin-left:auto;">Hidden</span>
             </div>
             <div style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:14px;">
-              Your application was assessed using our backend compliance scoring workflow across <strong>5 weighted dimensions</strong>. Each dimension is scored from 1 (Low Risk) to 4 (Very High Risk), then combined into a composite score out of 100. Where additional verification is required, it is handled separately during document review.
+              Your application is being processed by Onboarda.
             </div>
             <div id="portal-explain-dimensions" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;"></div>
             <div id="portal-explain-summary" style="padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.6;"></div>
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">📐 Scoring Model v1.4</span>
-              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🏦 FATF Risk-Based Approach</span>
-              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🛡️ Backend Validated</span>
+              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">Application workflow</span>
             </div>
           </div>
 
@@ -3186,15 +3167,14 @@
   </div>
 
   <!-- ══════════════════════════════════════
-       VIEW: PRE-APPROVAL HOLD (High/Very High Risk)
-       Shown after risk scoring when risk is HIGH/VERY_HIGH.
-       Client cannot proceed to KYC until officer pre-approves.
+       VIEW: PRE-APPROVAL HOLD
+       Client cannot proceed to KYC until the backend status allows it.
   ══════════════════════════════════════ -->
   <div id="view-pre-approval-hold" class="hidden">
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
         <div class="step active"><div class="step-circle">4</div><div class="step-label">Pre-Approval</div></div>
         <div class="step"><div class="step-circle">5</div><div class="step-label">KYC & Documents</div></div>
@@ -3203,27 +3183,12 @@
 
       <div class="status-hero">
         <div class="status-icon-lg pending">🔍</div>
-        <h2>Initial Compliance Review In Progress</h2>
+        <h2>Application Under Compliance Review</h2>
         <p style="color:var(--text2);max-width:520px;margin:8px auto 20px;line-height:1.7;font-size:14px;">
-          Your application is undergoing an initial compliance review before document submission.
-          This is a standard regulatory procedure for applications with an elevated risk profile.
+          Your application is being reviewed before the document submission step is opened.
+          No action is required at this time.
         </p>
         <div class="ref-number" id="pre-approval-ref-display"></div>
-      </div>
-
-      <!-- Risk Rating Card -->
-      <div class="card" id="pre-approval-risk-card" style="border-left:4px solid var(--amber);background:rgba(245,158,11,0.06);">
-        <div style="display:flex;gap:14px;align-items:center;">
-          <div style="font-size:28px;flex-shrink:0;">📊</div>
-          <div style="flex:1;">
-            <div class="font-semibold" style="margin-bottom:4px;">Your Risk Assessment</div>
-            <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">Based on AI-powered 5-dimension risk scoring of your pre-screening data.</p>
-            <div style="display:flex;gap:16px;align-items:center;">
-              <div id="pre-approval-risk-badge" style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:0.5px;background:#d97706;color:#fff;">HIGH RISK</div>
-              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pre-approval-risk-score">—</strong> / 100</div>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- Status tracker -->
@@ -3231,14 +3196,13 @@
         <div style="display:flex;gap:14px;align-items:flex-start;">
           <div style="font-size:28px;flex-shrink:0;">🔒</div>
           <div>
-            <div class="font-semibold" style="margin-bottom:6px;">Pre-Approval Review</div>
+            <div class="font-semibold" style="margin-bottom:6px;">Review In Progress</div>
             <p style="font-size:13px;color:var(--text2);line-height:1.7;">
-              A compliance officer is reviewing your pre-screening data and screening results.
-              No documents are required at this stage. You will be notified once a decision has been made.
+              Our team is reviewing your application. No documents are required at this stage. You will be notified once the next step is available.
             </p>
             <div style="margin-top:12px;padding:10px 14px;background:rgba(245,158,11,0.1);border-radius:8px;display:inline-flex;align-items:center;gap:8px;">
               <span class="spinner-sm"></span>
-              <span style="font-weight:600;font-size:13px;color:var(--amber);">Pre-Approval Review (In Progress)</span>
+              <span style="font-weight:600;font-size:13px;color:var(--amber);">Application review in progress</span>
             </div>
           </div>
         </div>
@@ -3247,10 +3211,10 @@
       <div class="card" style="text-align:left;">
         <div style="font-weight:600;margin-bottom:8px;">What happens next?</div>
         <div style="font-size:13px;color:var(--text2);line-height:1.8;">
-          1. A compliance officer reviews your pre-screening data and screening results<br/>
-          2. You may be contacted if additional pre-screening information is needed<br/>
-          3. If pre-approved, you will be shown pricing and can proceed to KYC document submission<br/>
-          4. If not pre-approved, you will be notified with reasons
+          1. Our team reviews your application details<br/>
+          2. You may be contacted if additional information is needed<br/>
+          3. When the next step is ready, the portal will show the available action<br/>
+          4. You will be notified by email when there is an update
         </div>
       </div>
 
@@ -3264,7 +3228,7 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3273,13 +3237,13 @@
         <div class="cr-icon">🔍</div>
         <h3>Application Under Compliance Review</h3>
         <p style="color:var(--text2);max-width:480px;margin:8px auto 20px;line-height:1.7;font-size:14px;">
-          Your application has been assessed as <strong id="compliance-risk-label"></strong> and is being reviewed by our compliance team.
+          Application under compliance review. No action is required at this time.
         </p>
         <div class="ref-number" id="compliance-ref-display"></div>
         <div class="card" style="text-align:left;margin-top:24px;max-width:480px;margin-left:auto;margin-right:auto;">
           <div style="font-weight:600;margin-bottom:8px;">What happens next?</div>
           <div style="font-size:13px;color:var(--text2);line-height:1.8;">
-            1. A senior compliance officer will review your application and documents<br/>
+            1. Our team will review your application and documents<br/>
             2. You may be contacted for additional information or documentation<br/>
             3. A decision will be communicated via email within 3–5 business days
           </div>
@@ -3296,28 +3260,20 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="pricing-view">
-        <!-- Risk Rating Summary -->
-        <div id="pricing-risk-summary" style="background:linear-gradient(135deg,rgba(43,47,143,0.06),rgba(43,47,143,0.02));border:1px solid rgba(43,47,143,0.15);border-radius:var(--radius);padding:20px;margin-bottom:24px;text-align:center;">
-          <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px;">Your Risk Assessment Result</div>
-          <div id="pricing-risk-badge" style="display:inline-block;padding:8px 24px;border-radius:24px;font-weight:700;font-size:16px;letter-spacing:0.5px;margin-bottom:8px;background:#6b7280;color:#fff;">RISK PENDING</div>
-          <div style="font-size:13px;color:var(--text3);">Composite Score: <strong id="pricing-risk-score-display">—</strong> / 100</div>
-        </div>
-
         <div style="text-align:center;margin-bottom:24px;">
           <h2>Your Pricing Schedule</h2>
-          <p style="color:var(--text3);font-size:14px;">Based on the risk profile of your application</p>
+          <p style="color:var(--text3);font-size:14px;">Review the fee schedule before continuing.</p>
         </div>
 
         <div class="pricing-card">
           <div class="pricing-header">
             <h3 id="pricing-plan-title">Corporate Account — Standard</h3>
-            <div class="pricing-risk-label">Risk Profile: <strong id="pricing-risk-level"></strong></div>
           </div>
           <div class="pricing-table-wrap">
             <table class="pricing-table">
@@ -3329,7 +3285,7 @@
             </table>
 
             <div class="pricing-disclaimer">
-              <strong>⚠️ Important Notice:</strong> The pricing above is based on the preliminary risk assessment of your application. Onboarda reserves the right to revise the applicable pricing upon completion of the final compliance review and enhanced due diligence process. Changes in risk profile, business activity, or regulatory status may result in adjusted fee schedules. By proceeding, you acknowledge that the final pricing will be confirmed in your service agreement following full account approval.
+              <strong>Important Notice:</strong> The pricing above is based on the information provided in your application. Onboarda reserves the right to revise the applicable pricing if the information changes or if additional information is required before approval. Final pricing will be confirmed in your service agreement following full account approval.
             </div>
 
             <div class="consent-section" style="margin-top:16px;">
@@ -3342,7 +3298,7 @@
 
             <div class="pricing-actions">
               <button class="btn btn-outline" onclick="showView('my-apps')">← Back to Dashboard</button>
-              <button class="btn btn-primary" id="btn-accept-pricing" onclick="acceptPricing()" disabled style="opacity:0.5;cursor:not-allowed;">Accept Pricing & Proceed to KYC →</button>
+              <button class="btn btn-primary" id="btn-accept-pricing" onclick="acceptPricing()" disabled style="opacity:0.5;cursor:not-allowed;">Accept Pricing & Continue →</button>
             </div>
           </div>
         </div>
@@ -3358,7 +3314,7 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3372,7 +3328,7 @@
         <div class="progress-track">
           <div class="progress-fill" id="progress-bar" style="width:0%"></div>
         </div>
-        <p class="text-sm mt-2" style="color:var(--text3);">Upload all required documents. AI will verify authenticity and validity automatically.</p>
+        <p class="text-sm mt-2" style="color:var(--text3);">Upload all required documents. Your documents will be reviewed by our team.</p>
       </div>
 
       <!-- Section A: Corporate Documents -->
@@ -3891,7 +3847,7 @@
     <div class="page">
       <div class="step-bar">
         <div class="step done">Application Form</div>
-        <div class="step done">Risk Profiling</div>
+        <div class="step done">Application Review</div>
         <div class="step done">KYC & Documents</div>
         <div class="step active">Review & Submit</div>
       </div>
@@ -3952,11 +3908,11 @@
   <div id="view-docs-review" class="hidden">
     <div class="page">
 
-      <!-- Deterministic compliance memo summary — hidden from client -->
+      <!-- Application summary kept hidden from the client workflow. -->
       <div class="ai-agent-panel" id="agent-compliance-memo" style="display:none;">
         <div class="ai-agent-header">
           <div class="ai-agent-icon green">📝</div>
-          <div><div class="ai-agent-name">Compliance Memo Summary</div><div class="ai-agent-sub">Deterministic case summary for compliance review</div></div>
+          <div><div class="ai-agent-name">Application Summary</div><div class="ai-agent-sub">Application details prepared for review</div></div>
           <span class="ai-agent-badge clear" id="agent9-badge">Prepared</span>
         </div>
         <div id="compliance-memo-content">
@@ -3973,11 +3929,11 @@
             <div class="memo-text" id="memo-screening">Generating...</div>
           </div>
           <div class="memo-section">
-            <div class="memo-section-title">Risk Drivers</div>
+            <div class="memo-section-title">Application Notes</div>
             <div id="memo-risk-drivers"></div>
           </div>
           <div class="memo-section">
-            <div class="memo-section-title">AI Recommendation</div>
+            <div class="memo-section-title">Review Summary</div>
             <div class="memo-text" id="memo-recommendation">Generating...</div>
           </div>
         </div>
@@ -3985,7 +3941,7 @@
 
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">KYC & Documents</div></div>
         <div class="step active"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3993,7 +3949,7 @@
       <div class="status-hero">
         <div class="status-icon-lg pending">🔍</div>
         <h2 id="docs-review-title">Documents Under Review</h2>
-        <p id="docs-review-subtitle">All documents have been submitted. Our AI and compliance team are conducting final due diligence. You'll receive a decision within 24–48 hours.</p>
+        <p id="docs-review-subtitle">Your documents are being reviewed. You will receive an update when the next step is ready.</p>
       </div>
 
       <div class="card" style="border-color:var(--brand-dim);background:rgba(43,47,143,0.04);">
@@ -4001,7 +3957,7 @@
           <div style="font-size:28px;flex-shrink:0;">📋</div>
           <div>
             <div class="font-semibold" style="margin-bottom:6px;" id="docs-review-card-title">Documents Received — Final Review in Progress</div>
-            <p style="font-size:13px;color:var(--text2);line-height:1.7;" id="docs-review-card-body">All your documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours. No further action is required from you at this stage.</p>
+            <p style="font-size:13px;color:var(--text2);line-height:1.7;" id="docs-review-card-body">All your documents have been received and are being reviewed by our team. You will receive an email notification with the outcome within 24–48 hours. No further action is required from you at this stage.</p>
             <p style="font-size:12px;color:var(--text3);margin-top:10px;" id="docs-review-card-footnote">If we require any additional information, our team will contact you directly at the email address provided in your application.</p>
           </div>
         </div>
@@ -4072,7 +4028,7 @@
         <div class="card-header">
           <div class="card-icon blue">💬</div>
           <div>
-            <div class="card-title">Messages from Compliance Team</div>
+            <div class="card-title">Messages from Our Team</div>
             <div class="card-sub">Important updates and document requests</div>
           </div>
         </div>
@@ -4109,26 +4065,16 @@
 
       <div class="status-hero">
         <div class="status-icon-lg approved">🎉</div>
-        <h2 style="color:var(--green)">Account Approved!</h2>
-        <p>Congratulations! Your application has been approved. Your Onboarda account is being activated and your dedicated relationship manager will be in touch shortly.</p>
+        <h2 style="color:var(--green)">Application Approved</h2>
+        <p>Your application has been approved. Activation is in progress and our team will contact you with next steps.</p>
         <div class="ref-number" id="approved-ref">ARF-2024-XXXXXX</div>
       </div>
 
       <div class="dash-grid">
         <div class="dash-metric">
           <div class="dash-metric-label">Account Status</div>
-          <div class="dash-metric-val green">Active</div>
-          <div class="dash-metric-sub">Fully operational</div>
-        </div>
-        <div class="dash-metric">
-          <div class="dash-metric-label">Risk Rating</div>
-          <div class="dash-metric-val gold">Medium-Low</div>
-          <div class="dash-metric-sub">Initial assessment</div>
-        </div>
-        <div class="dash-metric">
-          <div class="dash-metric-label">Next Review</div>
-          <div class="dash-metric-val blue">12 months</div>
-          <div class="dash-metric-sub">Ongoing monitoring</div>
+          <div class="dash-metric-val green">Approved</div>
+          <div class="dash-metric-sub">Activation in progress</div>
         </div>
       </div>
 
@@ -4136,43 +4082,18 @@
         <div class="card-header">
           <div class="card-icon green">✅</div>
           <div>
-            <div class="card-title">All Checks Cleared</div>
-            <div class="card-sub">Full compliance verification completed</div>
+            <div class="card-title">No Further Action Required</div>
+            <div class="card-sub">Submitted documents are complete for the current step</div>
           </div>
         </div>
-        <div class="ai-checks">
-          <div class="ai-check">
-            <div class="ai-check-top"><span class="ai-check-icon">🔬</span><span class="ai-check-name">Document Authenticity</span></div>
-            <span class="ai-status passed">✓ Passed</span>
-          </div>
-          <div class="ai-check">
-            <div class="ai-check-top"><span class="ai-check-icon">📅</span><span class="ai-check-name">Document Validity</span></div>
-            <span class="ai-status passed">✓ Passed</span>
-          </div>
-          <div class="ai-check">
-            <div class="ai-check-top"><span class="ai-check-icon">🔍</span><span class="ai-check-name">Sanctions Screening</span></div>
-            <span class="ai-status passed">✓ Clear</span>
-          </div>
-          <div class="ai-check">
-            <div class="ai-check-top"><span class="ai-check-icon">📰</span><span class="ai-check-name">Adverse Media</span></div>
-            <span class="ai-status passed">✓ Clear</span>
-          </div>
-          <div class="ai-check">
-            <div class="ai-check-top"><span class="ai-check-icon">⚠️</span><span class="ai-check-name">PEP Check</span></div>
-            <span class="ai-status passed">✓ Clear</span>
-          </div>
-          <div class="ai-check">
-            <div class="ai-check-top"><span class="ai-check-icon">🏛️</span><span class="ai-check-name">Compliance Review</span></div>
-            <span class="ai-status passed">✓ Approved</span>
-          </div>
-        </div>
+        <p style="font-size:13px;color:var(--text2);line-height:1.7;margin-top:12px;">We will contact you if anything else is needed. Otherwise, our team will reach out with activation details.</p>
       </div>
 
       <div class="card" style="text-align:center;">
         <div style="font-size:40px;margin-bottom:12px;">🚀</div>
         <div class="font-bold" style="font-size:18px; margin-bottom:8px;">Next Steps</div>
         <p style="color:var(--text2); font-size:13px; max-width:480px; margin:0 auto 20px;">
-          Your relationship manager will contact you within one business day to complete account setup, provide your account details, and onboard you to our payment platform.
+          Our team will contact you within one business day to complete account setup, provide your account details, and onboard you to our payment platform.
         </p>
         <button class="btn btn-primary" style="display:inline-flex;" onclick="showToast('success','Welcome aboard!','Your Onboarda team will be in touch shortly.')">
           📧 Confirm Receipt
@@ -4214,7 +4135,7 @@
           </div>
           <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px;">
             <span style="font-size:18px;">📝</span>
-            <div><div style="font-weight:600;font-size:13px;">Request a review</div><div style="color:var(--text2);font-size:12px;">If you have additional information to provide, you may request a review by contacting our compliance team.</div></div>
+            <div><div style="font-weight:600;font-size:13px;">Request a review</div><div style="color:var(--text2);font-size:12px;">If you have additional information to provide, you may request a review by contacting our team.</div></div>
           </div>
           <div style="display:flex;gap:12px;align-items:flex-start;">
             <span style="font-size:18px;">🔄</span>
@@ -4367,9 +4288,9 @@
             </div>
           </div>
 
-          <!-- Col: AI Screening -->
+          <!-- Col: Initial Review -->
           <div class="kanban-col ai-screen">
-            <div class="kanban-col-header">🤖 AI Screening <span class="k-count">1</span></div>
+            <div class="kanban-col-header">Initial Review <span class="k-count">1</span></div>
             <div class="kanban-cards">
               <div class="k-card" onclick="openBOApp('TechPay','ARF-2026-100421','onboarding')">
                 <div class="k-card-name">TechPay Solutions Ltd</div>
@@ -4392,14 +4313,14 @@
               </div>
               
 
-          <!-- Col: EDD -->
+          <!-- Col: Review -->
           <div class="kanban-col edd">
-            <div class="kanban-col-header">⚠️ EDD Required <span class="k-count">1</span></div>
+            <div class="kanban-col-header">Review Queue <span class="k-count">1</span></div>
             <div class="kanban-cards">
               <div class="k-card" onclick="openBOApp('NovaPay','ARF-2026-100390','pending')">
                 <div class="k-card-name">NovaPay Africa Ltd</div>
                 <div class="k-card-ref">ARF-2026-100390</div>
-                <div class="k-card-flag">🇰🇪 Kenya · Payments · High Risk</div>
+                <div class="k-card-flag">Kenya · Payments · Additional review</div>
                 <span class="k-sla overdue">🔴 72h — SLA BREACHED</span>
               </div>
             </div>
@@ -4498,7 +4419,7 @@
 
           <div class="ai-check-detail" style="border-left:3px solid var(--green);">
             <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">🔬 Document Authenticity (AI Verification)</div>
+              <div class="ai-check-detail-name">Document Review</div>
               <span class="ai-status passed" style="font-size:12px;">✓ Passed</span>
             </div>
             <div class="ai-check-detail-body">
@@ -4506,87 +4427,87 @@
               <div class="ai-detail-row"><span class="ai-detail-label">Passport (Henderson)</span><span class="ai-detail-val" style="color:var(--green);">MRZ validated ✓ · Expiry: 12 Feb 2031 · Face detection: clear photo · Biometric chip marker detected · No tamper indicators</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">Passport (Mitchell)</span><span class="ai-detail-val" style="color:var(--green);">MRZ validated ✓ · Expiry: 08 Jul 2029 · Face detection: clear photo · No tamper indicators</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">Proof of Address</span><span class="ai-detail-val" style="color:var(--green);">Bank statement dated 15 Feb 2026 — within 90 days ✓ · Barclays Bank letterhead verified · Address matches COI</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Provider</span><span class="ai-detail-val">Onfido Document AI + AWS Textract OCR · Processing time: 4.2s</span></div>
+              <div class="ai-detail-row"><span class="ai-detail-label">Provider</span><span class="ai-detail-val">Document processing provider · Processing time: 4.2s</span></div>
             </div>
           </div>
 
           <div class="ai-check-detail" style="border-left:3px solid var(--blue);">
             <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">🌍 Country Risk Assessment</div>
+              <div class="ai-check-detail-name">Jurisdiction Review</div>
               <span class="ai-status running" style="font-size:12px;"><span class="ai-spinner"></span> In Progress</span>
             </div>
             <div class="ai-check-detail-body">
               <div class="ai-detail-row"><span class="ai-detail-label">Jurisdiction</span><span class="ai-detail-val">United Kingdom — FATF Member, Not on Blacklist/Grey List</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">FATF Status</span><span class="ai-detail-val" style="color:var(--green);">Compliant jurisdiction ✓</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">CPI Score</span><span class="ai-detail-val">73/100 (Transparency International 2025) — Low corruption risk</span></div>
+              <div class="ai-detail-row"><span class="ai-detail-label">CPI Reference</span><span class="ai-detail-val">73/100 (Transparency International 2025)</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">Target Markets</span><span class="ai-detail-val">UK, EU, South Africa, Kenya — all FATF-compliant jurisdictions ✓</span></div>
             </div>
           </div>
         </div>
 
-        <!-- ── TAB: Risk Score ── -->
+        <!-- ── TAB: Application Review ── -->
         <div class="bo-tab-content" id="tab-risk">
           <div class="risk-score-hero">
-            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Composite Risk Score</div>
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Application Review Status</div>
             <div class="risk-dial" style="color:var(--amber);">34</div>
             <div style="font-size:10px;color:var(--text3);margin-top:6px;">/ 100</div>
             <div style="display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 16px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:99px;">
-              <span style="font-size:13px;font-weight:700;color:var(--amber);">MEDIUM-LOW RISK</span>
+              <span style="font-size:13px;font-weight:700;color:var(--amber);">REVIEW IN PROGRESS</span>
             </div>
-            <p style="font-size:12px;color:var(--text2);max-width:500px;margin:12px auto 0;line-height:1.6;">Score below 40: Standard CDD pathway. No EDD required at this stage. Recommend approval subject to compliance officer sign-off.</p>
+            <p style="font-size:12px;color:var(--text2);max-width:500px;margin:12px auto 0;line-height:1.6;">Application information is being reviewed. No client action is required at this time.</p>
           </div>
 
-          <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:12px;">Risk Factor Breakdown</div>
+          <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:12px;">Review Summary</div>
 
           <div class="risk-factor">
             <div style="font-size:18px;">🌍</div>
-            <div class="risk-factor-name">Jurisdiction Risk<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Country of Incorporation: UK (FATF Member)</div></div>
+            <div class="risk-factor-name">Jurisdiction Details<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Country of Incorporation: UK (FATF Member)</div></div>
             <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:20%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">10 / 25 pts · Low</div>
+            <div class="risk-factor-score" style="color:var(--green);">Received</div>
           </div>
 
           <div class="risk-factor">
             <div style="font-size:18px;">🏭</div>
-            <div class="risk-factor-name">Business Sector Risk<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Fintech / Payments — inherently higher risk sector</div></div>
+            <div class="risk-factor-name">Business Activity<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Fintech / Payments — additional context requested where needed</div></div>
             <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-med" style="width:60%"></div></div>
-            <div class="risk-factor-score" style="color:var(--amber);">15 / 25 pts · Medium</div>
+            <div class="risk-factor-score" style="color:var(--amber);">Under review</div>
           </div>
 
           <div class="risk-factor">
             <div style="font-size:18px;">🔍</div>
-            <div class="risk-factor-name">Screening Results<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Sanctions, PEP, Adverse Media — all clear</div></div>
+            <div class="risk-factor-name">Review Checks<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Submitted information reviewed</div></div>
             <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:10%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">0 / 20 pts · Clear</div>
+            <div class="risk-factor-score" style="color:var(--green);">Reviewed</div>
           </div>
 
           <div class="risk-factor">
             <div style="font-size:18px;">🏗️</div>
             <div class="risk-factor-name">Ownership Structure Complexity<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">2 UBOs directly identified, no intermediate holding layers</div></div>
             <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:15%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">3 / 15 pts · Low</div>
+            <div class="risk-factor-score" style="color:var(--green);">Received</div>
           </div>
 
           <div class="risk-factor">
             <div style="font-size:18px;">💰</div>
-            <div class="risk-factor-name">Transaction Volume Risk<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Estimated monthly: USD 50K–500K inflows · 50 transactions</div></div>
+            <div class="risk-factor-name">Transaction Volume<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Estimated monthly: USD 50K-500K inflows · 50 transactions</div></div>
             <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-med" style="width:40%"></div></div>
-            <div class="risk-factor-score" style="color:var(--amber);">6 / 15 pts · Medium</div>
+            <div class="risk-factor-score" style="color:var(--amber);">Under review</div>
           </div>
 
           <div class="risk-factor">
             <div style="font-size:18px;">📄</div>
-            <div class="risk-factor-name">Document Quality Score<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">AI verification: all documents passed, high confidence</div></div>
+            <div class="risk-factor-name">Document Review<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Documents received for review</div></div>
             <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:0%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">0 / 10 pts · Excellent</div>
+            <div class="risk-factor-score" style="color:var(--green);">Received</div>
           </div>
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin-top:16px;">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Score Interpretation</div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Status Guide</div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
-              <div style="text-align:center;padding:8px;background:var(--green-dim);border-radius:6px;"><div style="font-weight:800;color:var(--green);">0–25</div><div style="font-size:11px;color:var(--text3);">Low Risk</div><div style="font-size:10px;color:var(--text3);">Auto-approve</div></div>
-              <div style="text-align:center;padding:8px;background:rgba(245,158,11,0.08);border-radius:6px;border:1px solid var(--amber);"><div style="font-weight:800;color:var(--amber);">26–50</div><div style="font-size:11px;color:var(--text3);">Medium-Low</div><div style="font-size:10px;color:var(--text3);">CO sign-off</div></div>
-              <div style="text-align:center;padding:8px;background:rgba(249,115,22,0.08);border-radius:6px;"><div style="font-weight:800;color:#f97316">51–74</div><div style="font-size:11px;color:var(--text3);">Medium-High</div><div style="font-size:10px;color:var(--text3);">EDD required</div></div>
-              <div style="text-align:center;padding:8px;background:var(--red-dim);border-radius:6px;"><div style="font-weight:800;color:var(--red);">75–100</div><div style="font-size:11px;color:var(--text3);">High Risk</div><div style="font-size:10px;color:var(--text3);">Decline / SAR</div></div>
+              <div style="text-align:center;padding:8px;background:var(--green-dim);border-radius:6px;"><div style="font-weight:800;color:var(--green);">Step 1</div><div style="font-size:11px;color:var(--text3);">Submitted</div><div style="font-size:10px;color:var(--text3);">Received</div></div>
+              <div style="text-align:center;padding:8px;background:rgba(245,158,11,0.08);border-radius:6px;border:1px solid var(--amber);"><div style="font-weight:800;color:var(--amber);">Step 2</div><div style="font-size:11px;color:var(--text3);">Review</div><div style="font-size:10px;color:var(--text3);">In progress</div></div>
+              <div style="text-align:center;padding:8px;background:rgba(249,115,22,0.08);border-radius:6px;"><div style="font-weight:800;color:#f97316">Step 3</div><div style="font-size:11px;color:var(--text3);">Follow-up</div><div style="font-size:10px;color:var(--text3);">If needed</div></div>
+              <div style="text-align:center;padding:8px;background:var(--red-dim);border-radius:6px;"><div style="font-weight:800;color:var(--red);">Step 4</div><div style="font-size:11px;color:var(--text3);">Outcome</div><div style="font-size:10px;color:var(--text3);">Next steps</div></div>
             </div>
           </div>
         </div>
@@ -4633,25 +4554,25 @@
             <div class="ai-check-detail" style="border-left:3px solid var(--green);padding:14px 16px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">📋</span><div><div style="font-size:13px;font-weight:600;">Certificate of Incorporation</div><div style="font-size:11px;color:var(--text3);">COI_TechPay_Companies_House.pdf · 284 KB · Uploaded 10 Mar 2026 14:30</div></div></div>
-                <span class="ai-status passed">✓ AI Verified</span>
+                <span class="ai-status passed">Received</span>
               </div>
             </div>
             <div class="ai-check-detail" style="border-left:3px solid var(--green);padding:14px 16px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">📜</span><div><div style="font-size:13px;font-weight:600;">Memorandum & Articles of Association</div><div style="font-size:11px;color:var(--text3);">TechPay_MA.pdf · 1.2 MB · Uploaded 10 Mar 2026 14:30</div></div></div>
-                <span class="ai-status passed">✓ AI Verified</span>
+                <span class="ai-status passed">Received</span>
               </div>
             </div>
             <div class="ai-check-detail" style="border-left:3px solid var(--green);padding:14px 16px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">🛂</span><div><div style="font-size:13px;font-weight:600;">Passports — Directors & UBOs (3 files)</div><div style="font-size:11px;color:var(--text3);">Henderson_PP.pdf, Mitchell_PP.pdf, Webb_PP.pdf · Uploaded 10 Mar 2026 14:31</div></div></div>
-                <span class="ai-status passed">✓ AI Verified · MRZ Valid</span>
+                <span class="ai-status passed">Received</span>
               </div>
             </div>
             <div class="ai-check-detail" style="border-left:3px solid var(--green);padding:14px 16px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">🏠</span><div><div style="font-size:13px;font-weight:600;">Proof of Address — Directors & UBOs</div><div style="font-size:11px;color:var(--text3);">Bank statements Feb 2026 (3 files) · Within 90-day requirement ✓</div></div></div>
-                <span class="ai-status passed">✓ AI Verified · In Date</span>
+                <span class="ai-status passed">Received</span>
               </div>
             </div>
             <div class="ai-check-detail" style="border-left:3px solid var(--green);padding:14px 16px;">
@@ -4674,14 +4595,14 @@
           <div class="notes-list" id="notes-list">
             <div class="note-item">
               <div class="note-header">
-                <div><span class="note-author">Sarah M. (Compliance Officer)</span><span class="note-tag request">Info Requested</span></div>
+                <div><span class="note-author">Team Member</span><span class="note-tag request">Info Requested</span></div>
                 <div class="note-time">10 Mar 2026 · 14:32</div>
               </div>
               <div class="note-body">Requested additional source of funds documentation — client mentioned recent property sale. Awaiting bank statement for proceeds. Also flagged the BVI director for enhanced due diligence check.</div>
             </div>
             <div class="note-item">
               <div class="note-header">
-                <div><span class="note-author">James O. (MLRO)</span><span class="note-tag flag">Flag</span></div>
+                <div><span class="note-author">Team Member</span><span class="note-tag flag">Flag</span></div>
                 <div class="note-time">9 Mar 2026 · 10:15</div>
               </div>
               <div class="note-body">PEP match returned on Director 2 (James Okonkwo). Need to confirm if active or former government role. Additional internal checks are in progress before approval.</div>
@@ -4691,7 +4612,7 @@
                 <div><span class="note-author">Priya R. (Onboarding)</span><span class="note-tag general">General</span></div>
                 <div class="note-time">8 Mar 2026 · 09:05</div>
               </div>
-              <div class="note-body">Initial submission received. Company registry data verified via OpenCorporates. Pre-screening form reviewed — all mandatory fields completed. Passed to compliance team for full review.</div>
+              <div class="note-body">Initial submission received. Company registry data verified via OpenCorporates. Pre-screening form reviewed — all mandatory fields completed. Passed to the team for review.</div>
             </div>
           </div>
 
@@ -4984,13 +4905,13 @@ function resetPortalPricingState() {
   serverScreening = null;
   currentRiskDisplayState = buildRiskDisplayState({ status: 'draft' });
   var pricingRiskLevel = document.getElementById('pricing-risk-level');
-  if (pricingRiskLevel) pricingRiskLevel.textContent = 'Risk pending';
+  if (pricingRiskLevel) pricingRiskLevel.textContent = 'Status pending';
   var pricingPlanTitle = document.getElementById('pricing-plan-title');
   if (pricingPlanTitle) pricingPlanTitle.textContent = 'Corporate Account — Pending';
   var pricingRiskBadge = document.getElementById('pricing-risk-badge');
   if (pricingRiskBadge) {
     pricingRiskBadge.style.background = '#6b7280';
-    pricingRiskBadge.textContent = 'RISK PENDING';
+    pricingRiskBadge.textContent = 'Pending';
   }
   var pricingRiskScore = document.getElementById('pricing-risk-score-display');
   if (pricingRiskScore) pricingRiskScore.textContent = '—';
@@ -5229,14 +5150,8 @@ function applyApplicationViewState(target) {
   if (target === 'pre-approval-hold') {
     var preApprovalRef = document.getElementById('pre-approval-ref-display');
     if (preApprovalRef) preApprovalRef.textContent = appRef || '—';
-    applyRiskCardDisplay('pre-approval-risk-badge', 'pre-approval-risk-score', 'pre-approval-risk-card');
   }
   if (target === 'compliance-hold') {
-    var complianceRisk = document.getElementById('compliance-risk-label');
-    if (complianceRisk) {
-      var complianceDisplay = renderRiskDisplay(currentRiskDisplayState || { risk_level: computedRiskLevel, risk_score: computedRiskScore });
-      complianceRisk.textContent = complianceDisplay.available ? complianceDisplay.badgeText.replace(' RISK', ' Risk') : complianceDisplay.warning;
-    }
     var complianceRef = document.getElementById('compliance-ref-display');
     if (complianceRef) complianceRef.textContent = appRef || '—';
   }
@@ -5270,8 +5185,14 @@ function showLicenceDocs() {
 const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','withdrawn','client-notifications','account-security','portal-changes'];
 
 function showView(name) {
+  if (name === 'backoffice') {
+    console.warn('Staff workspace is not served from the client portal.');
+    name = 'landing';
+  }
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
-  document.getElementById('view-' + name).classList.remove('hidden');
+  var targetView = document.getElementById('view-' + name) || document.getElementById('view-landing');
+  if (!targetView) return;
+  targetView.classList.remove('hidden');
   // Show / hide persistent client sidebar
   const sidebar = document.getElementById('global-client-sidebar');
   const showSidebar = SIDEBAR_VIEWS.includes(name);
@@ -5774,11 +5695,11 @@ async function loadMyApplications() {
       prescreening_submitted: 'Pre-screening',
       pricing_review: 'Pricing review',
       pricing_accepted: 'Pricing accepted',
-      pre_approval_review: 'Pre-approval review',
-      pre_approved: 'Pre-approved',
-      kyc_documents: 'KYC documents',
-      kyc_submitted: 'KYC submitted',
-      compliance_review: 'Compliance review',
+      pre_approval_review: 'Application under review',
+      pre_approved: 'Documents ready',
+      kyc_documents: 'Documents requested',
+      kyc_submitted: 'Documents submitted',
+      compliance_review: 'Application review',
       in_review: 'Verification review',
       under_review: 'Verification review',
       edd_required: 'Additional review',
@@ -5798,7 +5719,7 @@ async function loadMyApplications() {
     };
     apps.forEach(function(app) {
       var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
-      var statusLabels = {draft:'Application Started',submitted:'Application Submitted',prescreening_submitted:'Pre-Screening in Progress',pricing_review:'Pricing Under Review',pricing_accepted:'Pricing Accepted',pre_approval_review:'Pre-Approval Under Review',pre_approved:'Pre-Approved',kyc_documents:'KYC Documents Required',kyc_submitted:'KYC Documents Submitted',compliance_review:'Compliance Review in Progress',in_review:'Verification Ongoing',under_review:'Under Compliance Review',edd_required:'Enhanced Due Diligence Required',approved:'Approved \u2013 Ready for Activation',rejected:'Application Declined',rmi_sent:'Further Information Requested',withdrawn:'Application Withdrawn',pending:'Pending'};
+      var statusLabels = {draft:'Application Started',submitted:'Application Submitted',prescreening_submitted:'Pre-Screening in Progress',pricing_review:'Pricing Under Review',pricing_accepted:'Pricing Accepted',pre_approval_review:'Application Under Review',pre_approved:'Ready for Documents',kyc_documents:'Documents Required',kyc_submitted:'Documents Submitted',compliance_review:'Compliance Review in Progress',in_review:'Verification Ongoing',under_review:'Under Compliance Review',edd_required:'Application Under Review',approved:'Approved \u2013 Ready for Activation',rejected:'Application Declined',rmi_sent:'Further Information Requested',withdrawn:'Application Withdrawn',pending:'Pending'};
       var color = statusColors[app.status] || '#999';
       var label = app.status_label || statusLabels[app.status] || app.status;
       var date = (app.updated_at || app.created_at) ? new Date(app.updated_at || app.created_at).toLocaleDateString() : '';
@@ -5948,7 +5869,7 @@ function triggerRegistryVerification() {
   panel.style.display = 'block';
   results.innerHTML = '<div style="font-size:12px;color:var(--text2);">🔄 Checking registries...</div>';
 
-  // Registry verification is handled server-side by the compliance team
+  // Registry verification is handled server-side by the review workflow.
   setTimeout(() => {
     results.innerHTML = '<div style="padding:8px;background:rgba(59,130,246,0.08);border:1px solid #3b82f6;border-radius:6px;color:#3b82f6;font-size:11px;"><strong>&#9203; Pending</strong><br/>Document verification will be performed automatically after submission. Results will appear here once processing is complete.</div>';
   }, 1200);
@@ -6966,17 +6887,20 @@ async function submitPrescreening(e) {
     }
 
     var submitResp = await apiCall('POST', '/applications/' + currentApplicationId + '/submit');
-    if (!submitResp || !submitResp.risk_level) {
-      throw new Error('Authoritative risk result was not returned by the server.');
+    if (!submitResp || !submitResp.status) {
+      throw new Error('Application status was not returned by the server.');
     }
 
     // Pre-screening submitted successfully — server holds canonical state now.
     _draftDirty = false;
     btn.disabled = false;
     btn.innerHTML = '🚀 Submit Pre-Screening';
-    showView('risk-scoring');
+    if (submitResp.pricing) serverPricing = submitResp.pricing;
+    if (submitResp.screening) serverScreening = submitResp.screening;
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
-    startRiskScoring(submitResp);
+    routePortalByBackendStatus(submitResp.status, {
+      pricingMessage: 'Please review and accept the pricing to continue.'
+    });
   } catch (err) {
     console.error('Pre-screening submission failed:', err);
     btn.disabled = false;
@@ -6987,7 +6911,7 @@ async function submitPrescreening(e) {
   }
 }
 
-// ─── Risk scoring engine ──────────────────────────────────
+// ─── Internal workflow state helpers ──────────────────────
 var computedRiskLevel = '';
 var computedRiskScore = null;
 var dimScores = {};
@@ -6999,7 +6923,7 @@ var RISK_REQUIRED_STATUSES = [
   'compliance_review', 'in_review', 'under_review', 'edd_required',
   'approved', 'rejected', 'rmi_sent', 'withdrawn'
 ];
-var RISK_UNAVAILABLE_TEXT = 'Risk unavailable — recalculation required';
+var RISK_UNAVAILABLE_TEXT = 'Application status unavailable. Please contact our team if this continues.';
 
 function parseMaybeJsonArray(value) {
   if (Array.isArray(value)) return value.slice();
@@ -7055,8 +6979,8 @@ function buildRiskDisplayState(app) {
 
   if (status === 'edd_required' && score === 0) {
     var eddWarning = eddFlags.length
-      ? 'EDD required — ' + eddFlags.join(', ')
-      : 'EDD required — trigger reason unavailable';
+      ? 'Application review required'
+      : 'Application review required';
     if (warnings.indexOf(eddWarning) === -1) warnings.push(eddWarning);
     hasRisk = false;
   }
@@ -7076,8 +7000,7 @@ function hasAuthoritativeRisk(app) {
 }
 
 function requiresEnhancedRiskDocs() {
-  var state = currentRiskDisplayState || {};
-  return computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH' || state.status === 'edd_required';
+  return false;
 }
 
 function renderRiskDisplay(appOrState) {
@@ -7092,12 +7015,11 @@ function renderRiskDisplay(appOrState) {
       warning: state.warnings[0] || RISK_UNAVAILABLE_TEXT
     };
   }
-  var levelDisplay = state.level.replace('_', ' ');
   return {
     available: true,
-    badgeText: levelDisplay + ' RISK',
-    scoreText: state.score.toFixed(1),
-    color: colors[state.level] || '#6b7280',
+    badgeText: 'Application review complete',
+    scoreText: '',
+    color: '#2563eb',
     warning: state.warnings.join('; ')
   };
 }
@@ -7123,7 +7045,7 @@ function setRiskScoreElement(scoreId, display) {
     return;
   }
   if (display.available) {
-    wrapper.innerHTML = 'Score: <strong id="' + scoreId + '">' + display.scoreText + '</strong> / 100';
+    wrapper.innerHTML = '<strong id="' + scoreId + '">' + escapeHtml(display.badgeText) + '</strong>';
   } else {
     wrapper.innerHTML = '<strong id="' + scoreId + '" style="color:#dc2626;">' + escapeHtml(display.warning) + '</strong>';
   }
@@ -7168,21 +7090,14 @@ function scoreFromValue(val, mapping) {
 function startRiskScoring(serverResult) {
   document.getElementById('risk-computing').classList.remove('hidden');
   document.getElementById('risk-result').classList.add('hidden');
-  if (!serverResult || !serverResult.risk_level) {
+  if (!serverResult || !serverResult.status) {
     document.getElementById('risk-computing').classList.add('hidden');
-    showToast('error', 'Risk Scoring Failed', 'The backend did not return a valid risk assessment.');
+    showToast('error', 'Application Processing Failed', 'The backend did not return an application status.');
     showView('prescreening');
     return;
   }
 
   var serverRiskState = setCurrentRiskFromApp(serverResult);
-  if (!serverRiskState.hasRisk) {
-    document.getElementById('risk-computing').classList.add('hidden');
-    showToast('error', 'Risk Scoring Failed', renderRiskDisplay(serverRiskState).warning);
-    showView('prescreening');
-    return;
-  }
-
   var result = {
     score: serverRiskState.score,
     level: serverRiskState.level,
@@ -7227,78 +7142,38 @@ function startRiskScoring(serverResult) {
 }
 
 function showRiskResult(result) {
-  // Show risk result briefly, then move to pending view
+  // Show a neutral processing result briefly, then move to pricing.
   document.getElementById('risk-computing').classList.add('hidden');
   document.getElementById('risk-result').classList.remove('hidden');
 
-  // Display the computed risk level in the result panel
-  var levelLabel = result.level.replace('_',' ');
   var resultEl = document.getElementById('risk-result');
   if (resultEl) {
-    var levelColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
-    var color = levelColors[result.level] || '#2563eb';
     resultEl.innerHTML = '<div style="text-align:center;padding:24px;">' +
-      '<div style="font-size:48px;margin-bottom:12px;">' + (result.level === 'LOW' ? '✅' : result.level === 'MEDIUM' ? '🔵' : result.level === 'HIGH' ? '⚠️' : '🔴') + '</div>' +
-      '<h2 style="margin-bottom:8px;">Risk Assessment Complete</h2>' +
-      '<div style="font-size:20px;font-weight:700;color:' + color + ';margin-bottom:8px;">' + levelLabel + ' RISK</div>' +
-      '<div style="color:var(--text3);font-size:14px;">Composite Score: ' + (result.score || 0).toFixed(1) + ' / 100</div>' +
+      '<div style="font-size:48px;margin-bottom:12px;">✅</div>' +
+      '<h2 style="margin-bottom:8px;">Application Step Ready</h2>' +
       '<p style="margin-top:16px;color:var(--text2);font-size:13px;">Transitioning to pricing schedule...</p>' +
       '</div>';
   }
 
-  // Populate AI Explainability section
-  var dimNames = ['Customer / Entity','Geographic','Product / Service','Industry / Sector','Delivery Channel'];
-  var dimWeights = ['30%','25%','20%','15%','10%'];
-  var dimDescriptions = [
-    'Entity type, ownership complexity, PEP status, adverse media, source of wealth/funds',
-    'Country of incorporation, countries of operation, payment corridor risk',
-    'Service type, expected transaction volume, transaction complexity',
-    'Business sector classification against 26-sector risk model',
-    'Application channel, introduction method, KYC interaction type'
-  ];
-  var dimKeys = ['d1','d2','d3','d4','d5'];
-  var portalDimHtml = '';
-  dimKeys.forEach(function(k, i) {
-    var val = result.dims[k] || 0;
-    var pct = (val / 4) * 100;
-    var clr = val <= 1.5 ? '#16a34a' : val <= 2.5 ? '#2563eb' : val <= 3.2 ? '#d97706' : '#dc2626';
-    portalDimHtml += '<div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
-      '<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;">' + dimNames[i] + ' <span style="color:var(--text3);font-weight:400;">(' + dimWeights[i] + ')</span></div>' +
-      '<div style="font-size:18px;font-weight:800;color:' + clr + ';">' + val.toFixed(2) + '<span style="font-size:10px;color:var(--text3);font-weight:400;"> / 4.00</span></div>' +
-      '<div style="height:4px;background:var(--surface3);border-radius:2px;margin:4px 0;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:' + clr + ';border-radius:2px;"></div></div>' +
-      '<div style="font-size:10px;color:var(--text3);line-height:1.4;">' + dimDescriptions[i] + '</div>' +
-    '</div>';
-  });
   var portalDimEl = document.getElementById('portal-explain-dimensions');
-  if (portalDimEl) portalDimEl.innerHTML = portalDimHtml;
-
-  var riskExplain = {
-    LOW: { bg:'rgba(22,163,74,0.06)', border:'rgba(22,163,74,0.2)', text:'Your application has been classified as <strong>Low Risk</strong>. This means all risk dimensions scored within acceptable thresholds. You are eligible for Simplified Due Diligence (SDD) and Fast Lane processing.' },
-    MEDIUM: { bg:'rgba(37,99,235,0.06)', border:'rgba(37,99,235,0.2)', text:'Your application has been classified as <strong>Medium Risk</strong>. One or more risk dimensions showed moderate elevation. Standard Customer Due Diligence (CDD) applies with normal document requirements.' },
-    HIGH: { bg:'rgba(217,119,6,0.06)', border:'rgba(217,119,6,0.2)', text:'Your application has been classified as <strong>High Risk</strong>. Enhanced Due Diligence (EDD) is required. A senior compliance officer will review your application. Additional documentation may be requested.' },
-    VERY_HIGH: { bg:'rgba(220,38,38,0.06)', border:'rgba(220,38,38,0.2)', text:'Your application has been classified as <strong>Very High Risk</strong>. Mandatory compliance officer approval is required. Your application will undergo thorough review and you may be contacted for additional information.' }
-  };
-  var re = riskExplain[result.level] || riskExplain.MEDIUM;
+  if (portalDimEl) portalDimEl.innerHTML = '';
   var portalSumEl = document.getElementById('portal-explain-summary');
   if (portalSumEl) {
-    portalSumEl.style.background = re.bg;
-    portalSumEl.style.border = '1px solid ' + re.border;
-    portalSumEl.innerHTML = re.text;
+    portalSumEl.style.background = 'var(--surface2)';
+    portalSumEl.style.border = '1px solid var(--border1)';
+    portalSumEl.textContent = 'Application step ready.';
   }
 
-  // After showing risk result, ALL risk levels see pricing first
   setTimeout(function() {
     showPricingView();
-    showToast('success', 'Risk Assessment Complete', 'Please review and accept the pricing to proceed.');
+    showToast('success', 'Application Submitted', 'Please review and accept the pricing to continue.');
   }, 2500);
 }
 
 function showHighRiskDocs() {
-  // Show/hide docs based on risk level
-  var isHighRisk = requiresEnhancedRiskDocs();
   var highRiskDocs = document.querySelectorAll('.high-risk-doc');
   highRiskDocs.forEach(function(el) {
-    el.style.display = isHighRisk ? '' : 'none';
+    el.style.display = 'none';
   });
 }
 
@@ -7308,28 +7183,17 @@ function updatePendingRiskCard() {
 
 function showPricingView() {
   showView('pricing');
-  populatePricing(computedRiskLevel);
+  populatePricing();
 }
 
 function populatePricing(level) {
-  if (!level) level = computedRiskLevel || '';
-  // Use server-authoritative pricing if available, otherwise fallback to backend-aligned defaults
-  var p = serverPricing || (level ? PRICING_FALLBACK[level] : null);
-  var display = renderRiskDisplay(currentRiskDisplayState || { risk_level: level, risk_score: computedRiskScore });
-  document.getElementById('pricing-risk-level').textContent = display.badgeText;
-  document.getElementById('pricing-plan-title').textContent = display.available ? 'Corporate Account — ' + (level === 'VERY_HIGH' ? 'Enhanced' : level === 'HIGH' ? 'Enhanced' : level === 'MEDIUM' ? 'Standard' : 'Standard') : 'Corporate Account — Pending Risk Recalculation';
-
-  // Update risk rating display on pricing page
-  var riskBadge = document.getElementById('pricing-risk-badge');
-  if (riskBadge) {
-    riskBadge.style.background = display.color;
-    riskBadge.textContent = display.badgeText;
-  }
-  setRiskScoreElement('pricing-risk-score-display', display);
+  var p = serverPricing || null;
+  var pricingPlanTitle = document.getElementById('pricing-plan-title');
+  if (pricingPlanTitle) pricingPlanTitle.textContent = 'Corporate Account';
 
   var tbody = document.getElementById('pricing-table-body');
   if (!p) {
-    tbody.innerHTML = '<tr><td colspan="2" style="color:#dc2626;font-weight:700;">' + RISK_UNAVAILABLE_TEXT + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="2" style="color:#dc2626;font-weight:700;">Pricing is not available yet. Please refresh or contact our team.</td></tr>';
     var pricingAcceptBtn = document.getElementById('btn-accept-pricing');
     if (pricingAcceptBtn) {
       pricingAcceptBtn.disabled = true;
@@ -7348,8 +7212,8 @@ function populatePricing(level) {
   var annualFee = Number(p.annual_monitoring_fee || 0);
   var currency = p.currency || 'USD';
   tbody.innerHTML = '' +
-    '<tr><td><strong>Onboarding Fee</strong><div class="fee-desc">One-time account setup, compliance screening, and due diligence</div></td><td>' + currency + ' ' + onboardingFee.toLocaleString() + '.00</td></tr>' +
-    '<tr><td><strong>Annual Monitoring Fee</strong><div class="fee-desc">Annual compliance monitoring, periodic review, and ongoing screening</div></td><td>' + currency + ' ' + annualFee.toLocaleString() + '.00</td></tr>';
+    '<tr><td><strong>Onboarding Fee</strong><div class="fee-desc">One-time account setup and application review</div></td><td>' + currency + ' ' + onboardingFee.toLocaleString() + '.00</td></tr>' +
+    '<tr><td><strong>Annual Service Fee</strong><div class="fee-desc">Annual account support and service administration</div></td><td>' + currency + ' ' + annualFee.toLocaleString() + '.00</td></tr>';
 }
 
 async function acceptPricing() {
@@ -7367,40 +7231,73 @@ async function acceptPricing() {
     return;
   }
 
-  // After pricing acceptance: route based on risk level
-  if (!result.risk_level) {
+  // After pricing acceptance: route based on backend workflow status only.
+  if (!result.status) {
     showToast('error', 'Pricing Acceptance Failed', 'The backend response was incomplete. Please try again.');
     return;
   }
 
-  if (result.risk_level === 'HIGH' || result.risk_level === 'VERY_HIGH') {
-    // HIGH/VERY_HIGH → Pre-Approval Hold (KYC blocked until officer pre-approves)
-    showPreApprovalHold();
-    showToast('info', 'Pre-Approval Required', 'Pricing accepted. Your application now requires initial compliance review before document submission.');
-  } else {
-    // LOW/MEDIUM → proceed directly to KYC & Documents
-    showHighRiskDocs();
-    showLicenceDocs();
-    syncDirectorsUBOsToKYC();
-    checkPEPAndShowDeclaration();
-    showView('onboarding');
-    showToast('success', 'Pricing Accepted', 'Please proceed to submit your KYC documents.');
+  routePortalByBackendStatus(result.status, {
+    kycMessage: 'Pricing accepted. Please continue with the requested documents.',
+    reviewMessage: 'Pricing accepted. Application under compliance review.',
+    approvedMessage: 'Pricing accepted. Your application has been approved and activation is in progress.',
+    rmiMessage: 'Pricing accepted. Additional information is required to complete your application.'
+  });
+}
+
+function continueToKYCDocuments(message) {
+  showHighRiskDocs();
+  showLicenceDocs();
+  syncDirectorsUBOsToKYC();
+  checkPEPAndShowDeclaration();
+  showView('onboarding');
+  showToast('success', 'Pricing Accepted', message || 'Please continue with the requested documents.');
+}
+
+function routePortalByBackendStatus(status, messages) {
+  var nextStatus = String(status || '').trim();
+  messages = messages || {};
+  if (nextStatus === 'pricing_review') {
+    showPricingView();
+    showToast('info', 'Pricing Available', messages.pricingMessage || 'Please review and accept the pricing to continue.');
+    return;
   }
+  if (nextStatus === 'pre_approval_review') {
+    showPreApprovalHold();
+    showToast('info', 'Application Under Review', messages.reviewMessage || 'Application under compliance review.');
+    return;
+  }
+  if (nextStatus === 'kyc_documents') {
+    continueToKYCDocuments(messages.kycMessage);
+    return;
+  }
+  if (nextStatus === 'approved') {
+    var approvedRef = document.getElementById('approved-ref');
+    if (approvedRef) approvedRef.textContent = appRef || '—';
+    showView('approved');
+    showToast('success', 'Approved', messages.approvedMessage || 'Your application has been approved. Activation is in progress.');
+    return;
+  }
+  if (nextStatus === 'rmi_sent') {
+    showView('client-notifications');
+    loadClientNotifications();
+    showToast('info', 'Additional Information Required', messages.rmiMessage || 'Additional information is required to complete your application.');
+    return;
+  }
+  showView(getApplicationView(nextStatus));
+  showToast('info', 'Application Updated', 'Your application status has been updated.');
 }
 
 function showComplianceHold() {
-  var display = renderRiskDisplay(currentRiskDisplayState || { risk_level: computedRiskLevel, risk_score: computedRiskScore });
-  document.getElementById('compliance-risk-label').textContent = display.available ? display.badgeText.replace(' RISK', ' Risk') : display.warning;
   document.getElementById('compliance-ref-display').textContent = appRef || '—';
   showView('compliance-hold');
-  showToast('info', 'Compliance Referral', 'Your application has been referred for manual compliance review.');
+  showToast('info', 'Application Under Review', 'Application under compliance review.');
 }
 
 // ─── Pre-Approval Hold Flow (v2.1) ──────────────────────────
 function showPreApprovalHold() {
   var refEl = document.getElementById('pre-approval-ref-display');
   if (refEl) refEl.textContent = appRef || '—';
-  applyRiskCardDisplay('pre-approval-risk-badge', 'pre-approval-risk-score', 'pre-approval-risk-card');
 
   showView('pre-approval-hold');
 }
@@ -7718,6 +7615,16 @@ function normalizePersonType(value) {
   return '';
 }
 
+function isValidPortalPathId(value) {
+  var normalized = String(value == null ? '' : value).trim();
+  var lowered = normalized.toLowerCase();
+  return !!normalized && lowered !== 'undefined' && lowered !== 'null';
+}
+
+function isValidPortalPersonId(personId) {
+  return isValidPortalPathId(personId);
+}
+
 function getKYCPersonType(personId, explicitType) {
   var normalized = normalizePersonType(explicitType);
   if (normalized) return normalized;
@@ -7967,7 +7874,10 @@ function stopAllVerificationStatusPolling() {
 }
 
 function startVerificationStatusPolling(options) {
-  if (!options || !options.docId || typeof options.onUpdate !== 'function') return;
+  if (!options || !isValidPortalPathId(options.docId) || typeof options.onUpdate !== 'function') {
+    console.warn('Skipping document verification polling because the document identifier is invalid', options && options.docId);
+    return;
+  }
   var docId = String(options.docId);
   var startedAt = Date.now();
   var latestRecord = options.initialRecord || { doc_id: docId };
@@ -8980,9 +8890,9 @@ function updateDocsReviewMessaging(summary) {
   }
 
   title.textContent = 'Documents Under Review';
-  subtitle.textContent = 'All submitted documents are under review by our AI and compliance team. You\'ll receive a decision within 24–48 hours.';
+  subtitle.textContent = 'Your documents are being reviewed. You will receive an update when the next step is ready.';
   cardTitle.textContent = 'Documents Received — Final Review in Progress';
-  cardBody.textContent = 'All submitted documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours.';
+  cardBody.textContent = 'All submitted documents have been received and are being reviewed by our team. You will receive an email notification with the outcome within 24–48 hours.';
   cardFootnote.textContent = 'If we require any additional information, our team will contact you directly at the email address provided in your application.';
 }
 
@@ -9197,81 +9107,31 @@ async function finalSubmitFromReview() {
 // Deterministic compliance memo summary panel
 // ═══════════════════════════════════════════════════════════
 function generateComplianceMemo() {
-  // Read from authoritative DOM form fields, not synthetic lookup data
-  var riskDisplay = renderRiskDisplay(currentRiskDisplayState || { risk_level: computedRiskLevel, risk_score: computedRiskScore });
-  var level = riskDisplay.available ? computedRiskLevel : '';
   var companyName = (document.getElementById('f-reg-name') || {}).value || 'N/A';
   var country = (document.getElementById('f-inc-country') || {}).value || 'N/A';
   var brn = (document.getElementById('f-brn') || {}).value || 'N/A';
-
-  // Client Overview
   var overview = document.getElementById('memo-client-overview');
-  overview.innerHTML = '<strong>' + escapeHtml(companyName) + '</strong> (BRN: ' + escapeHtml(brn) + ') is a corporate entity incorporated in ' + escapeHtml(country) + '. The entity has applied for Payment Intermediary Services through Onboarda Ltd. ' +
-    'The application was submitted on ' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric'}) + ' under reference <strong>' + escapeHtml(appRef || 'N/A') + '</strong>. ' +
-    (riskDisplay.available
-      ? 'The AI risk scoring engine has assigned a <strong>' + escapeHtml(level.replace('_',' ')) + ' RISK</strong> classification based on a 5-dimension weighted assessment.'
-      : '<strong style="color:#dc2626;">' + RISK_UNAVAILABLE_TEXT + '</strong>');
-
-  // Ownership
   var ownership = document.getElementById('memo-ownership');
   var dirRows = document.querySelectorAll('#directors-body tr');
   var uboRows = document.querySelectorAll('#ubos-body tr');
-  var dirCount = dirRows.length;
-  var uboCount = uboRows.length;
-  var pepFound = false;
-  document.querySelectorAll('.pep-select').forEach(function(s) { if (s.value === 'Yes') pepFound = true; });
-  ownership.innerHTML = 'The entity has <strong>' + dirCount + ' director(s)</strong> and <strong>' + uboCount + ' declared UBO(s)</strong>. ' +
-    (pepFound ? '<span style="color:#d97706;font-weight:600;">⚠️ At least one PEP has been identified among the directors/UBOs. Enhanced due diligence measures have been applied including a PEP declaration form.</span>' : 'No Politically Exposed Persons have been identified among the declared directors and UBOs.') +
-    ' Ownership structure has been reviewed against the Company Structure Chart.';
-
-  // Screening — sourced from actual server screening results
   var screening = document.getElementById('memo-screening');
-  var screeningHtml = '';
-  if (serverScreening && serverScreening.total_hits != null) {
-    var sanctionsHits = serverScreening.total_hits || 0;
-    var flagsList = serverScreening.flags || [];
-    if (sanctionsHits === 0 && flagsList.length === 0) {
-      screeningHtml += '<strong>Sanctions:</strong> No matches identified from automated screening.<br/>';
-    } else {
-      screeningHtml += '<strong>Sanctions:</strong> <span style="color:#d97706;font-weight:600;">' + sanctionsHits + ' potential match(es) identified — manual review required.</span><br/>';
-    }
-    screeningHtml += '<strong>PEP:</strong> ' + (pepFound ? 'PEP declaration confirmed — declaration form completed and supporting documents collected.' : 'No PEP classifications declared.') + '<br/>';
-    if (flagsList.length > 0) {
-      screeningHtml += '<strong>Screening Flags:</strong> <span style="color:#d97706;">' + flagsList.length + ' flag(s) raised during automated screening.</span>';
-    } else {
-      screeningHtml += '<strong>Screening Flags:</strong> No flags raised during automated screening.';
-    }
-  } else {
-    screeningHtml += '<strong>Sanctions:</strong> <span style="color:var(--text3);">Screening results not yet available — will be completed during compliance review.</span><br/>';
-    screeningHtml += '<strong>PEP:</strong> ' + (pepFound ? 'PEP declaration confirmed — declaration form completed.' : 'No PEP classifications declared.') + '<br/>';
-    screeningHtml += '<strong>Adverse Media:</strong> <span style="color:var(--text3);">Results pending — will be completed during compliance review.</span>';
-  }
-  screening.innerHTML = screeningHtml;
-
-  // Risk Drivers
   var drivers = document.getElementById('memo-risk-drivers');
-  var driverItems = [
-    { label: 'Jurisdiction risk', color: (level === 'HIGH' || level === 'VERY_HIGH') ? '#dc2626' : '#16a34a' },
-    { label: 'Industry/sector risk', color: '#f59e0b' },
-    { label: 'Ownership complexity', color: uboCount > 2 ? '#f59e0b' : '#16a34a' },
-    { label: 'PEP exposure', color: pepFound ? '#dc2626' : '#16a34a' },
-    { label: 'Source of funds clarity', color: '#16a34a' }
-  ];
-  drivers.innerHTML = '';
-  driverItems.forEach(function(d) {
-    drivers.innerHTML += '<div class="memo-risk-driver"><div class="driver-indicator" style="background:' + d.color + ';"></div><span style="font-size:12px;color:var(--text2);">' + d.label + '</span></div>';
-  });
-
-  // Recommendation
   var rec = document.getElementById('memo-recommendation');
-  if (level === 'LOW') {
-    rec.innerHTML = '<strong style="color:#16a34a;">PROCEED — Fast Lane.</strong> This application presents a low-risk profile. Standard CDD measures are sufficient. Recommend approval subject to satisfactory document verification.';
-  } else if (level === 'MEDIUM') {
-    rec.innerHTML = '<strong style="color:#2563eb;">PROCEED — Standard Review.</strong> This application presents a moderate risk profile. Standard CDD with additional monitoring recommended. No escalation required unless further risk factors are identified during document review.';
-  } else if (level === 'HIGH') {
-    rec.innerHTML = '<strong style="color:#d97706;">ENHANCED DUE DILIGENCE REQUIRED.</strong> This application has been flagged as high risk. Enhanced CDD measures are mandatory. Compliance officer must review all documents, screening results, and PEP declarations before approval. Senior compliance sign-off required.';
-  } else {
-    rec.innerHTML = '<strong style="color:#dc2626;">ESCALATE — Board Review Required.</strong> This application is classified as very high risk. Full EDD, senior compliance review, and board-level approval required before the account can be activated. Consider whether the application falls within Onboarda\'s risk appetite.';
+
+  if (overview) {
+    overview.innerHTML = '<strong>' + escapeHtml(companyName) + '</strong> (BRN: ' + escapeHtml(brn) + ') is incorporated in ' + escapeHtml(country) + '. The application was submitted under reference <strong>' + escapeHtml(appRef || 'N/A') + '</strong>.';
+  }
+  if (ownership) {
+    ownership.innerHTML = 'The application includes <strong>' + dirRows.length + ' director(s)</strong> and <strong>' + uboRows.length + ' declared UBO(s)</strong>.';
+  }
+  if (screening) {
+    screening.textContent = 'Application and document review is in progress.';
+  }
+  if (drivers) {
+    drivers.innerHTML = '<div class="memo-risk-driver"><div class="driver-indicator" style="background:#2563eb;"></div><span style="font-size:12px;color:var(--text2);">Submitted information captured for team review</span></div>';
+  }
+  if (rec) {
+    rec.textContent = 'No action required at this time.';
   }
 }
 
@@ -10196,9 +10056,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set incorporation date max to today
   var incDateEl = document.getElementById('f-inc-date');
   if (incDateEl) incDateEl.max = new Date().toISOString().split('T')[0];
-  // Staff back office access via URL hash: file.html#backoffice
+  // Staff workspace is served from the dedicated staff application.
   if (window.location.hash === '#backoffice') {
-    toggleBackOffice();
+    window.location.hash = '';
+    showView('landing');
   }
   const params = new URLSearchParams(window.location.search);
   const resetToken = params.get('reset_token');
@@ -10291,17 +10152,8 @@ function validateDobInputs() {
 // ─── Back Office toggle ───────────────────────────────────────
 let _prevView = 'landing';
 function toggleBackOffice() {
-  const bo = document.getElementById('view-backoffice');
-  const isOpen = !bo.classList.contains('hidden');
-  if (isOpen) {
-    showView(_prevView);
-  } else {
-    const active = document.querySelector('[id^="view-"]:not(.hidden)');
-    _prevView = active ? active.id.replace('view-','') : 'landing';
-    document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
-    bo.classList.remove('hidden');
-    document.getElementById('nav-user').classList.remove('hidden');
-  }
+  console.warn('Staff workspace is not served from the client portal.');
+  showView(_prevView || 'landing');
 }
 
 // ─── Back Office: app selection ──────────────────────────────
@@ -10801,9 +10653,17 @@ function resetLookup() {
 
 // ─── KYC person cards: tab switching ───────────────────────────────────
 function switchKYCTab(personId, tab) {
+  if (!isValidPortalPersonId(personId)) {
+    console.warn('Cannot switch KYC tab without a valid person identifier', personId);
+    return;
+  }
   const uploadPanel = document.getElementById('kyc-upload-' + personId);
   const linkPanel   = document.getElementById('kyc-link-'   + personId);
   const card        = document.getElementById('kyc-person-' + personId);
+  if (!card || !uploadPanel || !linkPanel) {
+    console.warn('Cannot switch KYC tab because the person card is unavailable', personId);
+    return;
+  }
   const tabs        = card.querySelectorAll('.kyc-tab');
   if (tab === 'upload') {
     uploadPanel.classList.add('active'); linkPanel.classList.remove('active');
@@ -10816,11 +10676,41 @@ function switchKYCTab(personId, tab) {
 
 // ─── KYC: handle file upload for a person ──────────────────────────────
 function triggerUploadKYC(inputId) {
-  document.getElementById(inputId).click();
+  if (!isValidPortalPathId(inputId)) {
+    console.warn('Cannot open KYC upload input without a valid input identifier', inputId);
+    showToast('error', 'Upload Unavailable', 'Please refresh the page and try again.');
+    return;
+  }
+  var input = document.getElementById(inputId);
+  if (!input) {
+    console.warn('Cannot open KYC upload input because it was not found', inputId);
+    showToast('error', 'Upload Unavailable', 'Please refresh the page and try again.');
+    return;
+  }
+  input.click();
 }
 
 function handleKYCUpload(personId, docType, input, personType) {
-  if (!input.files.length) return;
+  if (!input || !input.files || !input.files.length) return;
+  if (!isValidPortalPersonId(personId)) {
+    if (input) input.value = '';
+    console.warn('Cannot upload KYC document without a valid person identifier', personId);
+    showToast('error', 'Upload Error', 'Person identifier is missing. Please refresh the page and try again.');
+    return;
+  }
+  if (!isValidPortalPathId(docType)) {
+    if (input) input.value = '';
+    console.warn('Cannot upload KYC document without a valid document type', docType);
+    showToast('error', 'Upload Error', 'Document type is missing. Please refresh the page and try again.');
+    return;
+  }
+  var personCard = document.getElementById('kyc-person-' + personId);
+  if (!personCard) {
+    if (input) input.value = '';
+    console.warn('Cannot upload KYC document because the person card is unavailable', personId);
+    showToast('error', 'Upload Error', 'This person record is unavailable. Please refresh the page and try again.');
+    return;
+  }
   var resolvedPersonType = getKYCPersonType(personId, personType);
   // docType uses underscores (e.g. cert_inc) but HTML IDs use hyphens (e.g. kyc-cert-inc-lbl-)
   var docKey = docType.replace(/_/g, '-');
@@ -10836,13 +10726,6 @@ function handleKYCUpload(personId, docType, input, personType) {
 
   if (lbl) lbl.textContent = '⏳ Uploading ' + fileName;
   if (area) { area.style.borderColor = 'var(--amber)'; area.style.color = 'var(--amber)'; }
-
-  // Pre-flight validation
-  if (!personId) {
-    resetUploadUI();
-    showToast('error', 'Upload Error', 'Person identifier is missing. Please refresh the page and try again.');
-    return;
-  }
 
   // Upload to backend if authenticated
   if (AUTH_TOKEN && currentApplicationId && input.files[0]) {
@@ -10980,6 +10863,18 @@ function removeSectionDDocument(docId) {
 
 // ─── KYC: register applicant with Sumsub ────────────────────────────────
 async function sendKYCLink(personId) {
+  if (!isValidPortalPersonId(personId)) {
+    console.warn('Cannot register KYC applicant without a valid person identifier', personId);
+    showToast('error', 'Registration Unavailable', 'Person identifier is missing. Please refresh the page and try again.');
+    return;
+  }
+  personId = String(personId).trim();
+  const card = document.getElementById('kyc-person-' + personId);
+  if (!card) {
+    console.warn('Cannot register KYC applicant because the person card is unavailable', personId);
+    showToast('error', 'Registration Unavailable', 'This person record is unavailable. Please refresh the page and try again.');
+    return;
+  }
   const emailInput = document.getElementById('kyc-email-' + personId);
   const email = emailInput ? emailInput.value.trim() : '';
   if (!email || !email.includes('@')) {
@@ -11000,7 +10895,6 @@ async function sendKYCLink(personId) {
   const personType = personId.startsWith('dir') ? 'director' : personId.startsWith('ubo') ? 'ubo' : 'individual';
 
   // Set loading state on button
-  const card = document.getElementById('kyc-person-' + personId);
   const sendBtn = card ? card.querySelector('.kyc-send-btn') : null;
   if (sendBtn) {
     sendBtn.disabled = true;
@@ -11283,7 +11177,10 @@ function syncPersistedApplicationDocuments(app) {
 
   var docsBySlot = {};
   app.documents.forEach(function(doc) {
-    if (!doc || !doc.id || !isCurrentDocumentRecord(doc)) return;
+    if (!doc || !isValidPortalPathId(doc.id) || !isCurrentDocumentRecord(doc)) {
+      if (doc && doc.id) console.warn('Skipping persisted document with invalid identifier', doc.id);
+      return;
+    }
     var slotKey = getDocumentSlotKey(doc);
     if (docsBySlot[slotKey]) {
       console.warn('Duplicate current documents returned for upload slot', slotKey, docsBySlot[slotKey].id, doc.id);
@@ -11295,12 +11192,27 @@ function syncPersistedApplicationDocuments(app) {
   var activeDocs = Object.keys(docsBySlot).map(function(slotKey) { return docsBySlot[slotKey]; });
   var docsByPerson = {};
   activeDocs.forEach(function(doc) {
-    if (doc.person_id) {
-      docsByPerson[doc.person_id] = docsByPerson[doc.person_id] || [];
-      docsByPerson[doc.person_id].push(doc);
+    var rawPersonId = doc.person_id;
+    if (rawPersonId !== undefined && rawPersonId !== null && String(rawPersonId).trim()) {
+      var personId = String(rawPersonId).trim();
+      if (!isValidPortalPersonId(personId)) {
+        console.warn('Skipping persisted person document with invalid person identifier', doc.id, rawPersonId);
+        return;
+      }
+      if (!isValidPortalPathId(doc.doc_type)) {
+        console.warn('Skipping persisted person document with invalid document type', doc.id, doc.doc_type);
+        return;
+      }
+      var personCard = document.getElementById('kyc-person-' + personId);
+      if (!personCard) {
+        console.warn('Skipping persisted person document because the person card is unavailable', doc.id, personId);
+        return;
+      }
+      docsByPerson[personId] = docsByPerson[personId] || [];
+      docsByPerson[personId].push(doc);
       var docKey = String(doc.doc_type || '').replace(/_/g, '-');
-      var area = document.getElementById('kyc-' + docKey + '-area-' + doc.person_id);
-      var lbl = document.getElementById('kyc-' + docKey + '-lbl-' + doc.person_id);
+      var area = document.getElementById('kyc-' + docKey + '-area-' + personId);
+      var lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
       if (lbl) lbl.textContent = doc.doc_name || 'Previously uploaded';
       if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
       renderPersistedVerification(area ? area.parentElement : null, doc);
@@ -11495,7 +11407,7 @@ function renderSidebarApps(apps) {
     var stageJs = JSON.stringify(app.status || 'pending').replace(/"/g, '&quot;');
     REF_TO_SNAV[ref] = snavId;
     var icon = app.status === 'approved' ? '&#x2705;' : '&#x1F4C4;';
-    var statusLabels = {draft:'Draft',submitted:'Submitted',prescreening_submitted:'Screening',pricing_review:'Pricing',pricing_accepted:'Accepted',pre_approval_review:'Review',pre_approved:'Pre-Approved',kyc_documents:'KYC',kyc_submitted:'KYC Sent',compliance_review:'Compliance',in_review:'Review',under_review:'Review',edd_required:'EDD',approved:'&#x2713;',rejected:'Declined',rmi_sent:'Info Req.',withdrawn:'Withdrawn',pending:'Pending'};
+    var statusLabels = {draft:'Draft',submitted:'Submitted',prescreening_submitted:'Screening',pricing_review:'Pricing',pricing_accepted:'Accepted',pre_approval_review:'Review',pre_approved:'Ready',kyc_documents:'Documents',kyc_submitted:'Submitted',compliance_review:'Review',in_review:'Review',under_review:'Review',edd_required:'Review',approved:'&#x2713;',rejected:'Declined',rmi_sent:'Info Req.',withdrawn:'Withdrawn',pending:'Pending'};
     var statusClasses = {draft:'review',submitted:'review',prescreening_submitted:'review',pricing_review:'review',pricing_accepted:'review',pre_approval_review:'review',pre_approved:'review',kyc_documents:'kyc',kyc_submitted:'review',compliance_review:'review',in_review:'review',under_review:'review',edd_required:'kyc',approved:'approved',rejected:'rejected',rmi_sent:'kyc',withdrawn:'rejected',pending:'review'};
     var label = statusLabels[app.status] || app.status || '';
     var cls = statusClasses[app.status] || 'review';
@@ -11624,8 +11536,8 @@ function renderRecentActivity(apps) {
   }
   var html = '';
   apps.slice(0, 5).forEach(function(app, i) {
-    var statusIcons = {pending:'&#x1F4E8;',in_review:'&#x1F50D;',approved:'&#x2705;',rejected:'&#x274C;',edd_required:'&#x26A0;&#xFE0F;',kyc_documents:'&#x1F4E7;'};
-    var statusMsgs = {pending:'Application submitted',in_review:'Application under review',approved:'Account approved & activated',rejected:'Application declined',edd_required:'Enhanced due diligence required',kyc_documents:'KYC documents requested'};
+    var statusIcons = {pending:'&#x1F4E8;',in_review:'&#x1F50D;',approved:'&#x2705;',rejected:'&#x274C;',edd_required:'&#x1F50D;',kyc_documents:'&#x1F4E7;'};
+    var statusMsgs = {pending:'Application submitted',in_review:'Application under review',approved:'Application approved',rejected:'Application declined',edd_required:'Application under review',kyc_documents:'Documents requested'};
     var bgColors = {pending:'var(--blue-dim)',in_review:'var(--amber-dim)',approved:'var(--green-dim)',rejected:'var(--red-dim)',edd_required:'var(--amber-dim)',kyc_documents:'var(--blue-dim)'};
     var icon = statusIcons[app.status] || '&#x1F4C4;';
     var msg = statusMsgs[app.status] || app.status;
@@ -11705,7 +11617,7 @@ function postNote() {
   note.className = 'note-item';
   note.innerHTML = `
     <div class="note-header">
-      <div><span class="note-author">You (Compliance Team)</span><span class="note-tag ${tag}">${tagLabels[tag]}</span></div>
+      <div><span class="note-author">You</span><span class="note-tag ${tag}">${tagLabels[tag]}</span></div>
       <div class="note-time">${ts}</div>
     </div>
     <div class="note-body">${text.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>

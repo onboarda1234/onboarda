@@ -118,12 +118,16 @@ class PublicApplicationDecisionHandler(BaseHandler):
         if hasattr(ts, "isoformat"):
             ts = ts.isoformat()
 
-        self.success({
+        payload = {
             "decision_type": row["decision_type"],
-            "risk_level": row["risk_level"],
-            "confidence_score": row["confidence_score"],
             "timestamp": ts,
-        })
+        }
+        if user.get("type") != "client":
+            payload.update({
+                "risk_level": row["risk_level"],
+                "confidence_score": row["confidence_score"],
+            })
+        self.success(payload)
 
 
 class PublicDashboardStatusHandler(BaseHandler):
@@ -156,23 +160,8 @@ class PublicDashboardStatusHandler(BaseHandler):
             ).fetchall()
             by_status = {r["status"]: r["c"] for r in status_rows}
 
-            # Applications grouped by risk level from the latest decision_record per application
-            if is_client:
-                risk_sql = """
-                    SELECT dr.risk_level, COUNT(DISTINCT dr.application_ref) AS c
-                    FROM decision_records dr
-                    JOIN (
-                        SELECT application_ref, MAX(timestamp) AS max_timestamp
-                        FROM decision_records
-                        GROUP BY application_ref
-                    ) latest
-                        ON latest.application_ref = dr.application_ref
-                       AND latest.max_timestamp = dr.timestamp
-                    JOIN applications a ON a.ref = dr.application_ref
-                    WHERE a.client_id = ?
-                    GROUP BY dr.risk_level
-                """
-            else:
+            by_risk = None
+            if not is_client:
                 risk_sql = """
                     SELECT dr.risk_level, COUNT(DISTINCT dr.application_ref) AS c
                     FROM decision_records dr
@@ -185,8 +174,8 @@ class PublicDashboardStatusHandler(BaseHandler):
                        AND latest.max_timestamp = dr.timestamp
                     GROUP BY dr.risk_level
                 """
-            risk_rows = db.execute(risk_sql, params if is_client else ()).fetchall()
-            by_risk = {r["risk_level"]: r["c"] for r in risk_rows if r["risk_level"]}
+                risk_rows = db.execute(risk_sql).fetchall()
+                by_risk = {r["risk_level"]: r["c"] for r in risk_rows if r["risk_level"]}
 
             # Recent activity: last 5 updated applications
             recent_rows = db.execute(
@@ -212,10 +201,12 @@ class PublicDashboardStatusHandler(BaseHandler):
         finally:
             db.close()
 
-        self.success({
+        payload = {
             "total_applications": total,
             "applications_by_status": by_status,
-            "applications_by_risk_level": by_risk,
             "recent_activity": recent_activity,
             "last_updated": last_updated,
-        })
+        }
+        if not is_client:
+            payload["applications_by_risk_level"] = by_risk
+        self.success(payload)

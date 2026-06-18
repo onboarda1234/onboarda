@@ -339,7 +339,10 @@ class TestPublicAPIClientOwnership:
             timeout=3,
         )
         assert resp.status_code == 200
-        assert resp.json()["decision_type"] == "approve"
+        body = resp.json()
+        assert body["decision_type"] == "approve"
+        assert "risk_level" not in body
+        assert "confidence_score" not in body
 
     def test_client_cannot_access_other_decision(self, api_server):
         """Client B gets 403 when fetching Client A's application decision."""
@@ -478,6 +481,11 @@ class TestPublicDashboardStatus:
             INSERT INTO applications (id, ref, client_id, company_name, status, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (f"dsh_c_{uid}", f"ARF-DSH-C-{uid}", client_id, "Client App", "submitted", "2026-04-01T11:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_dsh_client_{uid}", f"ARF-DSH-C-{uid}", "approve", "HIGH", 0.93, "supervisor", "2026-04-01T12:00:00"))
         conn.commit()
         conn.close()
 
@@ -495,6 +503,8 @@ class TestPublicDashboardStatus:
         assert body["applications_by_status"].get("submitted") == 1
         assert len(body["recent_activity"]) == 1
         assert body["recent_activity"][0]["application_ref"] == f"ARF-DSH-C-{uid}"
+        assert "applications_by_risk_level" not in body
+        assert "HIGH" not in json.dumps(body)
 
     def test_dashboard_risk_level_uses_latest_decision_per_application(self, api_server):
         """applications_by_risk_level counts each application once using its latest decision."""
