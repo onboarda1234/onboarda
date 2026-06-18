@@ -4000,6 +4000,90 @@ class TestGovernanceAttemptAudit:
             "Fixture approval reason",
         ))
 
+    def _seed_pending_second_review_approval_app(self, conn, app_id, app_ref):
+        from tests.conftest import insert_verified_required_documents
+
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM agent_executions WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        prescreening = {
+            "company_name": "Second Review Gate Ltd",
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": "2026-04-30T10:00:00",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {
+                        "matched": True,
+                        "results": [{"name": "Second Review Gate Ltd", "is_sanctioned": True}],
+                        "source": "sumsub",
+                        "provider": "sumsub",
+                        "api_status": "live",
+                    },
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+            },
+            "screening_valid_until": "2026-07-29T10:00:00",
+            "screening_validity_days": 90,
+        }
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, final_risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            f"{app_id}_client",
+            "Second Review Gate Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "in_review",
+            "MEDIUM",
+            "MEDIUM",
+            42,
+            json.dumps(prescreening),
+        ))
+        self._insert_approved_memo(conn, app_id)
+        insert_verified_required_documents(conn, app_id)
+        conn.execute(
+            """
+            INSERT INTO screening_reviews (
+                application_id, subject_type, subject_name, disposition, notes,
+                disposition_code, rationale, sensitivity_flags, requires_four_eyes,
+                reviewer_id, reviewer_name
+            ) VALUES (?, 'entity', 'Second Review Gate Ltd', 'cleared', ?, 'false_positive_cleared', ?, ?, 1, 'co001', 'Compliance Officer')
+            """,
+            (
+                app_id,
+                "Provider case CA-CASE7-001 and registry evidence retained.",
+                "Officer reviewed provider hit and marked it false positive pending SCO second review.",
+                json.dumps(["provider_hit"]),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+            VALUES ('co001', 'Compliance Officer', 'co', 'Screening Review', ?, ?, '127.0.0.1')
+            """,
+            (
+                app_ref,
+                json.dumps({
+                    "subject_type": "entity",
+                    "subject_name": "Second Review Gate Ltd",
+                    "disposition": "cleared",
+                    "disposition_code": "false_positive_cleared",
+                    "evidence_reference": "Provider case CA-CASE7-001 and registry evidence retained.",
+                }, sort_keys=True),
+            ),
+        )
+        conn.commit()
+
     def _insert_enhanced_requirement(self, conn, app_id, *, status="accepted", mandatory=1, blocking_approval=1):
         suffix = uuid.uuid4().hex[:8]
         conn.execute(
@@ -4238,6 +4322,105 @@ class TestGovernanceAttemptAudit:
         assert detail["outcome"] == "rejected"
         assert detail["response_code"] == 400
         assert "compliance memo" in detail["rejection_reason"].lower()
+
+    def test_pending_screening_second_review_blocks_decision_with_structured_audit(self, api_server):
+        """Final decision approval must expose and audit pending screening second-review blockers."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_second_review_decision_block"
+        app_ref = "ARF-SCREENING-SECOND-DECISION"
+        conn = get_db()
+        self._seed_pending_second_review_approval_app(conn, app_id, app_ref)
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing pending screening second-review approval block.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "screening_second_review_pending"
+        assert body["blockers"][0]["title"] == "Screening second review pending"
+        assert body["blockers"][0]["required_reviewer_role"] == "SCO/admin"
+        assert body["blockers"][0]["screening_review_id"]
+
+        conn = get_db()
+        audit = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'approval_blocked_screening_second_review_pending'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        decision = conn.execute(
+            "SELECT status FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        conn.close()
+
+        assert decision["status"] == "in_review"
+        assert audit is not None
+        detail = json.loads(audit["detail"])
+        assert detail["application_id"] == app_id
+        assert detail["application_ref"] == app_ref
+        assert detail["actor_user_id"] == "admin001"
+        assert detail["actor_role"] == "admin"
+        assert detail["source_surface"] == "application_decision"
+        assert detail["pending_screening_review_ids"]
+
+    def test_pending_screening_second_review_blocks_legacy_status_transition(self, api_server):
+        """Legacy direct status approval must not bypass screening second-review gate."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_second_review_status_block"
+        app_ref = "ARF-SCREENING-SECOND-STATUS"
+        conn = get_db()
+        self._seed_pending_second_review_approval_app(conn, app_id, app_ref)
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.patch(
+            f"{api_server}/api/applications/{app_id}",
+            json={"status": "approved", "notes": "Legacy status approval attempt."},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "screening_second_review_pending"
+        assert body["blockers"][0]["action_key"] == "screening.resolve"
+
+        conn = get_db()
+        audit = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'approval_blocked_screening_second_review_pending'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        app = conn.execute("SELECT status FROM applications WHERE id = ?", (app_id,)).fetchone()
+        conn.close()
+
+        assert app["status"] == "in_review"
+        assert audit is not None
+        assert json.loads(audit["detail"])["source_surface"] == "application_status_patch"
 
     def test_approval_document_gate_failure_returns_structured_blockers(self, api_server):
         """Final approval document evidence failures must expose blocker payloads."""
@@ -5360,6 +5543,20 @@ class TestGovernanceAttemptAudit:
         assert detail["action"] == "screening.review_disposition"
         assert detail["outcome"] == "rejected"
         assert detail["response_code"] == 409
+
+        co_token = create_token("co_phase1c_second", "co", "Second CO", "officer")
+        co_payload = dict(first_payload)
+        co_payload["disposition_code"] = "identity_mismatch"
+        co_payload["rationale"] = "A CO cannot satisfy the senior four-eyes second review requirement."
+        co_payload["evidence_reference"] = "Second-review identity pack and CA-SENSITIVE-001."
+        co_second = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=co_payload,
+            headers={"Authorization": f"Bearer {co_token}"},
+            timeout=3,
+        )
+        assert co_second.status_code == 403
+        assert "Senior Compliance Officer" in co_second.json()["error"]
 
         second_token = create_token("sco_phase1c", "sco", "Second Officer", "officer")
         second_payload = dict(first_payload)

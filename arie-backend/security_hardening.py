@@ -282,6 +282,193 @@ def _load_screening_reviews_for_truth(db, app_id: str, app_ref: str = "") -> Lis
     return reviews
 
 
+_SCREENING_SECOND_REVIEW_BLOCK_CODE = "screening_second_review_pending"
+_SCREENING_SECOND_REVIEW_ALLOWED_ROLES = {"admin", "sco"}
+_SCREENING_SECOND_REVIEW_PENDING_STATUSES = {
+    "pending_second_review",
+    "second_review_pending",
+    "second_review_required",
+    "pending_four_eyes",
+    "four_eyes_pending",
+}
+
+
+def _normalise_screening_review_token(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _screening_review_requires_second_review(review: Mapping[str, Any]) -> bool:
+    status_tokens = {
+        _normalise_screening_review_token(review.get(key))
+        for key in (
+            "review_four_eyes_status",
+            "four_eyes_status",
+            "status",
+            "review_status",
+            "screening_review_status",
+            "workflow_status",
+        )
+        if review.get(key) not in (None, "")
+    }
+    return bool(
+        _truthy_screening_review_flag(review.get("requires_four_eyes"))
+        or _truthy_screening_review_flag(review.get("second_review_required"))
+        or status_tokens.intersection(_SCREENING_SECOND_REVIEW_PENDING_STATUSES)
+    )
+
+
+def _screening_second_reviewer_id(review: Mapping[str, Any]) -> str:
+    return str(
+        review.get("second_reviewer_id")
+        or review.get("second_reviewed_by_id")
+        or ""
+    ).strip()
+
+
+def _screening_first_reviewer_id(review: Mapping[str, Any]) -> str:
+    return str(
+        review.get("reviewer_id")
+        or review.get("first_reviewer_id")
+        or review.get("reviewed_by_id")
+        or ""
+    ).strip()
+
+
+def _screening_reviewer_roles(db, reviews: List[Mapping[str, Any]]) -> Dict[str, str]:
+    reviewer_ids = []
+    for review in reviews or []:
+        reviewer_id = _screening_second_reviewer_id(review)
+        if reviewer_id and reviewer_id not in reviewer_ids:
+            reviewer_ids.append(reviewer_id)
+    if not reviewer_ids:
+        return {}
+    placeholders = ",".join("?" for _ in reviewer_ids)
+    rows = db.execute(
+        f"SELECT id, role FROM users WHERE id IN ({placeholders})",
+        tuple(reviewer_ids),
+    ).fetchall()
+    return {
+        str(row["id"]): _normalise_screening_review_token(row["role"])
+        for row in rows
+    }
+
+
+def _screening_second_review_block_reason(
+    review: Mapping[str, Any],
+    reviewer_roles: Mapping[str, str],
+) -> Optional[str]:
+    if not _screening_review_requires_second_review(review):
+        return None
+
+    second_reviewer_id = _screening_second_reviewer_id(review)
+    first_reviewer_id = _screening_first_reviewer_id(review)
+    if not second_reviewer_id:
+        return "second review pending"
+
+    if first_reviewer_id and first_reviewer_id == second_reviewer_id:
+        return "second reviewer must be different from first reviewer"
+
+    second_reviewer_role = reviewer_roles.get(second_reviewer_id)
+    if second_reviewer_role not in _SCREENING_SECOND_REVIEW_ALLOWED_ROLES:
+        return "SCO/admin second reviewer required"
+
+    return None
+
+
+def screening_second_review_pending_summary(
+    db,
+    app: Mapping[str, Any],
+    screening_reviews: Optional[List[Dict]] = None,
+) -> Dict[str, Any]:
+    """Return fail-closed approval blockers for unresolved screening four-eyes reviews."""
+    app = app if isinstance(app, Mapping) else {}
+    app_id = app.get("id")
+    app_ref = app.get("ref") or app.get("application_ref") or ""
+    reviews = (
+        list(screening_reviews)
+        if screening_reviews is not None
+        else _load_screening_reviews_for_truth(db, app_id, app_ref)
+    )
+    reviewer_roles = _screening_reviewer_roles(db, reviews)
+    blockers: List[Dict[str, Any]] = []
+    pending_ids: List[str] = []
+
+    for review in reviews:
+        if not isinstance(review, Mapping):
+            continue
+        reason = _screening_second_review_block_reason(review, reviewer_roles)
+        if not reason:
+            continue
+
+        review_id = str(review.get("id") or "")
+        subject_name = str(review.get("subject_name") or "Screening subject")
+        subject_type = str(review.get("subject_type") or "screening")
+        first_reviewer = (
+            review.get("reviewer_name")
+            or review.get("reviewed_by")
+            or review.get("reviewer_id")
+            or ""
+        )
+        second_reviewer_id = _screening_second_reviewer_id(review)
+        second_reviewer_role = reviewer_roles.get(second_reviewer_id)
+        pending_ids.append(review_id or f"{subject_type}:{subject_name}")
+
+        blocker = _approval_gate_blocker(
+            f"{_SCREENING_SECOND_REVIEW_BLOCK_CODE}:{review_id or subject_type + ':' + subject_name}",
+            "Screening",
+            "Screening second review pending",
+            (
+                f"{subject_type.title()} screening for {subject_name} requires SCO/admin "
+                f"second review before final approval. Reason: {reason}."
+            ),
+            cta_label="Review screening",
+            tab="screening",
+            anchor_id="detail-screening-review",
+            blocker_group="screening",
+            blocker_group_label="Screening",
+            action_key="screening.resolve",
+        )
+        blocker.update({
+            "code": _SCREENING_SECOND_REVIEW_BLOCK_CODE,
+            "screening_review_id": review_id,
+            "subject_name": subject_name,
+            "subject_type": subject_type,
+            "first_reviewer": first_reviewer,
+            "first_reviewer_id": _screening_first_reviewer_id(review),
+            "required_reviewer_role": "SCO/admin",
+            "second_reviewer_id": second_reviewer_id,
+            "second_reviewer_role": second_reviewer_role,
+            "reason": reason,
+            "affected_people": [subject_name] if subject_name else [],
+        })
+        blockers.append(blocker)
+
+    return {
+        "blocked": bool(blockers),
+        "code": _SCREENING_SECOND_REVIEW_BLOCK_CODE,
+        "message": "screening_second_review_pending" if blockers else "",
+        "pending_review_ids": pending_ids,
+        "blockers": blockers,
+    }
+
+
+def format_screening_second_review_pending_message(summary: Mapping[str, Any]) -> str:
+    blockers = list((summary or {}).get("blockers") or [])
+    if not blockers:
+        return ""
+    review_ids = ", ".join(
+        str(item.get("screening_review_id") or "").strip()
+        for item in blockers
+        if str(item.get("screening_review_id") or "").strip()
+    )
+    suffix = f" Pending screening review IDs: {review_ids}." if review_ids else ""
+    return (
+        "screening_second_review_pending: Screening second review pending. "
+        "SCO/admin review is required before final approval."
+        + suffix
+    )
+
+
 def _approval_edd_completion_status(db, app_id: str, routing: Mapping[str, Any]) -> Dict[str, Any]:
     """Return current DB-backed EDD completion status for the approval gate."""
     try:
@@ -583,10 +770,27 @@ class ApprovalGateValidator:
             try:
                 screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref", ""))
             except Exception as exc:
-                logger.warning(
+                logger.error(
                     "Approval screening review lookup failed for application %s: %s",
                     app_id,
                     exc,
+                    exc_info=True,
+                )
+                return (
+                    False,
+                    "Could not verify screening second review state. "
+                    "Approval is blocked until screening review truth can be inspected."
+                )
+
+            second_review_summary = screening_second_review_pending_summary(
+                db,
+                app,
+                screening_reviews,
+            )
+            if second_review_summary.get("blocked"):
+                return (
+                    False,
+                    format_screening_second_review_pending_message(second_review_summary),
                 )
 
             prescreening_for_truth = dict(prescreening_data)
@@ -1264,6 +1468,12 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref", ""))
         except Exception:
             screening_reviews = []
+        second_review_summary = screening_second_review_pending_summary(
+            db,
+            app,
+            screening_reviews,
+        )
+        blockers.extend(second_review_summary.get("blockers") or [])
         prescreening_for_truth = dict(prescreening)
         prescreening_for_truth["screening_input_updated_at"] = (
             app.get("screening_input_updated_at")

@@ -797,6 +797,66 @@ def _insert_screening_review(
     db.commit()
 
 
+def _insert_four_eyes_screening_review(
+    db,
+    app_id,
+    *,
+    app_ref,
+    first_reviewer_id="co001",
+    first_reviewer_name="Compliance Officer",
+    second_reviewer_id=None,
+    second_reviewer_name=None,
+):
+    db.execute(
+        """
+        INSERT INTO screening_reviews (
+            application_id, subject_type, subject_name, disposition, notes,
+            disposition_code, rationale, sensitivity_flags, requires_four_eyes,
+            reviewer_id, reviewer_name, second_reviewer_id, second_reviewer_name,
+            second_disposition_code, second_rationale, second_reviewed_at
+        )
+        VALUES (?, ?, ?, 'cleared', ?, 'false_positive_cleared', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            "entity",
+            "Approval Gate Test Ltd",
+            "Provider case CA-GATE-4EYES and registry evidence retained.",
+            "Officer confirmed the provider hit belongs to another legal entity after registry comparison.",
+            json.dumps(["provider_hit"]),
+            first_reviewer_id,
+            first_reviewer_name,
+            second_reviewer_id,
+            second_reviewer_name,
+            "false_positive_cleared" if second_reviewer_id else None,
+            "Independent SCO review confirms false-positive clearance." if second_reviewer_id else None,
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") if second_reviewer_id else None,
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            first_reviewer_id,
+            first_reviewer_name,
+            "co",
+            "Screening Review",
+            app_ref,
+            json.dumps({
+                "subject_type": "entity",
+                "subject_name": "Approval Gate Test Ltd",
+                "disposition": "cleared",
+                "disposition_code": "false_positive_cleared",
+                "evidence_reference": "Provider case CA-GATE-4EYES and registry evidence retained.",
+            }, sort_keys=True),
+            "127.0.0.1",
+        ),
+    )
+    db.commit()
+
+
 def test_completed_match_without_disposition_blocks_approval(db):
     from security_hardening import ApprovalGateValidator
 
@@ -807,6 +867,96 @@ def test_completed_match_without_disposition_blocks_approval(db):
     assert can_approve is False
     assert "Screening truth gate failed" in message
     assert "completed_match" in message
+
+
+def test_screening_second_review_pending_blocks_approval(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_four_eyes_screening_review(db, app["id"], app_ref=app["ref"])
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "screening_second_review_pending" in message
+    assert "SCO/admin review is required" in message
+
+
+def test_screening_second_review_blocker_payload_is_officer_readable(db):
+    from security_hardening import collect_approval_gate_blockers
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_four_eyes_screening_review(db, app["id"], app_ref=app["ref"])
+
+    blockers = collect_approval_gate_blockers(app, db)
+    blocker = next(b for b in blockers if b.get("code") == "screening_second_review_pending")
+
+    assert blocker["title"] == "Screening second review pending"
+    assert blocker["required_reviewer_role"] == "SCO/admin"
+    assert blocker["tab"] == "screening"
+    assert blocker["anchorId"] == "detail-screening-review"
+    assert blocker["action_key"] == "screening.resolve"
+
+
+def test_same_user_first_and_second_screening_review_blocks_approval(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_four_eyes_screening_review(
+        db,
+        app["id"],
+        app_ref=app["ref"],
+        first_reviewer_id="sco001",
+        first_reviewer_name="Senior Compliance Officer",
+        second_reviewer_id="sco001",
+        second_reviewer_name="Senior Compliance Officer",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "screening_second_review_pending" in message
+
+
+def test_co_second_reviewer_does_not_satisfy_screening_four_eyes_gate(db):
+    from security_hardening import ApprovalGateValidator
+
+    db.execute(
+        """
+        INSERT OR IGNORE INTO users (id, email, password_hash, full_name, role, status)
+        VALUES ('co_second_gate', 'co-second-gate@test.local', 'hash', 'Second CO', 'co', 'active')
+        """
+    )
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_four_eyes_screening_review(
+        db,
+        app["id"],
+        app_ref=app["ref"],
+        second_reviewer_id="co_second_gate",
+        second_reviewer_name="Second CO",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "screening_second_review_pending" in message
+
+
+def test_sco_second_reviewer_satisfies_screening_four_eyes_gate(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_four_eyes_screening_review(
+        db,
+        app["id"],
+        app_ref=app["ref"],
+        second_reviewer_id="sco001",
+        second_reviewer_name="Senior Compliance Officer",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
 
 
 def test_completed_match_false_positive_clearance_allows_screening_gate(db):
