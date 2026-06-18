@@ -465,26 +465,10 @@
     text-transform: uppercase; letter-spacing: 0.6px;
   }
   .approved-ref-wrap .ref-number { margin-top: 0; }
-  .approved-summary-grid {
-    display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-    gap: 16px; align-items: stretch;
-  }
-  .approved-status-card {
-    background: var(--bg2); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-  }
-  .approved-status-label {
-    font-size: 11px; color: var(--text3); font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
-  }
-  .approved-status-value { font-size: 22px; font-weight: 800; color: var(--green); }
-  .approved-status-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
   .approved-card { margin-bottom: 0; padding: 20px; }
   .approved-card .card-header { margin-bottom: 12px; padding-bottom: 12px; }
   .approved-card p { margin-top: 0; }
   @media(max-width:760px) {
-    .approved-summary-grid { grid-template-columns: 1fr; }
     .approved-page { padding-top: 18px; }
     .approved-steps .step-label { font-size: 9px; }
     body.approved-view-active #global-client-sidebar.open { display: none; }
@@ -4127,25 +4111,6 @@
         <div class="approved-ref-wrap" id="approved-ref-wrap" style="display:none;">
           <div class="approved-ref-label">Application reference</div>
           <div class="ref-number" id="approved-ref"></div>
-        </div>
-      </div>
-
-      <div class="approved-summary-grid">
-        <div class="approved-status-card">
-          <div class="approved-status-label">Account status</div>
-          <div class="approved-status-value">Approved</div>
-          <div class="approved-status-sub">Activation in progress</div>
-        </div>
-
-        <div class="card approved-card">
-          <div class="card-header">
-            <div class="card-icon green">✅</div>
-            <div>
-              <div class="card-title">No Further Action Required</div>
-              <div class="card-sub">Submitted documents are complete for the current step</div>
-            </div>
-          </div>
-          <p style="font-size:13px;color:var(--text2);line-height:1.7;">We will contact you if anything else is needed.</p>
         </div>
       </div>
 

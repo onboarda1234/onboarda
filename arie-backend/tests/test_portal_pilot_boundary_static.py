@@ -140,8 +140,10 @@ def test_approved_state_is_activation_only():
     _assert_client_safe_text(text)
     assert "Application Approved" in text
     assert "Account Approved" not in text
-    assert "Activation in progress" in text
-    assert "No Further Action Required" in text
+    assert "Activation is in progress" in text
+    assert "No Further Action Required" not in text
+    assert "Account status" not in text
+    assert "Submitted documents are complete" not in text
     assert "Our team will contact you" in text
     approved_copy = (
         "Your application has been approved. Activation is in progress and our team "
