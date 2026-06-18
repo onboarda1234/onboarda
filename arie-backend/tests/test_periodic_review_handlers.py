@@ -205,6 +205,16 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
             "SELECT id FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
         ).fetchone()["id"]
 
+    def _create_edd(self, *, stage="triggered"):
+        self._conn.execute(
+            "INSERT INTO edd_cases (application_id, client_name, stage) VALUES (?, ?, ?)",
+            (self._app_id, "PR03 Test Co", stage),
+        )
+        self._conn.commit()
+        return self._conn.execute(
+            "SELECT id FROM edd_cases ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+
     def _create_monitoring_agent(self, *, name, agent_type, alerts_generated=0):
         self._conn.execute(
             "INSERT INTO monitoring_agent_status "
@@ -526,6 +536,33 @@ class TestEscalateHandler(_PRReviewHandlerBase):
 
 
 # ─────────────────────────────────────────────────────────────────
+# Legacy decision endpoint
+# ─────────────────────────────────────────────────────────────────
+class TestLegacyDecisionHandler(_PRReviewHandlerBase):
+    def test_legacy_decision_uses_modern_blockers_and_does_not_write_decision(self):
+        rid = self._create_review(status="in_progress", client_attestation_status="not_started")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/decision",
+            {
+                "decision": "continue",
+                "decision_reason": "legacy caller attempt",
+                "officer_acknowledgement": True,
+            },
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        labels = [item["label"] for item in body["blocking_items"]]
+        self.assertIn("Client attestation has not been submitted", labels)
+        row = self._conn.execute(
+            "SELECT status, decision, outcome FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(row["status"], "in_progress")
+        self.assertIsNone(row["decision"])
+        self.assertIsNone(row["outcome"])
+
+
+# ─────────────────────────────────────────────────────────────────
 # Complete endpoint
 # ─────────────────────────────────────────────────────────────────
 class TestCompleteHandler(_PRReviewHandlerBase):
@@ -757,6 +794,36 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         body = json.loads(resp.body)
         labels = [item["label"] for item in body["blocking_items"]]
         self.assertIn("EDD outcome selected but no linked EDD case exists", labels)
+
+    def test_edd_required_with_open_case_moves_to_awaiting_edd_not_completed(self):
+        edd_id = self._create_edd()
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(
+                outcome="edd_required",
+                reason="EDD is required",
+                edd_required=True,
+                risk_impact="EDD rationale recorded.",
+            ),
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "awaiting_edd")
+        self.assertEqual(body["result"]["linked_edd_case_id"], edd_id)
+        row = self._conn.execute(
+            "SELECT status, completed_at, closed_at, linked_edd_case_id FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(row["status"], "awaiting_edd")
+        self.assertIsNone(row["completed_at"])
+        self.assertIsNone(row["closed_at"])
+        self.assertEqual(row["linked_edd_case_id"], edd_id)
+        pending_next = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM periodic_reviews WHERE application_id = ? AND id != ? AND status = 'pending'",
+            (self._app_id, rid),
+        ).fetchone()["c"]
+        self.assertEqual(pending_next, 0)
 
     def test_client_follow_up_required_blocks_clean_closure(self):
         rid = self._create_review(status="in_progress")

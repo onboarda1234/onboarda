@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import document_health_monitor as dhm
@@ -79,15 +79,20 @@ STATE_PENDING = "pending"
 STATE_IN_PROGRESS = "in_progress"
 STATE_AWAITING_INFORMATION = "awaiting_information"
 STATE_PENDING_SENIOR_REVIEW = "pending_senior_review"
+STATE_AWAITING_EDD = "awaiting_edd"
 STATE_COMPLETED = "completed"
+STATE_CANCELLED = "cancelled"
 
 VALID_REVIEW_STATES = (
     STATE_PENDING,
     STATE_IN_PROGRESS,
     STATE_AWAITING_INFORMATION,
     STATE_PENDING_SENIOR_REVIEW,
+    STATE_AWAITING_EDD,
     STATE_COMPLETED,
+    STATE_CANCELLED,
 )
+TERMINAL_REVIEW_STATES = (STATE_COMPLETED, STATE_CANCELLED, "canceled")
 
 # Allowed forward transitions. Backwards transitions are intentionally
 # disallowed: a completed review is terminal, and an awaiting-info
@@ -98,18 +103,27 @@ STATE_TRANSITIONS: Dict[str, tuple] = {
     STATE_IN_PROGRESS: (
         STATE_AWAITING_INFORMATION,
         STATE_PENDING_SENIOR_REVIEW,
+        STATE_AWAITING_EDD,
         STATE_COMPLETED,
     ),
     STATE_AWAITING_INFORMATION: (
         STATE_IN_PROGRESS,
         STATE_PENDING_SENIOR_REVIEW,
+        STATE_AWAITING_EDD,
         STATE_COMPLETED,
     ),
     STATE_PENDING_SENIOR_REVIEW: (
         STATE_IN_PROGRESS,
+        STATE_AWAITING_EDD,
+        STATE_COMPLETED,
+    ),
+    STATE_AWAITING_EDD: (
+        STATE_IN_PROGRESS,
+        STATE_PENDING_SENIOR_REVIEW,
         STATE_COMPLETED,
     ),
     STATE_COMPLETED: (),
+    STATE_CANCELLED: (),
 }
 
 # Explicit outcome semantics, recorded separately from operational
@@ -355,11 +369,19 @@ def _coerce_state(value: Optional[str]) -> str:
 
     Reviews created before PR-03 only ever stored 'pending' or
     'completed'. Anything else is treated as the legacy default of
-    'pending' so the new state machine has a deterministic anchor.
+    'pending' so the new state machine has a deterministic anchor, except
+    for the US spelling 'canceled', which is terminal.
     """
-    if value in VALID_REVIEW_STATES:
-        return value
+    text = str(value or "").strip().lower()
+    if text == "canceled":
+        return STATE_CANCELLED
+    if text in VALID_REVIEW_STATES:
+        return text
     return STATE_PENDING
+
+
+def _is_terminal_review_state(state: Optional[str]) -> bool:
+    return _coerce_state(state) in {STATE_COMPLETED, STATE_CANCELLED}
 
 
 def _parse_ts(value) -> Optional[datetime]:
@@ -521,9 +543,9 @@ def transition_review_state(db, review_id, *, new_state: str,
 
     review = _fetch_review(db, review_id)
     current_state = _coerce_state(_row_get(review, "status"))
-    if current_state == STATE_COMPLETED:
+    if _is_terminal_review_state(current_state):
         raise ReviewClosedError(
-            f"periodic_review id={review_id} is already completed"
+            f"periodic_review id={review_id} is already {current_state}"
         )
 
     allowed = STATE_TRANSITIONS.get(current_state, ())
@@ -898,9 +920,9 @@ def generate_required_items(db, review_id, *,
     """
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
-    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+    if _is_terminal_review_state(_row_get(review, "status")):
         raise ReviewClosedError(
-            f"cannot generate required items for completed review id={review_id}"
+            f"cannot generate required items for terminal review id={review_id}"
         )
 
     application = _fetch_application(db, _row_get(review, "application_id"))
@@ -966,9 +988,9 @@ def update_required_item(db, review_id, item_id, *, status: str,
         raise PeriodicReviewEngineError("officer_note is required when status='not_applicable'")
 
     review = _fetch_review(db, review_id)
-    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+    if _is_terminal_review_state(_row_get(review, "status")):
         raise ReviewClosedError(
-            f"periodic_review id={review_id} is already completed"
+            f"periodic_review id={review_id} is terminal"
         )
 
     items = _load_required_items(_row_get(review, "required_items"))
@@ -1074,9 +1096,9 @@ def add_custom_required_item(db, review_id, *, label: str,
         )
 
     review = _fetch_review(db, review_id)
-    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+    if _is_terminal_review_state(_row_get(review, "status")):
         raise ReviewClosedError(
-            f"periodic_review id={review_id} is already completed"
+            f"periodic_review id={review_id} is terminal"
         )
 
     items = _load_required_items(_row_get(review, "required_items"))
@@ -1129,9 +1151,9 @@ def resolve_screening_refresh_item_if_current(db, review_id, *,
     """Clear the screening-refresh checklist item only after freshness is current."""
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
-    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+    if _is_terminal_review_state(_row_get(review, "status")):
         raise ReviewClosedError(
-            f"periodic_review id={review_id} is already completed"
+            f"periodic_review id={review_id} is terminal"
         )
 
     application = _fetch_application(db, _row_get(review, "application_id"))
@@ -1272,21 +1294,21 @@ def _link_review_to_edd(db, review_id, edd_case_id):
     """Soft-link a periodic review to an EDD case.
 
     The forward link is the review's ``linked_edd_case_id``; the
-    reverse link is the EDD's ``linked_periodic_review_id``. This is
-    explicit and additive, but note the PR-02 reverse-link displacement
-    contract: ``edd_cases.linked_monitoring_alert_id`` and
-    ``edd_cases.linked_periodic_review_id`` always point to the *most
-    recent* originator. We deliberately do NOT clear the EDD's
-    ``linked_monitoring_alert_id`` here -- the alert-side forward link
-    is owned by ``monitoring_routing`` / ``lifecycle_linkage`` and
-    asymmetry is part of the documented contract.
+    reverse link is the EDD's ``linked_periodic_review_id``. The reverse
+    link is first-writer-wins: later periodic reviews may point at the
+    same active EDD, but they must not displace the originating review.
+    We deliberately do NOT clear the EDD's ``linked_monitoring_alert_id``
+    here -- the alert-side forward link is owned by ``monitoring_routing`` /
+    ``lifecycle_linkage`` and asymmetry is part of the documented contract.
     """
     db.execute(
         "UPDATE periodic_reviews SET linked_edd_case_id = ? WHERE id = ?",
         (edd_case_id, review_id),
     )
     db.execute(
-        "UPDATE edd_cases SET linked_periodic_review_id = ? WHERE id = ?",
+        "UPDATE edd_cases "
+        "SET linked_periodic_review_id = COALESCE(linked_periodic_review_id, ?) "
+        "WHERE id = ?",
         (review_id, edd_case_id),
     )
     db.commit()
@@ -1328,11 +1350,11 @@ def escalate_review_to_edd(db, review_id, *,
 
     Refuses to escalate a completed review.
 
-    NOTE on the PR-02 reverse-link displacement contract:
+    NOTE on reverse-link ownership:
     ``edd_cases.linked_monitoring_alert_id`` is owned by the alert
-    routing path and is not cleared here. Callers reading EDD reverse
-    links must treat them as last-write-wins, never as symmetric to
-    every alert/review that pointed at this EDD.
+    routing path and is not cleared here. ``linked_periodic_review_id``
+    is first-writer-wins so later periodic-review originators do not
+    overwrite the EDD's original review link.
     """
     _require_audit_writer(audit_writer)
     # PR-03a: validate priority at the engine boundary so an invalid
@@ -1347,9 +1369,9 @@ def escalate_review_to_edd(db, review_id, *,
             + f"; got {priority!r}"
         )
     review = _fetch_review(db, review_id)
-    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+    if _is_terminal_review_state(_row_get(review, "status")):
         raise ReviewClosedError(
-            f"cannot escalate completed review id={review_id}"
+            f"cannot escalate terminal review id={review_id}"
         )
 
     application_id = _row_get(review, "application_id")
@@ -1380,12 +1402,6 @@ def escalate_review_to_edd(db, review_id, *,
         if active_id is not None:
             edd_case_id = active_id
             _link_review_to_edd(db, review_id, edd_case_id)
-            ll.set_edd_origin(
-                db, edd_case_id,
-                origin_context="periodic_review",
-                linked_periodic_review_id=review_id,
-                user=user, audit_writer=audit_writer,
-            )
             reused = True
 
     if edd_case_id is None:
@@ -1471,6 +1487,278 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
     return readiness["blocking_items_for_completion"]
 
 
+ACTIVE_NEXT_CYCLE_STATES = (
+    STATE_PENDING,
+    STATE_IN_PROGRESS,
+    STATE_AWAITING_INFORMATION,
+    STATE_PENDING_SENIOR_REVIEW,
+    STATE_AWAITING_EDD,
+)
+
+
+def _date_only(value) -> Optional[date]:
+    parsed = _parse_ts(value)
+    if parsed is not None:
+        return parsed.date()
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _approval_anniversary_anchor(application, review) -> str:
+    for key in ("first_approved_at", "approved_at", "decided_at", "completed_at", "created_at"):
+        value = _row_get(application, key)
+        parsed = _date_only(value)
+        if parsed is not None:
+            return parsed.isoformat()
+    parsed = _date_only(_row_get(review, "created_at")) or datetime.now(timezone.utc).date()
+    return parsed.isoformat()
+
+
+def _priority_for_next_cycle(policy: Mapping[str, Any]) -> str:
+    risk = str(policy.get("risk_level") or "").strip().upper()
+    if risk == "VERY_HIGH":
+        return "urgent"
+    if risk == "HIGH" or policy.get("enhanced_monitoring"):
+        return "high"
+    if risk == "MEDIUM":
+        return "normal"
+    return "low"
+
+
+def _latest_active_next_cycle(db, application_id, *, exclude_review_id):
+    placeholders = ",".join("?" for _ in ACTIVE_NEXT_CYCLE_STATES)
+    return db.execute(
+        f"""
+        SELECT * FROM periodic_reviews
+        WHERE application_id = ?
+          AND id != ?
+          AND COALESCE(status, 'pending') IN ({placeholders})
+        ORDER BY due_date ASC, created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (application_id, exclude_review_id, *ACTIVE_NEXT_CYCLE_STATES),
+    ).fetchone()
+
+
+def _next_review_cycle_number(db, application_id) -> int:
+    row = db.execute(
+        "SELECT COALESCE(MAX(review_cycle_number), 0) AS cycle_no "
+        "FROM periodic_reviews WHERE application_id = ?",
+        (application_id,),
+    ).fetchone()
+    try:
+        return int(_row_get(row, "cycle_no") or 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _ensure_next_periodic_review_cycle(
+    db,
+    review,
+    application,
+    *,
+    completion_date: str,
+    policy_risk_level: Optional[str],
+    user,
+    audit_writer,
+) -> Dict[str, Any]:
+    application_id = _row_get(review, "application_id")
+    review_id = _row_get(review, "id")
+    if not application_id or application is None:
+        return {"status": "skipped", "reason": "missing_application"}
+
+    existing = _latest_active_next_cycle(db, application_id, exclude_review_id=review_id)
+    if existing is not None:
+        return {
+            "status": "existing",
+            "periodic_review_id": _row_get(existing, "id"),
+            "next_review_date": _row_get(existing, "next_review_date") or _row_get(existing, "due_date"),
+            "due_date": _row_get(existing, "due_date"),
+        }
+
+    from periodic_review_policy import add_months, policy_snapshot_for_application
+
+    anchor_date = _approval_anniversary_anchor(application, review)
+    policy = policy_snapshot_for_application(
+        dict(application),
+        anchor_date=anchor_date,
+        override_risk_level=policy_risk_level,
+    )
+    frequency_months = int(policy["frequency_months"])
+    completion_day = date.fromisoformat(completion_date)
+    current_due_day = _date_only(_row_get(review, "due_date") or _row_get(review, "next_review_date"))
+    boundary_day = max(
+        day for day in (completion_day, current_due_day) if day is not None
+    )
+
+    interval_index = 1
+    skipped_anniversary_count = 0
+    while True:
+        candidate_due = add_months(anchor_date, frequency_months * interval_index)
+        candidate_day = date.fromisoformat(candidate_due)
+        if candidate_day > boundary_day:
+            break
+        if current_due_day is not None and current_due_day < candidate_day <= completion_day:
+            skipped_anniversary_count += 1
+        interval_index += 1
+
+    due_date = candidate_due
+    cycle_number = _next_review_cycle_number(db, application_id)
+    risk_level = policy["risk_level"]
+    cadence_label = f"{frequency_months}-month cadence"
+    trigger_reason = (
+        "Next periodic review scheduled after prior cycle completion "
+        f"({risk_level} risk, {cadence_label}, approval anniversary anchored to {anchor_date})."
+    )
+    if skipped_anniversary_count:
+        trigger_reason += f" Skipped {skipped_anniversary_count} missed anniversary cycle(s)."
+    priority = _priority_for_next_cycle(policy)
+    ts = _utc_now_iso()
+    insert_values = (
+        application_id,
+        _row_get(application, "company_name") or _row_get(review, "client_name"),
+        risk_level,
+        "time_based",
+        trigger_reason,
+        "schedule",
+        trigger_reason,
+        STATE_PENDING,
+        due_date,
+        due_date,
+        priority,
+        cycle_number,
+        "scheduled",
+        policy["policy_version"],
+        frequency_months,
+        policy["calculation_basis"],
+        due_date,
+        ts,
+        ts,
+    )
+    if getattr(db, "is_postgres", False):
+        next_row = db.execute(
+            """
+            INSERT INTO periodic_reviews
+                (application_id, client_name, risk_level, trigger_type,
+                 trigger_reason, trigger_source, review_reason, status,
+                 due_date, next_review_date, priority, review_cycle_number,
+                 review_type, policy_version, frequency_months, calculation_basis,
+                 sla_due_at, state_changed_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING *
+            """,
+            insert_values,
+        ).fetchone()
+    else:
+        db.execute(
+            """
+            INSERT INTO periodic_reviews
+                (application_id, client_name, risk_level, trigger_type,
+                 trigger_reason, trigger_source, review_reason, status,
+                 due_date, next_review_date, priority, review_cycle_number,
+                 review_type, policy_version, frequency_months, calculation_basis,
+                 sla_due_at, state_changed_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            insert_values,
+        )
+        next_row = db.execute(
+            "SELECT * FROM periodic_reviews WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (application_id,),
+        ).fetchone()
+
+    try:
+        db.execute(
+            """
+            UPDATE applications
+            SET periodic_review_last_review_date = ?,
+                periodic_review_next_review_due = ?,
+                periodic_review_baseline_cadence_months = ?,
+                periodic_review_baseline_calculation_basis = ?,
+                periodic_review_baseline_policy_version = ?
+            WHERE id = ?
+            """,
+            (
+                completion_date,
+                due_date,
+                frequency_months,
+                policy["calculation_basis"],
+                policy["policy_version"],
+                application_id,
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to update application periodic review schedule application_id=%s", application_id)
+
+    late_completion_days = None
+    if current_due_day is not None and completion_day > current_due_day:
+        late_completion_days = (completion_day - current_due_day).days
+    next_payload = dict(next_row) if next_row is not None else {}
+    result = {
+        "status": "created",
+        "periodic_review_id": _row_get(next_row, "id"),
+        "next_review_date": due_date,
+        "due_date": due_date,
+        "review_cycle_number": cycle_number,
+        "anchor_date": anchor_date,
+        "frequency_months": frequency_months,
+        "calculation_basis": policy["calculation_basis"],
+        "policy_version": policy["policy_version"],
+        "risk_level": risk_level,
+        "late_completion_days": late_completion_days,
+        "skipped_anniversary_count": skipped_anniversary_count,
+    }
+    _emit_audit(
+        audit_writer,
+        user,
+        "periodic_review.next_cycle_scheduled",
+        f"periodic_review:{review_id}",
+        {
+            "completed_review_id": review_id,
+            "next_review_id": result["periodic_review_id"],
+            "application_id": application_id,
+            "anchor_date": anchor_date,
+            "completion_date": completion_date,
+            "current_due_date": current_due_day.isoformat() if current_due_day else None,
+            "next_review_date": due_date,
+            "frequency_months": frequency_months,
+            "calculation_basis": policy["calculation_basis"],
+            "late_completion_days": late_completion_days,
+            "skipped_anniversary_count": skipped_anniversary_count,
+        },
+        db,
+        before_state={"completed_review_id": review_id},
+        after_state=next_payload,
+    )
+    return result
+
+
+def _open_edd_for_review_outcome(db, review) -> Optional[Dict[str, Any]]:
+    linked_id = _row_get(review, "linked_edd_case_id")
+    if linked_id is not None:
+        linked = db.execute(
+            "SELECT * FROM edd_cases WHERE id = ?",
+            (linked_id,),
+        ).fetchone()
+        if linked is not None and _row_get(linked, "stage") not in TERMINAL_EDD_STAGES:
+            return dict(linked)
+    application_id = _row_get(review, "application_id")
+    active_id = _find_active_edd_for_application(db, application_id)
+    if active_id is None:
+        return None
+    _link_review_to_edd(db, _row_get(review, "id"), active_id)
+    active = db.execute(
+        "SELECT * FROM edd_cases WHERE id = ?",
+        (active_id,),
+    ).fetchone()
+    return dict(active) if active is not None else None
+
+
 def record_review_outcome(db, review_id, *,
                           outcome: str,
                           outcome_reason: Optional[str] = None,
@@ -1530,9 +1818,9 @@ def record_review_outcome(db, review_id, *,
         raise PeriodicReviewEngineError("outcome_reason is required")
     review = _fetch_review(db, review_id)
     current_state = _coerce_state(_row_get(review, "status"))
-    if current_state == STATE_COMPLETED:
+    if _is_terminal_review_state(current_state):
         raise ReviewClosedError(
-            f"periodic_review id={review_id} is already completed"
+            f"periodic_review id={review_id} is already {current_state}"
         )
 
     risk_changed_flag = _boolish(risk_changed) or outcome == OUTCOME_RISK_RATING_CHANGED
@@ -1624,12 +1912,24 @@ def record_review_outcome(db, review_id, *,
     )
     if application is not None:
         try:
-            from periodic_review_policy import policy_snapshot_for_application
+            from periodic_review_policy import add_months, policy_snapshot_for_application
+            anchor_date = _approval_anniversary_anchor(application, review)
             policy = policy_snapshot_for_application(
                 application,
-                anchor_date=completion_date,
+                anchor_date=anchor_date,
                 override_risk_level=policy_risk_level,
             )
+            frequency = int(policy["frequency_months"])
+            completion_day = date.fromisoformat(completion_date)
+            current_due_day = _date_only(_row_get(review, "due_date") or _row_get(review, "next_review_date"))
+            boundary_day = max(day for day in (completion_day, current_due_day) if day is not None)
+            interval_index = 1
+            while True:
+                candidate_due = add_months(anchor_date, frequency * interval_index)
+                if date.fromisoformat(candidate_due) > boundary_day:
+                    break
+                interval_index += 1
+            policy = {**policy, "next_review_date": candidate_due, "due_date": candidate_due}
         except Exception:
             logger.exception("Periodic review policy calculation failed review_id=%s", review_id)
             policy = None
@@ -1646,6 +1946,9 @@ def record_review_outcome(db, review_id, *,
     )
     actor_id = (user or {}).get("sub") or (user or {}).get("id")
     items = _auto_clear_outcome_item(items, outcome=outcome, outcome_reason=effective_reason, user=user, ts=ts)
+    open_edd = _open_edd_for_review_outcome(db, review) if edd_required_flag else None
+    if open_edd is not None:
+        review = _fetch_review(db, review_id)
     before = {
         "status": current_state,
         "outcome": _row_get(review, "outcome"),
@@ -1662,8 +1965,131 @@ def record_review_outcome(db, review_id, *,
         "risk_change_attestation": _row_get(review, "risk_change_attestation"),
         "risk_rerate_reason": _row_get(review, "risk_rerate_reason"),
         "next_review_date": _row_get(review, "next_review_date"),
+        "linked_edd_case_id": _row_get(review, "linked_edd_case_id"),
         "required_items": _row_get(review, "required_items"),
     }
+    if open_edd is not None:
+        edd_case_id = _row_get(open_edd, "id")
+        db.execute(
+            "UPDATE periodic_reviews "
+            "SET status = ?, "
+            "    outcome = ?, "
+            "    outcome_reason = ?, "
+            "    outcome_recorded_at = ?, "
+            "    decided_by = ?, "
+            "    officer_rationale = ?, "
+            "    officer_findings_note = COALESCE(NULLIF(?, ''), officer_findings_note), "
+            "    officer_deficiencies_note = COALESCE(NULLIF(?, ''), officer_deficiencies_note), "
+            "    officer_internal_review_note = COALESCE(NULLIF(?, ''), officer_internal_review_note), "
+            "    findings_updated_by = CASE WHEN NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL THEN ? ELSE findings_updated_by END, "
+            "    findings_updated_at = CASE WHEN NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL OR NULLIF(?, '') IS NOT NULL THEN ? ELSE findings_updated_at END, "
+            "    previous_risk_level = COALESCE(previous_risk_level, ?), "
+            "    new_risk_level = COALESCE(?, new_risk_level), "
+            "    risk_change_attestation = COALESCE(?, risk_change_attestation), "
+            "    risk_rerate_reason = COALESCE(NULLIF(?, ''), risk_rerate_reason), "
+            "    risk_rerated_by = CASE WHEN ? IS NOT NULL THEN ? ELSE risk_rerated_by END, "
+            "    risk_rerated_at = CASE WHEN ? IS NOT NULL THEN ? ELSE risk_rerated_at END, "
+            "    linked_edd_case_id = COALESCE(linked_edd_case_id, ?), "
+            "    state_changed_at = ?, "
+            "    required_items = ? "
+            "WHERE id = ?",
+            (
+                STATE_AWAITING_EDD,
+                outcome,
+                effective_reason,
+                ts,
+                actor_id,
+                effective_reason,
+                findings_text,
+                follow_up_text,
+                senior_note_text,
+                findings_text,
+                follow_up_text,
+                senior_note_text,
+                actor_id,
+                findings_text,
+                follow_up_text,
+                senior_note_text,
+                ts,
+                risk_before,
+                normalized_new_risk if risk_changed_flag else None,
+                risk_attestation,
+                risk_impact_text,
+                actor_id if risk_changed_flag else None,
+                actor_id,
+                actor_id if risk_changed_flag else None,
+                ts,
+                edd_case_id,
+                ts,
+                json.dumps(items, default=str),
+                review_id,
+            ),
+        )
+        after = {
+            "status": STATE_AWAITING_EDD,
+            "outcome": outcome,
+            "outcome_reason": effective_reason,
+            "outcome_recorded_at": ts,
+            "completed_at": _row_get(review, "completed_at"),
+            "completed_by": _row_get(review, "decided_by"),
+            "officer_rationale": effective_reason,
+            "officer_findings_note": findings_text or _row_get(review, "officer_findings_note"),
+            "officer_deficiencies_note": follow_up_text or _row_get(review, "officer_deficiencies_note"),
+            "officer_internal_review_note": senior_note_text or _row_get(review, "officer_internal_review_note"),
+            "previous_risk_level": risk_before,
+            "new_risk_level": risk_after if risk_changed_flag else _row_get(review, "new_risk_level"),
+            "risk_change_attestation": risk_attestation,
+            "risk_rerate_reason": risk_impact_text or _row_get(review, "risk_rerate_reason"),
+            "linked_edd_case_id": edd_case_id,
+            "required_items": items,
+        }
+        _emit_audit(
+            audit_writer,
+            user,
+            "periodic_review.outcome_recorded",
+            f"periodic_review:{review_id}",
+            {
+                "review_id": review_id,
+                "outcome": outcome,
+                "from_state": current_state,
+                "to_state": STATE_AWAITING_EDD,
+                "linked_edd_case_id": edd_case_id,
+            },
+            db,
+            before_state=before,
+            after_state=after,
+        )
+        _emit_audit(
+            audit_writer,
+            user,
+            "periodic_review.awaiting_edd",
+            f"periodic_review:{review_id}",
+            {
+                "review_id": review_id,
+                "application_id": application_id,
+                "edd_case_id": edd_case_id,
+                "outcome": outcome,
+            },
+            db,
+            before_state=before,
+            after_state=after,
+        )
+        db.commit()
+        return {
+            "review_id": review_id,
+            "status": STATE_AWAITING_EDD,
+            "outcome": outcome,
+            "outcome_reason": effective_reason,
+            "outcome_recorded_at": ts,
+            "linked_edd_case_id": edd_case_id,
+            "risk_level_before": risk_before,
+            "risk_level_after": risk_after,
+            "risk_changed": risk_changed_flag,
+            "risk_governance_status": (
+                "review_level_only_change_management_required"
+                if risk_changed_flag else "unchanged"
+            ),
+        }
     db.execute(
         "UPDATE periodic_reviews "
         "SET status = ?, "
@@ -1741,6 +2167,18 @@ def record_review_outcome(db, review_id, *,
     ll.mark_review_closed(
         db, review_id, user=user, audit_writer=audit_writer,
     )
+    next_cycle = _ensure_next_periodic_review_cycle(
+        db,
+        review,
+        application,
+        completion_date=completion_date,
+        policy_risk_level=policy_risk_level,
+        user=user,
+        audit_writer=audit_writer,
+    )
+    if next_cycle.get("next_review_date"):
+        next_review_date = next_cycle["next_review_date"]
+        due_date = next_cycle.get("due_date") or next_review_date
     after = {
         "status": STATE_COMPLETED,
         "outcome": outcome,
@@ -1782,10 +2220,15 @@ def record_review_outcome(db, review_id, *,
             "risk_level_after": risk_after,
             "risk_changed": risk_changed_flag,
             "next_review_date": next_review_date,
+            "next_review_id": next_cycle.get("periodic_review_id"),
+            "next_cycle_status": next_cycle.get("status"),
+            "late_completion_days": next_cycle.get("late_completion_days"),
+            "skipped_anniversary_count": next_cycle.get("skipped_anniversary_count"),
             "completed_by": actor_id,
         },
         db, before_state=before, after_state=after,
     )
+    db.commit()
     return {
         "review_id": review_id,
         "status": STATE_COMPLETED,
@@ -1795,6 +2238,8 @@ def record_review_outcome(db, review_id, *,
         "completed_at": ts,
         "completed_by": actor_id,
         "next_review_date": next_review_date,
+        "next_review_id": next_cycle.get("periodic_review_id"),
+        "next_cycle": next_cycle,
         "risk_level_before": risk_before,
         "risk_level_after": risk_after,
         "risk_changed": risk_changed_flag,
@@ -1813,7 +2258,10 @@ __all__ = [
     "STATE_IN_PROGRESS",
     "STATE_AWAITING_INFORMATION",
     "STATE_PENDING_SENIOR_REVIEW",
+    "STATE_AWAITING_EDD",
     "STATE_COMPLETED",
+    "STATE_CANCELLED",
+    "TERMINAL_REVIEW_STATES",
     # Outcome vocabulary
     "VALID_REVIEW_OUTCOMES",
     "OUTCOME_NO_CHANGE",

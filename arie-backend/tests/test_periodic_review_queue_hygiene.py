@@ -69,3 +69,25 @@ class TestPeriodicReviewQueueHygiene(_PRReviewHandlerBase):
 
         assert len(body["reviews"]) == 1
         assert body["reviews"][0]["trigger_source_label"] == "Policy trigger"
+
+    def test_reviews_endpoint_defaults_to_actionable_statuses_but_explicit_filters_include_terminal(self):
+        pending_id = self._create_review(status="pending", review_reason="Actionable")
+        completed_id = self._create_review(status="completed", review_reason="Historical complete")
+        cancelled_id = self._create_review(status="cancelled", review_reason="Historical cancel")
+
+        default_resp = self._get("/api/monitoring/reviews")
+        self.assertEqual(default_resp.code, 200)
+        default_ids = [row["id"] for row in json.loads(default_resp.body)["reviews"]]
+        self.assertIn(pending_id, default_ids)
+        self.assertNotIn(completed_id, default_ids)
+        self.assertNotIn(cancelled_id, default_ids)
+
+        completed_resp = self._get("/api/monitoring/reviews?status=completed")
+        self.assertEqual(completed_resp.code, 200)
+        completed_ids = [row["id"] for row in json.loads(completed_resp.body)["reviews"]]
+        self.assertIn(completed_id, completed_ids)
+
+        cancelled_resp = self._get("/api/monitoring/reviews?queue=cancelled")
+        self.assertEqual(cancelled_resp.code, 200)
+        cancelled_ids = [row["id"] for row in json.loads(cancelled_resp.body)["reviews"]]
+        self.assertIn(cancelled_id, cancelled_ids)

@@ -20,6 +20,7 @@ ACTIVE_REVIEW_STATUSES = (
     "in_progress",
     "awaiting_information",
     "pending_senior_review",
+    "awaiting_edd",
 )
 
 
