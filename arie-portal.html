@@ -433,6 +433,63 @@
   .status-icon-lg.rejected { background: var(--red-dim); border: 2px solid var(--red); }
   .status-hero h2 { font-size: 28px; font-weight: 800; margin-bottom: 10px; letter-spacing: -0.5px; }
   .status-hero p { color: var(--text2); max-width: 440px; margin: 0 auto; font-size: 15px; }
+  .approved-page { padding-top: 24px; }
+  .approved-steps { margin-bottom: 20px; padding-top: 0; }
+  .approved-steps .step { gap: 7px; }
+  .approved-steps .step::after { top: 15px; height: 2px; }
+  .approved-steps .step-circle {
+    width: 30px; height: 30px; font-size: 11px;
+    box-shadow: 0 4px 12px rgba(34,197,94,0.16);
+  }
+  .approved-steps .step-label { font-size: 10px; max-width: 76px; }
+  .approved-hero {
+    padding: 24px 20px 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg2);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    margin-bottom: 18px;
+  }
+  .approved-hero .status-icon-lg {
+    width: 52px; height: 52px; font-size: 24px;
+    margin-bottom: 14px;
+  }
+  .approved-hero h2 { font-size: 24px; margin-bottom: 8px; }
+  .approved-hero p { max-width: 540px; font-size: 14px; line-height: 1.65; }
+  .approved-ref-wrap {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 4px;
+    margin-top: 16px;
+  }
+  .approved-ref-label {
+    font-size: 10px; color: var(--text3); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .approved-ref-wrap .ref-number { margin-top: 0; }
+  .approved-summary-grid {
+    display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    gap: 16px; align-items: stretch;
+  }
+  .approved-status-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .approved-status-label {
+    font-size: 11px; color: var(--text3); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+  }
+  .approved-status-value { font-size: 22px; font-weight: 800; color: var(--green); }
+  .approved-status-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
+  .approved-card { margin-bottom: 0; padding: 20px; }
+  .approved-card .card-header { margin-bottom: 12px; padding-bottom: 12px; }
+  .approved-card p { margin-top: 0; }
+  @media(max-width:760px) {
+    .approved-summary-grid { grid-template-columns: 1fr; }
+    .approved-page { padding-top: 18px; }
+    .approved-steps .step-label { font-size: 9px; }
+    body.approved-view-active #global-client-sidebar.open { display: none; }
+    body.approved-view-active.sidebar-active #view-approved { margin-left: 0; }
+  }
   .ref-number {
     display: inline-block;
     padding: 10px 24px; margin-top: 20px;
@@ -3054,7 +3111,7 @@
         <div class="status-icon-lg pending">⏳</div>
         <h2>Application Under Compliance Review</h2>
         <p>Your application has been submitted and is being reviewed. No action is required at this time unless our team contacts you for additional information.</p>
-        <div class="ref-number" id="ref-display">ARF-2024-XXXXXX</div>
+        <div class="ref-number" id="ref-display" style="display:none;"></div>
       </div>
 
       <div class="card" style="border-color:var(--brand-dim);background:rgba(43,47,143,0.04);">
@@ -4055,49 +4112,49 @@
        VIEW: APPROVED 🎉
   ══════════════════════════════════════ -->
   <div id="view-approved" class="hidden">
-    <div class="page">
-      <div class="steps">
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
+    <div class="page approved-page">
+      <div class="steps approved-steps" aria-label="Application progress">
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Review</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Documents</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Approved</div></div>
       </div>
 
-      <div class="status-hero">
+      <div class="status-hero approved-hero">
         <div class="status-icon-lg approved">🎉</div>
         <h2 style="color:var(--green)">Application Approved</h2>
         <p>Your application has been approved. Activation is in progress and our team will contact you with next steps.</p>
-        <div class="ref-number" id="approved-ref">ARF-2024-XXXXXX</div>
-      </div>
-
-      <div class="dash-grid">
-        <div class="dash-metric">
-          <div class="dash-metric-label">Account Status</div>
-          <div class="dash-metric-val green">Approved</div>
-          <div class="dash-metric-sub">Activation in progress</div>
+        <div class="approved-ref-wrap" id="approved-ref-wrap" style="display:none;">
+          <div class="approved-ref-label">Application reference</div>
+          <div class="ref-number" id="approved-ref"></div>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <div class="card-icon green">✅</div>
-          <div>
-            <div class="card-title">No Further Action Required</div>
-            <div class="card-sub">Submitted documents are complete for the current step</div>
+      <div class="approved-summary-grid">
+        <div class="approved-status-card">
+          <div class="approved-status-label">Account status</div>
+          <div class="approved-status-value">Approved</div>
+          <div class="approved-status-sub">Activation in progress</div>
+        </div>
+
+        <div class="card approved-card">
+          <div class="card-header">
+            <div class="card-icon green">✅</div>
+            <div>
+              <div class="card-title">No Further Action Required</div>
+              <div class="card-sub">Submitted documents are complete for the current step</div>
+            </div>
           </div>
+          <p style="font-size:13px;color:var(--text2);line-height:1.7;">We will contact you if anything else is needed.</p>
         </div>
-        <p style="font-size:13px;color:var(--text2);line-height:1.7;margin-top:12px;">We will contact you if anything else is needed. Otherwise, our team will reach out with activation details.</p>
       </div>
 
-      <div class="card" style="text-align:center;">
-        <div style="font-size:40px;margin-bottom:12px;">🚀</div>
-        <div class="font-bold" style="font-size:18px; margin-bottom:8px;">Next Steps</div>
+      <div class="card approved-card" style="text-align:center;margin-top:16px;">
+        <div style="font-size:28px;margin-bottom:10px;">🚀</div>
+        <div class="font-bold" style="font-size:17px; margin-bottom:8px;">Next Steps</div>
         <p style="color:var(--text2); font-size:13px; max-width:480px; margin:0 auto 20px;">
           Our team will contact you within one business day to complete account setup, provide your account details, and onboard you to our payment platform.
         </p>
-        <button class="btn btn-primary" style="display:inline-flex;" onclick="showToast('success','Welcome aboard!','Your Onboarda team will be in touch shortly.')">
-          📧 Confirm Receipt
-        </button>
       </div>
     </div>
   </div>
@@ -4922,6 +4979,8 @@ function resetPortalPricingState() {
 function resetPortalApplicationState() {
   currentApplicationId = '';
   appRef = '';
+  setPortalReferenceDisplay('ref-display', '');
+  setApprovedApplicationRef('');
   currentEnhancedRequirements = [];
   renderPortalEnhancedRequirements([]);
   if (autoSaveTimer) {
@@ -5138,6 +5197,24 @@ function buildDraftDataFromApplication(app) {
   return data;
 }
 
+function setPortalReferenceDisplay(refId, ref, wrapperId) {
+  var refEl = document.getElementById(refId);
+  if (!refEl) return;
+  var wrapper = wrapperId ? document.getElementById(wrapperId) : refEl;
+  var value = String(ref || '').trim();
+  if (!value) {
+    refEl.textContent = '';
+    if (wrapper) wrapper.style.display = 'none';
+    return;
+  }
+  refEl.textContent = value;
+  if (wrapper) wrapper.style.display = '';
+}
+
+function setApprovedApplicationRef(ref) {
+  setPortalReferenceDisplay('approved-ref', ref, 'approved-ref-wrap');
+}
+
 function applyApplicationViewState(target) {
   syncConditionalFormState();
   showHighRiskDocs();
@@ -5145,6 +5222,7 @@ function applyApplicationViewState(target) {
     populatePricing(computedRiskLevel);
   }
   if (target === 'pending') {
+    setPortalReferenceDisplay('ref-display', appRef);
     updatePendingRiskCard();
   }
   if (target === 'pre-approval-hold') {
@@ -5154,6 +5232,9 @@ function applyApplicationViewState(target) {
   if (target === 'compliance-hold') {
     var complianceRef = document.getElementById('compliance-ref-display');
     if (complianceRef) complianceRef.textContent = appRef || '—';
+  }
+  if (target === 'approved') {
+    setApprovedApplicationRef(appRef);
   }
   if (target === 'onboarding' || target === 'submission-review' || target === 'docs-review') {
     syncDirectorsUBOsToKYC();
@@ -5196,6 +5277,7 @@ function showView(name) {
   // Show / hide persistent client sidebar
   const sidebar = document.getElementById('global-client-sidebar');
   const showSidebar = SIDEBAR_VIEWS.includes(name);
+  document.body.classList.toggle('approved-view-active', name === 'approved');
   if (showSidebar) {
     sidebar.classList.add('open');
     document.body.classList.add('sidebar-active');
@@ -5689,28 +5771,8 @@ async function loadMyApplications() {
     }
 
     var html = '';
-    var stageLabels = {
-      draft: 'Application started',
-      submitted: 'Submitted',
-      prescreening_submitted: 'Pre-screening',
-      pricing_review: 'Pricing review',
-      pricing_accepted: 'Pricing accepted',
-      pre_approval_review: 'Application under review',
-      pre_approved: 'Documents ready',
-      kyc_documents: 'Documents requested',
-      kyc_submitted: 'Documents submitted',
-      compliance_review: 'Application review',
-      in_review: 'Verification review',
-      under_review: 'Verification review',
-      edd_required: 'Additional review',
-      approved: 'Approved',
-      rejected: 'Declined',
-      rmi_sent: 'Info requested',
-      withdrawn: 'Withdrawn',
-      pending: 'Pending'
-    };
     var progressLabels = {
-      draft: 'You can continue this draft',
+      draft: 'You can continue this application',
       kyc_documents: 'Documents needed',
       rmi_sent: 'Waiting on you',
       approved: 'Completed',
@@ -5719,16 +5781,15 @@ async function loadMyApplications() {
     };
     apps.forEach(function(app) {
       var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
-      var statusLabels = {draft:'Application Started',submitted:'Application Submitted',prescreening_submitted:'Pre-Screening in Progress',pricing_review:'Pricing Under Review',pricing_accepted:'Pricing Accepted',pre_approval_review:'Application Under Review',pre_approved:'Ready for Documents',kyc_documents:'Documents Required',kyc_submitted:'Documents Submitted',compliance_review:'Compliance Review in Progress',in_review:'Verification Ongoing',under_review:'Under Compliance Review',edd_required:'Application Under Review',approved:'Approved \u2013 Ready for Activation',rejected:'Application Declined',rmi_sent:'Further Information Requested',withdrawn:'Application Withdrawn',pending:'Pending'};
       var color = statusColors[app.status] || '#999';
-      var label = app.status_label || statusLabels[app.status] || app.status;
+      var label = getClientPortalStatusLabel(app.status);
       var date = (app.updated_at || app.created_at) ? new Date(app.updated_at || app.created_at).toLocaleDateString() : '';
       var ref = app.ref || app.id;
       var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
       var statusJs = JSON.stringify(app.status || '').replace(/"/g, '&quot;');
       var companyJs = JSON.stringify(app.company_name || 'this draft application').replace(/"/g, '&quot;');
       var isDraft = (app.status || '') === 'draft';
-      var stageLabel = stageLabels[app.status] || label;
+      var stageLabel = label;
       var progressLabel = progressLabels[app.status] || 'In progress';
       html += '<tr style="cursor:pointer;" onclick="resumeApplication(' + refJs + ', ' + statusJs + ')">';
       html += '<td><div class="app-tbl-name">' + escapeHtml(app.company_name || '-') + '</div></td>';
@@ -7272,8 +7333,7 @@ function routePortalByBackendStatus(status, messages) {
     return;
   }
   if (nextStatus === 'approved') {
-    var approvedRef = document.getElementById('approved-ref');
-    if (approvedRef) approvedRef.textContent = appRef || '—';
+    setApprovedApplicationRef(appRef);
     showView('approved');
     showToast('success', 'Approved', messages.approvedMessage || 'Your application has been approved. Activation is in progress.');
     return;
@@ -7284,7 +7344,9 @@ function routePortalByBackendStatus(status, messages) {
     showToast('info', 'Additional Information Required', messages.rmiMessage || 'Additional information is required to complete your application.');
     return;
   }
-  showView(getApplicationView(nextStatus));
+  var target = getApplicationView(nextStatus);
+  showView(target);
+  applyApplicationViewState(target);
   showToast('info', 'Application Updated', 'Your application status has been updated.');
 }
 
@@ -11139,6 +11201,39 @@ function getApplicationView(status) {
   return stageMap[status] || 'pending';
 }
 
+function getClientPortalStatusLabel(status) {
+  var key = String(status || '').trim();
+  var labelMap = {
+    draft: 'Under Review',
+    pending: 'Under Review',
+    submitted: 'Submitted',
+    prescreening_submitted: 'Submitted',
+    pricing_review: 'Under Review',
+    pricing_accepted: 'Submitted',
+    pre_approval_review: 'Under Review',
+    pre_approved: 'Documents',
+    kyc_documents: 'Documents',
+    kyc_submitted: 'Submitted',
+    compliance_review: 'Under Review',
+    in_review: 'Under Review',
+    under_review: 'Under Review',
+    edd_required: 'Documents',
+    approved: 'Approved',
+    rejected: 'Declined',
+    rmi_sent: 'Info Required',
+    withdrawn: 'Declined'
+  };
+  return labelMap[key] || 'Under Review';
+}
+
+function getClientPortalStatusClass(status) {
+  var label = getClientPortalStatusLabel(status);
+  if (label === 'Approved') return 'approved';
+  if (label === 'Declined') return 'rejected';
+  if (label === 'Documents' || label === 'Info Required') return 'kyc';
+  return 'review';
+}
+
 function resetPortalDocumentState() {
   stopAllVerificationStatusPolling();
   uploadedDocIds = {};
@@ -11407,16 +11502,14 @@ function renderSidebarApps(apps) {
     var stageJs = JSON.stringify(app.status || 'pending').replace(/"/g, '&quot;');
     REF_TO_SNAV[ref] = snavId;
     var icon = app.status === 'approved' ? '&#x2705;' : '&#x1F4C4;';
-    var statusLabels = {draft:'Draft',submitted:'Submitted',prescreening_submitted:'Screening',pricing_review:'Pricing',pricing_accepted:'Accepted',pre_approval_review:'Review',pre_approved:'Ready',kyc_documents:'Documents',kyc_submitted:'Submitted',compliance_review:'Review',in_review:'Review',under_review:'Review',edd_required:'Review',approved:'&#x2713;',rejected:'Declined',rmi_sent:'Info Req.',withdrawn:'Withdrawn',pending:'Pending'};
-    var statusClasses = {draft:'review',submitted:'review',prescreening_submitted:'review',pricing_review:'review',pricing_accepted:'review',pre_approval_review:'review',pre_approved:'review',kyc_documents:'kyc',kyc_submitted:'review',compliance_review:'review',in_review:'review',under_review:'review',edd_required:'kyc',approved:'approved',rejected:'rejected',rmi_sent:'kyc',withdrawn:'rejected',pending:'review'};
-    var label = statusLabels[app.status] || app.status || '';
-    var cls = statusClasses[app.status] || 'review';
+    var label = getClientPortalStatusLabel(app.status);
+    var cls = getClientPortalStatusClass(app.status);
     var stage = app.status || 'pending';
     var name = app.company_name || app.ref || 'Application';
     html += '<button type="button" class="dash-nav-item" id="' + snavId + '" onclick="resumeApplication(' + refJs + ',' + stageJs + ')">' +
       '<span class="dash-nav-icon">' + icon + '</span>' +
       '<span>' + escapeHtml(name) + '</span>' +
-      '<span class="app-status ' + cls + '" style="font-size:9px;padding:1px 6px;margin-left:auto;">' + label + '</span>' +
+      '<span class="app-status ' + cls + '" style="font-size:9px;padding:1px 6px;margin-left:auto;">' + escapeHtml(label) + '</span>' +
     '</button>';
   });
   container.innerHTML = html;
