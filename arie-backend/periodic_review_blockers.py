@@ -37,6 +37,19 @@ BASELINE_READY_STATUSES = {
 }
 ATTESTATION_NOT_REQUIRED_STATUSES = {"not_required", "not_applicable", "waived"}
 DOCUMENT_REQUEST_TERMINAL_STATUSES = {"accepted", "waived", "cancelled"}
+# PR-PRS-B (P0-EV1): a deliberate waiver/cancellation is a non-evidence
+# disposition and remains terminal; officer "accepted" is NOT a free pass and
+# must be backed by a verified or senior-accepted-with-reason document.
+DOCUMENT_REQUEST_WAIVED_STATUSES = {"waived", "cancelled"}
+# PR-PRS-B (P1-A2): verification states that must never be senior-overridden at
+# completion -- a hard failure, or still in progress.
+NON_OVERRIDABLE_VERIFICATION_STATES = {
+    "failed",
+    "pending",
+    "running",
+    "processing",
+    "queued",
+}
 
 
 def _row_get(row, key, default=None):
@@ -121,23 +134,35 @@ def _truthy(value: Any) -> bool:
 
 def _document_request_ready(row: Dict[str, Any]) -> bool:
     status = str(row.get("status") or "").strip().lower()
-    if status in DOCUMENT_REQUEST_TERMINAL_STATUSES:
+    # Deliberate waiver / cancellation stays terminal.
+    if status in DOCUMENT_REQUEST_WAIVED_STATUSES:
         return True
     if _truthy(row.get("workflow_test_accepted")):
         return True
+    # PR-PRS-B (P0-EV1): officer "accepted" no longer satisfies completion on its
+    # own. Evidence truth is decided by the linked document, separately from the
+    # requirement's officer-set status.
     if not str(row.get("linked_document_id") or "").strip():
+        return False
+    # PR-PRS-B (P1-EV3): a stale / superseded document does not satisfy completion.
+    if not _document_is_current(row):
         return False
     verification_status = str(row.get("document_verification_status") or "").strip().lower()
     if verification_status == "verified":
         return True
+    # PR-PRS-B (P1-A2): controlled senior/manual exception. A senior reviewer
+    # (admin/sco) must have accepted the document WITH a comment, and the document
+    # must not be in a hard-failed or still-processing verification state. This
+    # covers both Agent 1 "flagged" documents and manual-only document types, while
+    # a plain officer ("co") acceptance never satisfies completion.
     review_status = str(row.get("document_review_status") or "").strip().lower()
     reviewer_role = str(row.get("document_reviewer_role") or "").strip().lower()
     review_comment = str(row.get("document_review_comment") or "").strip()
     return (
-        verification_status == "flagged"
-        and review_status in {"accepted", "approved"}
+        review_status in {"accepted", "approved"}
         and reviewer_role in SENIOR_DOCUMENT_REVIEW_ROLES
         and bool(review_comment)
+        and verification_status not in NON_OVERRIDABLE_VERIFICATION_STATES
     )
 
 
@@ -159,7 +184,8 @@ def _periodic_review_document_request_blockers(db, review) -> List[Dict[str, Any
                    d.verification_status AS document_verification_status,
                    d.review_status AS document_review_status,
                    d.reviewer_role AS document_reviewer_role,
-                   d.review_comment AS document_review_comment
+                   d.review_comment AS document_review_comment,
+                   d.is_current AS document_is_current
             FROM application_enhanced_requirements aer
             LEFT JOIN documents d ON d.id = aer.linked_document_id
             WHERE aer.application_id = ?

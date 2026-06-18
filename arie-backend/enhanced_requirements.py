@@ -163,6 +163,29 @@ ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP = {
     "jurisdiction_sof_evidence": "source_funds",
     "contracts_invoices": "contracts",
     "expected_transaction_flow_evidence": "supporting_document",
+    # PR-PRS-B: periodic-review document requests bound to canonical Agent 1
+    # policies so uploads run verification instead of silently falling
+    # through to supporting_document. Keys are the periodic_review_document_requests
+    # QUESTION_REQUIREMENT_MAP requirement_keys. Mappings flagged with TODO need
+    # product sign-off; narrative/disclosure-type keys are intentionally NOT mapped
+    # here (they remain manual) pending the v7 Section E disclosure split.
+    "updated_register_of_directors": "reg_dir",
+    "new_director_id_document": "passport",
+    "new_director_proof_of_address": "poa",
+    "updated_register_of_shareholders": "reg_sh",
+    "updated_cap_table": "reg_sh",  # TODO confirm: reg_sh vs structure_chart
+    "updated_ownership_chart": "structure_chart",
+    "ubo_identification_document": "passport",
+    "ubo_proof_of_address": "poa",
+    "proof_of_ownership_or_control": "structure_chart",  # TODO confirm
+    "website_product_operating_evidence": "contracts",
+    "contracts_invoices_or_commercial_evidence": "contracts",
+    "regulated_activity_licence_or_approval": "licence",
+    "financials_bank_statements_or_projections": "bank_statements",
+    "licence_or_registration_certificate": "licence",
+    "updated_company_extract": "cert_inc",  # TODO confirm: cert_inc vs business registration
+    "updated_registered_office_proof": "poa",  # TODO confirm: entity registered-address policy
+    "updated_authorised_contact_confirmation": "board_res",  # TODO confirm
 }
 
 LEGACY_ENHANCED_REQUIREMENT_DOCUMENT_POLICY_ALIASES = {
