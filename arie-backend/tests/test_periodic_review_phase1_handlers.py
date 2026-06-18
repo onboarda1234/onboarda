@@ -159,20 +159,22 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         self.assertEqual(body["linked_edd_case_id"], edd_id)
         self.assertEqual(body["projection"]["linked_edd_case_id"], edd_id)
 
-    def test_legacy_decision_endpoint_still_returns_legacy_flag(self):
+    def test_legacy_decision_endpoint_uses_modern_blockers(self):
         rid = self._create_review(status="pending")
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/decision",
             {"decision": "continue", "decision_reason": "Legacy back-compat"},
         )
-        self.assertEqual(resp.code, 200)
+        self.assertEqual(resp.code, 409)
         body = json.loads(resp.body)
         self.assertTrue(body["legacy"])
+        labels = {item["label"] for item in body["blocking_items"]}
+        self.assertIn("Officer acknowledgement is required", labels)
         row = self._conn.execute(
             "SELECT decision, outcome FROM periodic_reviews WHERE id = ?",
             (rid,),
         ).fetchone()
-        self.assertEqual(row["decision"], "continue")
+        self.assertIsNone(row["decision"])
         self.assertIsNone(row["outcome"])
 
     def test_legacy_completed_review_detail_marks_modern_completion_readiness_not_applicable(self):

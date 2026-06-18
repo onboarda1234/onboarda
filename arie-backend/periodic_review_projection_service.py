@@ -21,17 +21,20 @@ ACTIVE_REVIEW_STATES = (
     "in_progress",
     "awaiting_information",
     "pending_senior_review",
+    "awaiting_edd",
 )
 COMPLETED_REVIEW_STATE = "completed"
 CANCELLED_REVIEW_STATE = "cancelled"
+CANCELED_REVIEW_STATE = "canceled"
 
-TERMINAL_QUEUE_STATUSES = {"completed", "cancelled"}
+TERMINAL_QUEUE_STATUSES = {"completed", "cancelled", "canceled"}
 OPEN_QUEUE_FILTER_STATUSES = {
     "open",
     "due",
     "overdue",
     "awaiting_client",
     "in_review",
+    "awaiting_edd",
 }
 
 OPERATIONAL_STATUS_LABELS = {
@@ -41,6 +44,7 @@ OPERATIONAL_STATUS_LABELS = {
     "awaiting_documents": "Awaiting documents",
     "officer_review_required": "Officer review required",
     "blocked": "Blocked",
+    "awaiting_edd": "Awaiting EDD",
     "ready_for_decision": "Ready for decision",
     "completed": "Completed",
     "historical_superseded": "Historical / Superseded",
@@ -160,8 +164,10 @@ def derive_operational_review_status(
         key = "historical_superseded"
     elif status == COMPLETED_REVIEW_STATE:
         key = "completed"
-    elif status == CANCELLED_REVIEW_STATE:
+    elif status in {CANCELLED_REVIEW_STATE, CANCELED_REVIEW_STATE}:
         key = "historical_superseded"
+    elif status == "awaiting_edd":
+        key = "awaiting_edd"
     elif attestation and attestation != "submitted":
         key = "awaiting_client_attestation"
     elif has_missing_documents:
@@ -261,8 +267,10 @@ def _review_due_state(review, *, raw_status: str) -> Dict[str, Any]:
 def _queue_status(raw_status: str, due_state: str) -> str:
     if raw_status == COMPLETED_REVIEW_STATE:
         return "completed"
-    if raw_status == CANCELLED_REVIEW_STATE:
+    if raw_status in {CANCELLED_REVIEW_STATE, CANCELED_REVIEW_STATE}:
         return "cancelled"
+    if raw_status == "awaiting_edd":
+        return "awaiting_edd"
     if raw_status == "awaiting_information":
         return "awaiting_client"
     if raw_status in {"in_progress", "pending_senior_review"}:
@@ -281,6 +289,7 @@ def _queue_status_label(queue_status: str) -> str:
         "awaiting_client": "Awaiting Client",
         "in_review": "In Review",
         "overdue": "Overdue",
+        "awaiting_edd": "Awaiting EDD",
         "completed": "Completed",
         "cancelled": "Cancelled",
     }.get(queue_status, "Open")

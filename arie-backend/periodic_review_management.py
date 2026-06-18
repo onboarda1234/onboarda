@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from lifecycle_linkage import MissingAuditWriter, _row_get
+from periodic_review_engine import ReviewClosedError
 from periodic_review_policy import normalize_risk_level, parse_review_date, policy_snapshot_for_application
 
 ASSIGNABLE_REVIEW_ROLES = {"admin", "sco", "co"}
+TERMINAL_REVIEW_STATUSES = {"completed", "cancelled", "canceled"}
 LEGACY_SOURCE_TYPES = {
     "internal_register",
     "prior_file_note",
@@ -155,6 +157,15 @@ def _fetch_review(db, review_id: int):
     if review is None:
         raise ReviewNotFound(f"periodic_review id={review_id} not found")
     return review
+
+
+
+def _require_review_open(review) -> None:
+    status = str(_row_get(review, "status") or "pending").strip().lower()
+    if status in TERMINAL_REVIEW_STATUSES:
+        raise ReviewClosedError(
+            f"periodic_review id={_row_get(review, 'id')} is {status} and cannot be modified"
+        )
 
 
 
@@ -456,6 +467,7 @@ def _require_override_if_needed(review, proposed: Dict[str, Any], user, override
 def assign_review(db, review_id: int, *, assigned_officer: str, user, audit_writer, priority: Optional[str] = None, reassigned_reason: Optional[str] = None) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     assigned_officer = _validate_officer(db, assigned_officer)
     current_assigned = _row_get(review, "assigned_officer")
     if current_assigned and current_assigned != assigned_officer and not str(reassigned_reason or "").strip():
@@ -523,6 +535,7 @@ def save_legacy_import_setup(
 ) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     source_type = str(source_type or "").strip()
     confidence = str(confidence or "").strip().lower()
     if source_type not in LEGACY_SOURCE_TYPES:
@@ -655,6 +668,7 @@ def save_periodic_review_baseline(
 ) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     return save_application_periodic_review_baseline(
         db,
         _row_get(review, "application_id"),
@@ -714,6 +728,7 @@ def save_application_periodic_review_baseline(
     if preferred_review_id is not None:
         candidate = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (preferred_review_id,)).fetchone()
         if candidate is not None and _row_get(candidate, "application_id") == application_id:
+            _require_review_open(candidate)
             review = candidate
     if review is None:
         review = _latest_active_review_for_application(db, application_id)
@@ -853,6 +868,7 @@ def save_application_periodic_review_baseline(
 def acknowledge_legacy_import(db, review_id: int, *, user, audit_writer) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     role = str((user or {}).get("role") or "").strip().lower()
     if role not in {"admin", "sco"}:
         raise InvalidPeriodicReviewInput("Only SCO/admin can acknowledge imported review setup")
@@ -895,6 +911,7 @@ def save_officer_rationale(db, review_id: int, *, rationale: str, user, audit_wr
     if not str(rationale or "").strip():
         raise InvalidPeriodicReviewInput("officer_rationale is required")
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     before = {"officer_rationale": _row_get(review, "officer_rationale")}
     db.execute(
         "UPDATE periodic_reviews SET officer_rationale = ? WHERE id = ?",
@@ -926,6 +943,7 @@ def save_workspace_findings(
 ) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     findings_note = _clean_optional_text(findings_note, limit=4000)
     deficiencies_note = _clean_optional_text(deficiencies_note, limit=4000)
     internal_review_note = _clean_optional_text(internal_review_note, limit=4000)
@@ -1017,6 +1035,7 @@ def save_material_change_attestation(
     if attestation == MATERIAL_CHANGE_ATTESTATION_PRESENT and not categories:
         raise InvalidPeriodicReviewInput("material_change_identified requires at least one category")
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     before = {
         "material_change_attestation": _row_get(review, "material_change_attestation"),
         "material_change_categories": _json_list(_row_get(review, "material_change_categories")),
@@ -1058,6 +1077,7 @@ def record_risk_change(
     if not reason_code:
         raise InvalidPeriodicReviewInput("reason_code is required")
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     prior_risk = _effective_risk_level(db, review)
     new_risk_level = normalize_risk_level(new_risk_level)
     ts = _utc_now_iso()
@@ -1170,6 +1190,7 @@ def add_evidence_link(
 ) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     review = _fetch_review(db, review_id)
+    _require_review_open(review)
     app_id = _row_get(review, "application_id")
     document = db.execute(
         "SELECT id, application_id FROM documents WHERE id = ?",

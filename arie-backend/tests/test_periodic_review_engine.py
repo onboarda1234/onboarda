@@ -133,6 +133,23 @@ def audit_sink():
 USER = {"sub": "officer-1", "name": "Test Officer", "role": "compliance_officer"}
 
 
+def _freeze_engine_now(monkeypatch, iso_value: str):
+    import periodic_review_engine as pre
+
+    fixed = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        @classmethod
+        def utcnow(cls):
+            return fixed.astimezone(timezone.utc).replace(tzinfo=None)
+
+    monkeypatch.setattr(pre, "datetime", FrozenDateTime)
+
+
 def _insert_review(conn, *, application_id="test-app-100",
                    client_name="Test Co Ltd", risk_level="MEDIUM",
                    status="pending", trigger_source=None,
@@ -184,6 +201,13 @@ def _review(conn, review_id):
     return conn.execute(
         "SELECT * FROM periodic_reviews WHERE id = ?", (review_id,)
     ).fetchone()
+
+
+def _review_rows(conn, application_id="test-app-100"):
+    return conn.execute(
+        "SELECT * FROM periodic_reviews WHERE application_id = ? ORDER BY id",
+        (application_id,),
+    ).fetchall()
 
 
 def _edd(conn, edd_id):
@@ -513,10 +537,10 @@ class TestEscalateToEDD:
         assert result["edd_case_id"] == existing_edd
         assert result["created"] is False
         assert result["reused"] is True
-        # EDD origin updated to periodic_review since this is the new
-        # touchpoint, but no parallel case is created
+        # The review points at the existing EDD, but reuse must not
+        # rewrite the EDD's origin metadata.
         edd = _edd(review_db, existing_edd)
-        assert edd["origin_context"] == "periodic_review"
+        assert edd["origin_context"] is None
         assert edd["linked_periodic_review_id"] == rid
 
     def test_monitoring_originated_review_escalates_as_first_class(
@@ -544,23 +568,13 @@ class TestEscalateToEDD:
         assert edd["origin_context"] == "periodic_review"
         assert edd["linked_periodic_review_id"] == rid
 
-    def test_pr02_reverse_link_displacement_contract_respected(
+    def test_reused_edd_preserves_existing_reverse_link(
             self, review_db, audit_sink):
-        """PR-02 reality: edd_cases reverse-link pointers are
-        last-write-wins, NOT symmetric to every alert/review that
-        pointed at this EDD.
-
-        Concretely, when a periodic-review escalation reuses an active
-        EDD that was previously the target of a monitoring-alert route,
-        the alert-side forward link (``alert.linked_edd_case_id``) must
-        remain intact so traceability from the alert to the EDD is not
-        lost. The EDD's own reverse pointers are owned by the most
-        recent originator (set via ``lifecycle_linkage.set_edd_origin``)
-        and are NOT required to enumerate every prior originator. This
-        test pins that asymmetry contract explicitly.
+        """Later periodic-review originators must not steal the EDD's
+        original reverse link.
         """
         from periodic_review_engine import escalate_review_to_edd
-        # Manually wire the active-EDD-with-alert-back-pointer scenario.
+        origin_review_id = _insert_review(review_db, risk_level="HIGH")
         existing_edd = _insert_edd(review_db)
         alert_id = _insert_alert(review_db)
         review_db.execute(
@@ -568,8 +582,8 @@ class TestEscalateToEDD:
             (existing_edd, alert_id),
         )
         review_db.execute(
-            "UPDATE edd_cases SET linked_monitoring_alert_id = ? WHERE id = ?",
-            (alert_id, existing_edd),
+            "UPDATE edd_cases SET linked_monitoring_alert_id = ?, linked_periodic_review_id = ?, origin_context = ? WHERE id = ?",
+            (alert_id, origin_review_id, "periodic_review", existing_edd),
         )
         review_db.commit()
 
@@ -583,14 +597,11 @@ class TestEscalateToEDD:
         # escalation. This is the contract that downstream readers
         # (UI, audit consumers) can rely on.
         assert _alert(review_db, alert_id)["linked_edd_case_id"] == existing_edd
-        # The review-side forward link is set
+        # The later review-side forward link is set.
         assert _review(review_db, rid)["linked_edd_case_id"] == existing_edd
-        # The EDD's reverse pointer to the periodic review IS set;
-        # its reverse pointer to the alert may be displaced by the
-        # periodic-review origin -- this asymmetry is documented and
-        # accepted (PR-02 contract).
+        # The EDD's original reverse pointer is preserved.
         edd = _edd(review_db, existing_edd)
-        assert edd["linked_periodic_review_id"] == rid
+        assert edd["linked_periodic_review_id"] == origin_review_id
         assert edd["origin_context"] == "periodic_review"
 
     def test_refuses_on_completed_review(self, review_db, audit_sink):
@@ -913,14 +924,14 @@ class TestRecordOutcome:
     def test_allows_edd_required_outcome_when_active_case_exists(self, review_db, audit_sink):
         from periodic_review_engine import (
             generate_required_items, record_review_outcome,
-            OUTCOME_EDD_REQUIRED,
+            OUTCOME_EDD_REQUIRED, STATE_AWAITING_EDD,
         )
         review_db.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
             (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
         )
         review_db.commit()
-        _insert_edd(review_db)
+        edd_id = _insert_edd(review_db)
         rid = _insert_review(review_db, status="in_progress")
         generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
         result = record_review_outcome(
@@ -930,6 +941,12 @@ class TestRecordOutcome:
             user=USER, audit_writer=audit_sink,
         )
         assert result["outcome"] == "edd_required"
+        assert result["status"] == STATE_AWAITING_EDD
+        assert result["linked_edd_case_id"] == edd_id
+        row = _review(review_db, rid)
+        assert row["status"] == STATE_AWAITING_EDD
+        assert row["completed_at"] is None
+        assert row["closed_at"] is None
 
     def test_allows_completion_when_only_low_items_open(self, review_db, audit_sink):
         from periodic_review_engine import (
@@ -998,6 +1015,193 @@ class TestRecordOutcome:
         items = json.loads(row["required_items"])
         outcome_item = next(it for it in items if it["item_type"] == "review_outcome_recorded")
         assert outcome_item["status"] == "open"
+
+
+class TestOutcomeNextCycleScheduling:
+    def _prepare_app(self, review_db, *, risk_level="HIGH", decided_at="2025-01-01T09:00:00Z"):
+        review_db.execute(
+            """
+            UPDATE applications
+               SET risk_level = ?,
+                   final_risk_level = ?,
+                   decided_at = ?,
+                   first_approved_at = ?
+             WHERE id = ?
+            """,
+            (risk_level, risk_level, decided_at, decided_at, "test-app-100"),
+        )
+        review_db.commit()
+
+    def _prepare_review(self, review_db, *, risk_level="HIGH", due_date="2026-01-01", cycle=1):
+        rid = _insert_review(review_db, status="in_progress", risk_level=risk_level)
+        review_db.execute(
+            """
+            UPDATE periodic_reviews
+               SET due_date = ?,
+                   next_review_date = ?,
+                   review_cycle_number = ?,
+                   frequency_months = ?,
+                   calculation_basis = ?
+             WHERE id = ?
+            """,
+            (
+                due_date,
+                due_date,
+                cycle,
+                12 if risk_level == "HIGH" else 24,
+                f"risk_level:{risk_level}",
+                rid,
+            ),
+        )
+        review_db.commit()
+        return rid
+
+    def test_completion_creates_one_next_cycle_and_replay_does_not_duplicate(self, review_db, audit_sink, monkeypatch):
+        from periodic_review_engine import record_review_outcome, OUTCOME_NO_CHANGE, ReviewClosedError
+
+        _freeze_engine_now(monkeypatch, "2026-03-15T12:00:00Z")
+        self._prepare_app(review_db, risk_level="HIGH")
+        rid = self._prepare_review(review_db, risk_level="HIGH", due_date="2026-01-01")
+
+        result = record_review_outcome(
+            review_db,
+            rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="completed late",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        rows = _review_rows(review_db)
+        assert len(rows) == 2
+        next_review = rows[1]
+        assert result["next_review_id"] == next_review["id"]
+        assert next_review["status"] == "pending"
+        assert next_review["due_date"] == "2027-01-01"
+        assert next_review["next_review_date"] == "2027-01-01"
+        assert next_review["frequency_months"] == 12
+        assert next_review["calculation_basis"] == "risk_level:HIGH"
+        assert result["next_cycle"]["late_completion_days"] == 73
+
+        with pytest.raises(ReviewClosedError):
+            record_review_outcome(
+                review_db,
+                rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="replay",
+                user=USER,
+                audit_writer=audit_sink,
+            )
+        assert len(_review_rows(review_db)) == 2
+
+    def test_late_completion_keeps_approval_anniversary_across_cycles(self, review_db, audit_sink, monkeypatch):
+        from periodic_review_engine import record_review_outcome, OUTCOME_NO_CHANGE
+
+        self._prepare_app(review_db, risk_level="HIGH")
+        rid = self._prepare_review(review_db, risk_level="HIGH", due_date="2026-01-01")
+        _freeze_engine_now(monkeypatch, "2026-03-15T12:00:00Z")
+        first = record_review_outcome(
+            review_db,
+            rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="cycle one late",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+        assert first["next_review_date"] == "2027-01-01"
+        next_id = first["next_review_id"]
+
+        review_db.execute("UPDATE periodic_reviews SET status = 'in_progress' WHERE id = ?", (next_id,))
+        review_db.commit()
+        _freeze_engine_now(monkeypatch, "2027-01-02T12:00:00Z")
+        second = record_review_outcome(
+            review_db,
+            next_id,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="cycle two complete",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+        assert second["next_review_date"] == "2028-01-01"
+        assert _review(review_db, second["next_review_id"])["due_date"] == "2028-01-01"
+
+    def test_risk_change_shortens_interval_but_keeps_anniversary_day(self, review_db, audit_sink, monkeypatch):
+        from periodic_review_engine import record_review_outcome, OUTCOME_RISK_RATING_CHANGED
+
+        self._prepare_app(review_db, risk_level="MEDIUM")
+        rid = self._prepare_review(review_db, risk_level="MEDIUM", due_date="2027-01-01")
+        _freeze_engine_now(monkeypatch, "2027-01-01T12:00:00Z")
+        result = record_review_outcome(
+            review_db,
+            rid,
+            outcome=OUTCOME_RISK_RATING_CHANGED,
+            outcome_reason="risk increased",
+            risk_changed=True,
+            new_risk_level="HIGH",
+            risk_impact="Material adverse media increases review cadence.",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        assert result["next_review_date"] == "2028-01-01"
+        next_review = _review(review_db, result["next_review_id"])
+        assert next_review["risk_level"] == "HIGH"
+        assert next_review["frequency_months"] == 12
+        assert next_review["calculation_basis"] == "risk_level:HIGH"
+
+
+class TestManagementMutatorsTerminalGuard:
+    def test_completed_review_rejects_management_mutators(self, review_db, audit_sink):
+        from periodic_review_engine import ReviewClosedError
+        import periodic_review_management as prm
+
+        rid = _insert_review(review_db, status="completed")
+        calls = [
+            lambda: prm.assign_review(
+                review_db, rid, assigned_officer="admin001", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.save_workspace_findings(
+                review_db, rid, findings_note="frozen", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.record_risk_change(
+                review_db, rid, new_risk_level="HIGH", reason_code="adverse_media",
+                officer_note="frozen", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.save_material_change_attestation(
+                review_db, rid, attestation="no_material_change", categories=[],
+                user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.save_officer_rationale(
+                review_db, rid, rationale="frozen", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.add_evidence_link(
+                review_db, rid, requirement_id="kyc_refresh", document_id="missing-doc",
+                link_type="supporting", note="frozen", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.save_periodic_review_baseline(
+                review_db, rid, legacy_file="no", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.save_legacy_import_setup(
+                review_db, rid, last_review_date="2025-01-01", source_type="internal_register",
+                confidence="high", user=USER, audit_writer=audit_sink
+            ),
+            lambda: prm.acknowledge_legacy_import(
+                review_db, rid, user={"sub": "admin001", "role": "admin"}, audit_writer=audit_sink
+            ),
+        ]
+        for call in calls:
+            with pytest.raises(ReviewClosedError):
+                call()
+
+    def test_cancelled_review_rejects_management_mutator(self, review_db, audit_sink):
+        from periodic_review_engine import ReviewClosedError
+        import periodic_review_management as prm
+
+        rid = _insert_review(review_db, status="cancelled")
+        with pytest.raises(ReviewClosedError):
+            prm.save_workspace_findings(
+                review_db, rid, findings_note="frozen", user=USER, audit_writer=audit_sink
+            )
 
 
 class TestRequiredItemUpdates:

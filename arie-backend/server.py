@@ -219,6 +219,7 @@ from periodic_review_management import (
     InvalidPeriodicReviewInput as _InvalidPeriodicReviewInput,
     EvidenceLinkError as _PeriodicReviewEvidenceLinkError,
     ImmutablePeriodicReviewFieldError as _ImmutablePeriodicReviewFieldError,
+    ReviewClosedError as _PeriodicReviewMgmtReviewClosed,
     ReviewNotFound as _PeriodicReviewMgmtReviewNotFound,
     UnauthorizedReviewOverride as _UnauthorizedPeriodicReviewOverride,
     acknowledge_legacy_import as _acknowledge_periodic_review_import,
@@ -27032,6 +27033,13 @@ class PeriodicReviewsListHandler(BaseHandler):
 
         status_filter = self.get_argument("status", None)
         queue_filter = self.get_argument("queue", None)
+        actionable_statuses = (
+            "pending",
+            "in_progress",
+            "awaiting_information",
+            "pending_senior_review",
+            "awaiting_edd",
+        )
         assigned_to_me = self.get_argument("assigned_to_me", "false").lower() in ("true", "1", "yes")
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         db = get_db()
@@ -27047,6 +27055,9 @@ class PeriodicReviewsListHandler(BaseHandler):
         if status_filter:
             query += " AND status = ?"
             params.append(status_filter)
+        elif not queue_filter:
+            query += " AND COALESCE(status, 'pending') IN (" + ",".join("?" for _ in actionable_statuses) + ")"
+            params.extend(actionable_statuses)
         if assigned_to_me:
             query += " AND assigned_officer = ?"
             params.append(user.get("sub"))
@@ -27125,6 +27136,8 @@ class PeriodicReviewAssignmentHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError, _UnauthorizedPeriodicReviewOverride) as exc:
                 return self.error(str(exc), 400 if isinstance(exc, (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError)) else 403)
             db.commit()
@@ -27167,6 +27180,8 @@ class PeriodicReviewImportSetupHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _UnauthorizedPeriodicReviewOverride as exc:
                 return self.error(str(exc), 403)
             except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
@@ -27240,6 +27255,8 @@ class PeriodicReviewBaselineHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27302,6 +27319,8 @@ class ApplicationPeriodicReviewBaselineHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Application not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27330,6 +27349,8 @@ class PeriodicReviewImportAcknowledgementHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _InvalidPeriodicReviewInput as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27360,6 +27381,8 @@ class PeriodicReviewRationaleHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _InvalidPeriodicReviewInput as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27392,6 +27415,8 @@ class PeriodicReviewFindingsHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _InvalidPeriodicReviewInput as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27423,6 +27448,8 @@ class PeriodicReviewMaterialChangeHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _InvalidPeriodicReviewInput as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27459,6 +27486,8 @@ class PeriodicReviewRiskChangeHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _InvalidPeriodicReviewInput as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27543,6 +27572,8 @@ class PeriodicReviewEvidenceLinksHandler(BaseHandler):
                 )
             except _PeriodicReviewMgmtReviewNotFound:
                 return self.error("Review not found", 404)
+            except _PeriodicReviewMgmtReviewClosed as exc:
+                return self.error(str(exc), 409)
             except _PeriodicReviewEvidenceLinkError as exc:
                 return self.error(str(exc), 400)
             db.commit()
@@ -27556,56 +27587,109 @@ class PeriodicReviewDecisionHandler(BaseHandler):
 
     Legacy compatibility only. New periodic-review flows must persist
     ``periodic_reviews.outcome`` via ``PeriodicReviewCompleteHandler`` and must
-    not co-write the deprecated ``decision`` field.
+    not co-write the deprecated ``decision`` field. This compatibility path
+    delegates to the canonical outcome engine so blockers, close-out hooks,
+    memo generation, and audit taxonomy cannot be bypassed.
     """
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
 
-        data = self.get_json()
+        data = self.get_json() or {}
         db = get_db()
+        try:
+            decision = data.get("decision")
+            decision_reason = data.get("decision_reason")
+            decision_map = {
+                "continue": "no_change",
+                "enhanced_monitoring": "enhanced_monitoring",
+                "request_info": "client_follow_up_required",
+                "exit_relationship": "exit_recommended",
+            }
+            if decision not in decision_map:
+                return self.error(f"Invalid decision. Must be one of: {', '.join(decision_map)}", 400)
+            if not decision_reason:
+                return self.error("decision_reason is required", 400)
 
-        review = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (review_id,)).fetchone()
-        if not review:
+            import periodic_review_engine as pre
+            outcome = decision_map[decision]
+            try:
+                result = pre.record_review_outcome(
+                    db,
+                    review_id,
+                    outcome=outcome,
+                    outcome_reason=decision_reason,
+                    rationale=decision_reason,
+                    risk_impact=data.get("risk_impact") or (
+                        decision_reason if decision == "exit_relationship" else None
+                    ),
+                    follow_up_required=decision == "request_info",
+                    follow_up_notes=data.get("follow_up_notes") or (
+                        decision_reason if decision == "request_info" else None
+                    ),
+                    exit_recommended=decision == "exit_relationship",
+                    officer_acknowledgement=data.get("officer_acknowledgement", False),
+                    enforce_prs5_gates=True,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.InvalidReviewOutcome as e:
+                return self.error(str(e), 400)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.ReviewCompletionBlocked as e:
+                self.set_status(409)
+                return self.finish({
+                    "error": "Periodic review cannot be completed",
+                    "blocking_items": e.blocking_items,
+                    "legacy": True,
+                })
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+
+            memo_result = None
+            if result.get("status") == pre.STATE_COMPLETED:
+                try:
+                    import periodic_review_memo as prm
+                    memo_result = prm.generate_periodic_review_memo(db, review_id)
+                except Exception:
+                    memo_result = {"status": "generation_failed"}
+                try:
+                    import periodic_review_risk_reassessment as prr
+                    prr.mark_memo_addendum_generated(
+                        db,
+                        review_id,
+                        memo_result=memo_result,
+                        user=user,
+                        audit_writer=self.log_audit,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Periodic review memo addendum status/audit update failed: review_id=%s",
+                        review_id,
+                    )
+
+            self.success({
+                "status": "decision_recorded",
+                "result": result,
+                "memo": memo_result,
+                "legacy": True,
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Legacy periodic review decision failed: review_id=%s", review_id)
+            self.error("Failed to record periodic review decision.", 500)
+        finally:
             db.close()
-            return self.error("Review not found", 404)
-
-        # ── C-03 FIX: Prevent decision replay on completed reviews ──
-        if review["status"] == "completed":
-            db.close()
-            return self.error(
-                f"Decision replay blocked: review {review_id} is already completed.",
-                409
-            )
-
-        decision = data.get("decision")
-        decision_reason = data.get("decision_reason")
-
-        valid_decisions = ["continue", "enhanced_monitoring", "request_info", "exit_relationship"]
-        if decision not in valid_decisions:
-            db.close()
-            return self.error(f"Invalid decision. Must be one of: {', '.join(valid_decisions)}", 400)
-
-        if not decision_reason:
-            db.close()
-            return self.error("decision_reason is required", 400)
-
-        db.execute("""
-            UPDATE periodic_reviews SET
-                status='completed', decision=?, decision_reason=?, decided_by=?, completed_at=datetime('now')
-            WHERE id=?
-        """, (decision, decision_reason, user["sub"], review_id))
-
-        # Log audit
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Review Decision", f"Review {review_id}",
-                    f"Decision: {decision}, Reason: {decision_reason}", self.get_client_ip()))
-
-        db.commit()
-        db.close()
-
-        self.success({"status": "decision_recorded", "decision": decision, "legacy": True})
 
 
 class PeriodicReviewScheduleHandler(BaseHandler):
@@ -28621,31 +28705,32 @@ class PeriodicReviewCompleteHandler(BaseHandler):
             # but generation failed" (row with failure status). See
             # periodic_review_memo.py docstring for the failure contract.
             memo_result = None
-            try:
-                import periodic_review_memo as prm
-                memo_result = prm.generate_periodic_review_memo(db, review_id)
-            except Exception:
-                # Generator already logged with full traceback. Swallow
-                # here so the outcome commit is the authoritative result
-                # surfaced to the caller.
-                memo_result = {"status": "generation_failed"}
-            try:
-                import periodic_review_risk_reassessment as prr
-                prr.mark_memo_addendum_generated(
-                    db,
-                    review_id,
-                    memo_result=memo_result,
-                    user=user,
-                    audit_writer=self.log_audit,
-                )
-            except Exception:
-                logger.exception(
-                    "Periodic review memo addendum status/audit update failed: review_id=%s",
-                    review_id,
-                )
+            if result.get("status") == pre.STATE_COMPLETED:
+                try:
+                    import periodic_review_memo as prm
+                    memo_result = prm.generate_periodic_review_memo(db, review_id)
+                except Exception:
+                    # Generator already logged with full traceback. Swallow
+                    # here so the outcome commit is the authoritative result
+                    # surfaced to the caller.
+                    memo_result = {"status": "generation_failed"}
+                try:
+                    import periodic_review_risk_reassessment as prr
+                    prr.mark_memo_addendum_generated(
+                        db,
+                        review_id,
+                        memo_result=memo_result,
+                        user=user,
+                        audit_writer=self.log_audit,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Periodic review memo addendum status/audit update failed: review_id=%s",
+                        review_id,
+                    )
 
             self.success({
-                "status": "periodic_review_completed",
+                "status": "periodic_review_completed" if result.get("status") == pre.STATE_COMPLETED else result.get("status"),
                 "result": result,
                 "memo": memo_result,
             })
@@ -29783,6 +29868,70 @@ class EDDDetailHandler(BaseHandler):
                     db=db,
                     commit=False,
                 )
+            if new_stage == "edd_approved" and updated_case:
+                linked_review_id = dict(updated_case).get("linked_periodic_review_id")
+                if linked_review_id:
+                    try:
+                        import periodic_review_engine as pre
+                        linked_review = db.execute(
+                            "SELECT status, outcome FROM periodic_reviews WHERE id = ?",
+                            (linked_review_id,),
+                        ).fetchone()
+                        linked_review_dict = dict(linked_review) if linked_review else {}
+                        linked_status = str(linked_review_dict.get("status") or "").strip().lower()
+                        if linked_review_dict and linked_status == pre.STATE_AWAITING_EDD:
+                            edd_reason = data.get("decision_reason") or "Linked EDD approved"
+                            review_result = pre.record_review_outcome(
+                                db,
+                                linked_review_id,
+                                outcome=(linked_review_dict.get("outcome") or pre.OUTCOME_EDD_REQUIRED),
+                                outcome_reason=f"Linked EDD approved: {edd_reason}",
+                                rationale=f"Linked EDD approved: {edd_reason}",
+                                risk_impact=edd_reason,
+                                edd_required=True,
+                                officer_acknowledgement=True,
+                                enforce_prs5_gates=True,
+                                user=user,
+                                audit_writer=self.log_audit,
+                            )
+                            if review_result.get("status") == pre.STATE_COMPLETED:
+                                try:
+                                    import periodic_review_memo as prm
+                                    memo_result = prm.generate_periodic_review_memo(db, linked_review_id)
+                                except Exception:
+                                    memo_result = {"status": "generation_failed"}
+                                try:
+                                    import periodic_review_risk_reassessment as prr
+                                    prr.mark_memo_addendum_generated(
+                                        db,
+                                        linked_review_id,
+                                        memo_result=memo_result,
+                                        user=user,
+                                        audit_writer=self.log_audit,
+                                    )
+                                except Exception:
+                                    logger.exception(
+                                        "Periodic review memo addendum status/audit update failed: review_id=%s",
+                                        linked_review_id,
+                                    )
+                    except Exception as exc:
+                        logger.exception(
+                            "Failed to close periodic review after linked EDD approval: edd_case_id=%s review_id=%s",
+                            case_id,
+                            linked_review_id,
+                        )
+                        self.log_audit(
+                            user,
+                            "periodic_review.edd_completion_feedback_failed",
+                            app_ref,
+                            json.dumps({
+                                "edd_case_id": case_id,
+                                "periodic_review_id": linked_review_id,
+                                "error": str(exc),
+                            }, default=str, sort_keys=True),
+                            db=db,
+                            commit=False,
+                        )
             self.log_governance_attempt(
                 user, "edd.case_update", attempt_target, "accepted", 200,
                 "", attempt_summary, db=db, commit=False)
