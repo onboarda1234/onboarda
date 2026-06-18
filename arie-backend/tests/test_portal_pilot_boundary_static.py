@@ -21,6 +21,12 @@ CLIENT_VIEW_IDS = (
     "view-client-notifications",
 )
 
+WORDING_CLEANUP_PATTERNS = (
+    r"Pre-Screening",
+    r"bank officer",
+    r"Officer review may be required",
+)
+
 FORBIDDEN_CLIENT_PATTERNS = (
     r"\bLOW RISK\b",
     r"\bMEDIUM RISK\b",
@@ -44,6 +50,7 @@ FORBIDDEN_CLIENT_PATTERNS = (
     r"\bEDD\b",
     r"elevated risk profile",
     r"high risk",
+    *WORDING_CLEANUP_PATTERNS,
 )
 
 
@@ -201,6 +208,43 @@ def test_no_recalculation_or_ai_risk_wording_in_portal_bundle():
     )
     for phrase in forbidden:
         assert phrase not in html
+
+
+def test_portal_wording_cleanup_terms_removed_from_visible_client_views():
+    html = _portal_html()
+    visible_text = []
+    for match in re.finditer(r'id="(view-[^"]+)"', html):
+        element_id = match.group(1)
+        visible_text.append(_visible_text(_extract_div_by_id(html, element_id)))
+    combined = " ".join(visible_text)
+    for pattern in WORDING_CLEANUP_PATTERNS:
+        assert not re.search(pattern, combined, flags=re.IGNORECASE), pattern
+
+
+def test_portal_status_lookup_uses_client_safe_status_mapping():
+    html = _portal_html()
+    lookup_body = _extract_js_function(html, "lookupApplication")
+    assert "getClientPortalStatusLabel(app.status)" in lookup_body
+    assert "app.status_label" not in lookup_body
+
+
+def test_portal_sanitizes_backend_verification_copy_before_rendering():
+    html = _portal_html()
+    sanitizer_body = _extract_js_function(html, "sanitizeClientPortalCopy")
+    assert "Pre-Screening" in sanitizer_body
+    assert "Initial Review" in sanitizer_body
+    assert "bank officer" in sanitizer_body
+    assert "Officer review may be required" in sanitizer_body
+    render_body = _extract_js_function(html, "renderPersistedVerification")
+    assert "sanitizeClientPortalCopy(check.message)" in render_body
+    assert "sanitizeClientPortalCopy(check.label || check.name || 'Check')" in render_body
+
+
+def test_initial_review_submit_button_matches_reset_copy():
+    html = _portal_html()
+    prescreening_markup = _extract_div_by_id(html, "view-prescreening")
+    assert "Submit Initial Review" in _visible_text(prescreening_markup)
+    assert "Submit Application" not in _visible_text(prescreening_markup)
 
 
 def test_left_application_badges_use_client_safe_labels():
