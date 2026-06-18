@@ -1,0 +1,128 @@
+
+The Session Manager plugin was installed successfully. Use the AWS CLI to start a session.
+
+
+Starting session with SessionId: ecs-execute-command-55gt8lxjxbhzgz5zr4a4og2peq
+PR_PRS_B_STAGING_SMOKE_JSON_START
+{
+  "agent1_enabled": true,
+  "base_url": "http://127.0.0.1:8080",
+  "git_sha": "69effaafce6e14dd493497e692c290f69018dcb5",
+  "image_tag": "69effaafce6e14dd493497e692c290f69018dcb5",
+  "prefix": "PRPRSB-STAGING-20260618181835",
+  "ran_at": "2026-06-18T18:18:35+00:00",
+  "scenarios": {
+    "accepted_not_verified_blocks": {
+      "application_id": "prprsb-staging-20260618181835-co-accepted",
+      "blocking_items": [
+        {
+          "completion_only": false,
+          "item_type": "periodic_review_document_required",
+          "label": "Updated Register of Directors still requires officer review",
+          "severity": "high",
+          "source": "application_enhanced_requirements",
+          "source_id": 3290
+        }
+      ],
+      "co_accept_payload_status": "accepted",
+      "co_accept_status": 200,
+      "completion_status": 409,
+      "document_id": "a270d7d6a4cb4f6e",
+      "passed": true,
+      "requirement_id": 3290,
+      "review_id": 71
+    },
+    "agent1_runs": {
+      "application_id": "prprsb-staging-20260618181835-agent1",
+      "checks_count": 7,
+      "document_id": "5a7d5d19d6594bb2",
+      "passed": true,
+      "persisted_status": "flagged",
+      "requirement_id": 3289,
+      "review_id": 70,
+      "upload_agent1": {
+        "mode": "active_runtime_verified",
+        "policy_id": "DOC-ENTITY-REGDIR-v1",
+        "trigger_path": "/api/documents/{document_id}/verify",
+        "triggered": true
+      },
+      "upload_status_code": 201,
+      "upload_verification_status": "pending",
+      "verified_at": "2026-06-18 18:18:36.035785",
+      "verify_status": "flagged",
+      "verify_status_code": 200
+    },
+    "onboarding_edd_regression": {
+      "application_id": "prprsb-staging-20260618181835-edd-regression",
+      "checks_count": 1,
+      "document_id": "65a7e8e0f8164925",
+      "passed": true,
+      "persisted_status": "verified",
+      "requirement_id": 3294,
+      "upload_agent1": {
+        "mode": "active_runtime_verified",
+        "policy_id": "DOC-ENTITY-LICENCE-v1",
+        "trigger_path": "/api/documents/{document_id}/verify",
+        "triggered": true
+      },
+      "upload_doc_type": "licence",
+      "upload_status": "pending",
+      "upload_status_code": 201,
+      "verified_at": "2026-06-18 18:18:56.069873",
+      "verify_status": "verified",
+      "verify_status_code": 200
+    },
+    "senior_manual_exception": {
+      "application_id": "prprsb-staging-20260618181835-senior-manual",
+      "blocking_items": [],
+      "co_document_accept_status": 403,
+      "co_error": "Only senior compliance officers (admin/sco) may manually accept unverified documents",
+      "completion_status": 200,
+      "document_id": "daf9e3abd3cc4f1a",
+      "passed": true,
+      "requirement_accept_status": 200,
+      "requirement_id": 3292,
+      "review_id": 74,
+      "review_status": {
+        "outcome": "no_change",
+        "status": "completed"
+      },
+      "sco_document_accept_status": 200,
+      "sco_reviewer_role": "sco"
+    },
+    "stale_reblocks": {
+      "application_id": "prprsb-staging-20260618181835-stale",
+      "blocking_items": [
+        {
+          "completion_only": false,
+          "item_type": "periodic_review_document_required",
+          "label": "Updated Register of Directors still requires officer review",
+          "severity": "high",
+          "source": "application_enhanced_requirements",
+          "source_id": 3293
+        }
+      ],
+      "completion_status": 409,
+      "document_id": "6b4a7b6da6374994",
+      "document_is_current": false,
+      "passed": true,
+      "requirement_id": 3293,
+      "review_id": 76
+    },
+    "verified_satisfies": {
+      "application_id": "prprsb-staging-20260618181835-verified",
+      "completion_payload_status": "periodic_review_completed",
+      "completion_status": 200,
+      "document_id": "8bdeba04b05849b1",
+      "passed": true,
+      "requirement_id": 3291,
+      "review_id": 72,
+      "review_status": {
+        "outcome": "no_change",
+        "status": "completed"
+      }
+    }
+  }
+}
+PR_PRS_B_STAGING_SMOKE_JSON_END
+Cannot perform start session: EOF

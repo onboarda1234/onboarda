@@ -1,0 +1,26 @@
+JWT_SECRET not set for testing — using generated fallback. Set JWT_SECRET env var.
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-9.0.2, pluggy-1.6.0 -- /opt/homebrew/opt/python@3.11/bin/python3.11
+cachedir: .pytest_cache
+rootdir: /Users/Aisha/CodexWork/onboarda-pr-prs-b/arie-backend
+configfile: pytest.ini
+plugins: anyio-4.12.1, cov-7.1.0, asyncio-1.3.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 14 items
+
+tests/test_pr_prs_b_evidence_gates.py::test_pr_document_keys_resolve_to_runtime_executable_policies PASSED [  7%]
+tests/test_pr_prs_b_evidence_gates.py::test_disclosure_keys_remain_manual_pending_section_e_split PASSED [ 14%]
+tests/test_pr_prs_b_evidence_gates.py::test_subject_scope_allowed_values_pass_through PASSED [ 21%]
+tests/test_pr_prs_b_evidence_gates.py::test_subject_scope_unknown_defaults_to_application PASSED [ 28%]
+tests/test_pr_prs_b_evidence_gates.py::test_accepted_over_unverified_document_does_not_satisfy_completion PASSED [ 35%]
+tests/test_pr_prs_b_evidence_gates.py::test_accepted_with_no_linked_document_blocks PASSED [ 42%]
+tests/test_pr_prs_b_evidence_gates.py::test_verified_document_satisfies_completion PASSED [ 50%]
+tests/test_pr_prs_b_evidence_gates.py::test_senior_accept_with_reason_on_manual_doc_satisfies PASSED [ 57%]
+tests/test_pr_prs_b_evidence_gates.py::test_co_accept_with_reason_does_not_satisfy PASSED [ 64%]
+tests/test_pr_prs_b_evidence_gates.py::test_senior_accept_without_comment_does_not_satisfy PASSED [ 71%]
+tests/test_pr_prs_b_evidence_gates.py::test_failed_verification_not_senior_overridable PASSED [ 78%]
+tests/test_pr_prs_b_evidence_gates.py::test_pending_verification_not_ready PASSED [ 85%]
+tests/test_pr_prs_b_evidence_gates.py::test_stale_document_does_not_satisfy_completion PASSED [ 92%]
+tests/test_pr_prs_b_evidence_gates.py::test_waived_remains_terminal PASSED [100%]
+
+============================== 14 passed in 0.11s ==============================
