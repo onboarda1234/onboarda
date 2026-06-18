@@ -1,0 +1,3 @@
+NOT RUN
+
+Authenticated staging browser smoke was not executed because this PR has not been merged to main and staging has not been redeployed from merged main.

@@ -1,0 +1,39 @@
+{
+  "task": "PR-PORTAL-PILOT-BOUNDARY-1",
+  "timestamp_utc": "20260618T030901Z",
+  "closure_status": "not_closed",
+  "local_validation_ok": true,
+  "local_tests": {
+    "portal_pilot_boundary_static": {
+      "ok": true,
+      "tests": 7
+    },
+    "public_api": {
+      "ok": true,
+      "tests": 20
+    },
+    "pr1_client_api_boundary": {
+      "ok": true,
+      "tests": 5
+    },
+    "portal_script_parse": {
+      "ok": true,
+      "tests": 1
+    }
+  },
+  "staging_validation_ok": false,
+  "staging_validation_reason": "Pending merge to main and staging deployment from merged SHA.",
+  "evidence_files": [
+    "version.json",
+    "health.json",
+    "liveness.json",
+    "api_smoke.json",
+    "portal_wording_scan.md",
+    "browser_smoke.md",
+    "screenshots/",
+    "browser_console.log",
+    "network_summary.json",
+    "closure_report.md",
+    "summary.json"
+  ]
+}

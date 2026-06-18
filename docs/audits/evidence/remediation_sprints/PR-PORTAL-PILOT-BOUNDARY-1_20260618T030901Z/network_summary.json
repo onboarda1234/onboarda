@@ -1,0 +1,9 @@
+{
+  "task": "PR-PORTAL-PILOT-BOUNDARY-1",
+  "timestamp_utc": "20260618T030901Z",
+  "browser_network_smoke_collected": false,
+  "bad_person_identifier_requests": null,
+  "blocking_errors": null,
+  "closure_status": "not_closed",
+  "reason": "Authenticated staging browser/network smoke must be collected after merge and deployment from main."
+}

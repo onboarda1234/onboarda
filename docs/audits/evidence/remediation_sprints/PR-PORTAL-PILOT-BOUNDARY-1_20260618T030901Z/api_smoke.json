@@ -1,0 +1,32 @@
+{
+  "task": "PR-PORTAL-PILOT-BOUNDARY-1",
+  "timestamp_utc": "20260618T030901Z",
+  "staging_api_smoke_collected": false,
+  "local_validation": {
+    "ok": true,
+    "commands": [
+      {
+        "command": "pytest arie-backend/tests/test_portal_pilot_boundary_static.py -q",
+        "result": "passed",
+        "tests": 7
+      },
+      {
+        "command": "pytest arie-backend/tests/test_public_api.py -q",
+        "result": "passed",
+        "tests": 20
+      },
+      {
+        "command": "pytest arie-backend/tests/test_pr1_client_api_boundary.py -q",
+        "result": "passed",
+        "tests": 5
+      },
+      {
+        "command": "node portal script parse check",
+        "result": "passed",
+        "tests": 1
+      }
+    ]
+  },
+  "closure_status": "not_closed",
+  "reason": "Authenticated staging API smoke must be rerun after merge and deployment from main."
+}

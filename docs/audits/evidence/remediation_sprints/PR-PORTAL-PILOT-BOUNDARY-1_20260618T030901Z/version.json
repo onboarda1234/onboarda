@@ -1,0 +1,14 @@
+{
+  "task": "PR-PORTAL-PILOT-BOUNDARY-1",
+  "timestamp_utc": "20260618T030901Z",
+  "repository": "onboarda1234/onboarda",
+  "branch": "codex/pr-portal-pilot-boundary-1",
+  "base_main_sha": "5708dcfd6d50e477360e7ece17ee44e2c683b6fa",
+  "local_worktree": "/tmp/onboarda-pr-portal",
+  "local_worktree_dirty": true,
+  "staging_version_collected": false,
+  "staging_git_sha": null,
+  "staging_image_tag": null,
+  "closure_status": "not_closed",
+  "reason": "PR is not merged to main and staging has not been redeployed from merged main."
+}
