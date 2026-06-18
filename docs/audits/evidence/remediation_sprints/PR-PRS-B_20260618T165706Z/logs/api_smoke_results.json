@@ -1,0 +1,113 @@
+{
+  "base_url": "http://127.0.0.1:10000",
+  "prefix": "PRPRSB-LOCAL",
+  "ran_at": "2026-06-18T17:29:42+00:00",
+  "scenarios": {
+    "accepted_not_verified_blocks": {
+      "application_id": "prprsb-local-co-accepted",
+      "blocking_items": [
+        {
+          "completion_only": false,
+          "item_type": "periodic_review_document_required",
+          "label": "Updated Register of Directors still requires officer review",
+          "severity": "high",
+          "source": "application_enhanced_requirements",
+          "source_id": 2
+        }
+      ],
+      "co_accept_payload_status": "accepted",
+      "co_accept_status": 200,
+      "completion_status": 409,
+      "document_id": "7e43e6880ba84377",
+      "passed": true,
+      "requirement_id": 2,
+      "review_id": 2
+    },
+    "agent1_runs": {
+      "application_id": "prprsb-local-agent1",
+      "checks_count": 8,
+      "document_id": "8de52269045843d1",
+      "manual_only": false,
+      "passed": true,
+      "persisted_status": "flagged",
+      "requirement_id": 1,
+      "review_id": 1,
+      "upload_agent1": {
+        "mode": "active_runtime_verified",
+        "policy_id": "DOC-ENTITY-REGDIR-v1",
+        "trigger_path": "/api/documents/{document_id}/verify",
+        "triggered": true
+      },
+      "upload_status": "pending",
+      "verified_at": "2026-06-18 17:29:43",
+      "verify_status": "flagged"
+    },
+    "onboarding_edd_regression": {
+      "application_id": "prprsb-local-edd-regression",
+      "checks_count": 1,
+      "document_id": "15c29fabb02c42a1",
+      "passed": true,
+      "persisted_status": "verified",
+      "requirement_id": 6,
+      "upload_agent1": {
+        "mode": "active_runtime_verified",
+        "policy_id": "DOC-ENTITY-LICENCE-v1",
+        "trigger_path": "/api/documents/{document_id}/verify",
+        "triggered": true
+      },
+      "upload_doc_type": "licence",
+      "upload_status": "pending",
+      "verified_at": "2026-06-18 17:29:47",
+      "verify_status": "verified"
+    },
+    "senior_manual_exception": {
+      "application_id": "prprsb-local-senior-manual",
+      "blocking_items": [],
+      "co_document_accept_status": 403,
+      "co_error": "Only senior compliance officers (admin/sco) may manually accept unverified documents",
+      "completion_status": 200,
+      "document_id": "6e7420b702394045",
+      "passed": true,
+      "requirement_accept_status": 200,
+      "requirement_id": 4,
+      "review_id": 5,
+      "review_status": {
+        "outcome": "no_change",
+        "status": "completed"
+      },
+      "sco_document_accept_status": 200,
+      "sco_reviewer_role": "sco"
+    },
+    "stale_reblocks": {
+      "application_id": "prprsb-local-stale",
+      "blocking_items": [
+        {
+          "completion_only": false,
+          "item_type": "periodic_review_document_required",
+          "label": "Updated Register of Directors still requires officer review",
+          "severity": "high",
+          "source": "application_enhanced_requirements",
+          "source_id": 5
+        }
+      ],
+      "completion_status": 409,
+      "document_id": "b8bbdedf06e14c5c",
+      "document_is_current": 0,
+      "passed": true,
+      "requirement_id": 5,
+      "review_id": 7
+    },
+    "verified_satisfies": {
+      "application_id": "prprsb-local-verified",
+      "completion_status": 200,
+      "document_id": "b7a6f99711984aa5",
+      "passed": true,
+      "requirement_id": 3,
+      "review_id": 3,
+      "review_status": {
+        "outcome": "no_change",
+        "status": "completed"
+      }
+    }
+  }
+}
