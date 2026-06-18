@@ -2,7 +2,12 @@
   "task_id": "PR-ROLE-NAMING-ONBOARDING-OFFICER-1",
   "timestamp_utc": "2026-06-18T02:47:54Z",
   "status": "not_closed",
+  "recorded_status_update_utc": "2026-06-18T02:53:06Z",
+  "operating_status": "IMPLEMENTED / DRAFT PR OPEN / NOT CLOSED",
+  "pr_url": "https://github.com/onboarda1234/onboarda/pull/527",
+  "draft_pr_open": true,
   "internal_role_key_unchanged": true,
+  "scope_guard": "If review suggests permission, authority, approval-gate, or role-matrix behavior changes, reject that for this PR and move it to the later authority-matrix PR.",
   "changed_files_summary": {
     "ui": [
       "arie-backoffice.html"
@@ -49,13 +54,23 @@
     "browser_smoke_user_management": false,
     "browser_smoke_assignment_reassignment": false,
     "browser_smoke_audit_role_display": false,
+    "browser_smoke_no_permission_change": false,
     "evidence_folder_complete": true,
     "closure_report_complete": true
   },
+  "current_closure_blockers": [
+    "CI must finish and pass.",
+    "PR #527 must be marked ready and merged.",
+    "Staging deploy from merged main.",
+    "/api/version.git_sha and image_tag must match merge SHA.",
+    "API smoke must pass.",
+    "Browser smoke must cover user management role label, application assignment/reassignment label, audit trail role display, and no permission change.",
+    "Evidence and closure report must be updated."
+  ],
   "residual_issues": [
     {
       "classification": "blocker",
-      "issue": "Merge, staging deploy, authenticated version proof, CI, API smoke, and browser smoke remain required before closure."
+      "issue": "Only closure gates remain: CI, ready/merge, staging deploy, authenticated version proof, API smoke, browser smoke, and evidence/closure update."
     },
     {
       "classification": "non_blocking",
