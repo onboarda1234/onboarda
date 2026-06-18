@@ -329,11 +329,11 @@ POLICY_DEFINITIONS = [
     {
         "key": "source_wealth",
         "label": "Source of Wealth",
-        "category": "edd",
+        "category": "evidence",
         "policy_id": "DOC-EDD-SOW-v1",
         "aliases": ["sow", "source_of_wealth"],
-        "sources": [("matrix", "sow", "person"), ("supplementary", "source_wealth", "entity")],
-        "gate_behaviour": ["Blocks EDD closure only when active required SOW evidence is requested."],
+        "sources": [("matrix", "source_wealth", "person"), ("matrix", "sow", "person"), ("supplementary", "source_wealth", "entity")],
+        "gate_behaviour": ["Blocks person/evidence reliance when active required SOW evidence is requested."],
     },
     {
         "key": "source_funds",

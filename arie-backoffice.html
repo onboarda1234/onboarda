@@ -2792,7 +2792,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="tab-bar" style="margin-bottom:0;">
         <div class="tab active" onclick="switchCheckTab('entity',this)">Entity Documents</div>
         <div class="tab" onclick="switchCheckTab('person',this)">Person / KYC Documents</div>
-        <div class="tab" onclick="switchCheckTab('edd',this)">Enhanced / EDD Documents</div>
+        <div class="tab" onclick="switchCheckTab('edd',this)">Enhanced Evidence Documents</div>
       </div>
 
       <div id="checks-entity-tab"></div>
@@ -2968,8 +2968,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="form-group" style="grid-column:1 / -1;"><div class="form-label">Requirement Description</div><textarea class="form-input" style="resize:vertical;" id="er-requirement-description" rows="2"></textarea></div>
       <div class="form-group"><div class="form-label">Audience</div><select class="form-select" id="er-audience"><option value="client">Client</option><option value="backoffice">Back-office</option><option value="both">Both</option></select></div>
       <div class="form-group"><div class="form-label">Requirement Type</div><select class="form-select" id="er-requirement-type"><option value="document">Document</option><option value="declaration">Declaration</option><option value="review_task">Review task</option><option value="explanation">Explanation</option><option value="internal_control">Internal control</option></select></div>
-      <div class="form-group"><div class="form-label">Subject Scope</div><select class="form-select" id="er-subject-scope"><option value="company">Company</option><option value="ubo">UBO</option><option value="director">Director</option><option value="controller">Controller</option><option value="application">Application</option><option value="screening_subject">Screening subject</option></select></div>
+      <div class="form-group"><div class="form-label">Subject Scope</div><select class="form-select" id="er-subject-scope"><option value="company">Company</option><option value="ubo">UBO</option><option value="director">Director</option><option value="controller">Controller</option><option value="application">Application</option><option value="screening_subject">Screening subject</option><option value="intermediary">Intermediary</option></select></div>
       <div class="form-group"><div class="form-label">Sort Order</div><input class="form-input" type="number" id="er-sort-order" value="100" /></div>
+      <div class="form-group"><div class="form-label">Section</div><input class="form-input" id="er-section" readonly /></div>
+      <div class="form-group"><div class="form-label">Canonical doc_type</div><input class="form-input" id="er-canonical-doc-type" readonly /></div>
       <div class="form-group" style="grid-column:1 / -1;">
         <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-size:12px;"><input type="checkbox" id="er-blocking-approval" checked /> Blocks approval</label>
         <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-size:12px;"><input type="checkbox" id="er-waivable" checked /> Waivable</label>
@@ -8818,9 +8820,12 @@ function enhancedRequirementBackOfficeGroup(req) {
     'director',
     'ubo',
     'controller',
-    'screening_subject'
+    'screening_subject',
+    'intermediary'
   ].indexOf(scope) >= 0) return 'identity';
   if (
+    key.indexOf('bankref_') === 0 ||
+    key.indexOf('source_wealth_') === 0 ||
     key.indexOf('material_ubo_sow_evidence') === 0 ||
     key.indexOf('pep_sow_evidence') === 0 ||
     key.indexOf('pep_bank_reference') === 0
@@ -8855,6 +8860,20 @@ function renderIdentityEnhancedRequirementCard(req) {
 }
 
 function buildExpectedKycDocumentSlots(app) {
+  var risk = String((app && (app.final_risk_level || app.risk_level || app.base_risk_level)) || '').toUpperCase();
+  var highOrVeryHigh = risk === 'HIGH' || risk === 'VERY_HIGH';
+  function partyIsPep(person) {
+    if (!person) return false;
+    if (person.isPEP === true || person.is_pep === true) return true;
+    var flag = String(person.isPEP || person.is_pep || person.pep_status || '').toLowerCase();
+    if (['1','true','yes','y','declared_yes','confirmed_pep'].indexOf(flag) >= 0) return true;
+    var declaration = person.pep_declaration || {};
+    if (typeof declaration === 'string') {
+      try { declaration = JSON.parse(declaration); } catch (e) { declaration = {}; }
+    }
+    var declared = String((declaration && (declaration.declared_pep || declaration.client_declared_pep)) || '').toLowerCase();
+    return ['1','true','yes','y','declared_yes','confirmed_pep'].indexOf(declared) >= 0;
+  }
   var expected = [
     { doc_type: 'cert_inc', label: 'Certificate of Incorporation', taxonomy_section: 'entity' },
     { doc_type: 'memarts', label: 'Memorandum & Articles', taxonomy_section: 'entity' },
@@ -8869,11 +8888,19 @@ function buildExpectedKycDocumentSlots(app) {
     var owner = buildPartyDisplayName(person);
     expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
     expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
+    if (highOrVeryHigh || partyIsPep(person)) {
+      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
+    }
   });
   (app.ubos || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
     expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
     expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+    if (highOrVeryHigh || partyIsPep(person)) {
+      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+    }
   });
   (app.intermediaries || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
@@ -26234,7 +26261,7 @@ AGENT1_DOCUMENT_POLICIES = [
   canonicalAgent1Policy('person','DOC-PERSON-CV-v1','CV / LinkedIn profile',['cv','linkedin_profile'],'Active',true,['name match','employment history presence','employment relevance'],'Blocks EDD/person background reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
   canonicalAgent1Policy('evidence','DOC-EVIDENCE-BANK-REFERENCE-v1','Bank reference',['bankref','bank_reference','pep_bank_reference','edd_bank_reference'],'Active',true,['bank letterhead','document date','entity/person name match','account standing','signatory'],'Blocks EDD/person/entity reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
   canonicalAgent1Policy('person','DOC-PERSON-PEP-SUPPORT-v1','PEP declaration support',['pep_declaration','pep-declaration','pep_support'],'Active',true,['name match','source of wealth evidence','consistency / plausibility'],'Blocks EDD and approval reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
-  canonicalAgent1Policy('edd','DOC-EDD-SOW-v1','Source of Wealth',['source_wealth','sow','source_of_wealth'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks EDD closure only when active required SOW evidence is requested.',['EDD basic pilot','Periodic review'],[]),
+  canonicalAgent1Policy('evidence','DOC-EDD-SOW-v1','Source of Wealth',['source_wealth','sow','source_of_wealth'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks person/evidence reliance when active required SOW evidence is requested.',['Onboarding / KYC','EDD basic pilot','Periodic review'],[]),
   canonicalAgent1Policy('edd','DOC-EDD-SOF-v1','Source of Funds',['source_funds','sof','source_of_funds'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks EDD closure only when active required SOF evidence is requested.',['EDD basic pilot','Periodic review'],[]),
   canonicalAgent1Policy('edd','DOC-EDD-BANK-STATEMENTS-v1','Bank statements',['bank_statements','bank_statement'],'Active',true,['statement period','account holder match','completeness'],'Blocks EDD closure only when active required bank statement evidence is requested.',['EDD basic pilot','Periodic review'],[]),
   canonicalAgent1Policy('edd','DOC-EDD-TAX-RETURN-v1','Tax return',['tax_return'],'Manual review only',false,['party match','tax year/date review','income/source consistency'],'Manual review only in pilot.',['EDD basic pilot'],[]),
@@ -27893,7 +27920,8 @@ function renderEnhancedRequirementRules() {
     var text = [
       rule.trigger_key, rule.trigger_label, rule.trigger_category,
       rule.requirement_key, rule.requirement_label, rule.requirement_description,
-      rule.audience, rule.requirement_type, rule.subject_scope
+      rule.audience, rule.requirement_type, rule.subject_scope, rule.section,
+      rule.canonical_doc_type
     ].join(' ').toLowerCase();
     if (search && text.indexOf(search) < 0) return false;
     if (trigger && rule.trigger_key !== trigger) return false;
@@ -27941,6 +27969,8 @@ function renderEnhancedRequirementRules() {
         '<td>' + enhancedRequirementBadge(rule.audience || '', audienceTone) + '</td>' +
         '<td>' + escapeHtml((rule.requirement_type || '').replace(/_/g, ' ')) + '</td>' +
         '<td>' + escapeHtml((rule.subject_scope || '').replace(/_/g, ' ')) + '</td>' +
+        '<td>' + escapeHtml(rule.section || '') + '</td>' +
+        '<td>' + escapeHtml(rule.canonical_doc_type || '') + '</td>' +
         '<td>' + (rule.blocking_approval ? enhancedRequirementBadge('Blocking', 'amber') : enhancedRequirementBadge('Non-blocking', '')) + '</td>' +
         '<td>' + (rule.waivable ? enhancedRequirementBadge('Waivable', '') : enhancedRequirementBadge('Not waivable', 'red')) + '</td>' +
         '<td>' + status + '</td>' +
@@ -27952,7 +27982,7 @@ function renderEnhancedRequirementRules() {
         '<div><div class="card-title">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + ' · ' + escapeHtml(group.category) + '</div></div>' +
         '<div>' + enhancedRequirementBadge(group.rules.length + ' rule' + (group.rules.length === 1 ? '' : 's'), '') + '</div>' +
       '</div>' +
-      '<div style="overflow:auto;"><table class="data-table"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Approval</th><th>Waiver</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div style="overflow:auto;"><table class="data-table"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Section</th><th>Doc type</th><th>Approval</th><th>Waiver</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '</div>';
   }).join('');
   container.innerHTML = html;
@@ -27983,6 +28013,8 @@ function showEnhancedRequirementForm(ruleId) {
   document.getElementById('er-requirement-type').value = rule ? rule.requirement_type : 'document';
   document.getElementById('er-subject-scope').value = rule ? rule.subject_scope : 'application';
   document.getElementById('er-sort-order').value = rule ? (rule.sort_order || 100) : 100;
+  document.getElementById('er-section').value = rule ? (rule.section || '') : '';
+  document.getElementById('er-canonical-doc-type').value = rule ? (rule.canonical_doc_type || '') : '';
   document.getElementById('er-blocking-approval').checked = rule ? !!rule.blocking_approval : true;
   document.getElementById('er-waivable').checked = rule ? !!rule.waivable : true;
   document.getElementById('er-mandatory').checked = rule ? !!rule.mandatory : true;

@@ -185,18 +185,24 @@ def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
     rows = conn.execute(
         """
         SELECT trigger_key, requirement_key, requirement_label, client_safe_label,
-               blocking_approval, mandatory, active, subject_scope
+               blocking_approval, mandatory, active, subject_scope, audience,
+               requirement_type, client_safe_description
         FROM enhanced_requirement_rules
         WHERE requirement_key IN (
             'company_bank_reference',
-            'company_bank_statements_6m',
             'company_sof_evidence',
-            'material_ubo_sow_evidence',
+            'pep_declaration_details',
+            'pep_adverse_media_assessment',
+            'pep_enhanced_monitoring_flag',
             'aml_cft_policy',
-            'ownership_structure_chart',
+            'trust_nominee_foundation_documents',
             'jurisdiction_sof_evidence',
+            'jurisdiction_exposure_rationale',
+            'jurisdiction_risk_assessment',
+            'contracts_invoices',
             'expected_transaction_flow_evidence',
-            'pep_bank_reference'
+            'major_counterparties_explanation',
+            'volume_rationale_vs_business_size'
         )
         """
     ).fetchall()
@@ -204,20 +210,30 @@ def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
     conn.close()
 
     assert by_key["company_bank_reference"]["requirement_label"] == "Company bank reference letter"
-    assert by_key["company_bank_reference"]["client_safe_label"] == "Company bank reference"
+    assert by_key["company_bank_reference"]["client_safe_label"] == "Company bank reference letter"
     assert by_key["company_bank_reference"]["blocking_approval"] == 0
-    assert by_key["company_bank_reference"]["mandatory"] == 0
-    assert by_key["company_bank_statements_6m"]["active"] == 0
+    assert by_key["company_bank_reference"]["mandatory"] == 1
     assert by_key["company_sof_evidence"]["active"] == 1
-    assert by_key["material_ubo_sow_evidence"]["client_safe_label"] == "UBO Source of Wealth evidence"
-    assert by_key["material_ubo_sow_evidence"]["subject_scope"] == "ubo"
+    assert by_key["pep_declaration_details"]["requirement_label"] == "Additional declaration details"
+    assert by_key["pep_declaration_details"]["audience"] == "client"
+    assert by_key["pep_declaration_details"]["requirement_type"] == "declaration"
+    assert by_key["pep_adverse_media_assessment"]["audience"] == "backoffice"
+    assert by_key["pep_adverse_media_assessment"]["mandatory"] == 0
+    assert by_key["pep_adverse_media_assessment"]["blocking_approval"] == 0
+    assert by_key["pep_enhanced_monitoring_flag"]["audience"] == "backoffice"
+    assert by_key["pep_enhanced_monitoring_flag"]["requirement_type"] == "internal_control"
     assert by_key["aml_cft_policy"]["blocking_approval"] == 0
     assert by_key["aml_cft_policy"]["mandatory"] == 0
-    assert by_key["ownership_structure_chart"]["active"] == 0
+    assert by_key["trust_nominee_foundation_documents"]["active"] == 1
+    assert by_key["trust_nominee_foundation_documents"]["blocking_approval"] == 1
     assert by_key["jurisdiction_sof_evidence"]["active"] == 0
+    assert by_key["jurisdiction_exposure_rationale"]["active"] == 1
+    assert by_key["jurisdiction_exposure_rationale"]["client_safe_description"] == "Required for certain countries of incorporation."
+    assert by_key["jurisdiction_risk_assessment"]["audience"] == "backoffice"
+    assert by_key["contracts_invoices"]["active"] == 1
     assert by_key["expected_transaction_flow_evidence"]["active"] == 0
-    assert by_key["pep_bank_reference"]["mandatory"] == 1
-    assert by_key["pep_bank_reference"]["subject_scope"] == "screening_subject"
+    assert by_key["major_counterparties_explanation"]["requirement_type"] == "explanation"
+    assert by_key["volume_rationale_vs_business_size"]["blocking_approval"] == 1
 
 
 def test_list_endpoint_returns_seeded_rules_and_read_roles(enhanced_req_api_server):
@@ -230,8 +246,11 @@ def test_list_endpoint_returns_seeded_rules_and_read_roles(enhanced_req_api_serv
     body = admin_resp.json()
     keys = {(r["trigger_key"], r["requirement_key"]) for r in body["rules"]}
     assert ("high_or_very_high_risk", "company_bank_reference") in keys
-    assert ("pep", "mandatory_senior_review") in keys
+    assert ("pep", "pep_adverse_media_assessment") in keys
     assert "high_or_very_high_risk" in body["grouped"]
+    company_bank = next(r for r in body["rules"] if r["requirement_key"] == "company_bank_reference")
+    assert company_bank["section"] == "C"
+    assert company_bank["canonical_doc_type"] == "bankref"
 
     co_resp = requests.get(
         f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
@@ -289,12 +308,12 @@ def test_rule_serialization_accepts_text_or_native_json_fields():
         "trigger_key": "pep",
         "trigger_label": "PEP",
         "trigger_category": "screening",
-        "requirement_key": "pep_sow_evidence",
-        "requirement_label": "Source of Wealth evidence",
+        "requirement_key": "company_sof_evidence",
+        "requirement_label": "Company Source of Funds evidence",
         "requirement_description": "",
         "audience": "client",
         "requirement_type": "document",
-        "subject_scope": "screening_subject",
+        "subject_scope": "company",
         "blocking_approval": 1,
         "waivable": 1,
         "mandatory": 1,
@@ -317,10 +336,9 @@ def test_pr6c_requirement_presentation_type_classification():
     cases = [
         ("company_sof_evidence", "Company Source of Funds evidence", "document", "evidence"),
         ("pep_declaration_details", "PEP declaration details", "declaration", "portal_disclosure"),
-        ("pep_jurisdiction", "PEP jurisdiction", "declaration", "portal_disclosure"),
-        ("pep_role_position", "PEP role/position", "declaration", "portal_disclosure"),
-        ("mandatory_senior_review", "Mandatory senior review", "review_task", "internal_control"),
-        ("ongoing_monitoring_flag", "Ongoing monitoring flag", "internal_control", "internal_control"),
+        ("jurisdiction_exposure_rationale", "Jurisdiction Exposure Rationale", "explanation", "portal_disclosure"),
+        ("pep_adverse_media_assessment", "Adverse media assessment", "review_task", "internal_control"),
+        ("pep_enhanced_monitoring_flag", "Enhanced monitoring flag", "internal_control", "internal_control"),
         ("unknown_requirement", "Unknown requirement", "", "evidence"),
     ]
 
@@ -400,6 +418,137 @@ def test_admin_can_create_update_disable_enable_and_audit(enhanced_req_api_serve
     assert detail["actor"] == "admin001"
 
 
+def test_admin_setting_edit_affects_new_applications_only_and_is_audited(enhanced_req_api_server):
+    from db import get_db
+    from enhanced_requirements import generate_application_enhanced_requirements
+
+    conn = get_db()
+    existing_app_id = "settings_existing_" + uuid.uuid4().hex[:8]
+    conn.execute(
+        """
+        INSERT INTO applications
+        (id, ref, company_name, country, sector, entity_type, ownership_structure,
+         prescreening_data, risk_score, risk_level, base_risk_level, final_risk_level, status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            existing_app_id,
+            "ARF-SET-" + uuid.uuid4().hex[:8],
+            "Settings Existing Ltd",
+            "United Kingdom",
+            "Technology",
+            "SME",
+            "Simple",
+            json.dumps({"existing_bank_account": "Yes"}),
+            72,
+            "HIGH",
+            "HIGH",
+            "HIGH",
+            "submitted",
+        ),
+    )
+    generate_application_enhanced_requirements(
+        conn,
+        existing_app_id,
+        actor={"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        generation_source="settings_test",
+    )
+    existing_label = conn.execute(
+        """
+        SELECT requirement_label
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key='company_sof_evidence'
+        """,
+        (existing_app_id,),
+    ).fetchone()["requirement_label"]
+    rule = conn.execute(
+        """
+        SELECT id
+        FROM enhanced_requirement_rules
+        WHERE trigger_key='high_or_very_high_risk'
+          AND requirement_key='company_sof_evidence'
+        """
+    ).fetchone()
+    conn.commit()
+    conn.close()
+
+    updated_label = "Company Source of Funds evidence - settings test"
+    update_resp = requests.patch(
+        f"{enhanced_req_api_server}/api/settings/enhanced-requirements/{rule['id']}",
+        json={"requirement_label": updated_label},
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    assert update_resp.json()["rule"]["requirement_label"] == updated_label
+
+    new_app_id = "settings_new_" + uuid.uuid4().hex[:8]
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO applications
+        (id, ref, company_name, country, sector, entity_type, ownership_structure,
+         prescreening_data, risk_score, risk_level, base_risk_level, final_risk_level, status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            new_app_id,
+            "ARF-SET-" + uuid.uuid4().hex[:8],
+            "Settings New Ltd",
+            "United Kingdom",
+            "Technology",
+            "SME",
+            "Simple",
+            json.dumps({"existing_bank_account": "Yes"}),
+            72,
+            "HIGH",
+            "HIGH",
+            "HIGH",
+            "submitted",
+        ),
+    )
+    generate_application_enhanced_requirements(
+        conn,
+        new_app_id,
+        actor={"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        generation_source="settings_test",
+    )
+    persisted_existing_label = conn.execute(
+        """
+        SELECT requirement_label
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key='company_sof_evidence'
+        """,
+        (existing_app_id,),
+    ).fetchone()["requirement_label"]
+    new_label = conn.execute(
+        """
+        SELECT requirement_label
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key='company_sof_evidence'
+        """,
+        (new_app_id,),
+    ).fetchone()["requirement_label"]
+    audit = conn.execute(
+        """
+        SELECT detail, before_state, after_state
+        FROM audit_log
+        WHERE action='enhanced_requirement_rule.updated'
+          AND detail LIKE ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (f"%{rule['id']}%",),
+    ).fetchone()
+    conn.close()
+
+    assert persisted_existing_label == existing_label
+    assert persisted_existing_label != updated_label
+    assert new_label == updated_label
+    assert audit is not None
+    assert json.loads(audit["after_state"])["requirement_label"] == updated_label
+    assert json.loads(audit["before_state"])["requirement_label"] == existing_label
+
+
 def test_analyst_cannot_modify_and_client_cannot_access(enhanced_req_api_server):
     analyst_resp = requests.post(
         f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
@@ -431,7 +580,7 @@ def test_invalid_enum_and_duplicate_keys_are_rejected(enhanced_req_api_server):
 
     duplicate = _new_rule_payload()
     duplicate["trigger_key"] = "pep"
-    duplicate["requirement_key"] = "mandatory_senior_review"
+    duplicate["requirement_key"] = "pep_adverse_media_assessment"
     dup_resp = requests.post(
         f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
         json=duplicate,
@@ -530,11 +679,13 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements" in portal_html
     assert "A — Corporate Entity Documents" in portal_html
     assert "B — Directors & UBO Identity Documents" in portal_html
-    assert "C — Additional Required Documents" in portal_html
+    assert "C — Enhanced Evidence Documents" in portal_html
+    assert "E — Portal Disclosures" in portal_html
     assert "D — Other Documents" in portal_html
     assert portal_html.index("A — Corporate Entity Documents") < portal_html.index("B — Directors & UBO Identity Documents")
-    assert portal_html.index("B — Directors & UBO Identity Documents") < portal_html.index("C — Additional Required Documents")
-    assert portal_html.index("C — Additional Required Documents") < portal_html.index("D — Other Documents")
+    assert portal_html.index("B — Directors & UBO Identity Documents") < portal_html.index("C — Enhanced Evidence Documents")
+    assert portal_html.index("C — Enhanced Evidence Documents") < portal_html.index("D — Other Documents")
+    assert portal_html.index("D — Other Documents") < portal_html.index("E — Portal Disclosures")
     assert "Additional enhanced evidence requested by Compliance for this application." not in portal_html
     assert "renderPortalEnhancedRequirements" in portal_html
     assert "loadPortalEnhancedRequirements" in portal_html
@@ -547,7 +698,7 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "portalEnhancedRequirementPersonPanel" in portal_html
     assert "portal-enhanced-requirements" in portal_html
 
-    portal_section = portal_html.split("C — Additional Required Documents", 1)[1]
+    portal_section = portal_html.split("C — Enhanced Evidence Documents", 1)[1]
     portal_section = portal_section.split("<!-- Section D: Other Documents", 1)[0]
     assert "Additional documents requested by Compliance for this application" in portal_section
     for forbidden in (
@@ -705,7 +856,8 @@ def test_pr6f_unified_kyc_documents_and_verification_cleanup_are_wired():
     assert "Checks passed" in html
     assert "System-blocked" in html
 
-    assert "C — Additional Required Documents" in portal_html
+    assert "C — Enhanced Evidence Documents" in portal_html
+    assert "E — Portal Disclosures" in portal_html
     assert "Upload requested risk-triggered evidence documents here." not in portal_html
     assert "{ id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: true, conditional: 'has-bank' }" in portal_html
     assert "{ id: 'doc-bank-ref', name: 'Bank Reference Letter', required: true, conditional: 'high-risk' }" not in portal_html

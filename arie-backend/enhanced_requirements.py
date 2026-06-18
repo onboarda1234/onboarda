@@ -31,6 +31,7 @@ ALLOWED_SUBJECT_SCOPES = (
     "controller",
     "application",
     "screening_subject",
+    "intermediary",
 )
 ALLOWED_WAIVER_ROLES = ("admin", "sco")
 
@@ -41,7 +42,6 @@ EXPECTED_DEFAULT_TRIGGER_KEYS = (
     "opaque_ownership",
     "high_risk_jurisdiction",
     "high_volume",
-    "screening_concern",
 )
 
 APPLICATION_REQUIREMENT_STATUSES = (
@@ -142,43 +142,131 @@ EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
     "crypto_or_virtual_asset_sector": "crypto_vasp",
     "elevated_jurisdiction": "high_risk_jurisdiction",
     "opaque_or_incomplete_ownership": "opaque_ownership",
-    "material_screening_concern": "screening_concern",
+}
+
+SCREENING_INDEPENDENT_ROUTING_TRIGGERS = {
+    "material_screening_concern",
+    "supervisor_mandatory_escalation",
 }
 
 BANK_ACCOUNT_DEPENDENT_REQUIREMENT_KEYS = {
-    "high_volume_bank_statements",
+    "company_bank_reference",
 }
 
 
 ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP = {
-    # Active pilot runtime verification policies.
+    # Active v5 enhanced-requirement document-backed rows only.
     "company_bank_reference": "bankref",
-    "company_bank_statements_6m": "bank_statements",
     "company_sof_evidence": "source_funds",
+    "aml_cft_policy": "aml_policy",
+    "trust_nominee_foundation_documents": "trust_deed",
+    "jurisdiction_sof_evidence": "source_funds",
+    "contracts_invoices": "contracts",
+    "expected_transaction_flow_evidence": "supporting_document",
+}
+
+LEGACY_ENHANCED_REQUIREMENT_DOCUMENT_POLICY_ALIASES = {
+    # Historical/read-only compatibility for generated records created before
+    # KYC/EDD matrix v5. These keys are not active defaults for new generation.
+    "company_bank_statements_6m": "bank_statements",
     "material_ubo_sow_evidence": "source_wealth",
     "pep_sow_evidence": "source_wealth",
     "pep_bank_reference": "bankref",
     "pep_linked_sof_evidence": "source_funds",
-    "aml_cft_policy": "aml_policy",
     "licence_or_registration_evidence": "licence",
     "crypto_source_of_funds_evidence": "source_funds",
     "ownership_structure_chart": "structure_chart",
-    "jurisdiction_sof_evidence": "source_funds",
     "jurisdiction_licensing_regulatory_evidence": "licence",
-    "contracts_invoices": "contracts",
     "high_volume_bank_statements": "bank_statements",
-    # Manual-review-only pilot policies.
     "ownership_chain_documents": "supporting_document",
     "enhanced_ubo_evidence": "supporting_document",
-    "trust_nominee_foundation_documents": "trust_deed",
-    "expected_transaction_flow_evidence": "supporting_document",
 }
+
+SECTION_B_PERSON_DOCUMENT_POLICY_PREFIXES = {
+    "bankref": "bankref",
+    "source_wealth": "source_wealth",
+}
+
+TARGET_ENHANCED_REQUIREMENT_SECTIONS = {
+    "company_bank_reference": "C",
+    "company_sof_evidence": "C",
+    "pep_declaration_details": "E",
+    "pep_adverse_media_assessment": "F",
+    "pep_enhanced_monitoring_flag": "F",
+    "aml_cft_policy": "C",
+    "trust_nominee_foundation_documents": "C",
+    "jurisdiction_sof_evidence": "C",
+    "jurisdiction_exposure_rationale": "E",
+    "jurisdiction_risk_assessment": "F",
+    "contracts_invoices": "C",
+    "expected_transaction_flow_evidence": "C",
+    "major_counterparties_explanation": "E",
+    "volume_rationale_vs_business_size": "E",
+}
+
+REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS = {
+    "enhanced_business_activity_explanation",
+    "company_bank_statements_6m",
+    "material_ubo_sow_evidence",
+    "pep_role_position",
+    "pep_jurisdiction",
+    "pep_sow_evidence",
+    "pep_bank_reference",
+    "pep_linked_sof_evidence",
+    "mandatory_senior_review",
+    "ongoing_monitoring_flag",
+    "licence_or_registration_evidence",
+    "transaction_flow_explanation",
+    "jurisdictions_served",
+    "wallet_exchange_counterparty_exposure",
+    "crypto_source_of_funds_evidence",
+    "crypto_enhanced_monitoring_flag",
+    "crypto_regulatory_status_assessment",
+    "ownership_structure_chart",
+    "ownership_chain_documents",
+    "enhanced_ubo_evidence",
+    "control_rationale",
+    "operating_country_target_market_explanation",
+    "jurisdiction_licensing_regulatory_evidence",
+    "enhanced_screening_review",
+    "high_volume_bank_statements",
+    "screening_disposition",
+    "false_positive_rationale",
+    "adverse_media_pep_sanctions_assessment",
+    "material_screening_senior_review",
+    "client_clarification_screening",
+    "manual_edd_pack",
+    "money_services_pack",
+    "regulated_financial_services_pack",
+    "cross_border_pack",
+    "high_risk_product_pack",
+}
+
+
+def _document_type_for_enhanced_requirement(requirement_key):
+    key = _clean_text(requirement_key).lower()
+    if key in ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP:
+        return ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP[key]
+    for prefix, doc_type in SECTION_B_PERSON_DOCUMENT_POLICY_PREFIXES.items():
+        if key == prefix or key.startswith(prefix + "_"):
+            return doc_type
+    if key in LEGACY_ENHANCED_REQUIREMENT_DOCUMENT_POLICY_ALIASES:
+        return LEGACY_ENHANCED_REQUIREMENT_DOCUMENT_POLICY_ALIASES[key]
+    for prefix, doc_type in (
+        ("material_ubo_sow_evidence", "source_wealth"),
+        ("pep_sow_evidence", "source_wealth"),
+        ("pep_bank_reference", "bankref"),
+        ("pep_linked_sof_evidence", "source_funds"),
+    ):
+        if key.startswith(prefix + "_"):
+            return doc_type
+    return "supporting_document"
 
 
 def enhanced_requirement_document_policy(requirement_key):
     """Return the canonical Agent 1 policy classification for an EDD request."""
     key = _clean_text(requirement_key).lower()
-    doc_type = ENHANCED_REQUIREMENT_DOCUMENT_POLICY_MAP.get(key) or "supporting_document"
+    doc_type = _document_type_for_enhanced_requirement(key)
     policy = policy_for_document_type(doc_type) or {}
     status = policy.get("active_pilot_status") or STATUS_MANUAL
     backend_executable = bool(policy.get("backend_executable"))
@@ -210,27 +298,16 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "trigger_category": "risk",
         "requirement_key": "company_bank_reference",
         "requirement_label": "Company bank reference letter",
-        "requirement_description": "Request a current company bank reference letter to support enhanced review.",
+        "requirement_description": "Company bank reference letter for the proposed relationship.",
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
         "blocking_approval": False,
-        "mandatory": False,
-        "client_safe_label": "Company bank reference",
+        "mandatory": True,
         "sort_order": 10,
-    },
-    {
-        "trigger_key": "high_or_very_high_risk",
-        "trigger_label": "HIGH / VERY_HIGH risk",
-        "trigger_category": "risk",
-        "requirement_key": "company_bank_statements_6m",
-        "requirement_label": "6 months company bank statements where available",
-        "requirement_description": "Collect recent company bank statements when available to support enhanced financial review.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "company",
-        "active": False,
-        "sort_order": 20,
+        "applies_when": {"existing_bank_account": True},
+        "client_safe_label": "Company bank reference letter",
+        "client_safe_description": "Please upload the requested company bank reference letter.",
     },
     {
         "trigger_key": "high_or_very_high_risk",
@@ -242,347 +319,160 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
-        "sort_order": 30,
-    },
-    {
-        "trigger_key": "high_or_very_high_risk",
-        "trigger_label": "HIGH / VERY_HIGH risk",
-        "trigger_category": "risk",
-        "requirement_key": "material_ubo_sow_evidence",
-        "requirement_label": "UBO Source of Wealth evidence for material UBOs/controllers",
-        "requirement_description": "Evidence supporting the source of wealth for material UBOs or controllers.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "ubo",
-        "client_safe_label": "UBO Source of Wealth evidence",
-        "sort_order": 40,
-    },
-    {
-        "trigger_key": "high_or_very_high_risk",
-        "trigger_label": "HIGH / VERY_HIGH risk",
-        "trigger_category": "risk",
-        "requirement_key": "enhanced_business_activity_explanation",
-        "requirement_label": "Enhanced business activity explanation",
-        "requirement_description": "Additional explanation of business activity, counterparties, revenue model, and transaction purpose.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "application",
-        "sort_order": 50,
+        "blocking_approval": False,
+        "mandatory": True,
+        "sort_order": 20,
+        "client_safe_label": "Company Source of Funds evidence",
+        "client_safe_description": "Please upload evidence explaining the source of company funds for the proposed relationship.",
     },
     {
         "trigger_key": "pep",
-        "trigger_label": "PEP",
+        "trigger_label": "PEP / declared PEP",
         "trigger_category": "screening",
         "requirement_key": "pep_declaration_details",
-        "requirement_label": "PEP declaration details",
-        "requirement_description": "Collect details of the PEP exposure, including relationship and public function context.",
+        "requirement_label": "Additional declaration details",
+        "requirement_description": "Additional declaration details captured for officer review.",
         "audience": "client",
         "requirement_type": "declaration",
         "subject_scope": "screening_subject",
+        "blocking_approval": True,
+        "mandatory": True,
         "sort_order": 10,
+        "client_safe_label": "Additional declaration details",
+        "client_safe_description": "Please provide the requested declaration details so our team can complete the review.",
     },
     {
         "trigger_key": "pep",
-        "trigger_label": "PEP",
+        "trigger_label": "PEP / adverse media context",
         "trigger_category": "screening",
-        "requirement_key": "pep_role_position",
-        "requirement_label": "PEP role/position",
-        "requirement_description": "Record the PEP role, position, public office, or exposure basis.",
-        "audience": "both",
-        "requirement_type": "declaration",
+        "requirement_key": "pep_adverse_media_assessment",
+        "requirement_label": "Adverse media assessment",
+        "requirement_description": "Back-office adverse media assessment for the relevant person.",
+        "audience": "backoffice",
+        "requirement_type": "review_task",
         "subject_scope": "screening_subject",
+        "blocking_approval": False,
+        "mandatory": False,
+        "waivable": False,
+        "waiver_roles": [],
         "sort_order": 20,
     },
     {
         "trigger_key": "pep",
-        "trigger_label": "PEP",
+        "trigger_label": "PEP monitoring",
         "trigger_category": "screening",
-        "requirement_key": "pep_jurisdiction",
-        "requirement_label": "PEP jurisdiction",
-        "requirement_description": "Capture the jurisdiction associated with the PEP role or exposure.",
-        "audience": "both",
-        "requirement_type": "declaration",
-        "subject_scope": "screening_subject",
-        "sort_order": 30,
-    },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP",
-        "trigger_category": "screening",
-        "requirement_key": "pep_sow_evidence",
-        "requirement_label": "Source of Wealth evidence",
-        "requirement_description": "Evidence supporting the PEP's source of wealth.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "screening_subject",
-        "sort_order": 40,
-    },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP",
-        "trigger_category": "screening",
-        "requirement_key": "pep_bank_reference",
-        "requirement_label": "Bank reference letter",
-        "requirement_description": "Bank reference letter required for the identified PEP subject.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "screening_subject",
-        "client_safe_label": "Bank reference letter",
-        "sort_order": 45,
-    },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP",
-        "trigger_category": "screening",
-        "requirement_key": "pep_linked_sof_evidence",
-        "requirement_label": "Source of Funds evidence where funds are linked to PEP",
-        "requirement_description": "Source of funds evidence where the proposed relationship funds are linked to the PEP.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "application",
-        "sort_order": 50,
-    },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP",
-        "trigger_category": "screening",
-        "requirement_key": "mandatory_senior_review",
-        "requirement_label": "Mandatory senior review",
-        "requirement_description": "Senior compliance review is required before closure.",
-        "audience": "backoffice",
-        "requirement_type": "review_task",
-        "subject_scope": "application",
-        "blocking_approval": True,
-        "waivable": False,
-        "waiver_roles": [],
-        "sort_order": 60,
-    },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP",
-        "trigger_category": "screening",
-        "requirement_key": "ongoing_monitoring_flag",
-        "requirement_label": "Ongoing monitoring flag",
-        "requirement_description": "Flag the relationship for ongoing monitoring after onboarding.",
+        "requirement_key": "pep_enhanced_monitoring_flag",
+        "requirement_label": "Enhanced monitoring flag",
+        "requirement_description": "Back-office monitoring flag for the relevant person or relationship.",
         "audience": "backoffice",
         "requirement_type": "internal_control",
         "subject_scope": "application",
         "blocking_approval": False,
+        "mandatory": False,
         "waivable": False,
         "waiver_roles": [],
-        "sort_order": 70,
+        "sort_order": 30,
     },
     {
         "trigger_key": "crypto_vasp",
         "trigger_label": "Crypto / VASP",
         "trigger_category": "sector",
         "requirement_key": "aml_cft_policy",
-        "requirement_label": "AML/CFT policy",
-        "requirement_description": "AML/CFT policy applicable to the crypto, VASP, or virtual asset activity.",
+        "requirement_label": "AML/CFT policy document",
+        "requirement_description": "AML/CFT policy document applicable to the activity.",
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "company",
         "blocking_approval": False,
         "mandatory": False,
         "sort_order": 10,
-    },
-    {
-        "trigger_key": "crypto_vasp",
-        "trigger_label": "Crypto / VASP",
-        "trigger_category": "sector",
-        "requirement_key": "licence_or_registration_evidence",
-        "requirement_label": "Licence/registration evidence or confirmation of unlicensed status",
-        "requirement_description": "Licence, registration, exemption, or explanation of unlicensed status for virtual asset activity.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "company",
-        "sort_order": 20,
-    },
-    {
-        "trigger_key": "crypto_vasp",
-        "trigger_label": "Crypto / VASP",
-        "trigger_category": "sector",
-        "requirement_key": "transaction_flow_explanation",
-        "requirement_label": "Transaction flow explanation",
-        "requirement_description": "Explain expected transaction flows, rails, counterparties, and settlement model.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "application",
-        "sort_order": 30,
-    },
-    {
-        "trigger_key": "crypto_vasp",
-        "trigger_label": "Crypto / VASP",
-        "trigger_category": "sector",
-        "requirement_key": "jurisdictions_served",
-        "requirement_label": "Jurisdictions served",
-        "requirement_description": "List jurisdictions served or targeted by the virtual asset activity.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "application",
-        "sort_order": 40,
-    },
-    {
-        "trigger_key": "crypto_vasp",
-        "trigger_label": "Crypto / VASP",
-        "trigger_category": "sector",
-        "requirement_key": "wallet_exchange_counterparty_exposure",
-        "requirement_label": "Wallet/exchange/counterparty exposure explanation where applicable",
-        "requirement_description": "Explain wallet, exchange, counterparty, custody, or blockchain exposure where applicable.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "application",
-        "sort_order": 50,
-    },
-    {
-        "trigger_key": "crypto_vasp",
-        "trigger_label": "Crypto / VASP",
-        "trigger_category": "sector",
-        "requirement_key": "crypto_source_of_funds_evidence",
-        "requirement_label": "Source of Funds evidence",
-        "requirement_description": "Evidence supporting the source of funds for virtual asset related activity.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "application",
-        "sort_order": 60,
+        "client_safe_label": "AML/CFT policy document",
+        "client_safe_description": "Please upload the requested AML/CFT policy document.",
     },
     {
         "trigger_key": "opaque_ownership",
-        "trigger_label": "Opaque ownership",
-        "trigger_category": "ownership",
-        "requirement_key": "ownership_structure_chart",
-        "requirement_label": "Ownership structure chart",
-        "requirement_description": "Current structure chart showing the full ownership and control chain.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "company",
-        "active": False,
-        "sort_order": 10,
-    },
-    {
-        "trigger_key": "opaque_ownership",
-        "trigger_label": "Opaque ownership",
-        "trigger_category": "ownership",
-        "requirement_key": "ownership_chain_documents",
-        "requirement_label": "Full ownership-chain documents",
-        "requirement_description": "Documents evidencing each entity or arrangement in the ownership chain.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "company",
-        "sort_order": 20,
-    },
-    {
-        "trigger_key": "opaque_ownership",
-        "trigger_label": "Opaque ownership",
-        "trigger_category": "ownership",
-        "requirement_key": "enhanced_ubo_evidence",
-        "requirement_label": "Enhanced UBO evidence",
-        "requirement_description": "Additional evidence supporting UBO identity, ownership, and control.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "ubo",
-        "sort_order": 30,
-    },
-    {
-        "trigger_key": "opaque_ownership",
-        "trigger_label": "Opaque ownership",
-        "trigger_category": "ownership",
-        "requirement_key": "control_rationale",
-        "requirement_label": "Control rationale",
-        "requirement_description": "Explain how control is exercised where ownership is indirect, layered, or otherwise complex.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "controller",
-        "sort_order": 40,
-    },
-    {
-        "trigger_key": "opaque_ownership",
-        "trigger_label": "Opaque ownership",
+        "trigger_label": "Trust / nominee / foundation",
         "trigger_category": "ownership",
         "requirement_key": "trust_nominee_foundation_documents",
-        "requirement_label": "Trust/nominee/foundation documents where applicable",
+        "requirement_label": "Trust / nominee / foundation documents",
         "requirement_description": "Trust deeds, nominee agreements, foundation documents, or equivalent control documents where applicable.",
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "controller",
-        "sort_order": 50,
-    },
-    {
-        "trigger_key": "high_risk_jurisdiction",
-        "trigger_label": "High-risk jurisdiction",
-        "trigger_category": "jurisdiction",
-        "requirement_key": "jurisdiction_exposure_rationale",
-        "requirement_label": "Jurisdiction exposure rationale",
-        "requirement_description": "Explain the business rationale for high-risk jurisdiction exposure.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "application",
+        "blocking_approval": True,
+        "mandatory": True,
         "sort_order": 10,
-    },
-    {
-        "trigger_key": "high_risk_jurisdiction",
-        "trigger_label": "High-risk jurisdiction",
-        "trigger_category": "jurisdiction",
-        "requirement_key": "operating_country_target_market_explanation",
-        "requirement_label": "Operating-country / target-market explanation",
-        "requirement_description": "Explain operating countries, target markets, and exposure controls.",
-        "audience": "client",
-        "requirement_type": "explanation",
-        "subject_scope": "application",
-        "sort_order": 20,
+        "client_safe_label": "Trust / nominee / foundation documents",
+        "client_safe_description": "Please upload the requested trust, nominee, foundation, or equivalent control documents.",
     },
     {
         "trigger_key": "high_risk_jurisdiction",
         "trigger_label": "High-risk jurisdiction",
         "trigger_category": "jurisdiction",
         "requirement_key": "jurisdiction_sof_evidence",
-        "requirement_label": "Source of Funds evidence",
-        "requirement_description": "Evidence supporting source of funds for high-risk jurisdiction exposure.",
+        "requirement_label": "Source of funds evidence for activity in the higher-risk jurisdiction",
+        "requirement_description": "Source of funds evidence for activity in the relevant jurisdiction.",
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "application",
+        "blocking_approval": True,
+        "mandatory": True,
         "active": False,
-        "sort_order": 30,
+        "sort_order": 10,
+        "client_safe_label": "Source of funds evidence",
+        "client_safe_description": "Please upload the requested source of funds evidence.",
     },
     {
         "trigger_key": "high_risk_jurisdiction",
         "trigger_label": "High-risk jurisdiction",
         "trigger_category": "jurisdiction",
-        "requirement_key": "jurisdiction_licensing_regulatory_evidence",
-        "requirement_label": "Licensing/regulatory evidence where relevant",
-        "requirement_description": "Licence, registration, or regulatory evidence relevant to the jurisdiction exposure.",
+        "requirement_key": "jurisdiction_exposure_rationale",
+        "requirement_label": "Jurisdiction Exposure Rationale",
+        "requirement_description": "Required for certain countries of incorporation.",
         "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "company",
-        "sort_order": 40,
+        "requirement_type": "explanation",
+        "subject_scope": "application",
+        "blocking_approval": True,
+        "mandatory": True,
+        "sort_order": 20,
+        "client_safe_label": "Country of incorporation information",
+        "client_safe_description": "Required for certain countries of incorporation.",
     },
     {
         "trigger_key": "high_risk_jurisdiction",
         "trigger_label": "High-risk jurisdiction",
         "trigger_category": "jurisdiction",
-        "requirement_key": "enhanced_screening_review",
-        "requirement_label": "Enhanced screening review",
-        "requirement_description": "Back-office review of enhanced screening evidence for the high-risk jurisdiction exposure.",
+        "requirement_key": "jurisdiction_risk_assessment",
+        "requirement_label": "Jurisdiction risk assessment",
+        "requirement_description": "Back-office jurisdiction risk assessment.",
         "audience": "backoffice",
         "requirement_type": "review_task",
         "subject_scope": "application",
-        "sort_order": 50,
+        "blocking_approval": True,
+        "mandatory": True,
+        "waivable": False,
+        "waiver_roles": [],
+        "sort_order": 30,
     },
     {
         "trigger_key": "high_volume",
-        "trigger_label": "High volume",
+        "trigger_label": "High transaction volume",
         "trigger_category": "transaction",
         "requirement_key": "contracts_invoices",
-        "requirement_label": "Contracts/invoices",
-        "requirement_description": "Commercial contracts, invoices, or equivalent evidence supporting expected high volume.",
+        "requirement_label": "Contracts / invoices",
+        "requirement_description": "Commercial contracts, invoices, or equivalent evidence supporting expected transaction volume.",
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "application",
+        "blocking_approval": False,
+        "mandatory": True,
         "sort_order": 10,
+        "client_safe_label": "Contracts / invoices",
+        "client_safe_description": "Please upload contracts, invoices, or equivalent evidence supporting expected transaction activity.",
     },
     {
         "trigger_key": "high_volume",
-        "trigger_label": "High volume",
+        "trigger_label": "High transaction volume",
         "trigger_category": "transaction",
         "requirement_key": "expected_transaction_flow_evidence",
         "requirement_label": "Expected transaction flow evidence",
@@ -590,25 +480,16 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "document",
         "subject_scope": "application",
+        "blocking_approval": True,
+        "mandatory": True,
         "active": False,
         "sort_order": 20,
+        "client_safe_label": "Expected transaction flow evidence",
+        "client_safe_description": "Please upload evidence supporting expected transaction flow.",
     },
     {
         "trigger_key": "high_volume",
-        "trigger_label": "High volume",
-        "trigger_category": "transaction",
-        "requirement_key": "high_volume_bank_statements",
-        "requirement_label": "Company bank statements where available",
-        "requirement_description": "Company bank statements supporting expected high-volume activity where available.",
-        "audience": "client",
-        "requirement_type": "document",
-        "subject_scope": "company",
-        "active": False,
-        "sort_order": 30,
-    },
-    {
-        "trigger_key": "high_volume",
-        "trigger_label": "High volume",
+        "trigger_label": "High transaction volume",
         "trigger_category": "transaction",
         "requirement_key": "major_counterparties_explanation",
         "requirement_label": "Major counterparties explanation",
@@ -616,11 +497,15 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "explanation",
         "subject_scope": "application",
-        "sort_order": 40,
+        "blocking_approval": False,
+        "mandatory": True,
+        "sort_order": 30,
+        "client_safe_label": "Major counterparties explanation",
+        "client_safe_description": "Please provide information about major counterparties, customer segments, suppliers, or payment participants.",
     },
     {
         "trigger_key": "high_volume",
-        "trigger_label": "High volume",
+        "trigger_label": "High transaction volume",
         "trigger_category": "transaction",
         "requirement_key": "volume_rationale_vs_business_size",
         "requirement_label": "Volume rationale vs business size",
@@ -628,72 +513,11 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "audience": "client",
         "requirement_type": "explanation",
         "subject_scope": "application",
-        "sort_order": 50,
-    },
-    {
-        "trigger_key": "screening_concern",
-        "trigger_label": "Screening concern",
-        "trigger_category": "screening",
-        "requirement_key": "screening_disposition",
-        "requirement_label": "Back-office screening disposition",
-        "requirement_description": "Record the back-office disposition for the screening concern.",
-        "audience": "backoffice",
-        "requirement_type": "review_task",
-        "subject_scope": "screening_subject",
-        "waivable": False,
-        "waiver_roles": [],
-        "sort_order": 10,
-    },
-    {
-        "trigger_key": "screening_concern",
-        "trigger_label": "Screening concern",
-        "trigger_category": "screening",
-        "requirement_key": "false_positive_rationale",
-        "requirement_label": "False-positive rationale",
-        "requirement_description": "Document the rationale where a possible match is assessed as a false positive.",
-        "audience": "backoffice",
-        "requirement_type": "review_task",
-        "subject_scope": "screening_subject",
-        "sort_order": 20,
-    },
-    {
-        "trigger_key": "screening_concern",
-        "trigger_label": "Screening concern",
-        "trigger_category": "screening",
-        "requirement_key": "adverse_media_pep_sanctions_assessment",
-        "requirement_label": "Adverse-media / PEP / sanctions assessment",
-        "requirement_description": "Assess adverse media, PEP, sanctions, or other screening risk presented by the concern.",
-        "audience": "backoffice",
-        "requirement_type": "review_task",
-        "subject_scope": "screening_subject",
-        "sort_order": 30,
-    },
-    {
-        "trigger_key": "screening_concern",
-        "trigger_label": "Screening concern",
-        "trigger_category": "screening",
-        "requirement_key": "material_screening_senior_review",
-        "requirement_label": "Senior review if material",
-        "requirement_description": "Escalate material screening concerns for senior review.",
-        "audience": "backoffice",
-        "requirement_type": "review_task",
-        "subject_scope": "screening_subject",
-        "waivable": False,
-        "waiver_roles": [],
+        "blocking_approval": True,
+        "mandatory": True,
         "sort_order": 40,
-    },
-    {
-        "trigger_key": "screening_concern",
-        "trigger_label": "Screening concern",
-        "trigger_category": "screening",
-        "requirement_key": "client_clarification_screening",
-        "requirement_label": "Client clarification only where needed",
-        "requirement_description": "Request client clarification only where back-office review determines it is necessary and safe.",
-        "audience": "both",
-        "requirement_type": "explanation",
-        "subject_scope": "screening_subject",
-        "mandatory": False,
-        "sort_order": 50,
+        "client_safe_label": "Volume rationale vs business size",
+        "client_safe_description": "Please explain why expected volumes are proportionate to the business size, age, sector, and operating model.",
     },
 ]
 
@@ -765,6 +589,12 @@ def _rule_applicable_to_application(rule, app):
     key = _clean_text((rule or {}).get("requirement_key")).lower()
     if key in BANK_ACCOUNT_DEPENDENT_REQUIREMENT_KEYS and not _application_existing_bank_account(app):
         return False, "existing_bank_account_not_declared_yes"
+    applies_when = (rule or {}).get("applies_when") or {}
+    if isinstance(applies_when, str):
+        applies_when = _loads_json(applies_when, {})
+    if isinstance(applies_when, dict) and _bool(applies_when.get("existing_bank_account"), False):
+        if not _application_existing_bank_account(app):
+            return False, "existing_bank_account_not_declared_yes"
     return True, ""
 
 
@@ -804,6 +634,21 @@ def serialize_rule(row):
         item[key] = _bool(item.get(key))
     item["waiver_roles"] = _loads_json(item.get("waiver_roles"), [])
     item["applies_when"] = _loads_json(item.get("applies_when"), {})
+    req_key = _clean_text(item.get("requirement_key")).lower()
+    if _clean_text(item.get("requirement_type")).lower() == "document":
+        item["canonical_doc_type"] = _document_type_for_enhanced_requirement(req_key)
+        item["document_policy"] = enhanced_requirement_document_policy(req_key)
+    else:
+        item["canonical_doc_type"] = ""
+    section = TARGET_ENHANCED_REQUIREMENT_SECTIONS.get(req_key)
+    if not section:
+        if req_key.startswith("bankref_") or req_key.startswith("source_wealth_"):
+            section = "B"
+        elif item.get("audience") == "backoffice":
+            section = "F"
+    item["section"] = section or ""
+    item["portal_section"] = section if section in ("A", "B", "C", "D", "E") else ""
+    item["backoffice_section"] = section or ""
     return item
 
 
@@ -832,8 +677,21 @@ def serialize_application_requirement(row):
         item["subject_name"] = item["subject"].get("name")
         item["subject_id"] = item["subject"].get("id")
         item["subject_person_key"] = item["subject"].get("person_key")
+    req_key = _clean_text(item.get("requirement_key")).lower()
+    section = TARGET_ENHANCED_REQUIREMENT_SECTIONS.get(req_key)
+    if not section:
+        if req_key.startswith("bankref_") or req_key.startswith("source_wealth_"):
+            section = "B"
+        elif item.get("audience") == "backoffice":
+            section = "F"
+    item["section"] = section or ""
+    item["portal_section"] = section if section in ("A", "B", "C", "D", "E") else ""
+    item["backoffice_section"] = section or ""
     if _clean_text(item.get("requirement_type")).lower() == "document":
         item["document_policy"] = enhanced_requirement_document_policy(item.get("requirement_key"))
+        item["canonical_doc_type"] = item["document_policy"].get("document_type")
+    else:
+        item["canonical_doc_type"] = ""
     return item
 
 
@@ -981,6 +839,137 @@ def _pep_subjects_for_person_specific_requirements(db, app):
             "name": subject_name,
         })
     return subjects
+
+
+def _application_effective_risk_level(app):
+    app = _row_dict(app) or {}
+    return _clean_text(
+        app.get("final_risk_level")
+        or app.get("risk_level")
+        or app.get("base_risk_level")
+    ).upper()
+
+
+def _application_high_or_very_high(app):
+    return _application_effective_risk_level(app) in {"HIGH", "VERY_HIGH"}
+
+
+def _party_subject(row, party_type):
+    party = _row_dict(row) or {}
+    declaration = _loads_json(party.get("pep_declaration"), {})
+    if not isinstance(declaration, dict):
+        declaration = {}
+    name = (
+        party.get("full_name")
+        or party.get("entity_name")
+        or party.get("person_key")
+        or party.get("id")
+        or "Unnamed party"
+    )
+    return {
+        "type": party_type,
+        "id": _clean_text(party.get("id")),
+        "person_key": _clean_text(party.get("person_key")),
+        "name": _clean_text(name),
+        "is_pep": (
+            _pep_bool(party.get("is_pep"))
+            or _pep_bool(declaration.get("declared_pep"))
+            or _pep_bool(declaration.get("client_declared_pep"))
+        ),
+    }
+
+
+def _section_b_subjects_for_person_requirements(db, app):
+    app = _row_dict(app) or {}
+    app_id = app.get("id")
+    if not app_id:
+        return []
+    subjects = []
+    for table, party_type, columns in (
+        ("directors", "director", "id, person_key, full_name, is_pep, pep_declaration, created_at"),
+        ("ubos", "ubo", "id, person_key, full_name, is_pep, pep_declaration, created_at"),
+        ("intermediaries", "intermediary", "id, person_key, entity_name, created_at"),
+    ):
+        if not _table_exists(db, table):
+            continue
+        try:
+            rows = db.execute(
+                f"""
+                SELECT {columns}
+                FROM {table}
+                WHERE application_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (app_id,),
+            ).fetchall()
+        except Exception:
+            continue
+        subjects.extend(_party_subject(row, party_type) for row in rows)
+    return subjects
+
+
+def _section_b_person_document_rule(kind, subject, idx, *, reason):
+    suffix = _subject_requirement_suffix(subject, idx)
+    subject_type = subject.get("type") if subject.get("type") in ALLOWED_SUBJECT_SCOPES else "screening_subject"
+    subject_name = subject.get("name") or "Named person"
+    if kind == "bankref":
+        key = f"bankref_{subject_type}_{suffix}"
+        label = f"Bank Reference Letter - {subject_name}"
+        description = "Bank reference letter for the named person."
+        safe_description = "Please upload the requested bank reference letter for the named person."
+        sort_offset = 10
+    else:
+        key = f"source_wealth_{subject_type}_{suffix}"
+        label = f"Source of Wealth evidence - {subject_name}"
+        description = "Source of Wealth evidence for the named person."
+        safe_description = "Please upload source of wealth evidence for the named person."
+        sort_offset = 20
+    return {
+        "id": None,
+        "trigger_key": "standard_kyc_section_b",
+        "trigger_label": "Section B person-level documents",
+        "trigger_category": "standard_kyc",
+        "requirement_key": key,
+        "requirement_label": label,
+        "requirement_description": description,
+        "audience": "client",
+        "requirement_type": "document",
+        "subject_scope": subject_type,
+        "blocking_approval": True,
+        "waivable": True,
+        "waiver_roles": ["admin", "sco"],
+        "mandatory": True,
+        "active": True,
+        "sort_order": 1000 + (idx * 10) + sort_offset,
+        "applies_when": {"section": "B", "reason": reason},
+        "client_safe_label": label,
+        "client_safe_description": safe_description,
+        "internal_notes": "Generated from KYC/EDD matrix v5 Section B.",
+        "_subject": {
+            "type": subject_type,
+            "id": subject.get("id"),
+            "person_key": subject.get("person_key"),
+            "name": subject_name,
+        },
+    }
+
+
+def _section_b_person_document_rules(db, app):
+    """Return v5 Section B person-level requirements for new generation only."""
+    high_or_very_high = _application_high_or_very_high(app)
+    rules = []
+    for idx, subject in enumerate(_section_b_subjects_for_person_requirements(db, app)):
+        subject_type = subject.get("type")
+        is_director_or_ubo = subject_type in {"director", "ubo"}
+        is_pep = bool(subject.get("is_pep"))
+        bankref_required = is_director_or_ubo and (high_or_very_high or is_pep)
+        source_wealth_required = is_director_or_ubo and (high_or_very_high or is_pep)
+        reason = "high_or_very_high_risk" if high_or_very_high else "pep_person"
+        if bankref_required:
+            rules.append(_section_b_person_document_rule("bankref", subject, idx, reason=reason))
+        if source_wealth_required:
+            rules.append(_section_b_person_document_rule("source_wealth", subject, idx, reason=reason))
+    return rules
 
 
 def _subject_requirement_suffix(subject, index=0):
@@ -1542,7 +1531,7 @@ def seed_default_enhanced_requirement_rules(db, actor="system"):
 
 
 def _apply_approved_enhanced_requirement_taxonomy_updates(db, actor="system", actor_fk=None):
-    """Reconcile named enhanced-rule settings approved in the KYC taxonomy matrix.
+    """Reconcile named enhanced-rule settings approved in KYC/EDD matrix v5.
 
     Normal default seeding is intentionally non-destructive. These specific
     rows are product-approved configuration corrections that must apply to
@@ -1555,36 +1544,199 @@ def _apply_approved_enhanced_requirement_taxonomy_updates(db, actor="system", ac
             "company_bank_reference",
             {
                 "requirement_label": "Company bank reference letter",
-                "requirement_description": "Request a current company bank reference letter to support enhanced review.",
+                "requirement_description": "Company bank reference letter for the proposed relationship.",
                 "blocking_approval": 0,
-                "mandatory": 0,
+                "mandatory": 1,
                 "active": 1,
-                "client_safe_label": "Company bank reference",
+                "client_safe_label": "Company bank reference letter",
+                "client_safe_description": "Please upload the requested company bank reference letter.",
                 "subject_scope": "company",
                 "audience": "client",
                 "requirement_type": "document",
+                "applies_when": json.dumps({"existing_bank_account": True}, sort_keys=True),
             },
         ),
-        ("high_or_very_high_risk", "company_bank_statements_6m", {"active": 0}),
-        ("high_or_very_high_risk", "company_sof_evidence", {"active": 1, "subject_scope": "company"}),
         (
             "high_or_very_high_risk",
-            "material_ubo_sow_evidence",
+            "company_sof_evidence",
             {
                 "active": 1,
-                "subject_scope": "ubo",
-                "client_safe_label": "UBO Source of Wealth evidence",
+                "requirement_label": "Company Source of Funds evidence",
+                "requirement_description": "Evidence explaining the origin of company funds used for the proposed relationship.",
+                "blocking_approval": 0,
+                "mandatory": 1,
+                "subject_scope": "company",
+                "audience": "client",
+                "requirement_type": "document",
+                "client_safe_label": "Company Source of Funds evidence",
+                "client_safe_description": "Please upload evidence explaining the source of company funds for the proposed relationship.",
             },
         ),
-        ("crypto_vasp", "aml_cft_policy", {"active": 1, "blocking_approval": 0, "mandatory": 0}),
-        ("crypto_vasp", "licence_or_registration_evidence", {"active": 1, "subject_scope": "company"}),
-        ("opaque_ownership", "ownership_structure_chart", {"active": 0}),
-        ("high_risk_jurisdiction", "jurisdiction_sof_evidence", {"active": 0}),
-        ("high_volume", "contracts_invoices", {"active": 1}),
-        ("high_volume", "expected_transaction_flow_evidence", {"active": 0}),
-        ("high_volume", "high_volume_bank_statements", {"active": 0}),
-        ("pep", "pep_sow_evidence", {"active": 1, "subject_scope": "screening_subject"}),
-        ("pep", "pep_bank_reference", {"active": 1, "mandatory": 1, "blocking_approval": 1}),
+        (
+            "pep",
+            "pep_declaration_details",
+            {
+                "active": 1,
+                "requirement_label": "Additional declaration details",
+                "requirement_description": "Additional declaration details captured for officer review.",
+                "blocking_approval": 1,
+                "mandatory": 1,
+                "subject_scope": "screening_subject",
+                "audience": "client",
+                "requirement_type": "declaration",
+                "client_safe_label": "Additional declaration details",
+                "client_safe_description": "Please provide the requested declaration details so our team can complete the review.",
+            },
+        ),
+        (
+            "pep",
+            "pep_adverse_media_assessment",
+            {
+                "active": 1,
+                "requirement_label": "Adverse media assessment",
+                "requirement_description": "Back-office adverse media assessment for the relevant person.",
+                "blocking_approval": 0,
+                "mandatory": 0,
+                "waivable": 0,
+                "waiver_roles": "[]",
+                "subject_scope": "screening_subject",
+                "audience": "backoffice",
+                "requirement_type": "review_task",
+            },
+        ),
+        (
+            "pep",
+            "pep_enhanced_monitoring_flag",
+            {
+                "active": 1,
+                "requirement_label": "Enhanced monitoring flag",
+                "requirement_description": "Back-office monitoring flag for the relevant person or relationship.",
+                "blocking_approval": 0,
+                "mandatory": 0,
+                "waivable": 0,
+                "waiver_roles": "[]",
+                "subject_scope": "application",
+                "audience": "backoffice",
+                "requirement_type": "internal_control",
+            },
+        ),
+        ("crypto_vasp", "aml_cft_policy", {
+            "active": 1,
+            "requirement_label": "AML/CFT policy document",
+            "requirement_description": "AML/CFT policy document applicable to the activity.",
+            "blocking_approval": 0,
+            "mandatory": 0,
+            "subject_scope": "company",
+            "audience": "client",
+            "requirement_type": "document",
+            "client_safe_label": "AML/CFT policy document",
+            "client_safe_description": "Please upload the requested AML/CFT policy document.",
+        }),
+        (
+            "opaque_ownership",
+            "trust_nominee_foundation_documents",
+            {
+                "active": 1,
+                "requirement_label": "Trust / nominee / foundation documents",
+                "blocking_approval": 1,
+                "mandatory": 1,
+                "subject_scope": "controller",
+                "audience": "client",
+                "requirement_type": "document",
+                "client_safe_label": "Trust / nominee / foundation documents",
+                "client_safe_description": "Please upload the requested trust, nominee, foundation, or equivalent control documents.",
+            },
+        ),
+        (
+            "high_risk_jurisdiction",
+            "jurisdiction_sof_evidence",
+            {
+                "active": 0,
+                "requirement_label": "Source of funds evidence for activity in the higher-risk jurisdiction",
+                "requirement_description": "Source of funds evidence for activity in the relevant jurisdiction.",
+                "blocking_approval": 1,
+                "mandatory": 1,
+                "subject_scope": "application",
+                "audience": "client",
+                "requirement_type": "document",
+                "client_safe_label": "Source of funds evidence",
+                "client_safe_description": "Please upload the requested source of funds evidence.",
+            },
+        ),
+        (
+            "high_risk_jurisdiction",
+            "jurisdiction_exposure_rationale",
+            {
+                "active": 1,
+                "requirement_label": "Jurisdiction Exposure Rationale",
+                "requirement_description": "Required for certain countries of incorporation.",
+                "blocking_approval": 1,
+                "mandatory": 1,
+                "subject_scope": "application",
+                "audience": "client",
+                "requirement_type": "explanation",
+                "client_safe_label": "Country of incorporation information",
+                "client_safe_description": "Required for certain countries of incorporation.",
+            },
+        ),
+        (
+            "high_risk_jurisdiction",
+            "jurisdiction_risk_assessment",
+            {
+                "active": 1,
+                "requirement_label": "Jurisdiction risk assessment",
+                "requirement_description": "Back-office jurisdiction risk assessment.",
+                "blocking_approval": 1,
+                "mandatory": 1,
+                "waivable": 0,
+                "waiver_roles": "[]",
+                "subject_scope": "application",
+                "audience": "backoffice",
+                "requirement_type": "review_task",
+            },
+        ),
+        ("high_volume", "contracts_invoices", {
+            "active": 1,
+            "requirement_label": "Contracts / invoices",
+            "requirement_description": "Commercial contracts, invoices, or equivalent evidence supporting expected transaction volume.",
+            "blocking_approval": 0,
+            "mandatory": 1,
+            "subject_scope": "application",
+            "audience": "client",
+            "requirement_type": "document",
+            "client_safe_label": "Contracts / invoices",
+            "client_safe_description": "Please upload contracts, invoices, or equivalent evidence supporting expected transaction activity.",
+        }),
+        ("high_volume", "expected_transaction_flow_evidence", {
+            "active": 0,
+            "blocking_approval": 1,
+            "mandatory": 1,
+            "subject_scope": "application",
+            "audience": "client",
+            "requirement_type": "document",
+            "client_safe_label": "Expected transaction flow evidence",
+            "client_safe_description": "Please upload evidence supporting expected transaction flow.",
+        }),
+        ("high_volume", "major_counterparties_explanation", {
+            "active": 1,
+            "blocking_approval": 0,
+            "mandatory": 1,
+            "subject_scope": "application",
+            "audience": "client",
+            "requirement_type": "explanation",
+            "client_safe_label": "Major counterparties explanation",
+            "client_safe_description": "Please provide information about major counterparties, customer segments, suppliers, or payment participants.",
+        }),
+        ("high_volume", "volume_rationale_vs_business_size", {
+            "active": 1,
+            "blocking_approval": 1,
+            "mandatory": 1,
+            "subject_scope": "application",
+            "audience": "client",
+            "requirement_type": "explanation",
+            "client_safe_label": "Volume rationale vs business size",
+            "client_safe_description": "Please explain why expected volumes are proportionate to the business size, age, sector, and operating model.",
+        }),
     ]
     changed = []
     for trigger_key, requirement_key, fields in updates:
@@ -1611,6 +1763,23 @@ def _apply_approved_enhanced_requirement_taxonomy_updates(db, actor="system", ac
             tuple(fields.values()) + (actor_fk, row_dict["id"]),
         )
         changed.append(f"{trigger_key}:{requirement_key}")
+
+    placeholders = ",".join("?" for _ in REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS)
+    legacy_rows = db.execute(
+        f"""
+        SELECT id, trigger_key, requirement_key
+        FROM enhanced_requirement_rules
+        WHERE active = 1 AND requirement_key IN ({placeholders})
+        """,
+        tuple(sorted(REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS)),
+    ).fetchall()
+    for row in legacy_rows:
+        row_dict = dict(row)
+        db.execute(
+            "UPDATE enhanced_requirement_rules SET active=0, updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (actor_fk, row_dict["id"]),
+        )
+        changed.append(f"{row_dict['trigger_key']}:{row_dict['requirement_key']}")
 
     if changed:
         detail = json.dumps({
@@ -3040,12 +3209,7 @@ def _resolve_requirement_triggers(app, routing):
         if target:
             mapped.setdefault(target, []).append(source_trigger)
             continue
-        if source_trigger == "supervisor_mandatory_escalation":
-            screening = (routing.get("inputs") or {}).get("screening_terminality_summary") or {}
-            if isinstance(screening, dict) and screening.get("has_terminal_match"):
-                mapped.setdefault("screening_concern", []).append(source_trigger)
-            else:
-                warnings.append("Unmapped EDD routing trigger: supervisor_mandatory_escalation")
+        if source_trigger in SCREENING_INDEPENDENT_ROUTING_TRIGGERS:
             continue
         if source_trigger == "high_risk_sector":
             if "crypto_vasp" not in mapped:
@@ -3141,6 +3305,7 @@ _CLIENT_UNSAFE_LABEL_TERMS = (
     "backoffice",
     "edd",
     "enhanced due diligence",
+    "fatf",
     "false-positive",
     "false positive",
     "internal",
@@ -3151,6 +3316,7 @@ _CLIENT_UNSAFE_LABEL_TERMS = (
     "politically exposed",
     "risk level",
     "sanction",
+    "sanctions",
     "screening",
     "screening concern",
     "senior review",
@@ -3193,6 +3359,10 @@ _PORTAL_SAFE_COPY_BY_REQUIREMENT_KEY = {
     "pep_linked_sof_evidence": (
         "Source of funds evidence",
         "Please upload evidence supporting the source of funds for the proposed relationship.",
+    ),
+    "jurisdiction_exposure_rationale": (
+        "Country of incorporation information",
+        "Required for certain countries of incorporation.",
     ),
 }
 
@@ -3300,6 +3470,7 @@ _PORTAL_SUBJECT_SCOPES = {
     "controller": "controller",
     "application": "application",
     "screening_subject": "person",
+    "intermediary": "intermediary",
 }
 
 
@@ -3397,6 +3568,7 @@ def list_portal_application_enhanced_requirements(db, application_id, *, exclude
         WHERE aer.application_id = ?
           AND aer.active = 1
           AND aer.audience IN ('client', 'both')
+          AND aer.requirement_type NOT IN ('review_task', 'internal_control')
           AND aer.status IN ({placeholders})
           {periodic_review_filter}
         ORDER BY aer.requested_at DESC, aer.updated_at DESC, aer.requirement_label, aer.id
@@ -4046,8 +4218,9 @@ def generate_application_enhanced_requirements(
     result["trigger_sources"] = trigger_sources
     result["warnings"].extend(trigger_warnings)
     result["ran"] = True
+    section_b_rules = _section_b_person_document_rules(db, app)
 
-    if not triggers:
+    if not triggers and not section_b_rules:
         _insert_audit(
             db,
             "application_enhanced_requirements.generation_completed",
@@ -4066,42 +4239,9 @@ def generate_application_enhanced_requirements(
         return result
 
     rules = _load_active_rules(db, triggers)
-    if not rules:
+    if not rules and not section_b_rules:
         result["warnings"].append("No active enhanced requirement rules matched detected trigger(s)")
-    expanded_rules = []
-    pep_subjects = _pep_subjects_for_person_specific_requirements(db, app) if "pep" in triggers else []
-    for rule in rules:
-        if (
-            rule.get("trigger_key") == "pep"
-            and rule.get("requirement_key") in {"pep_sow_evidence", "pep_bank_reference"}
-            and pep_subjects
-        ):
-            for idx, subject in enumerate(pep_subjects):
-                subject_rule = dict(rule)
-                suffix = _subject_requirement_suffix(subject, idx)
-                base_key = rule.get("requirement_key")
-                subject_name = subject.get("name") or "PEP subject"
-                subject_rule["requirement_key"] = f"{base_key}_{subject.get('type') or 'subject'}_{suffix}"
-                if base_key == "pep_bank_reference":
-                    subject_rule["requirement_label"] = f"Bank Reference Letter — {subject_name}"
-                    subject_rule["requirement_description"] = (
-                        "Bank reference letter required for the named PEP subject."
-                    )
-                else:
-                    subject_rule["requirement_label"] = f"Source of Wealth Evidence — {subject_name}"
-                    subject_rule["requirement_description"] = (
-                        "Evidence supporting the source of wealth for the named PEP subject."
-                    )
-                subject_rule["subject_scope"] = (
-                    subject.get("type")
-                    if subject.get("type") in ALLOWED_SUBJECT_SCOPES
-                    else "screening_subject"
-                )
-                subject_rule["_subject"] = subject
-                expanded_rules.append(subject_rule)
-            continue
-        expanded_rules.append(rule)
-    rules = expanded_rules
+    rules = list(rules) + section_b_rules
 
     generated_keys = []
     existing_keys = []
