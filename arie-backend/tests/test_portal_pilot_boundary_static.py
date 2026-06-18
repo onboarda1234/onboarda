@@ -134,12 +134,57 @@ def test_client_portal_rendered_views_hide_risk_and_ai_wording():
 
 
 def test_approved_state_is_activation_only():
-    text = _visible_text(_extract_div_by_id(_portal_html(), "view-approved"))
+    html = _portal_html()
+    approved_markup = _extract_div_by_id(html, "view-approved")
+    text = _visible_text(approved_markup)
     _assert_client_safe_text(text)
     assert "Application Approved" in text
+    assert "Account Approved" not in text
     assert "Activation in progress" in text
     assert "No Further Action Required" in text
     assert "Our team will contact you" in text
+    approved_copy = (
+        "Your application has been approved. Activation is in progress and our team "
+        "will contact you with next steps."
+    )
+    assert approved_copy in text
+    assert "Confirm Receipt" not in text
+    assert "Confirm Receipt" not in approved_markup
+    assert "ARF-2024-XXXXXX" not in approved_markup
+
+
+def test_approved_state_reference_uses_real_ref_or_hides_block():
+    html = _portal_html()
+    approved_markup = _extract_div_by_id(html, "view-approved")
+    assert "ARF-2024-XXXXXX" not in html
+    assert 'id="approved-ref-wrap" style="display:none;"' in approved_markup
+    assert '<div class="ref-number" id="approved-ref"></div>' in approved_markup
+
+    ref_body = _extract_js_function(html, "setPortalReferenceDisplay")
+    assert "var value = String(ref || '').trim();" in ref_body
+    assert "wrapper.style.display = 'none'" in ref_body
+    assert "refEl.textContent = value;" in ref_body
+    assert "wrapper.style.display = ''" in ref_body
+
+    approved_ref_body = _extract_js_function(html, "setApprovedApplicationRef")
+    assert "setPortalReferenceDisplay('approved-ref', ref, 'approved-ref-wrap')" in approved_ref_body
+
+    view_state_body = _extract_js_function(html, "applyApplicationViewState")
+    assert "target === 'approved'" in view_state_body
+    assert "setApprovedApplicationRef(appRef)" in view_state_body
+
+    route_body = _extract_js_function(html, "routePortalByBackendStatus")
+    approved_branch = route_body.split("nextStatus === 'approved'", 1)[1].split("nextStatus === 'rmi_sent'", 1)[0]
+    assert "setApprovedApplicationRef(appRef)" in approved_branch
+    assert "textContent = appRef ||" not in approved_branch
+
+
+def test_approved_state_has_no_fake_receipt_button():
+    html = _portal_html()
+    approved_markup = _extract_div_by_id(html, "view-approved")
+    assert "Confirm Receipt" not in html
+    assert "Acknowledge" not in approved_markup
+    assert "Welcome aboard!" not in approved_markup
 
 
 def test_no_recalculation_or_ai_risk_wording_in_portal_bundle():
@@ -154,6 +199,34 @@ def test_no_recalculation_or_ai_risk_wording_in_portal_bundle():
     )
     for phrase in forbidden:
         assert phrase not in html
+
+
+def test_left_application_badges_use_client_safe_labels():
+    html = _portal_html()
+    label_body = _extract_js_function(html, "getClientPortalStatusLabel")
+    sidebar_body = _extract_js_function(html, "renderSidebarApps")
+
+    for label in ("Documents", "Submitted", "Approved", "Declined", "Info Required", "Under Review"):
+        assert label in label_body
+
+    assert "getClientPortalStatusLabel(app.status)" in sidebar_body
+    assert "getClientPortalStatusClass(app.status)" in sidebar_body
+    assert "escapeHtml(label)" in sidebar_body
+    assert "app.status_label" not in sidebar_body
+
+    forbidden_badges = (
+        "Info Req.",
+        "Accepted",
+        "Ready",
+        "Screening",
+        "Pricing",
+        "Approved \\u2013 Ready for Activation",
+        "Further Information Requested",
+        "Compliance Review in Progress",
+        "Under Compliance Review",
+    )
+    for label in forbidden_badges:
+        assert label not in sidebar_body
 
 
 def test_pricing_acceptance_routes_by_backend_status_not_frontend_risk():
@@ -173,7 +246,11 @@ def test_pricing_acceptance_routes_by_backend_status_not_frontend_risk():
     assert "nextStatus === 'rmi_sent'" in route_body
     assert "showView('client-notifications')" in route_body
 
-    pre_approval_branch = route_body.split("nextStatus === 'pre_approval_review'", 1)[1].split("nextStatus === 'kyc_documents'", 1)[0]
+    pre_approval_branch = (
+        route_body
+        .split("nextStatus === 'pre_approval_review'", 1)[1]
+        .split("nextStatus === 'kyc_documents'", 1)[0]
+    )
     assert "showPreApprovalHold()" in pre_approval_branch
     assert "continueToKYCDocuments" not in pre_approval_branch
     assert "showView('onboarding')" not in pre_approval_branch
@@ -200,7 +277,9 @@ def test_person_document_polling_rejects_invalid_person_identifiers():
     assert "encodeURIComponent(personId)" in upload_body
 
     link_body = _extract_js_function(html, "sendKYCLink")
-    assert link_body.index("isValidPortalPersonId(personId)") < link_body.index("document.getElementById('kyc-email-' + personId)")
+    assert link_body.index("isValidPortalPersonId(personId)") < link_body.index(
+        "document.getElementById('kyc-email-' + personId)"
+    )
     assert "document.getElementById('kyc-person-' + personId)" in link_body
 
     sync_body = _extract_js_function(html, "syncPersistedApplicationDocuments")
