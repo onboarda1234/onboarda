@@ -364,6 +364,32 @@ def _normalise_requested_risk_level(value):
     return text
 
 
+_RISK_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
+
+
+def _norm_risk(value):
+    """Strict risk-level normaliser tolerant of spacing/casing variants
+    ("VERY HIGH", "very_high", "Very-High" -> "VERY_HIGH"). Returns None for
+    anything unrecognised -- never silently coerces to a default level."""
+    text = str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
+    return text if text in _RISK_RANK else None
+
+
+def _risk_rank(level) -> int:
+    return _RISK_RANK.get(_norm_risk(level) or "", 0)
+
+
+def _higher_risk_level(a, b):
+    """Return the higher-risk of two levels (LOW<MEDIUM<HIGH<VERY_HIGH),
+    normalised. Used for the PR-PRS-C elevation floor: canonical risk is never
+    left below the officer-confirmed periodic-review level."""
+    na, nb = _norm_risk(a), _norm_risk(b)
+    ra, rb = _risk_rank(na), _risk_rank(nb)
+    if ra == 0 and rb == 0:
+        return None
+    return na if ra >= rb else nb
+
+
 def _coerce_state(value: Optional[str]) -> str:
     """Normalise the stored status value to a known state.
 
@@ -1824,6 +1850,7 @@ def record_review_outcome(db, review_id, *,
         )
 
     risk_changed_flag = _boolish(risk_changed) or outcome == OUTCOME_RISK_RATING_CHANGED
+    material_change_flag = outcome == OUTCOME_MATERIAL_CHANGE_IDENTIFIED
     edd_required_flag = _boolish(edd_required) or outcome == OUTCOME_EDD_REQUIRED
     follow_up_required_flag = _boolish(follow_up_required) or outcome == OUTCOME_CLIENT_FOLLOW_UP_REQUIRED
     exit_recommended_flag = _boolish(exit_recommended) or outcome == OUTCOME_EXIT_RECOMMENDED
@@ -1874,6 +1901,18 @@ def record_review_outcome(db, review_id, *,
             strict_field_blockers.append(_completion_blocker(
                 "exit_rationale_required",
                 "Exit/offboarding rationale is required when exit is recommended",
+                review_id,
+            ))
+        # PR-PRS-C (P0-RR2): a "material change identified" outcome cannot
+        # complete without an explicit risk decision -- either a re-rating
+        # (risk_changed + new level, gated above) or a documented rationale for
+        # why the rating is unchanged. This closes the silent material-change-
+        # without-rescore hole.
+        if material_change_flag and not risk_changed_flag and not risk_impact_text:
+            strict_field_blockers.append(_completion_blocker(
+                "material_change_risk_decision_required",
+                "Material change identified: record a risk re-rating, or a documented "
+                "rationale for why the risk rating is unchanged",
                 review_id,
             ))
 
@@ -2167,6 +2206,139 @@ def record_review_outcome(db, review_id, *,
     ll.mark_review_closed(
         db, review_id, user=user, audit_writer=audit_writer,
     )
+    # PR-PRS-C (P0-RR1): a confirmed risk change must propagate to CANONICAL
+    # application risk, not stay review-local. The officer-confirmed level is an
+    # ELEVATION FLOOR: the model is recomputed (EDD/screening floors + routing),
+    # then final canonical risk is the HIGHER of (officer-confirmed level, model
+    # recomputed level). The review is already committed-complete; a recompute
+    # failure is loudly audited but does not reopen the closed review.
+    canonical_risk = None
+    if risk_changed_flag and application_id:
+        confirmed_level = _norm_risk(normalized_new_risk)
+        prev_row = db.execute(
+            "SELECT risk_level, final_risk_level FROM applications WHERE id = ?",
+            (application_id,),
+        ).fetchone()
+        previous_canonical = None
+        if prev_row is not None:
+            _prev_raw = _row_get(prev_row, "final_risk_level") or _row_get(prev_row, "risk_level")
+            previous_canonical = _norm_risk(_prev_raw) or _prev_raw
+        model_level = None
+        recompute_failed = False
+        try:
+            import rule_engine
+            recompute = rule_engine.recompute_risk(
+                db,
+                application_id,
+                f"periodic_review:{review_id} {outcome} (officer-confirmed risk change)",
+                user=user,
+                log_audit_fn=audit_writer,
+            )
+            model_level = _norm_risk(
+                recompute.get("new_level")
+                or recompute.get("final_risk_level")
+                or recompute.get("old_level")
+            )
+        except Exception:
+            recompute_failed = True
+            logger.exception(
+                "periodic_review canonical risk recompute failed review_id=%s app_id=%s",
+                review_id, application_id,
+            )
+        # Final canonical risk = higher of officer-confirmed and model levels.
+        # FAIL-CLOSED: if recompute failed, the officer-confirmed floor is still
+        # applied so a confirmed elevation never stays review-local.
+        #
+        # NO AUTOMATIC DOWNGRADE: previous canonical risk is also a floor, so a
+        # periodic review can only ELEVATE or PRESERVE canonical risk -- never
+        # silently lower it. Final = HIGHER of (previous canonical,
+        # officer-confirmed, model-recomputed). Downgrades are out of scope for
+        # PR-PRS-C1 and must go through a separate senior-approved path.
+        confirmed_or_model = _higher_risk_level(confirmed_level, model_level)
+        final_level = (
+            _higher_risk_level(previous_canonical, confirmed_or_model)
+            or confirmed_or_model
+            or previous_canonical
+        )
+        applied_floor = bool(
+            final_level and _risk_rank(final_level) > _risk_rank(model_level)
+        )
+        downgrade_prevented = bool(
+            previous_canonical
+            and _risk_rank(previous_canonical) > _risk_rank(confirmed_or_model)
+        )
+        # Persist the final canonical state EXPLICITLY -- do not rely on the
+        # rule engine's implicit write.
+        if final_level:
+            if applied_floor:
+                db.execute(
+                    "UPDATE applications "
+                    "SET risk_level = ?, final_risk_level = ?, elevation_reason_text = ? "
+                    "WHERE id = ?",
+                    (
+                        final_level,
+                        final_level,
+                        f"Periodic review {review_id}: risk floor applied "
+                        f"(previous={previous_canonical}, model={model_level}, "
+                        f"confirmed={confirmed_level}, recompute_failed={recompute_failed}, "
+                        f"downgrade_prevented={downgrade_prevented})",
+                        application_id,
+                    ),
+                )
+            else:
+                db.execute(
+                    "UPDATE applications SET risk_level = ?, final_risk_level = ? WHERE id = ?",
+                    (final_level, final_level, application_id),
+                )
+        db.commit()
+        if recompute_failed:
+            governance = (
+                "recompute_failed_with_confirmed_floor_applied"
+                if (confirmed_level and final_level)
+                else "canonical_recompute_failed"
+            )
+        else:
+            governance = "canonical_risk_recomputed"
+        canonical_risk = {
+            "previous_canonical": previous_canonical,
+            "confirmed_level": confirmed_level,
+            "model_level": model_level,
+            "final_level": final_level,
+            "applied_floor": applied_floor,
+            "downgrade_prevented": downgrade_prevented,
+            "recompute_failed": recompute_failed,
+            "governance": governance,
+        }
+        _audit_action = (
+            "periodic_review.canonical_risk_recompute_failed"
+            if recompute_failed
+            else "periodic_review.canonical_risk_recomputed"
+        )
+        try:
+            _emit_audit(
+                audit_writer, user, _audit_action,
+                f"periodic_review:{review_id}",
+                {
+                    "review_id": review_id,
+                    "application_id": application_id,
+                    "previous_canonical_risk": previous_canonical,
+                    "officer_confirmed_risk": confirmed_level,
+                    "model_recomputed_risk": model_level,
+                    "final_applied_risk": final_level,
+                    "applied_elevation_floor": applied_floor,
+                    "downgrade_prevented": downgrade_prevented,
+                    "recompute_failed": recompute_failed,
+                    "risk_governance_status": governance,
+                },
+                db,
+                before_state={"risk_level": previous_canonical},
+                after_state={"risk_level": final_level},
+            )
+        except Exception:
+            logger.exception("periodic_review canonical risk audit failed review_id=%s", review_id)
+        # Drive the next cycle's cadence from the FINAL applied canonical level.
+        if final_level:
+            policy_risk_level = final_level
     next_cycle = _ensure_next_periodic_review_cycle(
         db,
         review,
@@ -2243,9 +2415,11 @@ def record_review_outcome(db, review_id, *,
         "risk_level_before": risk_before,
         "risk_level_after": risk_after,
         "risk_changed": risk_changed_flag,
+        "canonical_risk": canonical_risk,
         "risk_governance_status": (
-            "review_level_only_change_management_required"
-            if risk_changed_flag else "unchanged"
+            canonical_risk.get("governance")
+            if canonical_risk
+            else ("canonical_recompute_failed" if risk_changed_flag else "unchanged")
         ),
     }
 
