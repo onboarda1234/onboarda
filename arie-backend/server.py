@@ -29061,7 +29061,7 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                     "quarantined": not bool(gate.get("finalized")),
                     "attempts": gate.get("attempts"),
                     "total_failures": gate.get("total_failures"),
-                    "alerted": gate.get("alerted", False),
+                    "alerted": gate.get("alert_active", False),
                 }
                 if gate.get("finalized"):
                     final_status = pre.STATE_COMPLETED

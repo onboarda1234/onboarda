@@ -876,3 +876,127 @@ class TestDeterminism(_PRDBase):
         finally:
             for p in patched:
                 p.stop()
+
+
+# ─────────────────────────────────────────────────────────────────
+# PR-PRS-E: audit completeness + alert dedup/lifecycle
+# ─────────────────────────────────────────────────────────────────
+class TestMemoAlertHardening(_PRDBase):
+    """PR-PRS-E: the stuck-memo alert must be auditable, fire ONCE, surface
+    to officers via officer_alert_status, and clear on recovery."""
+
+    def _force_quarantine(self, rid=None, payload=None):
+        import periodic_review_memo as prm
+        rid = rid or self._create_review()
+        with mock.patch.object(prm, "build_memo_data",
+                               side_effect=RuntimeError("injected")):
+            resp = self._post(
+                f"/api/monitoring/reviews/{rid}/complete",
+                payload or self._completion_payload(),
+            )
+        self.assertEqual(resp.code, 200)
+        return rid
+
+    def _audit_count(self, action):
+        return self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE action = ?", (action,)
+        ).fetchone()["c"]
+
+    def _alert_status(self, rid):
+        return str(self._conn.execute(
+            "SELECT officer_alert_status FROM periodic_reviews WHERE id = ?", (rid,)
+        ).fetchone()["officer_alert_status"] or "").lower()
+
+    def test_memo_gate_audit_events_persist_with_detail(self):
+        # completion_pending_memo + memo_generation_quarantined (with
+        # before/after + source) on quarantine; completion_finalized (with
+        # source) on recovery.
+        rid = self._force_quarantine()
+        rows = {
+            r["action"]: r for r in self._conn.execute(
+                "SELECT action, detail, before_state, after_state FROM audit_log"
+            ).fetchall()
+        }
+        self.assertIn("periodic_review.completion_pending_memo", rows)
+        self.assertIn("periodic_review.memo_generation_quarantined", rows)
+        q = rows["periodic_review.memo_generation_quarantined"]
+        self.assertIsNotNone(q["before_state"])
+        self.assertIsNotNone(q["after_state"])
+        self.assertEqual(json.loads(q["detail"]).get("source"), "inline")
+
+        rec = self._post(f"/api/monitoring/reviews/{rid}/memo/recover", {})
+        self.assertEqual(rec.code, 200)
+        fin = self._conn.execute(
+            "SELECT detail FROM audit_log "
+            "WHERE action = 'periodic_review.completion_finalized' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(fin)
+        self.assertEqual(json.loads(fin["detail"]).get("source"), "manual_recovery")
+
+    def test_no_officer_alert_below_threshold(self):
+        import periodic_review_memo as prm
+        with mock.patch.object(prm, "MEMO_QUARANTINE_ALERT_THRESHOLD", 99):
+            rid = self._force_quarantine()
+        self.assertNotEqual(self._alert_status(rid), "memo_generation_stuck")
+        self.assertEqual(self._audit_count("periodic_review.memo_alert_raised"), 0)
+
+    def test_officer_alert_raised_once_on_threshold(self):
+        import periodic_review_memo as prm
+        with mock.patch.object(prm, "MEMO_QUARANTINE_ALERT_THRESHOLD", 1), \
+                mock.patch.object(prm, "_emit_memo_health_alert") as mock_alert:
+            rid = self._force_quarantine()
+        row = self._conn.execute(
+            "SELECT officer_alert_status, officer_alerted_at "
+            "FROM periodic_reviews WHERE id = ?", (rid,)
+        ).fetchone()
+        self.assertEqual(str(row["officer_alert_status"] or "").lower(),
+                         "memo_generation_stuck")
+        self.assertIsNotNone(row["officer_alerted_at"])
+        self.assertEqual(mock_alert.call_count, 1)
+        self.assertEqual(self._audit_count("periodic_review.memo_alert_raised"), 1)
+
+    def test_repeated_sweep_does_not_respawn_alert(self):
+        import periodic_review_memo as prm
+        import monitoring_automation as ma
+        with mock.patch.object(prm, "MEMO_QUARANTINE_ALERT_THRESHOLD", 1):
+            rid = self._force_quarantine()
+            self.assertEqual(self._alert_status(rid), "memo_generation_stuck")
+            # Sweep again while the memo still fails: alert must NOT re-fire.
+            with mock.patch.object(prm, "build_memo_data",
+                                   side_effect=RuntimeError("still failing")), \
+                    mock.patch.object(prm, "_emit_memo_health_alert") as mock_alert:
+                summary = prm.run_memo_recovery_sweep(
+                    self._conn, user=ma.SYSTEM_USER,
+                    audit_writer=ma.system_audit_writer,
+                )
+            self.assertEqual(summary["finalized"], 0)
+            self.assertEqual(mock_alert.call_count, 0)
+        self.assertEqual(self._audit_count("periodic_review.memo_alert_raised"), 1)
+
+    def test_recovery_clears_officer_alert(self):
+        import periodic_review_memo as prm
+        with mock.patch.object(prm, "MEMO_QUARANTINE_ALERT_THRESHOLD", 1):
+            rid = self._force_quarantine()
+        self.assertEqual(self._alert_status(rid), "memo_generation_stuck")
+        rec = self._post(f"/api/monitoring/reviews/{rid}/memo/recover", {})
+        self.assertEqual(rec.code, 200)
+        self.assertEqual(self._alert_status(rid), "cleared")
+        self.assertEqual(self._audit_count("periodic_review.memo_alert_cleared"), 1)
+
+    def test_sweep_finalize_uses_system_actor_audit(self):
+        import periodic_review_memo as prm
+        import monitoring_automation as ma
+        rid = self._force_quarantine()
+        summary = prm.run_memo_recovery_sweep(
+            self._conn, user=ma.SYSTEM_USER, audit_writer=ma.system_audit_writer,
+        )
+        self.assertEqual(summary["finalized"], 1)
+        fin = self._conn.execute(
+            "SELECT user_role, detail FROM audit_log "
+            "WHERE action = 'periodic_review.completion_finalized' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(fin)
+        self.assertEqual(fin["user_role"], "system")
+        self.assertEqual(json.loads(fin["detail"]).get("source"), "recovery_sweep")

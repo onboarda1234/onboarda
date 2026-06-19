@@ -61,6 +61,14 @@ SWEEP_MEMO_ATTEMPTS = max(1, int(os.environ.get("PERIODIC_REVIEW_MEMO_SWEEP_ATTE
 MEMO_QUARANTINE_ALERT_THRESHOLD = max(
     1, int(os.environ.get("PERIODIC_REVIEW_MEMO_ALERT_THRESHOLD", "3"))
 )
+# PR-PRS-E: operator-visible escalation for a persistently stuck memo. Reuses
+# the existing ``periodic_reviews.officer_alert_status`` column with a SPECIFIC
+# value so it never collides with the generic client-action officer alert
+# ("active"/"cleared"). Raised once when failures cross the threshold and
+# cleared when the memo finalises -- this is the dedup state (fire once, no
+# per-sweep spam).
+MEMO_STUCK_ALERT_STATUS = "memo_generation_stuck"
+MEMO_ALERT_CLEARED_STATUS = "cleared"
 # A memo is considered STALE (P1-MEMO2) when the review was mutated after the
 # memo was generated -- e.g. the outcome or risk was re-recorded -- so the
 # persisted memo no longer reflects current review truth.
@@ -742,6 +750,60 @@ def _emit_memo_health_alert(review_id: int, total_failures: int, source: str) ->
         )
 
 
+def _raise_memo_stuck_alert(db, review_id, total_failures, source, *,
+                            user=None, audit_writer=None) -> bool:
+    """PR-PRS-E: raise the operator-visible stuck-memo alert exactly once.
+
+    Dedup contract: if the review is already flagged ``memo_generation_stuck``
+    this is a no-op (returns False) so repeated sweeps never re-fire the health
+    alert or re-write the officer flag. On the first crossing it sets
+    ``officer_alert_status='memo_generation_stuck'`` + ``officer_alerted_at``,
+    emits the health alert, and audits ``periodic_review.memo_alert_raised``.
+
+    Returns True only when the alert was newly raised.
+    """
+    row = db.execute(
+        "SELECT officer_alert_status FROM periodic_reviews WHERE id = ?",
+        (review_id,),
+    ).fetchone()
+    current = str(_row_get(row, "officer_alert_status") or "").strip().lower()
+    if current == MEMO_STUCK_ALERT_STATUS:
+        return False  # already raised for this stuck episode -- no spam
+    now = _utc_now_iso()
+    db.execute(
+        "UPDATE periodic_reviews SET officer_alert_status = ?, officer_alerted_at = ? "
+        "WHERE id = ?",
+        (MEMO_STUCK_ALERT_STATUS, now, review_id),
+    )
+    db.commit()
+    _emit_memo_health_alert(review_id, total_failures, source)
+    if audit_writer is not None:
+        try:
+            audit_writer(
+                dict(user) if user else {"sub": SYSTEM_ACTOR},
+                "periodic_review.memo_alert_raised",
+                f"periodic_review:{review_id}",
+                json.dumps({
+                    "review_id": review_id,
+                    "source": source,
+                    "total_failures": total_failures,
+                    "threshold": MEMO_QUARANTINE_ALERT_THRESHOLD,
+                    "officer_alert_status": MEMO_STUCK_ALERT_STATUS,
+                }, default=str),
+                db=db,
+                before_state={"officer_alert_status": current or None},
+                after_state={"officer_alert_status": MEMO_STUCK_ALERT_STATUS,
+                             "officer_alerted_at": now},
+            )
+        except Exception:  # pragma: no cover - audit must not break the flow
+            logger.exception("Failed to audit memo_alert_raised review_id=%s", review_id)
+    return True
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def complete_review_with_memo(db, review_id: int, *, user=None, audit_writer=None,
                               max_attempts: Optional[int] = None,
                               source: str = "inline") -> Dict[str, Any]:
@@ -792,7 +854,7 @@ def complete_review_with_memo(db, review_id: int, *, user=None, audit_writer=Non
                 continue
         try:
             completion = pre.finalize_review_memo_completion(
-                db, review_id, user=user, audit_writer=audit_writer,
+                db, review_id, user=user, audit_writer=audit_writer, source=source,
             )
         except Exception as exc:
             last_error = exc
@@ -811,6 +873,11 @@ def complete_review_with_memo(db, review_id: int, *, user=None, audit_writer=Non
         }
 
     total_failures = count_failed_memo_attempts(db, review_id)
+    prior_alert_row = db.execute(
+        "SELECT officer_alert_status FROM periodic_reviews WHERE id = ?",
+        (review_id,),
+    ).fetchone()
+    prior_alert = str(_row_get(prior_alert_row, "officer_alert_status") or "").strip().lower() or None
     if audit_writer is not None:
         try:
             audit_writer(
@@ -825,18 +892,35 @@ def complete_review_with_memo(db, review_id: int, *, user=None, audit_writer=Non
                     "error": str(last_error) if last_error else None,
                 }, default=str),
                 db=db,
+                before_state={
+                    "status": "completion_pending_memo",
+                    "officer_alert_status": prior_alert,
+                },
+                after_state={
+                    "status": "completion_pending_memo",
+                    "officer_alert_status": prior_alert,
+                    "total_failures": total_failures,
+                    "source": source,
+                },
             )
         except Exception:  # pragma: no cover - audit must not break the flow
             logger.exception("Failed to audit memo quarantine review_id=%s", review_id)
+    # PR-PRS-E: raise the operator-visible alert ONCE per stuck episode (dedup),
+    # not on every sweep cycle.
+    alerted = False
     if total_failures >= MEMO_QUARANTINE_ALERT_THRESHOLD:
-        _emit_memo_health_alert(review_id, total_failures, source)
+        alerted = _raise_memo_stuck_alert(
+            db, review_id, total_failures, source,
+            user=user, audit_writer=audit_writer,
+        )
     return {
         "finalized": False,
         "status": STATUS_GENERATION_FAILED,
         "memo_failed": True,
         "attempts": max_attempts,
         "total_failures": total_failures,
-        "alerted": total_failures >= MEMO_QUARANTINE_ALERT_THRESHOLD,
+        "alert_active": total_failures >= MEMO_QUARANTINE_ALERT_THRESHOLD,
+        "alerted": alerted,
         "source": source,
     }
 
