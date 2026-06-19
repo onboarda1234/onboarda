@@ -27,6 +27,20 @@ def test_authority_mirror_helpers_exist():
     assert "NOT a security boundary" in html
 
 
+def test_ux_gates_fail_open_when_permission_matrix_unloaded():
+    # Regression guard for the 0c smoke failure: a CO on a clean LOW/MEDIUM file must
+    # see Approve. The "no approval authority" hide must only fire when the RBAC matrix
+    # is actually loaded — otherwise hasPermission() fails closed and wrongly hides
+    # Approve for legitimate approvers on a matrix-load race/failure.
+    html = _html()
+    assert "function rolePermissionsLoaded(" in html
+    fn = html.split("function approveBackendBlockReason(", 1)[1].split("function setDetailActionVisibility(", 1)[0]
+    assert "rolePermissionsLoaded() && !hasPermission('approve_low_medium')" in fn
+    # The CO role/risk/status blocks must NOT be guarded by matrix load (they use the
+    # role string + risk directly and stay reliable without the matrix).
+    assert "role === 'co' && (risk === 'HIGH' || risk === 'VERY_HIGH')" in fn
+
+
 def test_co_high_and_edd_are_backend_block_reasons():
     html = _html()
     fn = html.split("function approveBackendBlockReason(", 1)[1].split("function setDetailActionVisibility(", 1)[0]
@@ -62,9 +76,10 @@ def test_sync_hides_approve_and_gates_reject_override():
     # Approve is hidden when the backend would reject it.
     assert "approveBackendBlockReason(app)" in sync
     assert "setDetailActionVisibility('btn-approve', !approveBlock)" in sync
-    # Reject / Override gated by explicit permissions (analyst sees neither).
-    assert "setDetailActionVisibility('btn-reject', hasPermission('reject_applications'))" in sync
-    assert "setDetailActionVisibility('btn-override', hasPermission('override_ai_risk_score'))" in sync
+    # Reject / Override gate strictly when the matrix is loaded, but fail OPEN when it
+    # is not (a matrix-load failure must never hide a senior officer's controls).
+    assert "setDetailActionVisibility('btn-reject', !rolePermissionsLoaded() || hasPermission('reject_applications'))" in sync
+    assert "setDetailActionVisibility('btn-override', !rolePermissionsLoaded() || hasPermission('override_ai_risk_score'))" in sync
     # Submit-to-Compliance offered, including from edd_required (mirrors backend).
     assert "btn-submit-compliance" in sync
     assert "'edd_required'" in sync
