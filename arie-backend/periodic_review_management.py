@@ -328,7 +328,7 @@ def _latest_active_review_for_application(db, application_id: Any):
         """
         SELECT * FROM periodic_reviews
         WHERE application_id = ?
-          AND COALESCE(status, 'pending') IN ('pending','in_progress','awaiting_information','pending_senior_review')
+          AND COALESCE(status, 'pending') IN ('pending','in_progress','awaiting_information','pending_senior_review','completion_pending_memo')
         ORDER BY due_date ASC, created_at DESC, id DESC
         LIMIT 1
         """,

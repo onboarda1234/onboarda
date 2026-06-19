@@ -28766,6 +28766,7 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                     senior_review_note=data.get("senior_review_note"),
                     officer_acknowledgement=data.get("officer_acknowledgement", False),
                     enforce_prs5_gates=True,
+                    memo_gate=True,
                     user=user, audit_writer=self.log_audit,
                 )
             except pre.ReviewNotFound:
@@ -28783,43 +28784,58 @@ class PeriodicReviewCompleteHandler(BaseHandler):
             except pre.PeriodicReviewEngineError as e:
                 return self.error(str(e), 400)
 
-            # PR-D: generate the lightweight periodic review memo AFTER
-            # the outcome commit. Deterministic, template-driven, no AI.
-            # Failure here MUST NOT roll back the outcome -- the review
-            # remains completed; a status='generation_failed' row is
-            # persisted by the generator so the read endpoint and UI can
-            # differentiate "not yet completed" (no row) from "completed
-            # but generation failed" (row with failure status). See
-            # periodic_review_memo.py docstring for the failure contract.
+            # PR-PRS-C2: memo-gated completion. record_review_outcome has
+            # recorded the outcome (and any canonical risk elevation) but
+            # parked the review at completion_pending_memo. The mandatory
+            # memo is now generated WITH inline retries; only a successful
+            # memo finalises the review to ``completed`` (and schedules the
+            # next cycle). If it still fails the review stays quarantined --
+            # the fail-closed outcome -- and a background sweep + manual
+            # recovery endpoint re-attempt it.
             memo_result = None
-            if result.get("status") == pre.STATE_COMPLETED:
-                try:
-                    import periodic_review_memo as prm
-                    memo_result = prm.generate_periodic_review_memo(db, review_id)
-                except Exception:
-                    # Generator already logged with full traceback. Swallow
-                    # here so the outcome commit is the authoritative result
-                    # surfaced to the caller.
-                    memo_result = {"status": "generation_failed"}
-                try:
-                    import periodic_review_risk_reassessment as prr
-                    prr.mark_memo_addendum_generated(
-                        db,
-                        review_id,
-                        memo_result=memo_result,
-                        user=user,
-                        audit_writer=self.log_audit,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Periodic review memo addendum status/audit update failed: review_id=%s",
-                        review_id,
-                    )
+            memo_gate = None
+            final_status = result.get("status")
+            response_result = result
+            if final_status == pre.STATE_COMPLETION_PENDING_MEMO:
+                import periodic_review_memo as prm
+                gate = prm.complete_review_with_memo(
+                    db, review_id,
+                    user=user, audit_writer=self.log_audit, source="inline",
+                )
+                memo_result = gate.get("memo") or {"status": gate.get("status")}
+                memo_gate = {
+                    "finalized": bool(gate.get("finalized")),
+                    "quarantined": not bool(gate.get("finalized")),
+                    "attempts": gate.get("attempts"),
+                    "total_failures": gate.get("total_failures"),
+                    "alerted": gate.get("alerted", False),
+                }
+                if gate.get("finalized"):
+                    final_status = pre.STATE_COMPLETED
+                    # Preserve canonical-risk / governance fields recorded at
+                    # quarantine entry (C1) and overlay the completed/next-cycle
+                    # fields produced by finalisation.
+                    response_result = {**result, **(gate.get("completion") or {})}
+                    try:
+                        import periodic_review_risk_reassessment as prr
+                        prr.mark_memo_addendum_generated(
+                            db,
+                            review_id,
+                            memo_result=memo_result,
+                            user=user,
+                            audit_writer=self.log_audit,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Periodic review memo addendum status/audit update failed: review_id=%s",
+                            review_id,
+                        )
 
             self.success({
-                "status": "periodic_review_completed" if result.get("status") == pre.STATE_COMPLETED else result.get("status"),
-                "result": result,
+                "status": "periodic_review_completed" if final_status == pre.STATE_COMPLETED else final_status,
+                "result": response_result,
                 "memo": memo_result,
+                "memo_gate": memo_gate,
             })
         except Exception:
             try:
@@ -28828,6 +28844,60 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                 pass
             logger.exception("Periodic review completion failed: review_id=%s", review_id)
             self.error("Failed to complete periodic review.", 500)
+        finally:
+            db.close()
+
+
+class PeriodicReviewMemoRecoveryHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/memo/recover -- PR-PRS-C2.
+
+    Manual recovery for a review stuck in ``completion_pending_memo``:
+    re-attempts memo generation and, on success, finalises the review to
+    ``completed`` (scheduling the next cycle). Operator/SCO/admin only.
+    Returns 409 if the review is not in the quarantine state.
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            row = db.execute(
+                "SELECT status FROM periodic_reviews WHERE id = ?",
+                (review_id,),
+            ).fetchone()
+            if row is None:
+                return self.error("Review not found", 404)
+            status = (dict(row).get("status") or "").strip().lower()
+            if status == "completed":
+                return self.success({
+                    "status": "already_completed",
+                    "review_id": review_id,
+                })
+            if status != "completion_pending_memo":
+                return self.error(
+                    f"Review is '{status}', not awaiting memo finalisation", 409,
+                )
+            import periodic_review_memo as prm
+            gate = prm.complete_review_with_memo(
+                db, review_id,
+                user=user, audit_writer=self.log_audit, source="manual_recovery",
+            )
+            self.success({
+                "status": "completed" if gate.get("finalized") else "still_pending_memo",
+                "review_id": review_id,
+                "memo_gate": gate,
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Periodic review memo recovery failed: review_id=%s", review_id)
+            self.error("Failed to recover periodic review memo.", 500)
         finally:
             db.close()
 
@@ -28904,6 +28974,15 @@ class PeriodicReviewMemoHandler(BaseHandler):
             except Exception:
                 logger.exception(
                     "Failed to enrich periodic review memo response review_id=%s",
+                    review_id,
+                )
+            # PR-PRS-C2 / P1-MEMO2: surface memo staleness so the UI can flag a
+            # memo that no longer reflects current review truth.
+            try:
+                memo["staleness"] = prm.evaluate_memo_staleness(db, review_id, memo)
+            except Exception:
+                logger.exception(
+                    "Failed to evaluate periodic review memo staleness review_id=%s",
                     review_id,
                 )
             self.success(memo)
@@ -32067,6 +32146,7 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),
         (r"/api/monitoring/reviews/([^/]+)/escalate", PeriodicReviewEscalateHandler),
         (r"/api/monitoring/reviews/([^/]+)/complete", PeriodicReviewCompleteHandler),
+        (r"/api/monitoring/reviews/([^/]+)/memo/recover", PeriodicReviewMemoRecoveryHandler),
         (r"/api/monitoring/reviews/([^/]+)/decision", PeriodicReviewDecisionHandler),
         (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
         (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
@@ -32389,6 +32469,91 @@ if __name__ == "__main__":
             logger.info("monitoring-automation: scheduled runner disabled for environment=%s", ENVIRONMENT)
     except Exception:
         logger.exception("monitoring-automation: startup registration failed")
+        if ENVIRONMENT in ("production", "staging"):
+            raise
+
+    # PR-PRS-C2 memo-recovery sweep. Re-attempts memo generation for reviews
+    # stuck in completion_pending_memo and finalises them to ``completed`` on
+    # success. It only mutates reviews already parked in the quarantine state;
+    # it never touches pending/in-progress reviews. Env-gated and bounded
+    # (small batch) to mirror the monitoring automation runner.
+    try:
+        import periodic_review_memo as _prm_recovery
+        import monitoring_automation as _ma_for_recovery
+
+        _memo_recovery_env = os.environ.get("PERIODIC_REVIEW_MEMO_RECOVERY_ENABLED")
+        if _memo_recovery_env is not None:
+            _memo_recovery_enabled = str(_memo_recovery_env).strip().lower() not in (
+                "0", "false", "no", "off",
+            )
+        else:
+            _memo_recovery_enabled = str(ENVIRONMENT or "").strip().lower() in (
+                "staging", "production", "prod",
+            )
+        if ENVIRONMENT not in ("testing",) and _memo_recovery_enabled:
+            try:
+                _memo_recovery_interval_seconds = int(
+                    os.environ.get("PERIODIC_REVIEW_MEMO_RECOVERY_SWEEP_SECONDS", "900")
+                )
+            except (TypeError, ValueError):
+                _memo_recovery_interval_seconds = 900
+            _memo_recovery_interval_seconds = max(120, _memo_recovery_interval_seconds)
+            try:
+                _memo_recovery_initial_delay = int(
+                    os.environ.get("PERIODIC_REVIEW_MEMO_RECOVERY_INITIAL_DELAY_SECONDS", "120")
+                )
+            except (TypeError, ValueError):
+                _memo_recovery_initial_delay = 120
+            _memo_recovery_initial_delay = max(0, _memo_recovery_initial_delay)
+
+            def _memo_recovery_tick():
+                db = None
+                try:
+                    db = get_db()
+                    summary = _prm_recovery.run_memo_recovery_sweep(
+                        db,
+                        user=_ma_for_recovery.SYSTEM_USER,
+                        audit_writer=_ma_for_recovery.system_audit_writer,
+                    )
+                    if summary.get("candidates"):
+                        logger.info(
+                            "periodic-review-memo-recovery: candidates=%s finalized=%s still_pending=%s",
+                            summary.get("candidates"),
+                            summary.get("finalized"),
+                            summary.get("still_pending"),
+                        )
+                except Exception:
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    logger.exception("periodic-review-memo-recovery: scheduled run failed")
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+
+            _memo_recovery_cb = tornado.ioloop.PeriodicCallback(
+                _memo_recovery_tick,
+                _memo_recovery_interval_seconds * 1000,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                _memo_recovery_initial_delay,
+                _memo_recovery_tick,
+            )
+            _memo_recovery_cb.start()
+            logger.info(
+                "periodic-review-memo-recovery: scheduled runner registered (interval=%ss initial_delay=%ss)",
+                _memo_recovery_interval_seconds,
+                _memo_recovery_initial_delay,
+            )
+        else:
+            logger.info("periodic-review-memo-recovery: scheduled runner disabled for environment=%s", ENVIRONMENT)
+    except Exception:
+        logger.exception("periodic-review-memo-recovery: startup registration failed")
         if ENVIRONMENT in ("production", "staging"):
             raise
 

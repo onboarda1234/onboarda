@@ -490,7 +490,11 @@ class TestCompleteHandlerHook(_PRDBase):
         self.assertEqual(row["version"], 1)
         self.assertEqual(row["status"], "generated")
 
-    def test_generator_failure_does_not_rollback_outcome(self):
+    def test_generator_failure_quarantines_completion_pending_memo(self):
+        # PR-PRS-C2: the memo is now a completion GATE. If generation fails,
+        # the outcome is still recorded (and canonical risk elevated) but the
+        # review is held at completion_pending_memo -- it MUST NOT reach
+        # ``completed`` without a memo. This is the fail-closed contract.
         rid = self._create_review()
 
         import periodic_review_memo as prm
@@ -501,14 +505,22 @@ class TestCompleteHandlerHook(_PRDBase):
                 self._completion_payload(),
             )
         self.assertEqual(resp.code, 200)
-        # Outcome is committed.
-        self.assertEqual(
-            self._conn.execute(
-                "SELECT status, outcome FROM periodic_reviews WHERE id = ?",
-                (rid,),
-            ).fetchone()["status"],
-            "completed",
-        )
+        body = json.loads(resp.body.decode())
+        # Review is quarantined, NOT completed.
+        review_row = self._conn.execute(
+            "SELECT status, outcome, completed_at FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(review_row["status"], "completion_pending_memo")
+        # Outcome is still recorded.
+        self.assertEqual(review_row["outcome"], "no_change")
+        # No completed_at while quarantined.
+        self.assertIsNone(review_row["completed_at"])
+        # Response advertises the quarantine.
+        self.assertEqual(body["status"], "completion_pending_memo")
+        self.assertIsNotNone(body.get("memo_gate"))
+        self.assertTrue(body["memo_gate"]["quarantined"])
+        self.assertFalse(body["memo_gate"]["finalized"])
         # Failure-indicator row persisted.
         row = self._conn.execute(
             "SELECT status FROM periodic_review_memos "
@@ -516,6 +528,153 @@ class TestCompleteHandlerHook(_PRDBase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], "generation_failed")
+
+    def test_recovery_after_quarantine_finalizes_review(self):
+        # PR-PRS-C2: a quarantined review recovers to ``completed`` once the
+        # memo can be generated -- via the recovery orchestration.
+        rid = self._create_review()
+        import periodic_review_memo as prm
+        with mock.patch.object(prm, "build_memo_data",
+                               side_effect=RuntimeError("injected")):
+            resp = self._post(
+                f"/api/monitoring/reviews/{rid}/complete",
+                self._completion_payload(),
+            )
+        self.assertEqual(resp.code, 200)
+        self.assertEqual(
+            self._conn.execute(
+                "SELECT status FROM periodic_reviews WHERE id = ?", (rid,),
+            ).fetchone()["status"],
+            "completion_pending_memo",
+        )
+        # Manual recovery endpoint now succeeds (no injected failure).
+        recover = self._post(f"/api/monitoring/reviews/{rid}/memo/recover", {})
+        self.assertEqual(recover.code, 200)
+        rbody = json.loads(recover.body.decode())
+        self.assertEqual(rbody["status"], "completed")
+        self.assertTrue(rbody["memo_gate"]["finalized"])
+        review_row = self._conn.execute(
+            "SELECT status, completed_at FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(review_row["status"], "completed")
+        self.assertIsNotNone(review_row["completed_at"])
+        # A successful memo row now exists.
+        good = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM periodic_review_memos "
+            "WHERE periodic_review_id = ? AND status = 'generated'", (rid,),
+        ).fetchone()
+        self.assertGreaterEqual(good["c"], 1)
+
+
+# ─────────────────────────────────────────────────────────────────
+# PR-PRS-C2: memo-gate quarantine, recovery sweep, staleness
+# ─────────────────────────────────────────────────────────────────
+class TestMemoGateQuarantine(_PRDBase):
+    def _quarantine(self, **review_kwargs):
+        rid = self._create_review(**review_kwargs)
+        import periodic_review_memo as prm
+        with mock.patch.object(prm, "build_memo_data",
+                               side_effect=RuntimeError("injected")):
+            resp = self._post(
+                f"/api/monitoring/reviews/{rid}/complete",
+                self._completion_payload(**self._payload_for(review_kwargs)),
+            )
+        self.assertEqual(resp.code, 200)
+        return rid, json.loads(resp.body.decode())
+
+    @staticmethod
+    def _payload_for(review_kwargs):
+        return {}
+
+    def test_quarantine_defers_next_cycle_scheduling(self):
+        # "Elevate now, defer cycle": while quarantined, NO next-cycle review
+        # row should be scheduled.
+        rid, _ = self._quarantine()
+        next_rows = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM periodic_reviews WHERE application_id = ?",
+            (self._app_id,),
+        ).fetchone()
+        # Only the original review exists; the next cycle is NOT yet created.
+        self.assertEqual(next_rows["c"], 1)
+
+    def test_quarantine_elevates_canonical_risk_immediately(self):
+        # "Elevate now": a confirmed risk change must elevate canonical
+        # application risk even though the memo (and completion) is pending.
+        rid = self._create_review(risk_level="MEDIUM")
+        import periodic_review_memo as prm
+        with mock.patch.object(prm, "build_memo_data",
+                               side_effect=RuntimeError("injected")):
+            resp = self._post(
+                f"/api/monitoring/reviews/{rid}/complete",
+                self._completion_payload(
+                    outcome="risk_rating_changed",
+                    risk_changed=True,
+                    new_risk_level="HIGH",
+                    risk_impact="Sanctions exposure identified",
+                ),
+            )
+        self.assertEqual(resp.code, 200)
+        review_row = self._conn.execute(
+            "SELECT status FROM periodic_reviews WHERE id = ?", (rid,),
+        ).fetchone()
+        self.assertEqual(review_row["status"], "completion_pending_memo")
+        app_row = self._conn.execute(
+            "SELECT risk_level, final_risk_level FROM applications WHERE id = ?",
+            (self._app_id,),
+        ).fetchone()
+        # Canonical risk was elevated to at least HIGH despite the memo gate.
+        self.assertIn(str(app_row["final_risk_level"]).upper(), ("HIGH", "VERY_HIGH"))
+
+    def test_re_completion_of_quarantined_review_is_blocked(self):
+        rid, _ = self._quarantine()
+        # A second completion attempt must be rejected (outcome already
+        # recorded; only memo finalisation may move it forward).
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(),
+        )
+        self.assertEqual(resp.code, 409)
+
+    def test_recovery_sweep_finalizes_quarantined_review(self):
+        rid, _ = self._quarantine()
+        import periodic_review_memo as prm
+        import monitoring_automation as ma
+        summary = prm.run_memo_recovery_sweep(
+            self._conn,
+            user=ma.SYSTEM_USER,
+            audit_writer=ma.system_audit_writer,
+        )
+        self.assertEqual(summary["finalized"], 1)
+        self.assertIn(rid, summary["finalized_ids"])
+        review_row = self._conn.execute(
+            "SELECT status, completed_at FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(review_row["status"], "completed")
+        self.assertIsNotNone(review_row["completed_at"])
+
+    def test_staleness_flag_when_review_mutated_after_memo(self):
+        # Complete normally so a generated memo exists, then mutate the review
+        # so the memo is older than the latest review change.
+        rid = self._create_review()
+        complete = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(),
+        )
+        self.assertEqual(complete.code, 200)
+        # Push the review's state_changed_at into the future relative to memo.
+        self._conn.execute(
+            "UPDATE periodic_reviews SET state_changed_at = '2099-01-01T00:00:00+00:00' "
+            "WHERE id = ?",
+            (rid,),
+        )
+        self._conn.commit()
+        resp = self._get(f"/api/periodic-reviews/{rid}/memo")
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body.decode())
+        self.assertIn("staleness", body)
+        self.assertTrue(body["staleness"]["is_stale"])
 
 
 # ─────────────────────────────────────────────────────────────────
