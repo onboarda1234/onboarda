@@ -85,6 +85,7 @@ from security_hardening import (
     get_safe_health_response, determine_screening_mode,
     store_screening_mode, PIIEncryptor, collect_approval_gate_blockers,
     screening_second_review_pending_summary,
+    can_decide_application,
 )
 HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
@@ -6097,21 +6098,50 @@ class ApplicationDetailHandler(BaseHandler):
         if new_status:
             current_status = app["status"]
 
-            # Define valid state transitions (v2.1: includes pre-approval flow)
+            # ── PR-APPROVAL-AUTHORITY-MATRIX-1: terminal decisions may NOT be made
+            #    through generic status PATCH (audit finding P0-1). All approve/reject
+            #    transitions must go through POST /api/applications/:id/decision so the
+            #    centralized can_decide gate enforces role, current risk, dual-approval,
+            #    override rules and the full precondition stack. Blocked attempts are
+            #    audited as application.decision_blocked. ──
+            if new_status in ("approved", "rejected"):
+                reason = (
+                    f"Terminal decision blocked: '{new_status}' cannot be set via "
+                    "PATCH /api/applications/:id. Use POST /api/applications/:id/decision "
+                    "so role, current risk, dual-approval, override and approval-gate checks are enforced."
+                )
+                self.log_governance_attempt(
+                    user, "application.decision_blocked", app["ref"], "rejected", 409,
+                    reason,
+                    {
+                        "attempted_status": new_status,
+                        "from_status": current_status,
+                        "source_surface": "application_status_patch",
+                        "fields": _governance_summary(data, ("status", "notes")),
+                    },
+                    db=db, commit=False)
+                db.commit()
+                db.close()
+                return self.error(reason, 409)
+
+            # Define valid state transitions (v2.1: includes pre-approval flow).
+            # Terminal targets 'approved'/'rejected' are intentionally absent — they
+            # are routed through /decision (guarded above). 'rejected' -> 'draft'
+            # remains a non-terminal reopen path.
             valid_transitions = {
                 "draft": ["submitted", "prescreening_submitted"],
                 "prescreening_submitted": ["pricing_review", "pre_approval_review"],
-                "pre_approval_review": ["pre_approved", "rejected", "draft"],  # officer pre-approval decisions
+                "pre_approval_review": ["pre_approved", "draft"],  # reject goes through /pre-approval-decision
                 "pre_approved": ["kyc_documents"],
                 "pricing_review": ["pricing_accepted"],
                 "pricing_accepted": ["kyc_documents", "pre_approval_review"],
                 "kyc_documents": ["kyc_submitted", "compliance_review"],
                 "kyc_submitted": ["compliance_review"],
-                "submitted": ["under_review", "rejected"],
-                "compliance_review": ["in_review", "edd_required", "approved", "rejected"],
-                "in_review": ["edd_required", "approved", "rejected"],
-                "under_review": ["edd_required", "approved", "rejected"],
-                "edd_required": ["under_review", "in_review", "approved", "rejected"],
+                "submitted": ["under_review"],
+                "compliance_review": ["in_review", "edd_required"],
+                "in_review": ["edd_required"],
+                "under_review": ["edd_required"],
+                "edd_required": ["under_review", "in_review"],
                 "rmi_sent": ["kyc_documents", "kyc_submitted", "compliance_review"],
                 "approved": [],  # Terminal state
                 "rejected": ["draft"],  # Can reopen to draft
@@ -25289,6 +25319,8 @@ class ApplicationDecisionHandler(BaseHandler):
         decision_reason = data.get("decision_reason")
         override_ai = data.get("override_ai", False)
         override_reason = data.get("override_reason", "")
+        # PR-APPROVAL-AUTHORITY-MATRIX-1: populated by the centralized can_decide gate
+        decision_authority_meta = {}
 
         valid_decisions = ["approve", "reject", "escalate_edd", "request_documents"]
         if decision not in valid_decisions:
@@ -25346,20 +25378,39 @@ class ApplicationDecisionHandler(BaseHandler):
                 db.close()
                 return self.error(risk_error, 400)
 
+        # ── PR-APPROVAL-AUTHORITY-MATRIX-1: reject also passes the centralized
+        #    authority gate (approve is gated in its own branch below). ──
+        if decision == "reject":
+            reject_risk_level, _reject_risk_score = _application_risk_snapshot(app)
+            authority_ok, authority_code, authority_reason, decision_authority_meta = can_decide_application(
+                user, app, "reject",
+                risk_level=reject_risk_level,
+                override_ai=override_ai,
+            )
+            if not authority_ok:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", authority_code,
+                    authority_reason, attempt_summary, db=db)
+                db.close()
+                return self.error(authority_reason, authority_code)
+
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
             approval_risk_level, approval_risk_score = _application_risk_snapshot(app)
-            # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
-            if user.get("role") == "co" and approval_risk_level in ("HIGH", "VERY_HIGH"):
-                reason = (
-                    "Approval blocked: Onboarding Officers cannot approve HIGH or VERY_HIGH risk applications. "
-                    "Only Admin or Senior Compliance Officer roles may approve at this risk level."
-                )
+            # ── PR-APPROVAL-AUTHORITY-MATRIX-1: centralized authority gate ──
+            # Single source of truth for terminal-decision authority (replaces the
+            # inline H-1 CO/HIGH check — same rule, now shared with all callers).
+            authority_ok, authority_code, authority_reason, decision_authority_meta = can_decide_application(
+                user, app, "approve",
+                risk_level=approval_risk_level,
+                override_ai=override_ai,
+            )
+            if not authority_ok:
                 self.log_governance_attempt(
-                    user, "application.decision", attempt_target, "rejected", 403,
-                    reason, attempt_summary, db=db)
+                    user, "application.decision", attempt_target, "rejected", authority_code,
+                    authority_reason, attempt_summary, db=db)
                 db.close()
-                return self.error(reason, 403)
+                return self.error(authority_reason, authority_code)
 
             # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
             memo_exists = latest_compliance_memo_row(db, real_id)
@@ -25611,6 +25662,12 @@ class ApplicationDecisionHandler(BaseHandler):
             "rmi_deadline": rmi_deadline if decision == "request_documents" else None,
             "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
             "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
+            # PR-APPROVAL-AUTHORITY-MATRIX-1: privileged admin high-risk approvals
+            # are flagged + extra-audited; they still pass the same can_decide gate.
+            "is_privileged_admin_action": bool(decision_authority_meta.get("is_privileged_admin_action"))
+                if decision in ("approve", "reject") else None,
+            "decision_authority": (decision_authority_meta or None)
+                if decision in ("approve", "reject") else None,
         }
 
         if decision == "request_documents":
