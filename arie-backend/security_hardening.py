@@ -1408,6 +1408,7 @@ class ApprovalGateValidator:
 DECISION_AUTHORITY_ROLES = ("admin", "sco", "co")
 # Risk tiers an Onboarding Officer (co) may NOT approve.
 HIGH_RISK_DECISION_LEVELS = ("HIGH", "VERY_HIGH")
+DECISION_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
 
 
 def can_decide_application(user, app, decision, *, risk_level=None, override_ai=False):
@@ -1457,6 +1458,16 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
             f"Unsupported terminal decision '{decision or 'none'}'. Must be 'approve' or 'reject'.",
             meta,
         )
+
+    if level not in DECISION_RISK_LEVELS:
+        reason = (
+            "Current risk level is required before a terminal decision can be authorized."
+        )
+        if level:
+            reason = (
+                f"Unsupported current risk level '{level}' for terminal decision authority."
+            )
+        return (False, 400, reason, meta)
 
     # 1. Actor must hold a terminal-decision role. Analyst / client / unknown
     #    are blocked for BOTH approve and reject.

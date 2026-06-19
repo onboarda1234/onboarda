@@ -6097,6 +6097,9 @@ class ApplicationDetailHandler(BaseHandler):
         new_status = data.get("status")
         if new_status:
             current_status = app["status"]
+            normalized_terminal_status = (
+                new_status.strip().lower() if isinstance(new_status, str) else new_status
+            )
 
             # ── PR-APPROVAL-AUTHORITY-MATRIX-1: terminal decisions may NOT be made
             #    through generic status PATCH (audit finding P0-1). All approve/reject
@@ -6104,9 +6107,9 @@ class ApplicationDetailHandler(BaseHandler):
             #    centralized can_decide gate enforces role, current risk, dual-approval,
             #    override rules and the full precondition stack. Blocked attempts are
             #    audited as application.decision_blocked. ──
-            if new_status in ("approved", "rejected"):
+            if normalized_terminal_status in ("approved", "rejected"):
                 reason = (
-                    f"Terminal decision blocked: '{new_status}' cannot be set via "
+                    f"Terminal decision blocked: '{normalized_terminal_status}' cannot be set via "
                     "PATCH /api/applications/:id. Use POST /api/applications/:id/decision "
                     "so role, current risk, dual-approval, override and approval-gate checks are enforced."
                 )
@@ -6115,6 +6118,7 @@ class ApplicationDetailHandler(BaseHandler):
                     reason,
                     {
                         "attempted_status": new_status,
+                        "normalized_status": normalized_terminal_status,
                         "from_status": current_status,
                         "source_surface": "application_status_patch",
                         "fields": _governance_summary(data, ("status", "notes")),
@@ -25346,7 +25350,7 @@ class ApplicationDecisionHandler(BaseHandler):
             return self.error("override_reason is required when override_ai is true", 400)
 
         # ── OVERRIDE GOVERNANCE: Only SCO or Admin may override the AI recommendation ──
-        if override_ai and user.get("role") not in ("sco", "admin"):
+        if decision not in ("approve", "reject") and override_ai and user.get("role") not in ("sco", "admin"):
             reason = (
                 "AI override requires Senior Compliance Officer or Admin role. "
                 f"Your role '{user.get('role')}' is not permitted to submit override_ai=true."

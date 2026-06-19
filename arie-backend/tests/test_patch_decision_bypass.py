@@ -66,7 +66,7 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
         self._db_path_state = _capture_db_path_state()
         self._db_path = os.path.join(
             tempfile.gettempdir(),
-            f"onboarda_patch_decision_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
+            f"patch_decision_test_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
         )
         try:
             os.unlink(self._db_path)
@@ -264,6 +264,26 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
         assert ps["from_status"] == "in_review"
         assert ps["source_surface"] == "application_status_patch"
 
+    def test_patch_terminal_block_normalizes_status_for_audit(self):
+        resp = self.fetch(
+            "/api/applications/pdb_low", method="PATCH",
+            headers=self._headers(self.admin_token),
+            body=json.dumps({"status": " Approved "}),
+        )
+        assert resp.code == 409, resp.body.decode()
+        assert "Terminal decision blocked" in self._json(resp)["error"]
+        assert self._status_of("pdb_low") == "in_review"
+
+        row = self.db.execute(
+            "SELECT detail FROM audit_log WHERE target = ? AND action = 'Governance Attempt' "
+            "ORDER BY id DESC LIMIT 1",
+            ("PDB-LOW",),
+        ).fetchone()
+        detail = json.loads(row["detail"])
+        ps = detail["payload_summary"]
+        assert ps["attempted_status"] == " Approved "
+        assert ps["normalized_status"] == "approved"
+
     def test_decision_co_low_approve_is_not_role_blocked(self):
         # CO retains LOW/MEDIUM approval authority: the gate must NOT 403 a CO on a
         # LOW file. It proceeds to the readiness gates (here: missing memo -> 400),
@@ -308,6 +328,17 @@ def test_can_decide_co_cannot_approve_high_or_very_high():
         assert allowed is False
         assert code == 403
         assert "Onboarding Officers cannot approve" in reason
+
+
+def test_can_decide_fails_closed_when_current_risk_missing():
+    from security_hardening import can_decide_application
+    for missing_level in (None, ""):
+        allowed, code, reason, meta = can_decide_application(
+            _user("admin"), {}, "approve", risk_level=missing_level)
+        assert allowed is False
+        assert code == 400
+        assert "Current risk level is required" in reason
+        assert meta["risk_level"] is None
 
 
 def test_can_decide_sco_can_approve_high_requires_dual():
