@@ -103,6 +103,7 @@ STATUS_LABELS = {
     "kyc_documents":             "KYC Documents Required",
     "kyc_submitted":             "KYC Documents Submitted",
     "compliance_review":         "Compliance Review in Progress",
+    "submitted_to_compliance":   "Submitted to Compliance",
     "in_review":                 "Verification Ongoing",
     "under_review":              "Under Compliance Review",
     "edd_required":              "Enhanced Due Diligence Required",

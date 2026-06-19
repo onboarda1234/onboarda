@@ -5125,6 +5125,7 @@ CASE_MANAGEMENT_FILTERS = {
     "applications",
     "periodic_reviews",
     "pre_approval",
+    "submitted_to_compliance",
     "overdue",
     "due_soon",
 }
@@ -5197,6 +5198,8 @@ def _case_management_filter_matches(item, filter_name):
         return item.get("type") == "periodic_review"
     if filter_name == "pre_approval":
         return item.get("open_target", {}).get("kind") == "pre_approval"
+    if filter_name == "submitted_to_compliance":
+        return item.get("status_key") == "submitted_to_compliance"
     if filter_name in {"overdue", "due_soon"}:
         return item.get("due_state") == filter_name
     return False
@@ -5205,7 +5208,7 @@ def _case_management_filter_matches(item, filter_name):
 def _case_management_filter_counts(items):
     return {
         filter_name: sum(1 for item in items if _case_management_filter_matches(item, filter_name))
-        for filter_name in ("all", "applications", "periodic_reviews", "pre_approval", "overdue", "due_soon")
+        for filter_name in ("all", "applications", "periodic_reviews", "pre_approval", "submitted_to_compliance", "overdue", "due_soon")
     }
 
 
@@ -5230,6 +5233,7 @@ def _case_management_application_item(row):
         "client": row.get("company_name") or "",
         "risk_level": _canonical_risk_level(row.get("final_risk_level") or row.get("risk_level")),
         "status": get_status_label(status),
+        "status_key": status_key,
         "assigned_to": row.get("assigned_name") or row.get("assigned_to") or "",
         "assigned_to_user_id": row.get("assigned_to") or "",
         "due_date": None,
@@ -6146,6 +6150,11 @@ class ApplicationDetailHandler(BaseHandler):
                 "in_review": ["edd_required"],
                 "under_review": ["edd_required"],
                 "edd_required": ["under_review", "in_review"],
+                # submitted_to_compliance is ENTERED only via
+                # POST /api/applications/:id/submit-to-compliance (which records the
+                # submission metadata + audit). From the SCO queue it may be routed
+                # back to a review lane; terminal approve/reject still go via /decision.
+                "submitted_to_compliance": ["in_review", "under_review", "compliance_review", "edd_required"],
                 "rmi_sent": ["kyc_documents", "kyc_submitted", "compliance_review"],
                 "approved": [],  # Terminal state
                 "rejected": ["draft"],  # Can reopen to draft
@@ -25216,6 +25225,250 @@ class MemoSupervisorResultHandler(BaseHandler):
 # DECISION WORKFLOW ENDPOINTS (Step 7)
 # ══════════════════════════════════════════════════════════
 
+# PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: an Onboarding Officer (or SCO/Admin) may
+# hand a case to senior compliance review from any active review lane. Submission
+# is deliberately NOT gated by approval blockers (high risk / PEP / EDD / material
+# screening / second-review pending / authority-blocked) — those gate FINAL
+# APPROVAL, never submission. edd_required is INCLUDED: a case escalated to EDD is
+# exactly where an Onboarding Officer (who cannot complete EDD or approve) needs the
+# forward action, so it must not be a dead-end.
+SUBMIT_TO_COMPLIANCE_FROM_STATES = ("compliance_review", "in_review", "under_review", "kyc_submitted", "edd_required")
+SUBMIT_TO_COMPLIANCE_ROLES = ("admin", "sco", "co")
+SUBMISSION_NOTE_MIN_LENGTH = 10
+
+
+class SubmitToComplianceHandler(BaseHandler):
+    """POST /api/applications/:id/submit-to-compliance — route a case to the SCO queue.
+
+    Non-terminal handoff. It records who submitted, why, the blocker snapshot, and
+    whether the submission was mandatory (an approval blocker is present) or
+    discretionary. It does NOT approve, reject, override, waive, or clear any
+    blocker; final approval stays fail-closed via the can_decide gate + approval
+    gate stack. The authoritative state is the application status
+    ('submitted_to_compliance'); the SCO queue is a projection of that status.
+    """
+
+    def post(self, app_id):
+        user = self.require_auth(roles=list(SUBMIT_TO_COMPLIANCE_ROLES))
+        if not user:
+            return
+        if not self.check_rate_limit("submit_to_compliance", max_attempts=20, window_seconds=60):
+            return
+
+        data = self.get_json()
+        attempt_summary = _governance_summary(data, ("submission_note", "reason", "notes"))
+        attempt_target = app_id
+        db = get_db()
+
+        # Row-level lock (mirror the decision path) to serialize concurrent writes.
+        try:
+            if db.is_postgres:
+                app = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
+                    (app_id, app_id),
+                ).fetchone()
+            else:
+                try:
+                    db.execute("BEGIN IMMEDIATE")
+                except Exception:
+                    pass
+                app = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                    (app_id, app_id),
+                ).fetchone()
+        except Exception as lock_error:
+            status_code = 409 if _is_lock_timeout_error(lock_error) else 500
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(
+                "Submit to compliance is temporarily locked by another transaction. Retry shortly."
+                if status_code == 409
+                else "Submit to compliance failed to acquire a lock.",
+                status_code,
+            )
+
+        if not app:
+            self.log_governance_attempt(
+                user, "application.submit_to_compliance", attempt_target, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+        attempt_target = app["ref"]
+        current_status = str(app["status"] or "").strip().lower()
+
+        # Terminal applications cannot be re-routed.
+        if current_status in ("approved", "rejected"):
+            reason = (
+                f"Submit blocked: application {app['ref']} is already in terminal state "
+                f"'{current_status}'."
+            )
+            self.log_governance_attempt(
+                user, "application.submit_to_compliance", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 409)
+
+        # Idempotent: already in the SCO queue.
+        if current_status == "submitted_to_compliance":
+            existing_basis = safe_json_loads(app.get("submission_basis")) or []
+            db.close()
+            return self.success({
+                "status": "submitted_to_compliance",
+                "application_ref": app["ref"],
+                "submission_kind": app.get("submission_kind"),
+                "submission_basis": existing_basis,
+                "submitted_by": app.get("submitted_to_compliance_by"),
+                "message": "Application is already submitted to compliance.",
+            }, 200)
+
+        # Submission is only valid from an active review lane (package readiness
+        # proxy). It is NOT blocked by approval blockers — that is the whole point.
+        if current_status not in SUBMIT_TO_COMPLIANCE_FROM_STATES:
+            reason = (
+                "Submit to compliance is only available from: "
+                f"{', '.join(SUBMIT_TO_COMPLIANCE_FROM_STATES)}. Current status: '{current_status}'."
+            )
+            self.log_governance_attempt(
+                user, "application.submit_to_compliance", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 409)
+
+        note = str(data.get("submission_note") or data.get("reason") or data.get("notes") or "").strip()
+        if len(note) < SUBMISSION_NOTE_MIN_LENGTH:
+            reason = f"submission_note is required (minimum {SUBMISSION_NOTE_MIN_LENGTH} characters)."
+            self.log_governance_attempt(
+                user, "application.submit_to_compliance", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 400)
+
+        # Build the blocker snapshot + basis tags (read-only; no gate is cleared).
+        app_dict = dict(app)
+        risk_level, risk_score = _application_risk_snapshot(app)
+        try:
+            blockers = collect_approval_gate_blockers(app_dict, db) or []
+        except Exception:
+            logger.exception("submit_to_compliance blocker snapshot failed for %s", real_id)
+            blockers = []
+        blocker_codes = sorted({str(b.get("code")) for b in blockers if isinstance(b, dict) and b.get("code")})
+        second_review = _screening_second_review_summary_if_blocked(db, app)
+        authority_ok, _ac, _ar, _am = can_decide_application(
+            user, app, "approve", risk_level=risk_level)
+
+        basis = []
+        if risk_level == "HIGH":
+            basis.append("high_risk")
+        elif risk_level == "VERY_HIGH":
+            basis.append("very_high_risk")
+        if current_status == "edd_required" or str(app.get("onboarding_lane") or "").strip().upper() == "EDD":
+            basis.append("edd_required")
+        if second_review:
+            basis.append("screening_second_review_pending")
+        if not authority_ok:
+            basis.append("authority_blocked")
+        # Material screening concern (live/stale screening gate) — surfaced for SCO clarity.
+        if any(code in ("screening_truth", "screening_stale") for code in blocker_codes):
+            basis.append("material_screening")
+        # PEP exposure (any director/UBO flagged). Optional clarity tag; the blocker
+        # snapshot is authoritative. Best-effort and fail-open (never blocks submission).
+        try:
+            pep_row = db.execute(
+                "SELECT 1 FROM directors WHERE application_id = ? "
+                "AND LOWER(COALESCE(is_pep, '')) IN ('yes', 'true', '1', 'y') LIMIT 1",
+                (real_id,),
+            ).fetchone()
+            if not pep_row:
+                pep_row = db.execute(
+                    "SELECT 1 FROM ubos WHERE application_id = ? "
+                    "AND LOWER(COALESCE(is_pep, '')) IN ('yes', 'true', '1', 'y') LIMIT 1",
+                    (real_id,),
+                ).fetchone()
+            if pep_row:
+                basis.append("pep")
+        except Exception:
+            logger.debug("submit_to_compliance PEP basis lookup skipped for %s", real_id)
+        basis = sorted(set(basis))
+        # mandatory = there is a concrete senior-review driver; discretionary =
+        # the submitter could have approved but chose to escalate. Incomplete-packet
+        # blockers (e.g. missing memo) are captured in the snapshot, not the basis.
+        kind = "mandatory" if basis else "discretionary"
+
+        snapshot = {
+            "risk_level": risk_level,
+            "risk_score": risk_score,
+            "from_status": current_status,
+            "blocker_codes": blocker_codes,
+            "second_review_pending": bool(second_review),
+            "authority_blocked_for_submitter": not authority_ok,
+            "captured_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+        db.execute(
+            """
+            UPDATE applications SET
+                status='submitted_to_compliance',
+                submitted_to_compliance_at=datetime('now'),
+                submitted_to_compliance_by=?,
+                submission_note=?,
+                submission_basis=?,
+                submission_kind=?,
+                submission_blocker_snapshot=?,
+                updated_at=datetime('now')
+            WHERE id=?
+            """,
+            (user["sub"], note, json.dumps(basis), kind, json.dumps(snapshot), real_id),
+        )
+
+        after_state = {
+            "status": "submitted_to_compliance",
+            "submission_kind": kind,
+            "submission_basis": basis,
+            "submitted_to_compliance_by": user.get("sub", ""),
+        }
+        self.log_audit(
+            user,
+            "Submit to Compliance",
+            app["ref"],
+            json.dumps({
+                "event": "submit_to_compliance",
+                "from_status": current_status,
+                "to_status": "submitted_to_compliance",
+                "submission_kind": kind,
+                "submission_basis": basis,
+                "blocker_snapshot": snapshot,
+                "note": note,
+            }, sort_keys=True),
+            db=db,
+            commit=False,
+            before_state=snapshot_app_state(app),
+            after_state=after_state,
+        )
+        self.log_governance_attempt(
+            user, "application.submit_to_compliance", attempt_target, "accepted", 200,
+            f"submitted_to_compliance ({kind})",
+            {"submission_kind": kind, "submission_basis": basis, "from_status": current_status},
+            db=db, commit=False)
+        db.commit()
+        db.close()
+
+        return self.success({
+            "status": "submitted_to_compliance",
+            "application_ref": app["ref"],
+            "submission_kind": kind,
+            "submission_basis": basis,
+            "submitted_by": user.get("sub", ""),
+            "submitted_by_role": user.get("role", ""),
+            "blocker_snapshot": snapshot,
+            "message": "Application submitted to compliance for senior review.",
+        }, 200)
+
+
 class ApplicationDecisionHandler(BaseHandler):
     """POST /api/applications/:id/decision — Submit application decision with override support"""
     # Static governance guards assert these decision-path invariants remain in
@@ -32010,6 +32263,7 @@ def make_app():
         (r"/api/applications/([^/]+)/memo/supervisor/run", MemoSupervisorHandler),
         (r"/api/applications/([^/]+)/memo/supervisor", MemoSupervisorResultHandler),
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
+        (r"/api/applications/([^/]+)/submit-to-compliance", SubmitToComplianceHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
         (r"/api/applications/([^/]+)/export-pack", ApplicationExportPackHandler),

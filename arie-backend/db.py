@@ -400,7 +400,7 @@ def _get_postgres_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
+            'kyc_documents','kyc_submitted','compliance_review','submitted_to_compliance','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -1568,7 +1568,7 @@ def _get_sqlite_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
+            'kyc_documents','kyc_submitted','compliance_review','submitted_to_compliance','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -6540,6 +6540,80 @@ def _run_migrations(db: DBConnection):
             db.rollback()
         except Exception:
             pass
+
+    # Migration v2.43: Submit-to-Compliance handoff metadata
+    # (PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1). Stores who submitted a case to senior
+    # compliance review, why, the blocker snapshot, and whether the submission was
+    # mandatory or discretionary. The authoritative state is the application status
+    # ('submitted_to_compliance'); these columns are the projection backing data.
+    try:
+        _ensure_submit_to_compliance_columns(db)
+        db.commit()
+        logger.info("Migration v2.43: Ensured submit-to-compliance metadata schema")
+    except Exception as e:
+        logger.error("Migration v2.43 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.43a (PostgreSQL): allow 'submitted_to_compliance' in the
+    # applications status CHECK constraint. SQLite picks this up from the CREATE
+    # TABLE definition on fresh databases; Postgres needs the constraint rebuilt.
+    if USE_POSTGRESQL:
+        try:
+            constraint_row = db.execute("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'applications_status_check'
+                  AND conrelid = 'applications'::regclass
+            """).fetchone()
+            constraint_def = None
+            if constraint_row:
+                constraint_def = (
+                    constraint_row.get("pg_get_constraintdef")
+                    if isinstance(constraint_row, dict) else constraint_row[0]
+                )
+            if constraint_def and "'submitted_to_compliance'" in constraint_def:
+                logger.info("Migration v2.43a: status CHECK already includes 'submitted_to_compliance'")
+            else:
+                db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
+                db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
+                    CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
+                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review',
+                    'submitted_to_compliance','in_review','under_review',
+                    'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
+                db.commit()
+                logger.info("Migration v2.43a: Added 'submitted_to_compliance' to applications status CHECK")
+        except Exception as e:
+            logger.debug("Migration v2.43a status constraint update: %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+
+def _ensure_submit_to_compliance_columns(db: 'DBConnection'):
+    """Add Submit-to-Compliance handoff metadata columns to applications.
+
+    Idempotent and additive: existing rows keep NULLs. No existing column,
+    verification, or approval-gate behaviour is changed.
+    """
+    if not _safe_table_exists(db, "applications"):
+        return
+    column_types = {
+        "submitted_to_compliance_at": "TIMESTAMP" if db.is_postgres else "TEXT",
+        "submitted_to_compliance_by": "TEXT REFERENCES users(id)",
+        "submission_note": "TEXT",
+        "submission_basis": "TEXT",            # JSON array of basis tags
+        "submission_kind": "TEXT",             # 'mandatory' | 'discretionary'
+        "submission_blocker_snapshot": "TEXT",  # JSON snapshot of gate blockers
+    }
+    for column, definition in column_types.items():
+        if not _safe_column_exists(db, "applications", column):
+            db.execute(
+                f"ALTER TABLE applications ADD COLUMN {column} {definition}"
+            )
 
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
