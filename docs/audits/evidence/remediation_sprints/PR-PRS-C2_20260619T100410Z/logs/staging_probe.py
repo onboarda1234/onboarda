@@ -45,7 +45,12 @@ def main():
     import periodic_review_engine as pre
     import periodic_review_memo as prm
 
-    user = {"sub": "staging-probe", "role": "sco", "email": "probe@regmind.co"}
+    user = {
+        "sub": "sco001",
+        "id": "sco001",
+        "role": "sco",
+        "email": "raj.patel@onboarda.com",
+    }
 
     def audit_writer(actor, action, target, detail, db=None, **kw):
         # no-op audit sink for the probe; real audits still fire in-engine
@@ -56,19 +61,22 @@ def main():
     rid = None
     try:
         # --- synthetic, fixture-marked application + review (MEDIUM risk) ---
+        app_id = f"{PREFIX}-app"
         db.execute(
-            "INSERT INTO applications (company_name, risk_level, final_risk_level, status) "
-            "VALUES (?, ?, ?, ?)",
-            (f"{PREFIX}-co", "MEDIUM", "MEDIUM", "approved"),
-        )
-        app_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        db.execute(
-            "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status, required_items, due_date) "
+            "INSERT INTO applications (id, ref, company_name, risk_level, final_risk_level, status) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (app_id, f"{PREFIX}-co", "MEDIUM", "in_progress", "[]", "2026-12-31"),
+            (app_id, f"{PREFIX}-ref", f"{PREFIX}-co", "MEDIUM", "MEDIUM", "approved"),
         )
-        rid = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        rid = db.execute(
+            "INSERT INTO periodic_reviews "
+            "(application_id, client_name, risk_level, status, required_items, due_date, "
+            "client_attestation_status, baseline_status, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (
+                app_id, f"{PREFIX}-co", "MEDIUM", "in_progress", "[]", "2026-12-31",
+                "submitted", "not_applicable", "staging probe rationale",
+            ),
+        ).fetchone()["id"]
         db.commit()
 
         # --- 1+2+3: force memo failure, expect quarantine + elevation + no cycle ---

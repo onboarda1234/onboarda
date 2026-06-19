@@ -31,7 +31,8 @@ while its mandatory compliance memo never existed. C2 closes that silent gap.
 | Required evidence | Status |
 |---|---|
 | Full merge SHA for #543 | ✅ `cda0cc779…` |
-| `/api/version` matches deployed SHA | ⏳ Operator probe pending (SHA-pinned image deployed + health verified) |
+| `/api/version` matches deployed image | ✅ LIVE (`git_sha == image_tag == d13c0c7e6345bb0132d143ae749090fdcfe40963`; image contains #543 product merge `cda0cc77967c052f0bab90081701123d4119cda5`) |
+| Live ECS memo-failure probe | ✅ PASS (`quarantine=pass`, `recovery=pass`) |
 | Forced memo failure → `completion_pending_memo` | ✅ TEST |
 | Review not `completed` while memo missing | ✅ TEST |
 | Canonical risk elevation still applies | ✅ TEST |
@@ -47,6 +48,19 @@ while its mandatory compliance memo never existed. C2 closes that silent gap.
 Full row-by-row proof: `evidence_matrix.md`. Test + CI detail: `test_results.md`.
 Staging probe steps + expected values: `api_smoke.md`.
 
+Live probe JSON:
+
+```json
+{
+  "version": null,
+  "scenarios": {
+    "quarantine": "pass",
+    "recovery": "pass"
+  },
+  "passed": true
+}
+```
+
 ## 4. Test status
 
 - Focused suite: **98 passed** (`logs/local_test_run.txt`).
@@ -55,8 +69,6 @@ Staging probe steps + expected values: `api_smoke.md`.
 
 ## 5. Residual / follow-ups
 
-- **Live staging probe** (`api_smoke.md` §1–§4) — the one OPERATOR item; behaviour
-  already proven deterministically in-suite, probe confirms it against the deployed SHA.
 - **PR-PRS-D** — officer-facing UX for the new state (quarantine badge, staleness
   banner, retry-memo button wired to `/memo/recover`, queue visibility). No logic changes.
 - **PR-PRS-E** — audit/notification hardening around the new events + health alert.
@@ -65,9 +77,9 @@ Staging probe steps + expected values: `api_smoke.md`.
 
 ## 6. Verdict
 
-PR-PRS-C2 is **MERGED and PROVEN** at the code/test/CI/deploy level. The only open item
-is the live staging runtime probe, which is operator-gated and does not change the proven
-behaviour. With C2 merged, the periodic-review **P0 line is clear**; remaining work
-(PR-PRS-D, PR-PRS-E) is P1 polish/hardening.
+PR-PRS-C2 is **CLOSED / PASS** at the code/test/CI/deploy/live-runtime-probe level.
+The live ECS probe proved the fail-closed quarantine and recovery flow against the
+deployed staging task. With C2 closed, the periodic-review **P0 line is clear**;
+remaining work (PR-PRS-D, PR-PRS-E) is P1 polish/hardening.
 
-**Recommended ledger entry:** `PR-PRS-C2 / #543 — MERGED / CI+DEPLOY GREEN / EVIDENCE PACK COMPLETE (live staging probe pending)`.
+**Recommended ledger entry:** `PR-PRS-C2 / #543 — CLOSED / PASS / CI+DEPLOY GREEN / LIVE ECS PROBE PASS`.
