@@ -2568,7 +2568,7 @@ class ReviewNotPendingMemo(PeriodicReviewEngineError):
 
 
 def finalize_review_memo_completion(db, review_id, *, user=None,
-                                    audit_writer=None) -> Dict[str, Any]:
+                                    audit_writer=None, source=None) -> Dict[str, Any]:
     """Advance a completion_pending_memo review to ``completed`` (PR-PRS-C2).
 
     Called once the mandatory periodic-review memo has been successfully
@@ -2675,6 +2675,40 @@ def finalize_review_memo_completion(db, review_id, *, user=None,
         "next_review_date": next_review_date,
         "due_date": due_date,
     }
+    # PR-PRS-E: clear the operator-visible stuck-memo alert (if any) now that
+    # the memo finalised. Only clears our own ``memo_generation_stuck`` value so
+    # an unrelated officer alert is never touched.
+    memo_alert_cleared = False
+    try:
+        import periodic_review_memo as _prm
+        alert_row = db.execute(
+            "SELECT officer_alert_status FROM periodic_reviews WHERE id = ?",
+            (review_id,),
+        ).fetchone()
+        if str(_row_get(alert_row, "officer_alert_status") or "").strip().lower() \
+                == _prm.MEMO_STUCK_ALERT_STATUS:
+            db.execute(
+                "UPDATE periodic_reviews SET officer_alert_status = ? WHERE id = ?",
+                (_prm.MEMO_ALERT_CLEARED_STATUS, review_id),
+            )
+            db.commit()
+            memo_alert_cleared = True
+            _emit_audit(
+                audit_writer, user, "periodic_review.memo_alert_cleared",
+                f"periodic_review:{review_id}",
+                {
+                    "review_id": review_id,
+                    "application_id": application_id,
+                    "source": source,
+                    "trigger": "memo_finalized",
+                },
+                db,
+                before_state={"officer_alert_status": _prm.MEMO_STUCK_ALERT_STATUS},
+                after_state={"officer_alert_status": _prm.MEMO_ALERT_CLEARED_STATUS},
+            )
+    except Exception:  # pragma: no cover - alert clearing must not block finalisation
+        logger.exception("Failed to clear memo stuck alert review_id=%s", review_id)
+
     _emit_audit(
         audit_writer, user, "periodic_review.completion_finalized",
         f"periodic_review:{review_id}",
@@ -2683,6 +2717,8 @@ def finalize_review_memo_completion(db, review_id, *, user=None,
             "application_id": application_id,
             "from_state": STATE_COMPLETION_PENDING_MEMO,
             "trigger": "memo_finalized",
+            "source": source,
+            "memo_alert_cleared": memo_alert_cleared,
         },
         db, before_state=before, after_state=after,
     )
