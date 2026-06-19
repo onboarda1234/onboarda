@@ -1,0 +1,113 @@
+{
+  "task": "ROLE-AUTHORITY-DESIGN-AUDIT-1",
+  "audit_type": "design_only_no_code_data_or_settings_changes",
+  "source_of_truth": "origin/main",
+  "source_commit": "69effaa",
+  "generated_utc": "20260618T173318Z",
+  "evidence_folder": "docs/audits/evidence/remediation_sprints/ROLE-AUTHORITY-DESIGN-AUDIT-1_20260618T173318Z",
+  "supersedes_root_deliverables": {
+    "note": "Deep code-grounded versions placed in this evidence folder supersede the thin root-level files committed in 1768037 (PR #532).",
+    "files": [
+      "current_role_matrix.md",
+      "target_role_matrix.md",
+      "endpoint_authority_matrix.md",
+      "button_visibility_matrix.md",
+      "status_transition_matrix.md",
+      "submit_to_compliance_design.md",
+      "recommended_pr_sequence.md",
+      "summary.json",
+      "audit_findings.md"
+    ],
+    "key_corrections": [
+      "Old current_role_matrix understated the H-1 actor gate: /decision DOES block co on HIGH/VERY_HIGH (server.py:25353) and enforces dual-approval (server.py:25515).",
+      "ApprovalGateValidator (security_hardening.py:705) exists as a single precondition gate but contains no role/actor logic; actor gates are inline per-handler.",
+      "compliance_review exists; submitted_to_compliance does not exist anywhere (backend grep zero matches).",
+      "The real P0 is the PATCH /api/applications/:id path omitting actor gates, not generic 'analyst can approve everywhere'.",
+      "Post-review revision: PR sequence reordered to authority-gate-first (PR-APPROVAL-AUTHORITY-MATRIX-1 is PR1). Central gate is can_decide covering approve AND reject; PATCH reject divergence (analyst can reject) elevated alongside approve; gate-level blocked-attempt audit lives in PR1; broad audit hardening is PR4."
+    ]
+  },
+  "roles": {
+    "keys": ["admin", "sco", "co", "analyst", "client"],
+    "co_label": "Onboarding Officer (internal key 'co' unchanged)",
+    "valid_roles_ref": "server.py:11905",
+    "labels_ref": "server.py:13590-13595"
+  },
+  "authority_enforcement_model": {
+    "primitive": "require_auth(roles=[...]) / require_backoffice_auth(roles=[...])",
+    "primitive_ref": "base_handler.py:487-522",
+    "precondition_gate": "ApprovalGateValidator.validate_approval (security_hardening.py:705); dual-control validate_high_risk_dual_approval (security_hardening.py:1345)",
+    "role_matrix_advisory_only": "ROLE_PERMISSION_MATRIX server.py:13567-13588 (UI reference; not consulted at decision time)",
+    "no_central_can_decide_helper": true
+  },
+  "statuses": {
+    "submitted_to_compliance_exists": false,
+    "compliance_review_exists": true,
+    "existing": ["draft","submitted","prescreening_submitted","pricing_review","pricing_accepted","pre_approval_review","pre_approved","kyc_documents","kyc_submitted","compliance_review","in_review","under_review","edd_required","approved","rejected","rmi_sent","withdrawn"],
+    "labels_ref": "branding.py:95-113",
+    "transition_map_ref": "server.py:6101-6118",
+    "withdrawn_has_no_transition_entry": true
+  },
+  "terminal_approval_write_paths": [
+    {"endpoint": "POST /api/applications/:id/decision", "ref": "server.py:25627", "roles": ["admin","sco","co"], "actor_gates": ["co_high_block@25353","override_sco_admin@25316","dual_approval@25515"], "status": "hardened"},
+    {"endpoint": "PATCH /api/applications/:id", "ref": "server.py:6296-6302", "roles": "bare require_auth (any officer incl analyst)", "actor_gates": ["MISSING co_high_block","MISSING dual_approval"], "status": "P0_bypass"}
+  ],
+  "findings": {
+    "P0": [
+      {"id": "P0-1", "title": "Final-decision bypass (approve AND reject) via PATCH /api/applications/:id; omits co-HIGH actor gate, dual-approval, and reject role-gate", "ref": "server.py:6070,6296-6302", "pilot_blocking": true}
+    ],
+    "P1": [
+      {"id": "P1-1", "title": "Decentralized authority logic; no single can_decide gate", "ref": "server.py:25316/25353/25515 vs 6070"},
+      {"id": "P1-2", "title": "No submitted_to_compliance status/endpoint/button (dead-end risk)", "ref": "grep zero matches", "pilot_blocking": true},
+      {"id": "P1-3", "title": "Decorator-level role denials not audited (132 require_auth sites, 0 log_authz_denial)", "ref": "base_handler.py:493-496"},
+      {"id": "P1-4", "title": "PATCH status block branches drop governance audit", "ref": "server.py:6122,6133,6174,6186,6193,6199"},
+      {"id": "P1-5", "title": "Memo-approve UI uses approve_low_medium (incl co); backend requires admin/sco", "ref": "arie-backoffice.html:28946 vs server.py:24476"}
+    ],
+    "P2": [
+      {"id": "P2-1", "title": "co-HIGH gate keys on risk level only; PEP/EDD-at-MEDIUM blocked only indirectly", "ref": "server.py:25353; security_hardening.py:995,1005"},
+      {"id": "P2-2", "title": "EDD PATCH decorator lists co (misleading; closure is SCO/admin-only)", "ref": "server.py:29689 vs 29816-29822"},
+      {"id": "P2-3", "title": "No first-class override_used/waiver_used audit events", "ref": "server.py:25606; enhanced_requirements"},
+      {"id": "P2-4", "title": "UI authority gates use hardcoded role arrays (drift vs ROLE_PERMISSIONS)", "ref": "arie-backoffice.html:12580,10012"},
+      {"id": "P2-5", "title": "analyst permitted screening first review while excluded from run/decision (confirm intent)", "ref": "server.py:20584"}
+    ],
+    "counts": {"P0": 1, "P1": 5, "P2": 5}
+  },
+  "controls_verified_sound": [
+    "screening second review SCO/admin-only + same-user block vs first reviewer (server.py:20779-20796); re-validated read-only at approval (security_hardening.py:356-375)",
+    "approval reads but never writes second-review state (no circular self-satisfaction)",
+    "EDD closure SCO/admin-only + closer!=assigned dual-control (server.py:29816-29822)",
+    "override SCO/admin + reason (server.py:25316,25309)",
+    "waiver SCO/admin (enhanced_requirements.py:36)",
+    "HIGH/VH dual-approval on /decision (server.py:25515)",
+    "authority evaluated against current risk (server.py:25351 live locked row)",
+    "public API decision endpoint read-only (public_api.py:78)",
+    "portal wording neutral; no internal mechanics leaked (arie-portal.html:11199-11231)"
+  ],
+  "recommended_prs": [
+    {"order": 1, "id": "PR-APPROVAL-AUTHORITY-MATRIX-1", "purpose": "central can_decide gate (approve AND reject); block PATCH terminal bypass; gate-level blocked-attempt audit; admin-privileged AC", "fixes": ["P0-1","P1-1","P1-4","P2-1"], "pilot_blocking": true},
+    {"order": 2, "id": "PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1", "purpose": "submit status/action/queue/audit; consumes same can_decide evaluator with package-readiness blocker subset", "fixes": ["P1-2"], "pilot_blocking": true},
+    {"order": 3, "id": "PR-APPROVAL-UX-GATES-1", "purpose": "UI buttons match backend authority", "fixes": ["P1-5","P2-2","P2-4"], "pilot_blocking": false},
+    {"order": 4, "id": "PR-AUTHORITY-AUDIT-HARDENING-1", "purpose": "systemic audit: 132 decorator denials, override/waiver first-class events", "fixes": ["P1-3","P2-3"], "pilot_blocking": false},
+    {"order": 5, "id": "E2E-AUTHORITY-MATRIX-1", "purpose": "full API/browser bypass + role-path validation incl reject-via-PATCH", "fixes": ["regression_lock"], "pilot_blocking": true}
+  ],
+  "central_gate": {
+    "name": "can_decide_application(user, application, decision, db)",
+    "covers": ["approve", "reject"],
+    "invariant": "No terminal approved/rejected transition reachable except through this gate; PATCH terminal status removed or funneled through it.",
+    "gate_level_blocked_attempt_audit": "in PR1 (not deferred)",
+    "admin_high_risk": "same gate as SCO, no shortcut, is_privileged_admin_action audit flag"
+  },
+  "deliverables": [
+    "current_role_matrix.md",
+    "target_role_matrix.md",
+    "endpoint_authority_matrix.md",
+    "button_visibility_matrix.md",
+    "status_transition_matrix.md",
+    "approval_gate_matrix.md",
+    "submit_to_compliance_design.md",
+    "audit_trail_requirements.md",
+    "bypass_risk_findings.md",
+    "recommended_pr_sequence.md",
+    "summary.json"
+  ],
+  "scope_boundary": "ROLE-AUTHORITY only; Periodic Review track (PR-PRS-A merged, PR-PRS-B in flight) untouched."
+}
