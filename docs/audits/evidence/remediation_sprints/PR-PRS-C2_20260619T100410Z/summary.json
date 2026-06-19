@@ -31,7 +31,8 @@
   },
   "evidence": {
     "merge_sha": "proven",
-    "version_sha_match": "operator_pending",
+    "version_sha_match": "proven:git_sha==image_tag==d13c0c7e6345bb0132d143ae749090fdcfe40963; contains_product_merge=cda0cc77967c052f0bab90081701123d4119cda5",
+    "live_staging_runtime_probe": "proven",
     "forced_failure_quarantines": "test",
     "not_completed_while_memo_missing": "test",
     "canonical_risk_elevation_applies": "test",
@@ -52,10 +53,17 @@
     "PERIODIC_REVIEW_MEMO_SWEEP_BATCH_SIZE": 25,
     "PERIODIC_REVIEW_MEMO_ALERT_THRESHOLD": 3
   },
+  "live_staging_probe": {
+    "version": null,
+    "scenarios": {
+      "quarantine": "pass",
+      "recovery": "pass"
+    },
+    "passed": true
+  },
   "residual": [
-    "live_staging_runtime_probe (operator)",
     "PR-PRS-D ux surface",
     "PR-PRS-E audit/notification hardening"
   ],
-  "verdict": "MERGED / CI+DEPLOY GREEN / EVIDENCE PACK COMPLETE / live staging probe pending"
+  "verdict": "CLOSED / PASS"
 }
