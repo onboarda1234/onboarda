@@ -683,6 +683,7 @@ class TestAuthenticatedAccess:
             "applications": 0,
             "periodic_reviews": 0,
             "pre_approval": 0,
+            "submitted_to_compliance": 0,
             "overdue": 0,
             "due_soon": 0,
         }

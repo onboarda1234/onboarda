@@ -5754,7 +5754,7 @@ async function loadMyApplications() {
       withdrawn: 'Closed'
     };
     apps.forEach(function(app) {
-      var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
+      var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',submitted_to_compliance:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
       var color = statusColors[app.status] || '#999';
       var label = getClientPortalStatusLabel(app.status);
       var date = (app.updated_at || app.created_at) ? new Date(app.updated_at || app.created_at).toLocaleDateString() : '';
@@ -11187,6 +11187,7 @@ function getApplicationView(status) {
     kyc_submitted: 'pending',
     in_review: 'pending',
     compliance_review: 'compliance-hold',
+    submitted_to_compliance: 'compliance-hold',
     approved: 'approved',
     rejected: 'rejected',
     edd_required: 'pending',
@@ -11210,6 +11211,7 @@ function getClientPortalStatusLabel(status) {
     kyc_documents: 'Documents',
     kyc_submitted: 'Submitted',
     compliance_review: 'Under Review',
+    submitted_to_compliance: 'Under Review',
     in_review: 'Under Review',
     under_review: 'Under Review',
     edd_required: 'Documents',

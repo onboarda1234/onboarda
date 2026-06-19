@@ -1474,6 +1474,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <!-- Standard Actions (hidden during pre-approval) -->
     <div id="standard-actions-topbar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <button class="btn btn-success btn-sm" onclick="approveApplication()" id="btn-approve" style="font-size:11px;">✅ Approve</button>
+      <button class="btn btn-primary btn-sm" onclick="submitToCompliance()" id="btn-submit-compliance" style="font-size:11px;display:none;">📨 Submit to Compliance</button>
       <button class="btn btn-warning btn-sm" onclick="requestMoreInfo()" id="btn-rmi" style="font-size:11px;">📋 More Info</button>
       <details class="topbar-more-menu">
         <summary class="btn btn-outline btn-sm" style="font-size:11px;">More ▾</summary>
@@ -5865,6 +5866,14 @@ function syncApplicationActionPermissions(app) {
   setDetailActionVisibility('btn-preapproval-rmi', canSubmitPreApproval);
   setDetailActionVisibility('btn-reassign', canReassignCases);
   setDetailActionVisibility('btn-export-pack', canExportPacks);
+
+  // PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: Submit-to-Compliance is the forward action
+  // when an officer cannot finalize approval (e.g. CO on a HIGH/PEP/EDD/second-review
+  // case). Shown to Onboarding Officer / SCO / Admin from any active review lane.
+  var submitEligibleStates = ['compliance_review', 'in_review', 'under_review', 'kyc_submitted'];
+  var canSubmitToCompliance = ['admin', 'sco', 'co'].indexOf(currentUserRole()) >= 0
+    && submitEligibleStates.indexOf(app.statusRaw) >= 0;
+  setDetailActionVisibility('btn-submit-compliance', canSubmitToCompliance);
 
   if (preApprovalNotes) preApprovalNotes.style.display = canSubmitPreApproval ? '' : 'none';
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval && canSubmitPreApproval ? 'flex' : 'none';
@@ -24638,6 +24647,30 @@ async function escalateCase() {
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
   renderDecisionReadiness('EDD');
   document.getElementById('modal-decision-reason').classList.add('open');
+}
+
+// PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: hand a case to senior compliance review.
+// This is a routing handoff — it never approves, rejects, overrides, or clears a
+// blocker. Final approval stays fail-closed on the backend.
+async function submitToCompliance() {
+  if (!currentApp || !currentApp.id) { showToast('No application selected.', 'warn'); return; }
+  if (['admin', 'sco', 'co'].indexOf(currentUserRole()) < 0) {
+    showToast('Insufficient permissions to submit to compliance.', 'error');
+    return;
+  }
+  var note = window.prompt('Submit to Compliance — brief reason for senior review (min 10 characters):', '');
+  if (note === null) return; // cancelled
+  note = String(note).trim();
+  if (note.length < 10) { showToast('A reason of at least 10 characters is required.', 'warn'); return; }
+  try {
+    var resp = await boApiCall('POST', '/applications/' + currentApp.id + '/submit-to-compliance', { submission_note: note });
+    await refreshCurrentAppDetail();
+    if (typeof refreshAdminAuditEvidence === 'function') refreshAdminAuditEvidence();
+    var kind = resp && resp.submission_kind ? resp.submission_kind : '';
+    showToast('Submitted to compliance for senior review' + (kind ? ' (' + kind + ')' : '') + '.');
+  } catch (err) {
+    showToast('Submit to compliance failed: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 function addNote() {
