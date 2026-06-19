@@ -1456,3 +1456,210 @@ class TestReadHelpers:
         )
         with pytest.raises(ReviewNotFound):
             get_review_state(review_db, 9999)
+
+
+
+
+class TestPRPRSCRiskGates:
+    """PR-PRS-C C1: canonical risk elevation-floor (P0-RR1) + material-change
+    rescore gate (P0-RR2). Final canonical risk = higher of officer-confirmed
+    and model-recomputed levels."""
+
+    def _spy_recompute(self, monkeypatch, model_level, *, raises=False):
+        import rule_engine
+        calls = []
+
+        def _spy(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
+            calls.append({"app_id": app_id, "reason": reason})
+            if raises:
+                raise RuntimeError("recompute boom")
+            return {
+                "recomputed": True, "old_level": "MEDIUM", "new_level": model_level,
+                "old_score": 40, "new_score": 60, "changed": True,
+            }
+
+        monkeypatch.setattr(rule_engine, "recompute_risk", _spy)
+        return calls
+
+    # --- P0-RR2 material-change rescore gate -----------------------------------
+
+    def test_material_change_without_risk_decision_blocks_completion(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            record_review_outcome, OUTCOME_MATERIAL_CHANGE_IDENTIFIED,
+            ReviewCompletionBlocked,
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        with pytest.raises(ReviewCompletionBlocked) as exc:
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_MATERIAL_CHANGE_IDENTIFIED,
+                outcome_reason="material change found",
+                officer_acknowledgement=True,
+                enforce_prs5_gates=True,
+                user=USER, audit_writer=audit_sink,
+            )
+        codes = [b.get("item_type") for b in exc.value.blocking_items]
+        assert "material_change_risk_decision_required" in codes
+        assert _review(review_db, rid)["status"] == "in_progress"
+
+    def test_material_change_with_documented_rationale_clears_gate(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            record_review_outcome, OUTCOME_MATERIAL_CHANGE_IDENTIFIED,
+            ReviewCompletionBlocked,
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        try:
+            result = record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_MATERIAL_CHANGE_IDENTIFIED,
+                outcome_reason="material change found",
+                risk_impact="Reviewed; rating unchanged because exposure is immaterial.",
+                officer_acknowledgement=True,
+                enforce_prs5_gates=True,
+                user=USER, audit_writer=audit_sink,
+            )
+            assert result["status"] == "completed"
+        except ReviewCompletionBlocked as exc:
+            codes = [b.get("item_type") for b in exc.blocking_items]
+            assert "material_change_risk_decision_required" not in codes
+
+    # --- P0-RR1 elevation-floor: final = higher(confirmed, model) --------------
+
+    def _run_risk_change(self, review_db, audit_sink, *, confirmed, model_level, monkeypatch):
+        from periodic_review_engine import record_review_outcome, OUTCOME_RISK_RATING_CHANGED
+        calls = self._spy_recompute(monkeypatch, model_level)
+        rid = _insert_review(review_db, status="in_progress")
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_RISK_RATING_CHANGED,
+            outcome_reason="risk rating changed",
+            new_risk_level=confirmed,
+            risk_impact="material change to ownership",
+            user=USER, audit_writer=audit_sink,
+        )
+        return result, calls, rid
+
+    def test_confirmed_high_model_medium_yields_canonical_high(self, review_db, audit_sink, monkeypatch):
+        result, calls, _ = self._run_risk_change(
+            review_db, audit_sink, confirmed="HIGH", model_level="MEDIUM", monkeypatch=monkeypatch)
+        assert len(calls) == 1
+        cr = result["canonical_risk"]
+        assert cr["final_level"] == "HIGH"
+        assert cr["applied_floor"] is True
+        # Floor is written to canonical application risk.
+        app = review_db.execute(
+            "SELECT risk_level, final_risk_level FROM applications WHERE id = ?",
+            ("test-app-100",),
+        ).fetchone()
+        assert app["risk_level"] == "HIGH"
+        assert app["final_risk_level"] == "HIGH"
+
+    def test_confirmed_medium_model_high_yields_high(self, review_db, audit_sink, monkeypatch):
+        result, _, _ = self._run_risk_change(
+            review_db, audit_sink, confirmed="MEDIUM", model_level="HIGH", monkeypatch=monkeypatch)
+        cr = result["canonical_risk"]
+        assert cr["final_level"] == "HIGH"
+        # Model >= confirmed, so no officer floor override is applied (the model
+        # recompute owns the canonical write in production).
+        assert cr["applied_floor"] is False
+
+    def test_confirmed_high_model_high_yields_high(self, review_db, audit_sink, monkeypatch):
+        result, _, _ = self._run_risk_change(
+            review_db, audit_sink, confirmed="HIGH", model_level="HIGH", monkeypatch=monkeypatch)
+        cr = result["canonical_risk"]
+        assert cr["final_level"] == "HIGH"
+        assert cr["applied_floor"] is False
+
+    def test_canonical_audit_records_all_levels(self, review_db, audit_sink, monkeypatch):
+        result, _, rid = self._run_risk_change(
+            review_db, audit_sink, confirmed="HIGH", model_level="MEDIUM", monkeypatch=monkeypatch)
+        ev = [e for e in audit_sink.events if e["action"] == "periodic_review.canonical_risk_recomputed"]
+        assert ev, "expected canonical_risk_recomputed audit event"
+        detail = ev[0]["detail"] if isinstance(ev[0].get("detail"), dict) else json.loads(ev[0]["detail"])
+        assert detail["officer_confirmed_risk"] == "HIGH"
+        assert detail["model_recomputed_risk"] == "MEDIUM"
+        assert detail["final_applied_risk"] == "HIGH"
+        assert detail["application_id"] == "test-app-100"
+        assert detail["review_id"] == rid
+
+    def test_next_cycle_cadence_follows_final_applied_risk(self, review_db, audit_sink, monkeypatch):
+        result, _, _ = self._run_risk_change(
+            review_db, audit_sink, confirmed="HIGH", model_level="MEDIUM", monkeypatch=monkeypatch)
+        assert result["next_cycle"].get("risk_level") == "HIGH"
+
+    def test_recompute_failure_still_applies_confirmed_floor(self, review_db, audit_sink, monkeypatch):
+        from periodic_review_engine import record_review_outcome, OUTCOME_RISK_RATING_CHANGED
+        self._spy_recompute(monkeypatch, "HIGH", raises=True)
+        rid = _insert_review(review_db, status="in_progress")
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_RISK_RATING_CHANGED,
+            outcome_reason="risk rating changed",
+            new_risk_level="HIGH",
+            risk_impact="material change",
+            user=USER, audit_writer=audit_sink,
+        )
+        # Review still completes; failure is audited, not silently swallowed.
+        assert result["status"] == "completed"
+        actions = [e["action"] for e in audit_sink.events]
+        assert "periodic_review.canonical_risk_recompute_failed" in actions
+        # FAIL-CLOSED: the officer-confirmed HIGH floor is written to canonical
+        # application risk even though recompute failed.
+        cr = result["canonical_risk"]
+        assert cr["final_level"] == "HIGH"
+        assert cr["applied_floor"] is True
+        assert result["risk_governance_status"] == "recompute_failed_with_confirmed_floor_applied"
+        app = review_db.execute(
+            "SELECT risk_level, final_risk_level FROM applications WHERE id = ?",
+            ("test-app-100",),
+        ).fetchone()
+        assert app["risk_level"] == "HIGH"
+        assert app["final_risk_level"] == "HIGH"
+
+    def test_previous_canonical_is_a_floor_no_auto_downgrade(self, review_db, audit_sink, monkeypatch):
+        # PR-PRS-C1 must never silently lower canonical risk: previous HIGH +
+        # confirmed MEDIUM + model MEDIUM => stays HIGH (downgrade prevented).
+        review_db.execute(
+            "UPDATE applications SET risk_level = 'HIGH', final_risk_level = 'HIGH' WHERE id = ?",
+            ("test-app-100",),
+        )
+        review_db.commit()
+        result, _, _ = self._run_risk_change(
+            review_db, audit_sink, confirmed="MEDIUM", model_level="MEDIUM", monkeypatch=monkeypatch)
+        cr = result["canonical_risk"]
+        assert cr["previous_canonical"] == "HIGH"
+        assert cr["final_level"] == "HIGH"
+        assert cr["downgrade_prevented"] is True
+        app = review_db.execute(
+            "SELECT risk_level, final_risk_level FROM applications WHERE id = ?",
+            ("test-app-100",),
+        ).fetchone()
+        assert app["risk_level"] == "HIGH"
+        assert app["final_risk_level"] == "HIGH"
+
+    def test_model_level_formatting_variants_compare_correctly(self, review_db, audit_sink, monkeypatch):
+        # Model returns spaced/odd-cased "VERY HIGH"; comparison + final must
+        # still resolve to VERY_HIGH (higher than confirmed HIGH).
+        result, _, _ = self._run_risk_change(
+            review_db, audit_sink, confirmed="HIGH", model_level="VERY HIGH", monkeypatch=monkeypatch)
+        cr = result["canonical_risk"]
+        assert cr["model_level"] == "VERY_HIGH"
+        assert cr["final_level"] == "VERY_HIGH"
+        assert cr["applied_floor"] is False  # model >= confirmed
+
+    def test_no_change_outcome_does_not_recompute(self, review_db, audit_sink, monkeypatch):
+        import rule_engine
+        from periodic_review_engine import record_review_outcome, OUTCOME_NO_CHANGE
+        calls = []
+        monkeypatch.setattr(
+            rule_engine, "recompute_risk",
+            lambda *a, **k: calls.append(a) or {"changed": False},
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_NO_CHANGE, outcome_reason="all clear",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert calls == []
+        assert result["risk_governance_status"] == "unchanged"

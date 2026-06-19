@@ -752,7 +752,7 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         labels = [item["label"] for item in body["blocking_items"]]
         self.assertIn("Updated Register of Directors is still missing", labels)
 
-    def test_risk_change_does_not_mutate_application_risk(self):
+    def test_risk_change_updates_canonical_application_risk(self):
         rid = self._create_review(status="in_progress", risk_level="MEDIUM")
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
@@ -777,7 +777,7 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self.assertEqual(review["outcome"], "risk_rating_changed")
         self.assertEqual(review["new_risk_level"], "HIGH")
         self.assertEqual(review["risk_change_attestation"], "risk_change_required")
-        self.assertEqual(app["risk_level"], "MEDIUM")
+        self.assertEqual(app["risk_level"], "HIGH")
 
     def test_edd_required_blocks_without_linked_edd_case(self):
         rid = self._create_review(status="in_progress")
