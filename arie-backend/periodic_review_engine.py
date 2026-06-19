@@ -80,6 +80,14 @@ STATE_IN_PROGRESS = "in_progress"
 STATE_AWAITING_INFORMATION = "awaiting_information"
 STATE_PENDING_SENIOR_REVIEW = "pending_senior_review"
 STATE_AWAITING_EDD = "awaiting_edd"
+# PR-PRS-C2: a review whose outcome (and any canonical risk elevation) has
+# been recorded but whose mandatory periodic-review memo has NOT yet been
+# successfully generated. This is a NON-terminal "fail-closed" quarantine
+# state: the review is deliberately NOT ``completed`` (the next review cycle
+# is not scheduled and PR-01 closure is not stamped) until the memo exists.
+# Inline retries run at completion time; a background sweep + manual recovery
+# endpoint re-attempt quarantined reviews and finalise them to ``completed``.
+STATE_COMPLETION_PENDING_MEMO = "completion_pending_memo"
 STATE_COMPLETED = "completed"
 STATE_CANCELLED = "cancelled"
 
@@ -89,6 +97,7 @@ VALID_REVIEW_STATES = (
     STATE_AWAITING_INFORMATION,
     STATE_PENDING_SENIOR_REVIEW,
     STATE_AWAITING_EDD,
+    STATE_COMPLETION_PENDING_MEMO,
     STATE_COMPLETED,
     STATE_CANCELLED,
 )
@@ -120,11 +129,21 @@ STATE_TRANSITIONS: Dict[str, tuple] = {
     STATE_AWAITING_EDD: (
         STATE_IN_PROGRESS,
         STATE_PENDING_SENIOR_REVIEW,
+        STATE_COMPLETION_PENDING_MEMO,
         STATE_COMPLETED,
     ),
+    # PR-PRS-C2: memo-gated completion lands here first; only a successful
+    # memo finalisation may move it forward to ``completed``.
+    STATE_COMPLETION_PENDING_MEMO: (STATE_COMPLETED,),
     STATE_COMPLETED: (),
     STATE_CANCELLED: (),
 }
+# The in_progress / awaiting_information / pending_senior_review states may
+# all land on completion_pending_memo (memo-gated completion). Append the
+# transition without disturbing their existing forward edges.
+for _src in (STATE_IN_PROGRESS, STATE_AWAITING_INFORMATION, STATE_PENDING_SENIOR_REVIEW):
+    if STATE_COMPLETION_PENDING_MEMO not in STATE_TRANSITIONS[_src]:
+        STATE_TRANSITIONS[_src] = STATE_TRANSITIONS[_src] + (STATE_COMPLETION_PENDING_MEMO,)
 
 # Explicit outcome semantics, recorded separately from operational
 # state. Kept disjoint from the legacy ``decision`` column so we never
@@ -1785,6 +1804,52 @@ def _open_edd_for_review_outcome(db, review) -> Optional[Dict[str, Any]]:
     return dict(active) if active is not None else None
 
 
+def _compute_completion_schedule(db, review, application, completion_date,
+                                 policy_risk_level) -> Dict[str, Any]:
+    """Compute the next-cycle schedule fields stamped on a completing review.
+
+    Extracted so both the inline (memo-disabled) completion path and the
+    deferred memo finalisation path (PR-PRS-C2) derive identical schedule
+    values from the same policy logic. Returns next_review_date, due_date,
+    frequency_months, calculation_basis and policy_version, always falling
+    back to the review's stored values if the policy snapshot fails.
+    """
+    review_id = _row_get(review, "id")
+    policy = None
+    if application is not None:
+        try:
+            from periodic_review_policy import add_months, policy_snapshot_for_application
+            anchor_date = _approval_anniversary_anchor(application, review)
+            policy = policy_snapshot_for_application(
+                application,
+                anchor_date=anchor_date,
+                override_risk_level=policy_risk_level,
+            )
+            frequency = int(policy["frequency_months"])
+            completion_day = date.fromisoformat(completion_date)
+            current_due_day = _date_only(_row_get(review, "due_date") or _row_get(review, "next_review_date"))
+            boundary_day = max(day for day in (completion_day, current_due_day) if day is not None)
+            interval_index = 1
+            while True:
+                candidate_due = add_months(anchor_date, frequency * interval_index)
+                if date.fromisoformat(candidate_due) > boundary_day:
+                    break
+                interval_index += 1
+            policy = {**policy, "next_review_date": candidate_due, "due_date": candidate_due}
+        except Exception:
+            logger.exception("Periodic review policy calculation failed review_id=%s", review_id)
+            policy = None
+    next_review_date = (policy or {}).get("next_review_date") or _row_get(review, "next_review_date")
+    due_date = (policy or {}).get("due_date") or next_review_date or _row_get(review, "due_date")
+    return {
+        "next_review_date": next_review_date,
+        "due_date": due_date,
+        "frequency_months": (policy or {}).get("frequency_months") or _row_get(review, "frequency_months"),
+        "calculation_basis": (policy or {}).get("calculation_basis") or _row_get(review, "calculation_basis"),
+        "policy_version": (policy or {}).get("policy_version") or _row_get(review, "policy_version"),
+    }
+
+
 def record_review_outcome(db, review_id, *,
                           outcome: str,
                           outcome_reason: Optional[str] = None,
@@ -1800,6 +1865,7 @@ def record_review_outcome(db, review_id, *,
                           senior_review_note: Optional[str] = None,
                           officer_acknowledgement: Any = False,
                           enforce_prs5_gates: bool = False,
+                          memo_gate: bool = False,
                           user=None, audit_writer=None) -> Dict[str, Any]:
     """Close a periodic review with an explicit outcome.
 
@@ -1847,6 +1913,14 @@ def record_review_outcome(db, review_id, *,
     if _is_terminal_review_state(current_state):
         raise ReviewClosedError(
             f"periodic_review id={review_id} is already {current_state}"
+        )
+    # PR-PRS-C2: a review already in the memo quarantine state has its
+    # outcome recorded; re-recording would double-apply risk/scheduling.
+    # Memo finalisation (not re-completion) is the only forward path.
+    if current_state == STATE_COMPLETION_PENDING_MEMO:
+        raise ReviewClosedError(
+            f"periodic_review id={review_id} outcome is already recorded and is "
+            f"awaiting memo finalisation"
         )
 
     risk_changed_flag = _boolish(risk_changed) or outcome == OUTCOME_RISK_RATING_CHANGED
@@ -1944,39 +2018,18 @@ def record_review_outcome(db, review_id, *,
     ts = _utc_now_iso()
     completion_date = ts[:10]
     application = _fetch_application(db, application_id)
-    policy = None
     policy_risk_level = normalized_new_risk if risk_changed_flag else (
         _row_get(review, "new_risk_level")
         or _row_get(review, "risk_level")
     )
-    if application is not None:
-        try:
-            from periodic_review_policy import add_months, policy_snapshot_for_application
-            anchor_date = _approval_anniversary_anchor(application, review)
-            policy = policy_snapshot_for_application(
-                application,
-                anchor_date=anchor_date,
-                override_risk_level=policy_risk_level,
-            )
-            frequency = int(policy["frequency_months"])
-            completion_day = date.fromisoformat(completion_date)
-            current_due_day = _date_only(_row_get(review, "due_date") or _row_get(review, "next_review_date"))
-            boundary_day = max(day for day in (completion_day, current_due_day) if day is not None)
-            interval_index = 1
-            while True:
-                candidate_due = add_months(anchor_date, frequency * interval_index)
-                if date.fromisoformat(candidate_due) > boundary_day:
-                    break
-                interval_index += 1
-            policy = {**policy, "next_review_date": candidate_due, "due_date": candidate_due}
-        except Exception:
-            logger.exception("Periodic review policy calculation failed review_id=%s", review_id)
-            policy = None
-    next_review_date = (policy or {}).get("next_review_date") or _row_get(review, "next_review_date")
-    due_date = (policy or {}).get("due_date") or next_review_date or _row_get(review, "due_date")
-    frequency_months = (policy or {}).get("frequency_months") or _row_get(review, "frequency_months")
-    calculation_basis = (policy or {}).get("calculation_basis") or _row_get(review, "calculation_basis")
-    policy_version = (policy or {}).get("policy_version") or _row_get(review, "policy_version")
+    schedule = _compute_completion_schedule(
+        db, review, application, completion_date, policy_risk_level,
+    )
+    next_review_date = schedule["next_review_date"]
+    due_date = schedule["due_date"]
+    frequency_months = schedule["frequency_months"]
+    calculation_basis = schedule["calculation_basis"]
+    policy_version = schedule["policy_version"]
     risk_before = _row_get(review, "previous_risk_level") or _row_get(review, "risk_level")
     risk_after = normalized_new_risk if risk_changed_flag else (_row_get(review, "new_risk_level") or risk_before)
     risk_attestation = (
@@ -2129,6 +2182,25 @@ def record_review_outcome(db, review_id, *,
                 if risk_changed_flag else "unchanged"
             ),
         }
+    # PR-PRS-C2: in memo-gate mode we record the outcome but DEFER the
+    # ``completed`` transition (and next-cycle scheduling + PR-01 closure)
+    # until the mandatory memo exists. Canonical risk elevation below still
+    # runs immediately (fail-closed safety). The schedule columns are left
+    # untouched in gate mode and advanced only at memo finalisation.
+    target_completion_status = (
+        STATE_COMPLETION_PENDING_MEMO if memo_gate else STATE_COMPLETED
+    )
+    completed_at_value = None if memo_gate else ts
+    last_review_date_value = (
+        _row_get(review, "last_review_date") if memo_gate else completion_date
+    )
+    next_review_date_value = (
+        _row_get(review, "next_review_date") if memo_gate else next_review_date
+    )
+    due_date_value = _row_get(review, "due_date") if memo_gate else due_date
+    frequency_months_value = None if memo_gate else frequency_months
+    calculation_basis_value = None if memo_gate else calculation_basis
+    policy_version_value = None if memo_gate else policy_version
     db.execute(
         "UPDATE periodic_reviews "
         "SET status = ?, "
@@ -2164,11 +2236,11 @@ def record_review_outcome(db, review_id, *,
         # ``PeriodicReviewDecisionHandler``. Do not co-write both.
         "WHERE id = ?",
         (
-            STATE_COMPLETED,
+            target_completion_status,
             outcome,
             effective_reason,
             ts,
-            ts,
+            completed_at_value,
             actor_id,
             effective_reason,
             findings_text,
@@ -2190,22 +2262,25 @@ def record_review_outcome(db, review_id, *,
             actor_id,
             actor_id if risk_changed_flag else None,
             ts,
-            completion_date,
-            next_review_date,
-            due_date,
-            frequency_months,
-            calculation_basis,
-            policy_version,
+            last_review_date_value,
+            next_review_date_value,
+            due_date_value,
+            frequency_months_value,
+            calculation_basis_value,
+            policy_version_value,
             ts,
             json.dumps(items, default=str),
             review_id,
         ),
     )
     db.commit()
-    # Stamp PR-01 closed_at + emit lifecycle.review.closed audit.
-    ll.mark_review_closed(
-        db, review_id, user=user, audit_writer=audit_writer,
-    )
+    # Stamp PR-01 closed_at + emit lifecycle.review.closed audit. In memo-gate
+    # mode the review is NOT yet completed, so closure is deferred to memo
+    # finalisation.
+    if not memo_gate:
+        ll.mark_review_closed(
+            db, review_id, user=user, audit_writer=audit_writer,
+        )
     # PR-PRS-C (P0-RR1): a confirmed risk change must propagate to CANONICAL
     # application risk, not stay review-local. The officer-confirmed level is an
     # ELEVATION FLOOR: the model is recomputed (EDD/screening floors + routing),
@@ -2339,6 +2414,69 @@ def record_review_outcome(db, review_id, *,
         # Drive the next cycle's cadence from the FINAL applied canonical level.
         if final_level:
             policy_risk_level = final_level
+    if memo_gate:
+        # PR-PRS-C2 quarantine: outcome + canonical risk are committed, but
+        # the review is held at completion_pending_memo until the mandatory
+        # memo is generated. Next-cycle scheduling and the periodic_review_
+        # completed audit are DEFERRED to memo finalisation so a missing memo
+        # can never masquerade as a closed, fully-scheduled review.
+        pending_after = {
+            "status": STATE_COMPLETION_PENDING_MEMO,
+            "outcome": outcome,
+            "outcome_reason": effective_reason,
+            "outcome_recorded_at": ts,
+            "completed_at": None,
+            "previous_risk_level": risk_before,
+            "new_risk_level": risk_after if risk_changed_flag else _row_get(review, "new_risk_level"),
+            "risk_change_attestation": risk_attestation,
+            "required_items": items,
+        }
+        _emit_audit(
+            audit_writer, user, "periodic_review.outcome_recorded",
+            f"periodic_review:{review_id}",
+            {
+                "review_id": review_id,
+                "outcome": outcome,
+                "from_state": current_state,
+                "to_state": STATE_COMPLETION_PENDING_MEMO,
+            },
+            db, before_state=before, after_state=pending_after,
+        )
+        _emit_audit(
+            audit_writer, user, "periodic_review.completion_pending_memo",
+            f"periodic_review:{review_id}",
+            {
+                "review_id": review_id,
+                "application_id": application_id,
+                "outcome": outcome,
+                "reason": "outcome_recorded_memo_pending",
+                "next_cycle_scheduled": False,
+                "canonical_risk_applied": bool(canonical_risk),
+            },
+            db, before_state=before, after_state=pending_after,
+        )
+        db.commit()
+        return {
+            "review_id": review_id,
+            "status": STATE_COMPLETION_PENDING_MEMO,
+            "outcome": outcome,
+            "outcome_reason": effective_reason,
+            "outcome_recorded_at": ts,
+            "completed_at": None,
+            "completed_by": actor_id,
+            "awaiting_memo": True,
+            "next_cycle": None,
+            "next_review_id": None,
+            "risk_level_before": risk_before,
+            "risk_level_after": risk_after,
+            "risk_changed": risk_changed_flag,
+            "canonical_risk": canonical_risk,
+            "risk_governance_status": (
+                canonical_risk.get("governance")
+                if canonical_risk
+                else ("canonical_recompute_failed" if risk_changed_flag else "unchanged")
+            ),
+        }
     next_cycle = _ensure_next_periodic_review_cycle(
         db,
         review,
@@ -2424,6 +2562,165 @@ def record_review_outcome(db, review_id, *,
     }
 
 
+class ReviewNotPendingMemo(PeriodicReviewEngineError):
+    """Raised when finalisation is attempted on a review that is not in the
+    completion_pending_memo quarantine state."""
+
+
+def finalize_review_memo_completion(db, review_id, *, user=None,
+                                    audit_writer=None) -> Dict[str, Any]:
+    """Advance a completion_pending_memo review to ``completed`` (PR-PRS-C2).
+
+    Called once the mandatory periodic-review memo has been successfully
+    generated. Schedules the next review cycle, stamps PR-01 closure, and
+    emits the deferred ``periodic_review_completed`` audit. The next-cycle
+    cadence is driven from the CANONICAL application risk level, which the
+    quarantine entry (``record_review_outcome``) already elevated.
+
+    Idempotent: finalising an already-``completed`` review is a no-op that
+    returns the current completed state, so concurrent sweep + manual
+    recovery attempts cannot double-schedule.
+
+    Raises ``ReviewNotPendingMemo`` if the review is in any other state.
+    """
+    _require_audit_writer(audit_writer)
+    review = _fetch_review(db, review_id)
+    current_state = _coerce_state(_row_get(review, "status"))
+    if current_state == STATE_COMPLETED:
+        return {
+            "review_id": review_id,
+            "status": STATE_COMPLETED,
+            "already_completed": True,
+            "next_review_id": None,
+        }
+    if current_state != STATE_COMPLETION_PENDING_MEMO:
+        raise ReviewNotPendingMemo(
+            f"periodic_review id={review_id} is {current_state}, not "
+            f"{STATE_COMPLETION_PENDING_MEMO}"
+        )
+
+    ts = _utc_now_iso()
+    recorded_at = _row_get(review, "outcome_recorded_at")
+    completion_date = (str(recorded_at)[:10] if recorded_at else ts[:10])
+    application_id = _row_get(review, "application_id")
+    application = _fetch_application(db, application_id)
+    outcome = _row_get(review, "outcome")
+    effective_reason = _row_get(review, "outcome_reason")
+    risk_before = _row_get(review, "previous_risk_level") or _row_get(review, "risk_level")
+    risk_attestation = _row_get(review, "risk_change_attestation")
+    risk_changed_flag = (risk_attestation == "risk_change_required")
+    risk_after = _row_get(review, "new_risk_level") or risk_before
+    actor_id = (user or {}).get("sub") or (user or {}).get("id")
+
+    # Cadence is driven from the canonical (already-elevated) application risk.
+    canonical_risk_level = None
+    if application is not None:
+        canonical_risk_level = (
+            _row_get(application, "final_risk_level")
+            or _row_get(application, "risk_level")
+        )
+    policy_risk_level = canonical_risk_level or risk_after or _row_get(review, "risk_level")
+    schedule = _compute_completion_schedule(
+        db, review, application, completion_date, policy_risk_level,
+    )
+    next_review_date = schedule["next_review_date"]
+    due_date = schedule["due_date"]
+
+    before = {"status": current_state, "completed_at": None}
+    db.execute(
+        "UPDATE periodic_reviews "
+        "SET status = ?, "
+        "    completed_at = ?, "
+        "    last_review_date = ?, "
+        "    next_review_date = ?, "
+        "    due_date = ?, "
+        "    frequency_months = COALESCE(?, frequency_months), "
+        "    calculation_basis = COALESCE(?, calculation_basis), "
+        "    policy_version = COALESCE(?, policy_version), "
+        "    state_changed_at = ? "
+        "WHERE id = ?",
+        (
+            STATE_COMPLETED,
+            ts,
+            completion_date,
+            next_review_date,
+            due_date,
+            schedule["frequency_months"],
+            schedule["calculation_basis"],
+            schedule["policy_version"],
+            ts,
+            review_id,
+        ),
+    )
+    db.commit()
+    ll.mark_review_closed(db, review_id, user=user, audit_writer=audit_writer)
+
+    next_cycle = _ensure_next_periodic_review_cycle(
+        db,
+        review,
+        application,
+        completion_date=completion_date,
+        policy_risk_level=policy_risk_level,
+        user=user,
+        audit_writer=audit_writer,
+    )
+    if next_cycle.get("next_review_date"):
+        next_review_date = next_cycle["next_review_date"]
+        due_date = next_cycle.get("due_date") or next_review_date
+    after = {
+        "status": STATE_COMPLETED,
+        "completed_at": ts,
+        "completed_by": actor_id,
+        "last_review_date": completion_date,
+        "next_review_date": next_review_date,
+        "due_date": due_date,
+    }
+    _emit_audit(
+        audit_writer, user, "periodic_review.completion_finalized",
+        f"periodic_review:{review_id}",
+        {
+            "review_id": review_id,
+            "application_id": application_id,
+            "from_state": STATE_COMPLETION_PENDING_MEMO,
+            "trigger": "memo_finalized",
+        },
+        db, before_state=before, after_state=after,
+    )
+    _emit_audit(
+        audit_writer, user, "periodic_review_completed",
+        f"periodic_review:{review_id}",
+        {
+            "review_id": review_id,
+            "application_id": application_id,
+            "outcome": outcome,
+            "risk_level_before": risk_before,
+            "risk_level_after": risk_after,
+            "risk_changed": risk_changed_flag,
+            "next_review_date": next_review_date,
+            "next_review_id": next_cycle.get("periodic_review_id"),
+            "next_cycle_status": next_cycle.get("status"),
+            "completed_by": actor_id,
+            "deferred_via_memo_gate": True,
+        },
+        db, before_state=before, after_state=after,
+    )
+    db.commit()
+    return {
+        "review_id": review_id,
+        "status": STATE_COMPLETED,
+        "outcome": outcome,
+        "outcome_reason": effective_reason,
+        "completed_at": ts,
+        "completed_by": actor_id,
+        "next_review_date": next_review_date,
+        "next_review_id": next_cycle.get("periodic_review_id"),
+        "next_cycle": next_cycle,
+        "risk_level_before": risk_before,
+        "risk_level_after": risk_after,
+        "risk_changed": risk_changed_flag,
+    }
+
+
 __all__ = [
     # State vocabulary
     "VALID_REVIEW_STATES",
@@ -2433,6 +2730,7 @@ __all__ = [
     "STATE_AWAITING_INFORMATION",
     "STATE_PENDING_SENIOR_REVIEW",
     "STATE_AWAITING_EDD",
+    "STATE_COMPLETION_PENDING_MEMO",
     "STATE_COMPLETED",
     "STATE_CANCELLED",
     "TERMINAL_REVIEW_STATES",
@@ -2459,6 +2757,7 @@ __all__ = [
     "InvalidRequiredItemStatus",
     "RequiredItemNotFound",
     "ReviewCompletionBlocked",
+    "ReviewNotPendingMemo",
     # Public helpers
     "get_review_state",
     "get_required_items",
@@ -2469,4 +2768,5 @@ __all__ = [
     "resolve_screening_refresh_item_if_current",
     "escalate_review_to_edd",
     "record_review_outcome",
+    "finalize_review_memo_completion",
 ]

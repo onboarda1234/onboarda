@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
@@ -48,6 +50,23 @@ MEMO_CONTEXT_JSON = json.dumps({"kind": MEMO_CONTEXT_KIND}, sort_keys=True)
 
 STATUS_GENERATED = "generated"
 STATUS_GENERATION_FAILED = "generation_failed"
+
+# PR-PRS-C2 memo-gate tuning. Inline attempts run synchronously during the
+# completion request (cheap, deterministic template render -- a couple of
+# attempts absorbs transient DB hiccups). The background sweep re-attempts
+# quarantined reviews. After ALERT_THRESHOLD cumulative failures a loud health
+# alert is raised so a persistently stuck memo cannot fail silently.
+INLINE_MEMO_ATTEMPTS = max(1, int(os.environ.get("PERIODIC_REVIEW_MEMO_INLINE_ATTEMPTS", "2")))
+SWEEP_MEMO_ATTEMPTS = max(1, int(os.environ.get("PERIODIC_REVIEW_MEMO_SWEEP_ATTEMPTS", "1")))
+MEMO_QUARANTINE_ALERT_THRESHOLD = max(
+    1, int(os.environ.get("PERIODIC_REVIEW_MEMO_ALERT_THRESHOLD", "3"))
+)
+# A memo is considered STALE (P1-MEMO2) when the review was mutated after the
+# memo was generated -- e.g. the outcome or risk was re-recorded -- so the
+# persisted memo no longer reflects current review truth.
+MEMO_STALENESS_GRACE_SECONDS = max(
+    0, int(os.environ.get("PERIODIC_REVIEW_MEMO_STALENESS_GRACE_SECONDS", "1"))
+)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -623,13 +642,270 @@ def fetch_latest_memo(db, review_id: int) -> Optional[Dict[str, Any]]:
     }
 
 
+# ─────────────────────────────────────────────────────────────────
+# PR-PRS-C2: memo-gated completion orchestration
+# ─────────────────────────────────────────────────────────────────
+def _parse_ts(value) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def count_failed_memo_attempts(db, review_id: int) -> int:
+    """Cumulative number of generation_failed memo rows for a review.
+
+    Used as the retry/attempt counter (no extra column needed) so the
+    background sweep and health alert can reason about persistently stuck
+    reviews.
+    """
+    row = db.execute(
+        "SELECT COUNT(*) AS c FROM periodic_review_memos "
+        "WHERE periodic_review_id = ? AND status = ?",
+        (review_id, STATUS_GENERATION_FAILED),
+    ).fetchone()
+    return int(_row_get(row, "c", 0) or 0)
+
+
+def evaluate_memo_staleness(db, review_id: int, memo: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """P1-MEMO2: decide whether ``memo`` still reflects current review truth.
+
+    A memo is STALE when the review was mutated (outcome re-recorded, risk
+    re-rated, or state changed) after the memo's ``generated_at``. Returns a
+    small descriptor that the read endpoint surfaces so the UI can flag a
+    memo that needs regeneration.
+    """
+    if not memo or memo.get("status") != STATUS_GENERATED:
+        return {"is_stale": False, "reason": None}
+    generated_at = _parse_ts(memo.get("generated_at"))
+    if generated_at is None:
+        return {"is_stale": False, "reason": None}
+    review = _fetch_review(db, review_id)
+    candidates = {
+        "outcome_recorded_at": _row_get(review, "outcome_recorded_at"),
+        "risk_rerated_at": _row_get(review, "risk_rerated_at"),
+        "findings_updated_at": _row_get(review, "findings_updated_at"),
+        "state_changed_at": _row_get(review, "state_changed_at"),
+    }
+    newest_field = None
+    newest_ts = None
+    for field, raw in candidates.items():
+        parsed = _parse_ts(raw)
+        if parsed is None:
+            continue
+        if newest_ts is None or parsed > newest_ts:
+            newest_ts, newest_field = parsed, field
+    if newest_ts is None:
+        return {"is_stale": False, "reason": None}
+    drift_seconds = (newest_ts - generated_at).total_seconds()
+    is_stale = drift_seconds > MEMO_STALENESS_GRACE_SECONDS
+    return {
+        "is_stale": is_stale,
+        "reason": (f"review_{newest_field}_after_memo" if is_stale else None),
+        "memo_generated_at": memo.get("generated_at"),
+        "review_last_mutated_at": (newest_ts.isoformat() if newest_ts else None),
+        "review_last_mutated_field": newest_field,
+        "drift_seconds": int(drift_seconds),
+    }
+
+
+def _emit_memo_health_alert(review_id: int, total_failures: int, source: str) -> None:
+    """Loud, structured operational alert for a persistently stuck memo."""
+    try:
+        import observability
+        observability.log_error(
+            "Periodic review memo generation stuck in quarantine",
+            handler="periodic_review_memo_gate",
+            review_id=review_id,
+            total_failures=total_failures,
+            source=source,
+            alert="periodic_review_memo_quarantine",
+        )
+        emit = getattr(observability, "emit_cloudwatch_metric_log", None)
+        if emit is not None:
+            emit(
+                "periodic_review_memo_quarantine",
+                total_failures,
+                namespace="RegMind/Compliance",
+            )
+    except Exception:  # pragma: no cover - alerting must never break the flow
+        logger.exception(
+            "Failed to emit memo quarantine health alert review_id=%s", review_id
+        )
+
+
+def complete_review_with_memo(db, review_id: int, *, user=None, audit_writer=None,
+                              max_attempts: Optional[int] = None,
+                              source: str = "inline") -> Dict[str, Any]:
+    """Generate the mandatory memo and, on success, finalise the review.
+
+    This is the single orchestration entry point shared by the completion
+    handler (inline), the background recovery sweep, and the manual recovery
+    endpoint. It:
+
+    * reuses an already-``generated`` memo if one exists (so finalisation can
+      proceed even if a previous attempt rendered the memo but failed to
+      finalise);
+    * otherwise attempts ``generate_periodic_review_memo`` up to
+      ``max_attempts`` times;
+    * on success transitions the review completion_pending_memo -> completed
+      via ``periodic_review_engine.finalize_review_memo_completion``;
+    * on exhaustion leaves the review quarantined, audits the failure, and
+      raises a health alert once cumulative failures cross the threshold.
+
+    Returns ``{"finalized": bool, "status": ..., "memo": ..., ...}``. Never
+    raises for an ordinary generation failure -- the quarantine state IS the
+    fail-closed outcome.
+    """
+    import periodic_review_engine as pre
+
+    if max_attempts is None:
+        max_attempts = INLINE_MEMO_ATTEMPTS if source == "inline" else SWEEP_MEMO_ATTEMPTS
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        existing = fetch_latest_memo(db, review_id)
+        memo_result = None
+        if existing and existing.get("status") == STATUS_GENERATED:
+            memo_result = {
+                "status": STATUS_GENERATED,
+                "memo_id": existing.get("memo_id"),
+                "version": existing.get("version"),
+                "memo_addendum_status": "draft_generated",
+            }
+        else:
+            try:
+                memo_result = generate_periodic_review_memo(db, review_id)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Periodic review memo attempt %s/%s failed review_id=%s source=%s: %s",
+                    attempt, max_attempts, review_id, source, exc,
+                )
+                continue
+        try:
+            completion = pre.finalize_review_memo_completion(
+                db, review_id, user=user, audit_writer=audit_writer,
+            )
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Periodic review memo finalisation attempt %s/%s failed review_id=%s source=%s: %s",
+                attempt, max_attempts, review_id, source, exc,
+            )
+            continue
+        return {
+            "finalized": True,
+            "status": "completed",
+            "memo": memo_result,
+            "completion": completion,
+            "attempts": attempt,
+            "source": source,
+        }
+
+    total_failures = count_failed_memo_attempts(db, review_id)
+    if audit_writer is not None:
+        try:
+            audit_writer(
+                dict(user) if user else {"sub": SYSTEM_ACTOR},
+                "periodic_review.memo_generation_quarantined",
+                f"periodic_review:{review_id}",
+                json.dumps({
+                    "review_id": review_id,
+                    "source": source,
+                    "attempts_this_run": max_attempts,
+                    "total_failures": total_failures,
+                    "error": str(last_error) if last_error else None,
+                }, default=str),
+                db=db,
+            )
+        except Exception:  # pragma: no cover - audit must not break the flow
+            logger.exception("Failed to audit memo quarantine review_id=%s", review_id)
+    if total_failures >= MEMO_QUARANTINE_ALERT_THRESHOLD:
+        _emit_memo_health_alert(review_id, total_failures, source)
+    return {
+        "finalized": False,
+        "status": STATUS_GENERATION_FAILED,
+        "memo_failed": True,
+        "attempts": max_attempts,
+        "total_failures": total_failures,
+        "alerted": total_failures >= MEMO_QUARANTINE_ALERT_THRESHOLD,
+        "source": source,
+    }
+
+
+def find_pending_memo_reviews(db, *, limit: int = 25):
+    """Return ids of reviews stuck in the completion_pending_memo state."""
+    rows = db.execute(
+        "SELECT id FROM periodic_reviews WHERE status = ? "
+        "ORDER BY COALESCE(outcome_recorded_at, created_at) ASC LIMIT ?",
+        ("completion_pending_memo", int(limit)),
+    ).fetchall()
+    return [_row_get(r, "id") for r in (rows or [])]
+
+
+def run_memo_recovery_sweep(db, *, user=None, audit_writer=None,
+                            batch_size: Optional[int] = None) -> Dict[str, Any]:
+    """Re-attempt memo generation for quarantined reviews (PR-PRS-C2).
+
+    Idempotent and bounded: claims at most ``batch_size`` reviews per run.
+    Each review is re-attempted via ``complete_review_with_memo``; successes
+    finalise to ``completed``, failures stay quarantined (and trigger the
+    health alert once over threshold).
+    """
+    if batch_size is None:
+        batch_size = max(1, min(int(os.environ.get("PERIODIC_REVIEW_MEMO_SWEEP_BATCH_SIZE", "25")), 100))
+    review_ids = find_pending_memo_reviews(db, limit=batch_size)
+    summary = {
+        "candidates": len(review_ids),
+        "finalized": 0,
+        "still_pending": 0,
+        "review_ids": list(review_ids),
+        "finalized_ids": [],
+        "still_pending_ids": [],
+    }
+    for review_id in review_ids:
+        try:
+            result = complete_review_with_memo(
+                db, review_id, user=user, audit_writer=audit_writer,
+                source="recovery_sweep",
+            )
+        except Exception:
+            logger.exception("memo recovery sweep failed review_id=%s", review_id)
+            summary["still_pending"] += 1
+            summary["still_pending_ids"].append(review_id)
+            continue
+        if result.get("finalized"):
+            summary["finalized"] += 1
+            summary["finalized_ids"].append(review_id)
+        else:
+            summary["still_pending"] += 1
+            summary["still_pending_ids"].append(review_id)
+    return summary
+
+
 __all__ = [
     "SYSTEM_ACTOR",
     "MEMO_CONTEXT_KIND",
     "MEMO_CONTEXT_JSON",
     "STATUS_GENERATED",
     "STATUS_GENERATION_FAILED",
+    "INLINE_MEMO_ATTEMPTS",
+    "SWEEP_MEMO_ATTEMPTS",
+    "MEMO_QUARANTINE_ALERT_THRESHOLD",
     "build_memo_data",
     "generate_periodic_review_memo",
     "fetch_latest_memo",
+    "count_failed_memo_attempts",
+    "evaluate_memo_staleness",
+    "complete_review_with_memo",
+    "find_pending_memo_reviews",
+    "run_memo_recovery_sweep",
 ]
