@@ -1475,6 +1475,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div id="standard-actions-topbar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <button class="btn btn-success btn-sm" onclick="approveApplication()" id="btn-approve" style="font-size:11px;">✅ Approve</button>
       <button class="btn btn-primary btn-sm" onclick="submitToCompliance()" id="btn-submit-compliance" style="font-size:11px;display:none;">📨 Submit to Compliance</button>
+      <span id="approval-authority-hint" style="font-size:11px;color:#92400e;display:none;align-self:center;"></span>
       <button class="btn btn-warning btn-sm" onclick="requestMoreInfo()" id="btn-rmi" style="font-size:11px;">📋 More Info</button>
       <details class="topbar-more-menu">
         <summary class="btn btn-outline btn-sm" style="font-size:11px;">More ▾</summary>
@@ -5870,6 +5871,47 @@ function canExportEvidencePack() {
   return role === 'admin' || role === 'sco';
 }
 
+// PR-APPROVAL-UX-GATES-1: client-side authority mirrors (NOT a security boundary —
+// the backend can_decide gate + approval gate stack are the source of truth after
+// PR1/PR2). These exist only to hide misleading buttons and prevent failed clicks.
+function canApproveMemo() {
+  // Backend MemoApproveHandler is admin/SCO only.
+  var role = String(currentUserRole() || '').toLowerCase();
+  return role === 'admin' || role === 'sco';
+}
+
+// Returns a short reason string if final approval would be rejected by the backend
+// for this role + case, or '' if approval is plausibly allowed. Conservative: only
+// flags conditions the backend is GUARANTEED to reject so we never hide a legitimate
+// Approve button.
+function approveBackendBlockReason(app) {
+  app = app || currentApp;
+  if (!app) return '';
+  var role = String(currentUserRole() || '').toLowerCase();
+  // Normalize risk so 'VERY HIGH', 'Very-High', 'very_high' all compare equal to
+  // the canonical 'VERY_HIGH' (defensive — the API normally sends underscores).
+  var risk = String(app.risk || app.risk_level || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  var statusRaw = String(app.statusRaw || app.status_raw || '').trim().toLowerCase();
+  // Roles with no approval authority at all.
+  if (!hasPermission('approve_low_medium')) {
+    return 'Your role cannot approve applications.';
+  }
+  // Onboarding Officer cannot approve HIGH/VERY_HIGH (can_decide gate, PR1).
+  if (role === 'co' && (risk === 'HIGH' || risk === 'VERY_HIGH')) {
+    return 'Requires SCO review — high-risk approval is Admin/SCO only.';
+  }
+  // EDD completion is SCO/MLRO-owned; a CO cannot clear EDD to approve.
+  if (role === 'co' && statusRaw === 'edd_required') {
+    return 'Requires SCO review — EDD completion is Admin/SCO only.';
+  }
+  // Once submitted to compliance, the case belongs to SCO/compliance review —
+  // a CO must not see Approve there (would undermine PR2's handoff).
+  if (role === 'co' && statusRaw === 'submitted_to_compliance') {
+    return 'Submitted to Compliance — SCO review required.';
+  }
+  return '';
+}
+
 function setDetailActionVisibility(id, visible) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -5897,10 +5939,32 @@ function syncApplicationActionPermissions(app) {
   // PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: Submit-to-Compliance is the forward action
   // when an officer cannot finalize approval (e.g. CO on a HIGH/PEP/EDD/second-review
   // case). Shown to Onboarding Officer / SCO / Admin from any active review lane.
-  var submitEligibleStates = ['compliance_review', 'in_review', 'under_review', 'kyc_submitted'];
-  var canSubmitToCompliance = ['admin', 'sco', 'co'].indexOf(currentUserRole()) >= 0
-    && submitEligibleStates.indexOf(app.statusRaw) >= 0;
+  // States mirror the backend SUBMIT_TO_COMPLIANCE_FROM_STATES (incl. edd_required).
+  var submitEligibleStates = ['compliance_review', 'in_review', 'under_review', 'kyc_submitted', 'edd_required'];
+  // Normalize role + raw status for the same robustness as approveBackendBlockReason.
+  // (app.status is the human label here, NOT a raw key, so it is deliberately not used.)
+  var submitRole = String(currentUserRole() || '').toLowerCase();
+  var submitStatusRaw = String(app.statusRaw || app.status_raw || '').trim().toLowerCase();
+  var canSubmitToCompliance = ['admin', 'sco', 'co'].indexOf(submitRole) >= 0
+    && submitEligibleStates.indexOf(submitStatusRaw) >= 0;
   setDetailActionVisibility('btn-submit-compliance', canSubmitToCompliance);
+
+  // PR-APPROVAL-UX-GATES-1: align Approve/Reject/Override with backend authority so
+  // officers don't see buttons the backend will reject. Backend stays the source of
+  // truth (PR1 can_decide); this only reduces confusion and failed clicks.
+  var approveBlock = approveBackendBlockReason(app);
+  setDetailActionVisibility('btn-approve', !approveBlock);
+  setDetailActionVisibility('btn-reject', hasPermission('reject_applications'));
+  setDetailActionVisibility('btn-override', hasPermission('override_ai_risk_score'));
+  var hintEl = document.getElementById('approval-authority-hint');
+  if (hintEl) {
+    if (approveBlock) {
+      hintEl.textContent = canSubmitToCompliance ? (approveBlock + ' Use Submit to Compliance.') : approveBlock;
+      hintEl.style.display = '';
+    } else {
+      hintEl.style.display = 'none';
+    }
+  }
 
   if (preApprovalNotes) preApprovalNotes.style.display = canSubmitPreApproval ? '' : 'none';
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval && canSubmitPreApproval ? 'flex' : 'none';
@@ -23364,6 +23428,14 @@ function approveApplication() {
   document.getElementById('decision-notes').value = '';
   setDecisionError('');
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
+  // PR-APPROVAL-UX-GATES-1: defence-in-depth — if the backend would reject this
+  // approval for the current role/case, steer the officer to Submit to Compliance
+  // instead of opening a modal that ends in a 403. (Backend remains authoritative.)
+  var approveBlock = approveBackendBlockReason(currentApp);
+  if (approveBlock) {
+    showToast(approveBlock + ' Use Submit to Compliance.', 'warn');
+    return;
+  }
   renderDecisionReadiness('Approve');
   document.getElementById('modal-decision-reason').classList.add('open');
 }
@@ -29368,6 +29440,14 @@ function renderValidationPanel(result) {
     approveBtn.style.background = '';
     approveBtn.innerHTML = '✅ Approve Memo';
     setMemoStatusBadge('Generated', 'pending');
+  }
+
+  // PR-APPROVAL-UX-GATES-1: memo approval is Admin/SCO only on the backend.
+  // Override the enable decision so an Onboarding Officer never sees an actionable
+  // Approve Memo button (it would 403). Validation/supervisor badges are unchanged.
+  if (!canApproveMemo()) {
+    approveBtn.disabled = true;
+    approveBtn.title = 'Memo approval requires Senior Compliance Officer or Admin.';
   }
 }
 
