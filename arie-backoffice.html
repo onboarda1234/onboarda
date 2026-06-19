@@ -18480,8 +18480,16 @@ async function completePeriodicReviewDecision(reviewId) {
   }
   try {
     var resp = await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/complete', draft);
-    var nextDate = resp && resp.result && resp.result.next_review_date ? (' Next review: ' + resp.result.next_review_date) : '';
-    showToast('Periodic review completed.' + nextDate);
+    // PR-PRS-D: if the outcome was recorded but the mandatory compliance memo
+    // could not be generated, the review is held (Pending Memo) rather than
+    // completed — surface that as a warning, not a success.
+    var heldForMemo = !!(resp && ((resp.memo_gate && resp.memo_gate.quarantined) || resp.status === 'completion_pending_memo'));
+    if (heldForMemo) {
+      showToast('Outcome recorded. Memo is still being generated. Review is held as Pending Memo.', 'warning');
+    } else {
+      var nextDate = resp && resp.result && resp.result.next_review_date ? (' Next review: ' + resp.result.next_review_date) : '';
+      showToast('Periodic review completed.' + nextDate);
+    }
     if (typeof ensureMonitoringDataLoaded === 'function') {
       try {
         await ensureMonitoringDataLoaded({ force: true });
@@ -19445,7 +19453,11 @@ function renderPrcReviewDetailSection(detail) {
   // Fire-and-forget; renderer owns its own error handling and the three
   // distinct visual states (generated / 404 / generation_failed).
   if (detail && detail.id != null) {
-    try { renderPeriodicReviewMemo(detail.id, state, fixturePayload); } catch (e) { /* renderer logs */ }
+    // PR-PRS-D: pass the RAW backend status (detail.status), not the
+    // ui-derived `state` — the detail endpoint overwrites ui_status with the
+    // projected queue_status (open/due/overdue), which has no case for
+    // completion_pending_memo, so only detail.status reliably carries it.
+    try { renderPeriodicReviewMemo(detail.id, detail.status || state, fixturePayload); } catch (e) { /* renderer logs */ }
   }
 }
 
@@ -19652,6 +19664,10 @@ function monitoringReviewDueState(review) {
 }
 
 function monitoringReviewSignalLabel(review) {
+  // PR-PRS-D: a review held awaiting its compliance memo must read as
+  // "Pending Memo", overriding the generic Open/Overdue label the queue
+  // projection derives for it (raw status is exposed by the projection).
+  if (review && String(review.status || '').toLowerCase() === 'completion_pending_memo') return 'Pending Memo';
   if (review && review.operationalStatusLabel) return review.operationalStatusLabel;
   if (review && review.queueStatusLabel) return review.queueStatusLabel;
   if (review && review.status) return review.status;
@@ -19660,6 +19676,9 @@ function monitoringReviewSignalLabel(review) {
 
 function monitoringReviewSignalBadgeClass(review) {
   var label = String((review && monitoringReviewSignalLabel(review)) || '').toLowerCase();
+  // PR-PRS-D: amber "Pending Memo" — an operational hold that auto-retries,
+  // not a rejection or hard block.
+  if (label === 'pending memo') return 'pending';
   if (label === 'blocked') return 'high';
   if (label === 'awaiting client attestation' || label === 'awaiting documents') return 'pending';
   if (label === 'officer review required') return 'in-review';
@@ -21212,21 +21231,100 @@ async function renderPeriodicReviewMemo(reviewId, reviewState, fixturePayload) {
     // generation); every other message is a real fetch error.
     var msg = (err && err.message) || '';
     if (msg === 'Memo not found') {
-      container.innerHTML = renderMemoNotCompletedPlaceholder(reviewState);
+      container.innerHTML = isPendingMemoState(reviewState)
+        ? renderMemoPendingBanner(reviewId)
+        : renderMemoNotCompletedPlaceholder(reviewState);
       return;
     }
     container.innerHTML = renderMemoFetchError(msg);
     return;
   }
   if (!resp) {
-    container.innerHTML = renderMemoNotCompletedPlaceholder(reviewState);
+    container.innerHTML = isPendingMemoState(reviewState)
+      ? renderMemoPendingBanner(reviewId)
+      : renderMemoNotCompletedPlaceholder(reviewState);
     return;
   }
   if (resp.status === 'generation_failed') {
-    container.innerHTML = renderMemoFailureBanner(resp);
+    // PR-PRS-D: a review still held for its memo shows an officer-friendly
+    // "held — pending memo" banner with a retry action; a legacy completed
+    // review with a failed memo falls through to the existing banner.
+    container.innerHTML = isPendingMemoState(reviewState)
+      ? renderMemoPendingBanner(reviewId)
+      : renderMemoFailureBanner(resp);
     return;
   }
   container.innerHTML = renderMemoGenerated(resp);
+}
+
+// PR-PRS-D: a review whose mandatory compliance memo has not yet been
+// generated is held in the back end as "completion_pending_memo".
+function isPendingMemoState(reviewState) {
+  return String(reviewState || '').toLowerCase() === 'completion_pending_memo';
+}
+
+// PR-PRS-D: officer-friendly held-state banner with an SCO/Admin-only retry
+// action wired to POST /api/monitoring/reviews/:id/memo/recover.
+function renderMemoPendingBanner(reviewId) {
+  var safeId = escapeHtml(String(reviewId));
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
+    '<div style="padding:12px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius-sm);font-size:13px;color:var(--amber);line-height:1.5;">' +
+    '<strong>Review held — compliance memo pending.</strong> The system will retry automatically. SCO/Admin may retry now.' +
+    '<div class="role-sco-only" style="margin-top:10px;">' +
+    '<button id="memo-retry-btn-' + safeId + '" class="btn btn-outline btn-sm" onclick="retryPeriodicReviewMemo(' + JSON.stringify(reviewId) + ')">Retry memo</button>' +
+    '</div>' +
+    '</div></div>';
+}
+
+// PR-PRS-D: informational only — no regenerate action (kept out of scope).
+function renderMemoStalenessBanner(memo) {
+  var st = memo && memo.staleness;
+  if (!st || !st.is_stale) return '';
+  return '<div style="margin-bottom:10px;padding:10px 12px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius-sm);font-size:12px;color:var(--amber);line-height:1.5;">' +
+    '⚠️ This memo may be out of date because the review changed after it was generated.' +
+    '</div>';
+}
+
+async function retryPeriodicReviewMemo(reviewId) {
+  var btn = document.getElementById('memo-retry-btn-' + reviewId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
+  var finalState = 'completion_pending_memo';
+  try {
+    var resp = await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/memo/recover', {});
+    var s = resp && resp.status;
+    if (s === 'completed') {
+      finalState = 'completed';
+      showToast('Memo generated. Review completed.', 'success');
+    } else if (s === 'already_completed') {
+      finalState = 'completed';
+      showToast('Review is already completed.', 'info');
+    } else {
+      showToast('Memo is still being generated. The system will keep retrying.', 'warning');
+    }
+  } catch (err) {
+    showToast((err && err.message) || 'Unable to retry the memo right now.', 'warning');
+  } finally {
+    // Repaint the memo panel in the currently open review modal so the held
+    // banner clears (on success) or persists (still pending) without a manual
+    // reload, then refresh the queue + any open lifecycle tab.
+    try { await renderPeriodicReviewMemo(reviewId, finalState); } catch (e) { /* renderer logs */ }
+    await refreshPeriodicReviewViews();
+  }
+}
+
+// PR-PRS-D: shared refresh so retry/completion reflect new state in both the
+// open queue and the lifecycle detail without a manual reload.
+async function refreshPeriodicReviewViews() {
+  try {
+    if (typeof ensureMonitoringDataLoaded === 'function') {
+      await ensureMonitoringDataLoaded({ force: true });
+      if (typeof renderPeriodicReviewQueue === 'function') renderPeriodicReviewQueue();
+    }
+  } catch (e) { /* non-fatal: refresh is best-effort */ }
+  try {
+    if (typeof refreshLifecycleWorkspaceTab === 'function') await refreshLifecycleWorkspaceTab();
+  } catch (e) { /* non-fatal */ }
 }
 
 function renderFixtureEmbeddedReviewMemo(payload) {
@@ -21314,7 +21412,8 @@ function renderMemoGenerated(memo) {
     ' · Generated ' + escapeHtml(memo.generated_at || '') +
     ' · by ' + escapeHtml(memo.generated_by || '') + '</div>';
   var html = '<div class="detail-section" style="margin-top:16px;">' +
-    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>';
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
+    renderMemoStalenessBanner(memo);
   sections.forEach(function(pair) {
     html += '<div style="margin-top:10px;">' +
       '<div style="font-weight:600;font-size:12px;color:var(--text2);margin-bottom:4px;">' + escapeHtml(pair[0]) + '</div>' +
