@@ -1,0 +1,61 @@
+{
+  "pr": "PR-PRS-C2",
+  "pr_number": 543,
+  "title": "memo-gated periodic-review completion (fail-closed quarantine + recovery)",
+  "classification": "P0",
+  "merge_sha": "cda0cc77967c052f0bab90081701123d4119cda5",
+  "merged_to": "main",
+  "date": "2026-06-19",
+  "tests": {
+    "focused_suite": {
+      "command": "pytest tests/test_periodic_review_memo.py tests/test_periodic_review_engine.py",
+      "passed": 98,
+      "failed": 0
+    },
+    "post_merge_ci": {
+      "workflow": "Onboarda CI",
+      "run_id": "27816794118",
+      "head_sha": "cda0cc77967c052f0bab90081701123d4119cda5",
+      "conclusion": "success",
+      "full_suite_gate": "success",
+      "coverage_threshold": "success"
+    },
+    "staging_deploy": {
+      "workflow": "Deploy to Staging",
+      "run_id": "27816794109",
+      "head_sha": "cda0cc77967c052f0bab90081701123d4119cda5",
+      "conclusion": "success",
+      "image_sha_pinned": true,
+      "health_verified": true
+    }
+  },
+  "evidence": {
+    "merge_sha": "proven",
+    "version_sha_match": "operator_pending",
+    "forced_failure_quarantines": "test",
+    "not_completed_while_memo_missing": "test",
+    "canonical_risk_elevation_applies": "test",
+    "no_next_cycle_while_quarantined": "test",
+    "manual_recover_finalizes": "test",
+    "next_cycle_only_after_memo": "test",
+    "background_sweep": "test",
+    "active_query_includes_quarantined": "code:periodic_review_management.py:331",
+    "terminal_filter_excludes_quarantined": "code:periodic_review_projection_service.py:30",
+    "audit_events_present": "code:periodic_review_engine.py:2446,2679;periodic_review_memo.py:818",
+    "staleness_flag": "test",
+    "closure_report": "complete"
+  },
+  "config_flags": {
+    "PERIODIC_REVIEW_MEMO_RECOVERY_ENABLED": "on_for_staging_prod",
+    "PERIODIC_REVIEW_MEMO_RECOVERY_SWEEP_SECONDS": 900,
+    "PERIODIC_REVIEW_MEMO_INLINE_ATTEMPTS": 2,
+    "PERIODIC_REVIEW_MEMO_SWEEP_BATCH_SIZE": 25,
+    "PERIODIC_REVIEW_MEMO_ALERT_THRESHOLD": 3
+  },
+  "residual": [
+    "live_staging_runtime_probe (operator)",
+    "PR-PRS-D ux surface",
+    "PR-PRS-E audit/notification hardening"
+  ],
+  "verdict": "MERGED / CI+DEPLOY GREEN / EVIDENCE PACK COMPLETE / live staging probe pending"
+}
