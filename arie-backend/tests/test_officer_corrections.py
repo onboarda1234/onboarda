@@ -107,6 +107,35 @@ def _headers(role="admin"):
     return {"Authorization": f"Bearer {token}"}
 
 
+def _attempt_final_approval(base_url, app_id, role="admin"):
+    """Attempt final approval via the canonical decision endpoint.
+
+    PR-APPROVAL-AUTHORITY-MATRIX-1 removed terminal approve/reject from the
+    generic status PATCH; final decisions must go through /decision (the
+    can_decide gate). These correction tests assert the approval is *blocked*
+    by the stale/gated memo, which /decision enforces.
+    """
+    # The /decision endpoint is rate-limited per-IP via a process-global limiter
+    # that the per-test server reload does not reset; clear it so decision-heavy
+    # test runs cannot trip a 429 unrelated to the assertion under test.
+    import base_handler
+    base_handler.rate_limiter._attempts.clear()
+    return requests.post(
+        f"{base_url}/api/applications/{app_id}/decision",
+        headers=_headers(role),
+        json={
+            "decision": "approve",
+            "decision_reason": "Final approval attempt after correction",
+            "officer_signoff": {
+                "acknowledged": True,
+                "scope": "decision",
+                "source_context": "ai_advisory",
+            },
+        },
+        timeout=5,
+    )
+
+
 def _timestamp_with_offset(offset_hours=0):
     return (datetime.now(timezone.utc) + timedelta(hours=offset_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -568,12 +597,7 @@ def test_pr410b_controlled_sector_correction_recomputes_risk_marks_memo_stale_an
     assert json.loads(audit["before_state"])["risk_before"]["risk_score"] == before_app["risk_score"]
     assert json.loads(audit["after_state"])["risk_after"]["risk_score"] == after_app["risk_score"]
 
-    approve = requests.patch(
-        f"{base_url}/api/applications/{case['app_id']}",
-        headers=_headers("admin"),
-        json={"status": "approved"},
-        timeout=5,
-    )
+    approve = _attempt_final_approval(base_url, case['app_id'])
     assert approve.status_code == 400, approve.text
     assert "memo" in approve.text.lower() and "stale" in approve.text.lower()
 
@@ -901,12 +925,7 @@ def test_pr410c_director_nationality_correction_recomputes_risk_audits_and_stale
     assert memo["is_stale"] in (1, True)
     assert memo["stale_trigger"] == "backoffice_correction:director"
 
-    approve = requests.patch(
-        f"{base_url}/api/applications/{case['app_id']}",
-        headers=_headers("admin"),
-        json={"status": "approved"},
-        timeout=5,
-    )
+    approve = _attempt_final_approval(base_url, case['app_id'])
     assert approve.status_code == 400, approve.text
     assert "memo" in approve.text.lower() and "stale" in approve.text.lower()
 
@@ -1485,12 +1504,7 @@ def test_material_correction_blocks_approval_until_refresh_complete(officer_corr
     )
     assert resp.status_code == 200, resp.text
 
-    approve = requests.patch(
-        f"{base_url}/api/applications/{case['app_id']}",
-        headers=_headers("admin"),
-        json={"status": "approved"},
-        timeout=5,
-    )
+    approve = _attempt_final_approval(base_url, case['app_id'])
     assert approve.status_code == 400, approve.text
     assert "memo" in approve.text.lower() or "approval gate failed" in approve.text.lower()
 

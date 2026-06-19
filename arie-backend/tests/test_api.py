@@ -4383,7 +4383,14 @@ class TestGovernanceAttemptAudit:
         assert detail["pending_screening_review_ids"]
 
     def test_pending_screening_second_review_blocks_legacy_status_transition(self, api_server):
-        """Legacy direct status approval must not bypass screening second-review gate."""
+        """Legacy direct status approval is blocked outright (PR-APPROVAL-AUTHORITY-MATRIX-1).
+
+        Previously PATCH /applications/:id could attempt approval and was stopped by
+        the screening second-review gate (400). The terminal-decision guard now blocks
+        ANY approve/reject via generic status PATCH (409) before gate evaluation,
+        routing the actor to /decision. The invariant is stronger: no bypass, status
+        unchanged, attempt audited as application.decision_blocked.
+        """
         from auth import create_token
         from db import get_db
 
@@ -4401,16 +4408,14 @@ class TestGovernanceAttemptAudit:
             timeout=3,
         )
 
-        assert resp.status_code == 400
-        body = resp.json()
-        assert body["code"] == "screening_second_review_pending"
-        assert body["blockers"][0]["action_key"] == "screening.resolve"
+        assert resp.status_code == 409
+        assert "Terminal decision blocked" in resp.json()["error"]
 
         conn = get_db()
         audit = conn.execute(
             """
             SELECT detail FROM audit_log
-            WHERE target = ? AND action = 'approval_blocked_screening_second_review_pending'
+            WHERE target = ? AND action = 'Governance Attempt'
             ORDER BY id DESC LIMIT 1
             """,
             (app_ref,),
@@ -4418,9 +4423,10 @@ class TestGovernanceAttemptAudit:
         app = conn.execute("SELECT status FROM applications WHERE id = ?", (app_id,)).fetchone()
         conn.close()
 
+        # No bypass: terminal status was not written.
         assert app["status"] == "in_review"
         assert audit is not None
-        assert json.loads(audit["detail"])["source_surface"] == "application_status_patch"
+        assert json.loads(audit["detail"])["action"] == "application.decision_blocked"
 
     def test_approval_document_gate_failure_returns_structured_blockers(self, api_server):
         """Final approval document evidence failures must expose blocker payloads."""

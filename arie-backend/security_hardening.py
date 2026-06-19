@@ -1403,6 +1403,107 @@ class ApprovalGateValidator:
             return (False, f"Internal validation error: {str(e)}")
 
 
+# ── PR-APPROVAL-AUTHORITY-MATRIX-1: centralized terminal-decision authority ──
+# Roles permitted to make a terminal (approve/reject) decision at all.
+DECISION_AUTHORITY_ROLES = ("admin", "sco", "co")
+# Risk tiers an Onboarding Officer (co) may NOT approve.
+HIGH_RISK_DECISION_LEVELS = ("HIGH", "VERY_HIGH")
+DECISION_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
+
+
+def can_decide_application(user, app, decision, *, risk_level=None, override_ai=False):
+    """Single server-side authority gate for terminal application decisions.
+
+    This is the ONLY sanctioned authority for moving an application to
+    ``approved`` or ``rejected``. It evaluates the ACTOR-authority dimension —
+    role x current-risk x decision x override — that was historically enforced
+    inline only on the ``/decision`` endpoint and was MISSING from the generic
+    ``PATCH /api/applications/:id`` status path (audit finding P0-1).
+
+    It deliberately does NOT run the approval precondition stack
+    (see :meth:`ApprovalGateValidator.validate_approval`) and does NOT mutate
+    state, so it is cheap and side-effect free. Dual-approval *state* remains
+    caller-managed; this gate only reports ``requires_dual_approval`` so callers
+    can route HIGH/VERY_HIGH approvals through the two-person flow.
+
+    Args:
+        user: authenticated actor dict (``role`` is read).
+        app: application row/dict (reserved for future per-app policy).
+        decision: ``"approve"`` or ``"reject"``.
+        risk_level: the application's CURRENT risk level at decision time
+            (LOW/MEDIUM/HIGH/VERY_HIGH). Authority is evaluated against current
+            risk, never a stored submission-time lane.
+        override_ai: True when the actor is overriding the AI recommendation.
+
+    Returns:
+        Tuple ``(allowed, status_code, reason, meta)`` where ``meta`` carries
+        ``requires_dual_approval``, ``risk_level`` and ``is_privileged_admin_action``.
+    """
+    role = str((user or {}).get("role") or "").strip().lower()
+    decision = str(decision or "").strip().lower()
+    level = str(risk_level or "").strip().upper()
+    is_high = level in HIGH_RISK_DECISION_LEVELS
+    meta = {
+        "requires_dual_approval": decision == "approve" and is_high,
+        "risk_level": level or None,
+        # Admin approving a high-risk file is a privileged action that must be
+        # extra-audited; it still passes the SAME gate as SCO (no shortcut).
+        "is_privileged_admin_action": role == "admin" and decision == "approve" and is_high,
+    }
+
+    if decision not in ("approve", "reject"):
+        return (
+            False,
+            400,
+            f"Unsupported terminal decision '{decision or 'none'}'. Must be 'approve' or 'reject'.",
+            meta,
+        )
+
+    if level not in DECISION_RISK_LEVELS:
+        reason = (
+            "Current risk level is required before a terminal decision can be authorized."
+        )
+        if level:
+            reason = (
+                f"Unsupported current risk level '{level}' for terminal decision authority."
+            )
+        return (False, 400, reason, meta)
+
+    # 1. Actor must hold a terminal-decision role. Analyst / client / unknown
+    #    are blocked for BOTH approve and reject.
+    if role not in DECISION_AUTHORITY_ROLES:
+        return (
+            False,
+            403,
+            "Terminal decisions require Admin, Senior Compliance Officer, or Onboarding Officer role. "
+            f"Role '{role or 'unknown'}' is not permitted to {decision} applications.",
+            meta,
+        )
+
+    # 2. Onboarding Officer (co) cannot approve HIGH / VERY_HIGH — must submit to
+    #    compliance for senior approval instead.
+    if decision == "approve" and role == "co" and is_high:
+        return (
+            False,
+            403,
+            "Approval blocked: Onboarding Officers cannot approve HIGH or VERY_HIGH risk applications. "
+            "Only Admin or Senior Compliance Officer roles may approve at this risk level.",
+            meta,
+        )
+
+    # 3. Overriding the AI recommendation is senior-only.
+    if override_ai and role not in ("sco", "admin"):
+        return (
+            False,
+            403,
+            "AI override requires Senior Compliance Officer or Admin role. "
+            f"Your role '{role or 'unknown'}' is not permitted to submit override_ai=true.",
+            meta,
+        )
+
+    return (True, 200, "", meta)
+
+
 def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
     """Return officer-visible blockers from the backend approval gate model."""
     blockers: List[Dict[str, Any]] = []

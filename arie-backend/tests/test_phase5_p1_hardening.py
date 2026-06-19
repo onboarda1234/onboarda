@@ -373,9 +373,12 @@ def test_rmi_sent_direct_kyc_submitted_still_requires_document_gate(phase5_api_s
 def test_rmi_sent_rejects_arbitrary_status_transition(phase5_api_server):
     _, app_id, _ = _seed_app(app_id="phase5_rmi_arbitrary", ref="ARF-2026-P5-024", status="rmi_sent")
 
+    # Terminal targets (approved/rejected) are intercepted earlier by the
+    # can_decide terminal guard (PR-APPROVAL-AUTHORITY-MATRIX-1), so use a
+    # non-terminal invalid target to exercise the transition-map validation path.
     resp = requests.patch(
         f"{phase5_api_server}/api/applications/{app_id}",
-        json={"status": "approved"},
+        json={"status": "pricing_review"},
         headers=_officer_headers(),
         timeout=5,
     )

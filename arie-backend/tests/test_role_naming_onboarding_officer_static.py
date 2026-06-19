@@ -88,7 +88,14 @@ def test_role_permission_matrix_keys_and_gates_are_unchanged():
     assert matrix["assign_reassign_cases"] == ["admin", "sco"]
     assert matrix["view_enhanced_requirements"] == ["admin", "sco", "co"]
 
-    assert 'user.get("role") == "co" and approval_risk_level in ("HIGH", "VERY_HIGH")' in source
+    # PR-APPROVAL-AUTHORITY-MATRIX-1: the CO-cannot-approve-HIGH/VERY_HIGH rule
+    # moved out of an inline check into the centralized can_decide_application
+    # authority gate (security_hardening.py); the decision handler routes
+    # approve/reject through that gate.
+    assert "can_decide_application(" in source
+    sh_source = (ROOT / "arie-backend" / "security_hardening.py").read_text(encoding="utf-8")
+    assert 'role == "co" and is_high' in sh_source
+    assert "Onboarding Officers cannot approve HIGH" in sh_source
     assert 'user.get("role") not in ("admin", "sco")' in source
     assert 'user.get("role") not in ("admin", "sco", "co")' in source
 
