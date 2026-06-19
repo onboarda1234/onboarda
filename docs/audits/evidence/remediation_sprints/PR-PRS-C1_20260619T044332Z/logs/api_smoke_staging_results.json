@@ -1,0 +1,352 @@
+{
+  "base_url": "http://127.0.0.1:8080",
+  "credential_handling": "SCO JWT generated inside staging backend task; token omitted.",
+  "expected_sha": "dd162525aa07c64660f70ca8336c3834ebdfb898",
+  "prefix": "PRPRSC1-STAGING-20260619045040",
+  "public_base_url": "https://staging.regmind.co",
+  "public_version": {
+    "payload": {
+      "build_time": "2026-06-19T03:59:02Z",
+      "environment": "staging",
+      "git_sha": "dd162525aa07c64660f70ca8336c3834ebdfb898",
+      "git_sha_short": "dd16252",
+      "image_tag": "dd162525aa07c64660f70ca8336c3834ebdfb898",
+      "provider_status": {
+        "aml_screening": {
+          "abstraction_enabled": true,
+          "auth_probe": "not_run",
+          "checked_at": "2026-06-19T04:50:40Z",
+          "configuration_label": "regmind-default-screening-v1",
+          "fallback_enabled": false,
+          "fallback_mode": "disabled",
+          "health": "not_probed",
+          "mode": "sandbox",
+          "provider": "ComplyAdvantage Mesh",
+          "status": "live",
+          "workspace_label": "ca-sandbox"
+        },
+        "identity_verification": {
+          "provider": "Sumsub IDV/KYC",
+          "scope": "individual_kyc_identity_verification",
+          "status": "live"
+        },
+        "registry_kyb": {
+          "provider": "OpenCorporates registry/enrichment",
+          "status": "simulated"
+        }
+      },
+      "service": "regmind-backend"
+    },
+    "status": 200
+  },
+  "ran_at": "2026-06-19T04:50:40+00:00",
+  "scenarios": {
+    "confirmed_risk_elevation_propagates": {
+      "application_id": "prprsc1-staging-20260619045040-elevate",
+      "application_risk_after": {
+        "final_risk_level": "HIGH",
+        "risk_level": "HIGH"
+      },
+      "canonical_audit": {
+        "application_id": "prprsc1-staging-20260619045040-elevate",
+        "applied_elevation_floor": true,
+        "downgrade_prevented": false,
+        "final_applied_risk": "HIGH",
+        "model_recomputed_risk": "LOW",
+        "officer_confirmed_risk": "HIGH",
+        "previous_canonical_risk": "MEDIUM",
+        "recompute_failed": false,
+        "review_id": 85,
+        "risk_governance_status": "canonical_risk_recomputed"
+      },
+      "completion_payload": {
+        "memo": {
+          "memo_addendum_status": "draft_generated",
+          "memo_id": 31,
+          "review_id": 85,
+          "status": "generated",
+          "version": 1
+        },
+        "result": {
+          "canonical_risk": {
+            "applied_floor": true,
+            "confirmed_level": "HIGH",
+            "downgrade_prevented": false,
+            "final_level": "HIGH",
+            "governance": "canonical_risk_recomputed",
+            "model_level": "LOW",
+            "previous_canonical": "MEDIUM",
+            "recompute_failed": false
+          },
+          "completed_at": "2026-06-19T04:50:40+00:00",
+          "completed_by": "sco001",
+          "next_cycle": {
+            "anchor_date": "2025-01-01",
+            "calculation_basis": "risk_level:HIGH",
+            "due_date": "2027-01-01",
+            "frequency_months": 12,
+            "late_completion_days": 169,
+            "next_review_date": "2027-01-01",
+            "periodic_review_id": 86,
+            "policy_version": "v2",
+            "review_cycle_number": 2,
+            "risk_level": "HIGH",
+            "skipped_anniversary_count": 0,
+            "status": "created"
+          },
+          "next_review_date": "2027-01-01",
+          "next_review_id": 86,
+          "outcome": "risk_rating_changed",
+          "outcome_reason": "Confirmed material risk elevation to HIGH.",
+          "outcome_recorded_at": "2026-06-19T04:50:40+00:00",
+          "review_id": 85,
+          "risk_changed": true,
+          "risk_governance_status": "canonical_risk_recomputed",
+          "risk_level_after": "HIGH",
+          "risk_level_before": "MEDIUM",
+          "status": "completed"
+        },
+        "status": "periodic_review_completed"
+      },
+      "completion_status": 200,
+      "next_cycle": {
+        "due_date": "2027-01-01",
+        "frequency_months": 12,
+        "id": 86,
+        "next_review_date": "2027-01-01",
+        "risk_level": "HIGH"
+      },
+      "passed": true,
+      "review_id": 85,
+      "review_status": "completed"
+    },
+    "material_change_rescore_gate": {
+      "application_id": "prprsc1-staging-20260619045040-material-gate",
+      "blocked_items": [
+        {
+          "completion_only": true,
+          "item_type": "material_change_risk_decision_required",
+          "label": "Material change identified: record a risk re-rating, or a documented rationale for why the risk rating is unchanged",
+          "severity": "high",
+          "source": "periodic_reviews",
+          "source_id": 89
+        }
+      ],
+      "blocked_status": 409,
+      "completion_payload_after_rationale": {
+        "memo": {
+          "memo_addendum_status": "draft_generated",
+          "memo_id": 33,
+          "review_id": 89,
+          "status": "generated",
+          "version": 1
+        },
+        "result": {
+          "canonical_risk": null,
+          "completed_at": "2026-06-19T04:50:41+00:00",
+          "completed_by": "sco001",
+          "next_cycle": {
+            "anchor_date": "2025-01-01",
+            "calculation_basis": "risk_level:MEDIUM",
+            "due_date": "2027-01-01",
+            "frequency_months": 24,
+            "late_completion_days": 169,
+            "next_review_date": "2027-01-01",
+            "periodic_review_id": 90,
+            "policy_version": "v2",
+            "review_cycle_number": 2,
+            "risk_level": "MEDIUM",
+            "skipped_anniversary_count": 0,
+            "status": "created"
+          },
+          "next_review_date": "2027-01-01",
+          "next_review_id": 90,
+          "outcome": "material_change_identified",
+          "outcome_reason": "Material change reviewed with documented risk decision.",
+          "outcome_recorded_at": "2026-06-19T04:50:41+00:00",
+          "review_id": 89,
+          "risk_changed": false,
+          "risk_governance_status": "unchanged",
+          "risk_level_after": "MEDIUM",
+          "risk_level_before": "MEDIUM",
+          "status": "completed"
+        },
+        "status": "periodic_review_completed"
+      },
+      "completion_status_after_rationale": 200,
+      "final_review_status": "completed",
+      "passed": true,
+      "review_id": 89,
+      "status_after_block": "in_progress"
+    },
+    "next_cycle_cadence_follows_final_risk": {
+      "due_date": "2027-01-01",
+      "frequency_months": 12,
+      "id": 86,
+      "next_review_date": "2027-01-01",
+      "passed": true,
+      "risk_level": "HIGH"
+    },
+    "no_automatic_downgrade": {
+      "application_id": "prprsc1-staging-20260619045040-downgrade-floor",
+      "application_risk_after": {
+        "final_risk_level": "HIGH",
+        "risk_level": "HIGH"
+      },
+      "canonical_audit": {
+        "application_id": "prprsc1-staging-20260619045040-downgrade-floor",
+        "applied_elevation_floor": true,
+        "downgrade_prevented": true,
+        "final_applied_risk": "HIGH",
+        "model_recomputed_risk": "LOW",
+        "officer_confirmed_risk": "MEDIUM",
+        "previous_canonical_risk": "HIGH",
+        "recompute_failed": false,
+        "review_id": 87,
+        "risk_governance_status": "canonical_risk_recomputed"
+      },
+      "completion_payload": {
+        "memo": {
+          "memo_addendum_status": "draft_generated",
+          "memo_id": 32,
+          "review_id": 87,
+          "status": "generated",
+          "version": 1
+        },
+        "result": {
+          "canonical_risk": {
+            "applied_floor": true,
+            "confirmed_level": "MEDIUM",
+            "downgrade_prevented": true,
+            "final_level": "HIGH",
+            "governance": "canonical_risk_recomputed",
+            "model_level": "LOW",
+            "previous_canonical": "HIGH",
+            "recompute_failed": false
+          },
+          "completed_at": "2026-06-19T04:50:41+00:00",
+          "completed_by": "sco001",
+          "next_cycle": {
+            "anchor_date": "2025-01-01",
+            "calculation_basis": "risk_level:HIGH",
+            "due_date": "2027-01-01",
+            "frequency_months": 12,
+            "late_completion_days": 169,
+            "next_review_date": "2027-01-01",
+            "periodic_review_id": 88,
+            "policy_version": "v2",
+            "review_cycle_number": 2,
+            "risk_level": "HIGH",
+            "skipped_anniversary_count": 0,
+            "status": "created"
+          },
+          "next_review_date": "2027-01-01",
+          "next_review_id": 88,
+          "outcome": "risk_rating_changed",
+          "outcome_reason": "Officer confirmed MEDIUM but previous HIGH must remain the floor.",
+          "outcome_recorded_at": "2026-06-19T04:50:41+00:00",
+          "review_id": 87,
+          "risk_changed": true,
+          "risk_governance_status": "canonical_risk_recomputed",
+          "risk_level_after": "MEDIUM",
+          "risk_level_before": "HIGH",
+          "status": "completed"
+        },
+        "status": "periodic_review_completed"
+      },
+      "completion_status": 200,
+      "passed": true,
+      "review_id": 87
+    },
+    "no_change_does_not_alter_canonical_risk": {
+      "application_id": "prprsc1-staging-20260619045040-no-change",
+      "canonical_recompute_audit_count": 0,
+      "completion_payload": {
+        "memo": {
+          "memo_addendum_status": "draft_generated",
+          "memo_id": 34,
+          "review_id": 91,
+          "status": "generated",
+          "version": 1
+        },
+        "result": {
+          "canonical_risk": null,
+          "completed_at": "2026-06-19T04:50:41+00:00",
+          "completed_by": "sco001",
+          "next_cycle": {
+            "anchor_date": "2025-01-01",
+            "calculation_basis": "risk_level:HIGH",
+            "due_date": "2027-01-01",
+            "frequency_months": 12,
+            "late_completion_days": 169,
+            "next_review_date": "2027-01-01",
+            "periodic_review_id": 92,
+            "policy_version": "v2",
+            "review_cycle_number": 2,
+            "risk_level": "HIGH",
+            "skipped_anniversary_count": 0,
+            "status": "created"
+          },
+          "next_review_date": "2027-01-01",
+          "next_review_id": 92,
+          "outcome": "no_change",
+          "outcome_reason": "No material changes identified; risk remains unchanged.",
+          "outcome_recorded_at": "2026-06-19T04:50:41+00:00",
+          "review_id": 91,
+          "risk_changed": false,
+          "risk_governance_status": "unchanged",
+          "risk_level_after": "HIGH",
+          "risk_level_before": "HIGH",
+          "status": "completed"
+        },
+        "status": "periodic_review_completed"
+      },
+      "completion_status": 200,
+      "passed": true,
+      "review_id": 91,
+      "risk_after": {
+        "final_risk_level": "HIGH",
+        "risk_level": "HIGH"
+      },
+      "risk_before": {
+        "final_risk_level": "HIGH",
+        "risk_level": "HIGH"
+      }
+    }
+  },
+  "version": {
+    "payload": {
+      "build_time": "2026-06-19T03:59:02Z",
+      "environment": "staging",
+      "git_sha": "dd162525aa07c64660f70ca8336c3834ebdfb898",
+      "git_sha_short": "dd16252",
+      "image_tag": "dd162525aa07c64660f70ca8336c3834ebdfb898",
+      "provider_status": {
+        "aml_screening": {
+          "abstraction_enabled": true,
+          "auth_probe": "not_run",
+          "checked_at": "2026-06-19T04:50:40Z",
+          "configuration_label": "regmind-default-screening-v1",
+          "fallback_enabled": false,
+          "fallback_mode": "disabled",
+          "health": "not_probed",
+          "mode": "sandbox",
+          "provider": "ComplyAdvantage Mesh",
+          "status": "live",
+          "workspace_label": "ca-sandbox"
+        },
+        "identity_verification": {
+          "provider": "Sumsub IDV/KYC",
+          "scope": "individual_kyc_identity_verification",
+          "status": "live"
+        },
+        "registry_kyb": {
+          "provider": "OpenCorporates registry/enrichment",
+          "status": "simulated"
+        }
+      },
+      "service": "regmind-backend"
+    },
+    "status": 200
+  }
+}
