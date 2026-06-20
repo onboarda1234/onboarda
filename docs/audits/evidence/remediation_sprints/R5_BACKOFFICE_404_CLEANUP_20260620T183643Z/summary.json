@@ -1,0 +1,28 @@
+{
+  "task": "R5_BACKOFFICE_404_CLEANUP",
+  "severity": "P2_cosmetic",
+  "pilot_blocking": false,
+  "exact_failing_url": "GET /favicon.ico -> 404 (initiator: browser default for /backoffice page)",
+  "root_cause": "No favicon declared in arie-backoffice.html and no /favicon.ico route; browser auto-requests /favicon.ico -> 404. Confirmed by code inspection (deterministic). No other asset in the page can 404.",
+  "classification": "missing_favicon_browser_default_request",
+  "files_changed": ["arie-backoffice.html"],
+  "fix": "Added one inline <link rel=icon> (1x1 transparent PNG data URI) to <head>. No backend/routing/auth/behaviour change; covers /backoffice and all sub-routes.",
+  "tests_run": {
+    "static_html_check": "pass (link well-formed, valid data URI, no structural change)",
+    "backend_tests": "n/a (no server change)",
+    "live_browser_smoke": "pending_operator_codex (no staging/browser access in this environment)"
+  },
+  "non_goals_respected": [
+    "no periodic review lifecycle changes",
+    "no memo-gate changes",
+    "no risk/scoring changes",
+    "no screening changes",
+    "no approval authority changes",
+    "no submit-to-compliance changes",
+    "no provider/CA changes",
+    "no broad catch-all routing",
+    "no global error suppression"
+  ],
+  "out_of_scope_followup": "Portal (/portal) likely has the same benign favicon 404; not touched per tiny-scope mandate.",
+  "verdict": "FIX_APPLIED — root cause CONFIRMED (code); CLOSED/PASS pending live browser-smoke confirmation"
+}
