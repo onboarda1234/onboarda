@@ -19073,12 +19073,16 @@ function renderLifecycleDetailTab(context) {
         var historyDomId = lifecycleQueueItemDomId(item.type || 'review', item.id || '');
         var outcomeLabel = String(item.outcome || item.recommended_outcome || 'Not recorded').replace(/_/g, ' ');
         var completedAt = item.completed_at || item.state_changed_at || item.updated_at || item.created_at || '';
+        var historyReviewId = item.id || '';
+        var historyMemoPreviewId = 'periodic-review-memo-preview-' + escapeHtml(String(historyReviewId));
         return '<div id="' + escapeHtml(historyDomId) + '" data-lifecycle-item-type="' + escapeHtml(String(item.type || 'review')) + '" data-lifecycle-item-id="' + escapeHtml(String(item.id || '')) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
           '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Historical read-only review · Outcome: ' + escapeHtml(outcomeLabel) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Completed: ' + escapeHtml(lifecycleFormatDate(completedAt)) + (item.next_review_date ? ' · Next review: ' + escapeHtml(lifecycleFormatDate(item.next_review_date)) : '') + '</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
             lifecycleDetailBadge(item.status_label || 'Historical / Superseded', 'slate') +
             '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(item.owner_name || item.owner || '—') + '</span>' +
+            (historyReviewId ? '<button class="btn btn-outline btn-sm" onclick="viewPeriodicReviewMemoAddendum(\'' + escapeHtml(String(historyReviewId)) + '\')">View memo addendum</button>' : '') +
           '</div>' +
+          (historyReviewId ? '<div id="' + historyMemoPreviewId + '" style="flex-basis:100%;display:block;margin-top:8px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">Memo addendum preview appears here after viewing.</div>' : '') +
         '</div>';
       }).join('')
     : '<div style="font-size:12px;color:var(--text2);">No historical periodic reviews yet.</div>';
@@ -19137,11 +19141,28 @@ async function loadLifecycleDetailTab(force) {
     var reviewDetail = null;
     var setupReviewDetail = null;
     var requiredItems = [];
-    if (activeReviewItem && activeReviewItem.id != null) {
+    var deepLinkTarget = window._lifecycleDeepLinkTarget || null;
+    var deepLinkedReviewDetail = null;
+    if (!activeReviewItem && deepLinkTarget && deepLinkTarget.type === 'review' && deepLinkTarget.id != null) {
+      // PR-PRS-F (R1): completion_pending_memo is an active non-terminal
+      // review state, but the lifecycle summary can omit it. When the officer
+      // arrived via a periodic-review queue row, use that deep-linked review id
+      // to render the held/retry banner in Lifecycle. Keep the fallback scoped
+      // to the pending-memo state so completed history does not become editable.
+      deepLinkedReviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(deepLinkTarget.id));
+      if (isPendingMemoState(deepLinkedReviewDetail && deepLinkedReviewDetail.status)) {
+        activeReviewItem = { type: 'review', id: deepLinkTarget.id };
+        reviewDetail = deepLinkedReviewDetail;
+      }
+    }
+    if (activeReviewItem && activeReviewItem.id != null && !reviewDetail) {
       reviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(activeReviewItem.id));
       requiredItems = Array.isArray(reviewDetail.required_items) ? reviewDetail.required_items : [];
     } else if (reviewSetup && reviewSetup.review_id != null) {
       setupReviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewSetup.review_id));
+    }
+    if (reviewDetail) {
+      requiredItems = Array.isArray(reviewDetail.required_items) ? reviewDetail.required_items : [];
     }
     var data = {
       summary: summary,
