@@ -1634,7 +1634,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
             </div>
             <div class="officer-signoff-gate" id="memo-officer-signoff-gate">
               <label>
-                <input type="checkbox" id="memo-officer-signoff" />
+                <input type="checkbox" id="memo-officer-signoff" onchange="refreshMemoApprovalReasonState()" />
                 <div>
                   <div class="signoff-text">Officer Sign-Off Required</div>
                   <div class="signoff-sub">I confirm I have reviewed all AI-generated advisory content above and accept responsibility for this compliance decision. AI outputs are advisory only and do not constitute authoritative determinations.</div>
@@ -22237,6 +22237,12 @@ function getMemoApprovalBlockers(app, validationResult) {
   if (reviewStatus !== 'approved' && !currentMemoApprovalReason()) {
     blockers.push('Enter the approval reason before submitting memo approval.');
   }
+  if (reviewStatus !== 'approved') {
+    var signoffEl = document.getElementById('memo-officer-signoff');
+    if (!signoffEl || !signoffEl.checked) {
+      blockers.push('Confirm the officer sign-off before submitting memo approval.');
+    }
+  }
 
   return blockers;
 }
@@ -23638,6 +23644,23 @@ async function refreshCurrentAppDetail() {
   if (currentRef) {
     await openAppDetail(currentRef);
   }
+}
+
+function getActiveDetailTab() {
+  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'alerts', 'activity'];
+  for (var i = 0; i < tabs.length; i++) {
+    var panelEl = document.getElementById('detail-tab-' + tabs[i]);
+    if (panelEl && panelEl.style.display !== 'none') return tabs[i];
+  }
+  return 'overview';
+}
+
+// Reload authoritative application detail (risk, memo, approval_blockers, Case Command
+// Centre) after a state-changing action, keeping the officer on their current tab.
+async function refreshCurrentAppDetailPreservingTab() {
+  var activeTab = getActiveDetailTab();
+  await refreshCurrentAppDetail();
+  if (activeTab && activeTab !== 'overview') switchDetailTab(activeTab);
 }
 
 function setOfficerCorrectionError(message) {
@@ -29111,11 +29134,7 @@ async function generateComplianceMemo() {
   var btn = document.getElementById('btn-generate-memo');
   btn.innerHTML = '⏳ Generating...'; btn.disabled = true;
   try {
-    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
-    });
-    var data = await res.json();
+    var data = await boApiCall('POST', '/applications/' + app.ref + '/memo');
     var memoData = (data.data && data.data.sections) ? data.data : (data.sections ? data : null);
     if (memoData) {
       window._currentMemoData = memoData;
@@ -29134,6 +29153,7 @@ async function generateComplianceMemo() {
           svBadge.className = 'badge ' + (sv.verdict === 'CONSISTENT' ? 'approved' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? 'pending' : 'rejected');
         }
       }
+      await refreshCurrentAppDetailPreservingTab();
     } else {
       alert('Memo generation returned unexpected format.');
     }
@@ -29236,15 +29256,12 @@ async function revalidateMemo() {
   var btn = document.getElementById('btn-revalidate-memo');
   btn.innerHTML = '⏳ Validating...'; btn.disabled = true;
   try {
-    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
-    });
-    var data = await res.json();
+    var data = await boApiCall('POST', '/applications/' + app.ref + '/memo/validate');
     if (data.success !== false) {
       var result = data.data || data;
       renderValidationPanel(result);
       showToast('Validation complete — score: ' + (result.quality_score || 0).toFixed(1) + '/10');
+      await refreshCurrentAppDetailPreservingTab();
     } else {
       alert('Validation failed: ' + (data.message || 'Unknown error'));
     }
@@ -29319,12 +29336,7 @@ async function approveMemo() {
       approval_reason: approvalReason,
       officer_signoff: { acknowledged: !!memoSignoff.checked, scope: 'memo', source_context: 'ai_advisory' }
     };
-    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/approve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') },
-      body: JSON.stringify(memoApproveBody)
-    });
-    var data = await res.json();
+    var data = await boApiCall('POST', '/applications/' + app.ref + '/memo/approve', memoApproveBody);
     if (data.success !== false) {
       var approval = data.data || data || {};
       if (window._currentMemoData) {
@@ -29336,6 +29348,7 @@ async function approveMemo() {
       setMemoStatusBadge('Approved', 'approved');
       await fetchValidationResults();
       showToast('Memo approved successfully.');
+      await refreshCurrentAppDetailPreservingTab();
     } else {
       alert('Approval failed: ' + (data.message || 'Unknown error'));
     }
