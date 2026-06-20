@@ -5849,6 +5849,13 @@ function currentUserRole() {
   return (currentUser && currentUser.role) || (BO_AUTH_USER && BO_AUTH_USER.role) || '';
 }
 
+function rolePermissionsLoaded() {
+  // True only when the backend RBAC matrix has actually been fetched. Used so the UI
+  // never hides a legitimate action merely because the matrix failed/has yet to load
+  // — it fails OPEN to backend + click-time enforcement instead.
+  return !!(ROLE_PERMISSIONS && Array.isArray(ROLE_PERMISSIONS.permissions));
+}
+
 function hasPermission(permissionId) {
   var role = currentUserRole();
   if (!role) return false;
@@ -5892,8 +5899,13 @@ function approveBackendBlockReason(app) {
   // the canonical 'VERY_HIGH' (defensive — the API normally sends underscores).
   var risk = String(app.risk || app.risk_level || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   var statusRaw = String(app.statusRaw || app.status_raw || '').trim().toLowerCase();
-  // Roles with no approval authority at all.
-  if (!hasPermission('approve_low_medium')) {
+  // Roles with no approval authority at all — assert this ONLY when the permission
+  // matrix is actually loaded. If it failed/has yet to load, do NOT hide Approve:
+  // fail OPEN to backend + click-time enforcement so legitimate approvers (e.g. an
+  // Onboarding Officer on a clean LOW/MEDIUM file) are never blocked by a UI
+  // data-load race. The role/risk/status blocks below use the role string + risk
+  // directly, so they remain reliable regardless of matrix load state.
+  if (rolePermissionsLoaded() && !hasPermission('approve_low_medium')) {
     return 'Your role cannot approve applications.';
   }
   // Onboarding Officer cannot approve HIGH/VERY_HIGH (can_decide gate, PR1).
@@ -5954,8 +5966,11 @@ function syncApplicationActionPermissions(app) {
   // truth (PR1 can_decide); this only reduces confusion and failed clicks.
   var approveBlock = approveBackendBlockReason(app);
   setDetailActionVisibility('btn-approve', !approveBlock);
-  setDetailActionVisibility('btn-reject', hasPermission('reject_applications'));
-  setDetailActionVisibility('btn-override', hasPermission('override_ai_risk_score'));
+  // Reject/Override gate strictly when the matrix is loaded; otherwise fail OPEN
+  // (show — backend + click-time assertPermission still enforce) so a matrix-load
+  // failure never wrongly hides a senior officer's controls.
+  setDetailActionVisibility('btn-reject', !rolePermissionsLoaded() || hasPermission('reject_applications'));
+  setDetailActionVisibility('btn-override', !rolePermissionsLoaded() || hasPermission('override_ai_risk_score'));
   var hintEl = document.getElementById('approval-authority-hint');
   if (hintEl) {
     if (approveBlock) {
