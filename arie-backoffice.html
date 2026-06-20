@@ -11717,6 +11717,11 @@ async function loadAuditTrail(options) {
 }
 
 function refreshAdminAuditEvidence() {
+  // The audit trail is admin/SCO-only (view_audit_trail). Do not fire the
+  // senior-only GET /audit for roles that the backend will 403 (e.g. an Onboarding
+  // Officer completing a decision) — it only produces console/network noise. Backend
+  // remains the source of truth; this just avoids a guaranteed-failed background call.
+  if (!hasPermission('view_audit_trail')) return;
   loadAuditTrail({ silent: true, limit: 100 }).catch(function(e) {
     console.warn('Could not refresh persisted audit evidence:', e);
   });

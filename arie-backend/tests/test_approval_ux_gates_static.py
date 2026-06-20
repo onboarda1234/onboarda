@@ -121,3 +121,12 @@ def test_no_backend_or_status_scope_creep_in_this_change():
     sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
     assert "hasPermission('reject_applications')" in sync
     assert "hasPermission('override_ai_risk_score')" in sync
+
+
+def test_admin_audit_refresh_is_gated_to_view_audit_trail():
+    # Part B closure: the post-decision audit-evidence refresh hits the admin/SCO-only
+    # GET /audit. It must not fire for roles lacking view_audit_trail (e.g. an
+    # Onboarding Officer completing an approval) or it 403s and pollutes the console.
+    html = _html()
+    fn = html.split("function refreshAdminAuditEvidence(", 1)[1].split("\nfunction ", 1)[0]
+    assert "if (!hasPermission('view_audit_trail')) return;" in fn
