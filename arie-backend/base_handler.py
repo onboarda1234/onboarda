@@ -491,6 +491,27 @@ class BaseHandler(tornado.web.RequestHandler):
             self.write({"error": "Authentication required"})
             return None
         if roles and user.get("role") not in roles:
+            # PR-AUTHORITY-AUDIT-HARDENING-1: audit decorator-level role denials so
+            # blocked authority attempts ("who tried to do what and was denied?") are
+            # reconstructable. Best-effort and additive — never alters the 403
+            # response. Path/method only; no request body, tokens, or query strings.
+            try:
+                resource_id = str(getattr(self.request, "path", "") or "internal_api")[:160]
+                self.log_authz_denial(
+                    user,
+                    "authz_denied_role",
+                    resource_id,
+                    {
+                        "actor_role": str(user.get("role") or ""),
+                        "allowed_roles": sorted(str(r) for r in roles),
+                        "method": self.request.method if hasattr(self, "request") else "",
+                        "path": resource_id,
+                        "source": "require_auth",
+                        "response_code": 403,
+                    },
+                )
+            except Exception:
+                logger.exception("authz_denied_role audit write failed")
             self.set_status(403)
             self.write({"error": "Insufficient permissions"})
             return None
