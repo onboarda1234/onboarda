@@ -1997,7 +1997,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
 
   <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
-    <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
+    <select class="form-select" style="width:auto;" id="review-status-filter" onchange="onPeriodicReviewStatusFilterChange(this.value)">
       <option value="open" selected>Active Review Cases</option>
       <option value="">All Review Cases</option>
       <option value="due">Due</option>
@@ -4588,7 +4588,32 @@ async function loadPeriodicReviewQueueRows(options) {
   } catch (e) {
     console.warn('Could not load pending-memo periodic reviews:', e);
   }
+  // PR-PRS-F (R2): completed reviews are loaded ON DEMAND the first time the
+  // Completed/All filter is selected (see onPeriodicReviewStatusFilterChange),
+  // NOT on every active-queue load. A fresh load excludes them, so reset the
+  // on-demand flag here.
+  PERIODIC_REVIEWS_COMPLETED_LOADED = false;
   return rows;
+}
+
+// PR-PRS-F (R2): load completed reviews on demand the first time the officer
+// selects the Completed / All filter, merge them into the queue, then render.
+// Avoids fetching (potentially many, ever-growing) completed rows on the
+// default active queue.
+async function onPeriodicReviewStatusFilterChange(value) {
+  var v = String(value == null ? '' : value).toLowerCase();
+  var needsCompleted = (v === 'completed' || v === '');
+  if (needsCompleted && !PERIODIC_REVIEWS_COMPLETED_LOADED) {
+    try {
+      var resp = await boApiCall('GET', '/monitoring/reviews?status=completed', null,
+        { suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
+      mergePeriodicReviewRowsInto(PERIODIC_REVIEWS, resp.reviews || []);
+      PERIODIC_REVIEWS_COMPLETED_LOADED = true;
+    } catch (e) {
+      console.warn('Could not load completed periodic reviews:', e);
+    }
+  }
+  renderPeriodicReviews();
 }
 
 function periodicReviewNotificationTone(status) {
@@ -5830,6 +5855,8 @@ var MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [],
 var MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = false;
 
 var PERIODIC_REVIEWS = [];
+// PR-PRS-F (R2): tracks whether completed reviews have been loaded on demand.
+var PERIODIC_REVIEWS_COMPLETED_LOADED = false;
 // Populated from API or left empty until review data loads.
 
 var MONITORING_AGENTS = [];
@@ -18276,6 +18303,22 @@ function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail) {
           '<div style="font-size:11px;color:var(--text3);margin-top:5px;">' + escapeHtml(requiredLabel) + ' · Upload status: ' + escapeHtml(uploadStatus) + (uploadedAt ? ' · Uploaded ' + escapeHtml(String(uploadedAt).slice(0, 10)) : '') + '</div>' +
           (hasDoc ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Uploaded file: ' + escapeHtml(doc.doc_name || doc.id || req.linked_document_id || 'Document') + '</div>' : '') +
           '<div style="margin-top:6px;">' + verification + '</div>' +
+          // PR-PRS-F (R3): make uploaded evidence actionable — View / Download
+          // via the existing back-office document surface (was status-only).
+          // Document ids are system-generated tokens; only render the inline
+          // actions for ids safe to interpolate into the handler + download URL
+          // (the existing document endpoint does not URL-encode the id either).
+          // A pathological id is shown as non-actionable rather than risk a
+          // broken handler — no value mangling.
+          (hasDoc ? (function() {
+            var rawId = (doc.id != null ? doc.id : req.linked_document_id);
+            var docId = rawId == null ? '' : String(rawId);
+            if (!docId || !/^[A-Za-z0-9_.:\-]+$/.test(docId)) return '';
+            return '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">' +
+              '<button class="btn btn-outline btn-sm" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>' +
+            '</div>';
+          })() : '') +
         '</div>' +
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
           lifecycleDetailBadge(requiredLabel, req.mandatory ? 'amber' : 'slate') +
@@ -18697,6 +18740,9 @@ function renderPeriodicReviewMemoAddendumPreview(memoData) {
   var findings = data.officer_findings || {};
   var conclusion = data.conclusion || {};
   return '<div style="display:grid;gap:10px;font-size:12px;color:var(--text2);line-height:1.55;">' +
+    // PR-PRS-F (R1): informational staleness banner when the memo predates the
+    // latest review change (shown on view/generate in the Lifecycle tab).
+    renderMemoStalenessBanner(memoData) +
     '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
       lifecycleDetailMeta('Review', header.review_reference || ('PR-' + String(memoData.review_id || ''))) +
       lifecycleDetailMeta('Application', header.application_ref || header.application_id || '—') +
@@ -18799,6 +18845,9 @@ function renderPeriodicReviewWorkspaceRiskReassessment(reviewDetail) {
   var evidenceCounts = suggested.evidence_counts || risk.document_summary || {};
   var seniorSuggested = !!(suggested.senior_review_suggested || risk.senior_review_required);
   return '<div style="display:grid;gap:14px;">' +
+    // PR-PRS-F (R1): surface the held / Retry-memo affordance on the Lifecycle
+    // tab (the canonical officer surface), not just the legacy monitoring modal.
+    (isPendingMemoState(reviewDetail.status) ? renderMemoPendingBanner(reviewId) : '') +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
       lifecycleDetailBadge('Current risk: ' + String(currentRisk || '—'), 'slate') +
       lifecycleDetailBadge('Suggested: ' + String((suggested.suggested_risk_impact_label || impact || '').replace(/_/g, ' ')), seniorSuggested ? 'amber' : 'blue') +
@@ -19024,12 +19073,16 @@ function renderLifecycleDetailTab(context) {
         var historyDomId = lifecycleQueueItemDomId(item.type || 'review', item.id || '');
         var outcomeLabel = String(item.outcome || item.recommended_outcome || 'Not recorded').replace(/_/g, ' ');
         var completedAt = item.completed_at || item.state_changed_at || item.updated_at || item.created_at || '';
+        var historyReviewId = item.id || '';
+        var historyMemoPreviewId = 'periodic-review-memo-preview-' + escapeHtml(String(historyReviewId));
         return '<div id="' + escapeHtml(historyDomId) + '" data-lifecycle-item-type="' + escapeHtml(String(item.type || 'review')) + '" data-lifecycle-item-id="' + escapeHtml(String(item.id || '')) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
           '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Historical read-only review · Outcome: ' + escapeHtml(outcomeLabel) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Completed: ' + escapeHtml(lifecycleFormatDate(completedAt)) + (item.next_review_date ? ' · Next review: ' + escapeHtml(lifecycleFormatDate(item.next_review_date)) : '') + '</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
             lifecycleDetailBadge(item.status_label || 'Historical / Superseded', 'slate') +
             '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(item.owner_name || item.owner || '—') + '</span>' +
+            (historyReviewId ? '<button class="btn btn-outline btn-sm" onclick="viewPeriodicReviewMemoAddendum(\'' + escapeHtml(String(historyReviewId)) + '\')">View memo addendum</button>' : '') +
           '</div>' +
+          (historyReviewId ? '<div id="' + historyMemoPreviewId + '" style="flex-basis:100%;display:block;margin-top:8px;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">Memo addendum preview appears here after viewing.</div>' : '') +
         '</div>';
       }).join('')
     : '<div style="font-size:12px;color:var(--text2);">No historical periodic reviews yet.</div>';
@@ -19088,11 +19141,28 @@ async function loadLifecycleDetailTab(force) {
     var reviewDetail = null;
     var setupReviewDetail = null;
     var requiredItems = [];
-    if (activeReviewItem && activeReviewItem.id != null) {
+    var deepLinkTarget = window._lifecycleDeepLinkTarget || null;
+    var deepLinkedReviewDetail = null;
+    if (!activeReviewItem && deepLinkTarget && deepLinkTarget.type === 'review' && deepLinkTarget.id != null) {
+      // PR-PRS-F (R1): completion_pending_memo is an active non-terminal
+      // review state, but the lifecycle summary can omit it. When the officer
+      // arrived via a periodic-review queue row, use that deep-linked review id
+      // to render the held/retry banner in Lifecycle. Keep the fallback scoped
+      // to the pending-memo state so completed history does not become editable.
+      deepLinkedReviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(deepLinkTarget.id));
+      if (isPendingMemoState(deepLinkedReviewDetail && deepLinkedReviewDetail.status)) {
+        activeReviewItem = { type: 'review', id: deepLinkTarget.id };
+        reviewDetail = deepLinkedReviewDetail;
+      }
+    }
+    if (activeReviewItem && activeReviewItem.id != null && !reviewDetail) {
       reviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(activeReviewItem.id));
       requiredItems = Array.isArray(reviewDetail.required_items) ? reviewDetail.required_items : [];
     } else if (reviewSetup && reviewSetup.review_id != null) {
       setupReviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewSetup.review_id));
+    }
+    if (reviewDetail) {
+      requiredItems = Array.isArray(reviewDetail.required_items) ? reviewDetail.required_items : [];
     }
     var data = {
       summary: summary,
