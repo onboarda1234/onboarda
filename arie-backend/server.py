@@ -12976,6 +12976,12 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
         data = self.get_json() or {}
         db = get_db()
         try:
+            # Capture the prior requirement status for the waiver audit event (below).
+            _req_before = db.execute(
+                "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+                (requirement_id,),
+            ).fetchone()
+            _req_prev_status = (dict(_req_before).get("status") if _req_before else None)
             result, error, status_code = update_application_enhanced_requirement(
                 db,
                 app_id,
@@ -13010,6 +13016,29 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 user=user,
                 audit_writer=self.log_audit,
             )
+            # ── PR-AUTHORITY-AUDIT-HARDENING-1: first-class waiver event ──
+            # An enhanced/EDD requirement waiver is a senior control action that
+            # previously wrote no dedicated audit row. Emit a filterable "Waiver Used"
+            # event (canonical application.waiver_used) when this PATCH waives a
+            # requirement. Role enforcement (ALLOWED_WAIVER_ROLES) is unchanged.
+            requirement_after = (result or {}).get("requirement") or {}
+            if app and str(data.get("status") or "").strip().lower() == "waived" \
+                    and str(requirement_after.get("status") or "").strip().lower() == "waived":
+                self.log_audit(
+                    user,
+                    "Waiver Used",
+                    app["ref"],
+                    json.dumps({
+                        "event": "application.waiver_used",
+                        "requirement_id": requirement_id,
+                        "waiver_reason": str(data.get("waiver_reason") or "")[:500],
+                        "waived_by_role": user.get("role", ""),
+                        "previous_status": _req_prev_status,
+                        "new_status": "waived",
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                )
             db.commit()
             self.success(result)
         except Exception as exc:
@@ -26006,6 +26035,30 @@ class ApplicationDecisionHandler(BaseHandler):
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
                     _safe_json(_before), _safe_json(_after)))
+
+        # ── PR-AUTHORITY-AUDIT-HARDENING-1: first-class, filterable override event ──
+        # Override use was previously only discoverable by parsing the Decision row;
+        # emit a distinct "Override Used" row (action column) carrying the canonical
+        # application.override_used key + structured reason for auditor queries.
+        if override_ai:
+            _ov_risk_level, _ov_risk_score = _application_risk_snapshot(app)
+            self.log_audit(
+                user,
+                "Override Used",
+                app["ref"],
+                json.dumps({
+                    "event": "application.override_used",
+                    "decision": decision,
+                    "override_reason": override_reason,
+                    "override_by_role": user.get("role", ""),
+                    "risk_level": _ov_risk_level,
+                    "risk_score": _ov_risk_score,
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+                before_state=_before,
+                after_state=_after,
+            )
 
         # ── EX-11: Persist officer sign-off audit record ──
         _persist_signoff_audit(db, user, app["ref"],
