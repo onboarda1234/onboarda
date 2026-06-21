@@ -1,0 +1,28 @@
+{
+  "task": "R5_BACKOFFICE_404_CLEANUP",
+  "failing_request": {
+    "url": "/favicon.ico",
+    "method": "GET",
+    "status": 404,
+    "initiator": "browser_default",
+    "page_context": "/backoffice",
+    "identified_by": "code_inspection_deterministic",
+    "notes": "No favicon route in server.py and no <link rel=icon> in arie-backoffice.html; no other relative/static asset request in the page."
+  },
+  "classification": "missing_favicon_browser_default_request",
+  "fix": {
+    "file": "arie-backoffice.html",
+    "change": "inline <link rel=icon> 1x1 transparent PNG data URI in <head>",
+    "backend_change": false,
+    "routing_change": false,
+    "new_served_asset": false,
+    "behaviour_change": false
+  },
+  "expected_after": {
+    "favicon_request_made": false,
+    "favicon_404": false,
+    "new_console_errors": false,
+    "other_failed_requests": false
+  },
+  "live_browser_smoke": "pending_operator_codex"
+}

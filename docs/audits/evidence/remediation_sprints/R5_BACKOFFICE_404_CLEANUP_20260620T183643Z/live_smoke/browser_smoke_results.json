@@ -1,0 +1,401 @@
+{
+  "ok": true,
+  "pr": 556,
+  "base": "https://staging.regmind.co",
+  "version": {
+    "git_sha": "20e4fb4cbd9b24f91382eb66696c42c7a7cf072c",
+    "git_sha_short": "20e4fb4",
+    "image_tag": "20e4fb4cbd9b24f91382eb66696c42c7a7cf072c",
+    "build_time": "2026-06-20T19:26:18Z",
+    "environment": "staging",
+    "service": "regmind-backend",
+    "provider_status": {
+      "aml_screening": {
+        "provider": "ComplyAdvantage Mesh",
+        "status": "live",
+        "mode": "sandbox",
+        "workspace_label": "ca-sandbox",
+        "configuration_label": "regmind-default-screening-v1",
+        "abstraction_enabled": true,
+        "fallback_mode": "disabled",
+        "fallback_enabled": false,
+        "health": "not_probed",
+        "auth_probe": "not_run",
+        "checked_at": "2026-06-21T03:13:55Z"
+      },
+      "identity_verification": {
+        "provider": "Sumsub IDV/KYC",
+        "status": "live",
+        "scope": "individual_kyc_identity_verification"
+      },
+      "registry_kyb": {
+        "provider": "OpenCorporates registry/enrichment",
+        "status": "simulated"
+      }
+    }
+  },
+  "preflight": {
+    "currentBackofficeHasRelIcon": false,
+    "faviconRoute": {
+      "url": "https://staging.regmind.co/favicon.ico",
+      "status": 404,
+      "contentType": "application/json; charset=UTF-8",
+      "bodyPreview": "{\"error\": \"Not found\"}"
+    }
+  },
+  "artifact_dir": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z",
+  "html_path": "/Users/Aisha/CodexWork/onboarda-pr-prs-e/arie-backoffice.html",
+  "checks": {
+    "before_favicon_404_seen": true,
+    "after_no_favicon_404_backoffice": true,
+    "after_no_new_console_errors": true,
+    "after_no_other_failed_requests": true,
+    "backoffice_login_and_navigation": true,
+    "subroute_no_favicon_404": true,
+    "subroute_no_console_or_request_errors": true,
+    "all_pass": true
+  },
+  "screenshots": {
+    "before_backoffice": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/screenshots/before-current-staging-backoffice.png",
+    "after_backoffice": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/screenshots/after-pr-html-backoffice.png",
+    "after_supervisor": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/screenshots/after-pr-html-supervisor-subroute.png",
+    "network_console": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/screenshots/network-console-before-after.png"
+  },
+  "report": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/network_console_report.html",
+  "summaries": {
+    "before": {
+      "label": "before-current-staging-backoffice",
+      "requestCount": 5,
+      "responseCount": 5,
+      "faviconRequests": [],
+      "faviconResponses": [],
+      "failedResponses": [],
+      "failedRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    "after": {
+      "label": "after-pr-html-backoffice",
+      "routePath": "/backoffice",
+      "patched": true,
+      "navigation": {
+        "reviewId": 14,
+        "ref": "ARF-2026-MON311-05151513094D77-MEDIUM"
+      },
+      "screenshot": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/screenshots/after-pr-html-backoffice.png",
+      "raw": {
+        "label": "after-pr-html-backoffice",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/backoffice",
+            "resourceType": "document"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
+            "resourceType": "stylesheet"
+          },
+          {
+            "method": "GET",
+            "url": "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+            "resourceType": "script"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2",
+            "resourceType": "font"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/config/environment",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/alerts",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/agents",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/dashboard",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews?status=completed",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews?status=completion_pending_memo",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/ARF-2026-MON311-05151513094D77-MEDIUM?include_history=true",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/mon311_05151513094d77_medium/enhanced-requirements",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/mon311_05151513094d77_medium/audit-log?limit=100",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/config/roles-permissions",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/lifecycle/applications/mon311_05151513094d77_medium/summary",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews/35",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/mon311_05151513094d77_medium",
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews/35",
+            "resourceType": "fetch"
+          }
+        ],
+        "responses": [
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/backoffice",
+            "status": 200,
+            "resourceType": "document"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
+            "status": 200,
+            "resourceType": "stylesheet"
+          },
+          {
+            "method": "GET",
+            "url": "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+            "status": 200,
+            "resourceType": "script"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/config/environment",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2",
+            "status": 200,
+            "resourceType": "font"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/alerts",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/agents",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/dashboard",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews?status=completed",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews?status=completion_pending_memo",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/ARF-2026-MON311-05151513094D77-MEDIUM?include_history=true",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/mon311_05151513094d77_medium/enhanced-requirements",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/config/roles-permissions",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/mon311_05151513094d77_medium/audit-log?limit=100",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/lifecycle/applications/mon311_05151513094d77_medium/summary",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews/35",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/monitoring/reviews/35",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/applications/mon311_05151513094d77_medium",
+            "status": 200,
+            "resourceType": "fetch"
+          }
+        ],
+        "failedRequests": [],
+        "console": [],
+        "pageErrors": []
+      },
+      "summary": {
+        "label": "after-pr-html-backoffice",
+        "requestCount": 19,
+        "responseCount": 19,
+        "faviconRequests": [],
+        "faviconResponses": [],
+        "failedResponses": [],
+        "failedRequests": [],
+        "consoleErrors": [],
+        "pageErrors": []
+      }
+    },
+    "subroute": {
+      "label": "after-pr-html-supervisor-subroute",
+      "routePath": "/backoffice/supervisor",
+      "patched": true,
+      "navigation": null,
+      "screenshot": "/Users/Aisha/CodexWork/r5-backoffice-favicon-smoke-20260621T031033Z/screenshots/after-pr-html-supervisor-subroute.png",
+      "raw": {
+        "label": "after-pr-html-supervisor-subroute",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/backoffice/supervisor",
+            "resourceType": "document"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
+            "resourceType": "stylesheet"
+          },
+          {
+            "method": "GET",
+            "url": "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+            "resourceType": "script"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2",
+            "resourceType": "font"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/config/environment",
+            "resourceType": "fetch"
+          }
+        ],
+        "responses": [
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/backoffice/supervisor",
+            "status": 200,
+            "resourceType": "document"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
+            "status": 200,
+            "resourceType": "stylesheet"
+          },
+          {
+            "method": "GET",
+            "url": "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+            "status": 200,
+            "resourceType": "script"
+          },
+          {
+            "method": "GET",
+            "url": "https://staging.regmind.co/api/config/environment",
+            "status": 200,
+            "resourceType": "fetch"
+          },
+          {
+            "method": "GET",
+            "url": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2",
+            "status": 200,
+            "resourceType": "font"
+          }
+        ],
+        "failedRequests": [],
+        "console": [],
+        "pageErrors": []
+      },
+      "summary": {
+        "label": "after-pr-html-supervisor-subroute",
+        "requestCount": 5,
+        "responseCount": 5,
+        "faviconRequests": [],
+        "faviconResponses": [],
+        "failedResponses": [],
+        "failedRequests": [],
+        "consoleErrors": [],
+        "pageErrors": []
+      }
+    }
+  }
+}
