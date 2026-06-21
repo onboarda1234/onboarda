@@ -5647,6 +5647,41 @@ class ApplicationIdentityVerificationResolutionHandler(BaseHandler):
             db.close()
 
 
+# ── PR-CM-LOCK-AND-AUTO-DRAFT-1: fail-closed locked-status set ──
+# Mirrors change_management.LOCKED_PROFILE_STATUSES but is defined here so the
+# approved-profile lock still holds even if the CM module fails to import or is
+# disabled. The lock decision must NEVER depend on a best-effort import.
+_LOCKED_APP_STATUSES = ("approved",)
+
+
+def _profile_is_locked_status(status):
+    """True if an application status represents an approved/locked profile."""
+    return (status or "") in _LOCKED_APP_STATUSES
+
+
+def _cm_unavailable_locked_response(handler, *, db=None):
+    """Fail-closed response: approved profile, but CM cannot stage the edit.
+
+    The mutation is refused outright — an approved profile is never mutated
+    directly, even when Change Management is unavailable.
+    """
+    if db is not None:
+        try:
+            db.close()
+        except Exception:
+            pass
+    handler.set_status(409)
+    handler.write(json.dumps({
+        "action": "approved_profile_locked_cm_unavailable",
+        "recommended_next_action": "retry_when_change_management_available",
+        "message": (
+            "This application is approved and locked. Change Management is "
+            "temporarily unavailable, so the change could not be staged. The "
+            "approved profile was not modified."
+        ),
+    }, default=str))
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -5962,6 +5997,40 @@ class ApplicationDetailHandler(BaseHandler):
                     "Screening mode is immutable after submission.",
                     403
                 )
+
+        # ── PR-CM-LOCK-AND-AUTO-DRAFT-1: approved profiles are locked ──
+        # Material edits to an approved profile must never mutate live data.
+        # They are staged as a draft Change Request (no live write) and the
+        # officer is handed the prefilled request to complete. Fail closed:
+        # if the profile is locked but CM is unavailable, refuse the edit.
+        if _profile_is_locked_status(app["status"]):
+            if not (HAS_CHANGE_MANAGEMENT and cm):
+                return _cm_unavailable_locked_response(self, db=db)
+            proposed_entity = {}
+            for _f in ("company_name", "brn", "country", "sector",
+                       "entity_type", "ownership_structure"):
+                if _f in data:
+                    proposed_entity[_f] = (
+                        resolved_company_name if _f == "company_name" else data.get(_f)
+                    )
+            locked_items = cm.diff_application_fields(dict(app), proposed_entity)
+            if locked_items:
+                _src_channel = "portal" if user.get("type") == "client" else "backoffice"
+                _src = "portal_client" if user.get("type") == "client" else "backoffice_manual"
+                try:
+                    staged = cm.stage_locked_profile_edit(
+                        db, dict(app), locked_items, user,
+                        source_channel=_src_channel, source=_src,
+                        reason=data.get("reason") or data.get("correction_reason"),
+                        log_audit_fn=self.log_audit,
+                    )
+                except PermissionError as exc:
+                    db.close()
+                    return self.error(str(exc), 403)
+                db.close()
+                self.set_status(409)
+                self.write(json.dumps(staged, default=str))
+                return
 
         # ── C-04/C-07: Only allow prescreening_data update in draft status ──
         if app["status"] == "draft":
@@ -6593,6 +6662,63 @@ class ApplicationCorrectionHandler(BaseHandler):
                 return
 
             app_dict = dict(app)
+
+            # ── PR-CM-LOCK-AND-AUTO-DRAFT-1: approved profiles are locked ──
+            # Core entity-identity fields (company_name, brn, country, sector,
+            # entity_type, ownership_structure) are protected REGARDLESS of the
+            # correction's materiality tier. A BRN/registration-number change is
+            # a legal-identity change and must route through Change Management,
+            # even though the heuristic tier for some of these fields is tier3.
+            # Fail closed: if locked but CM is unavailable, refuse the change.
+            if _profile_is_locked_status(app_dict.get("status")):
+                if not (HAS_CHANGE_MANAGEMENT and cm):
+                    self.log_audit(
+                        user, "Officer Correction Blocked: CM Unavailable",
+                        app_dict.get("ref", app_dict["id"]),
+                        f"Correction on approved profile refused — CM unavailable "
+                        f"(target_type={target_type})",
+                        db=db,
+                    )
+                    return _cm_unavailable_locked_response(self, db=db)
+                if target_type == "application":
+                    _proposed = {
+                        _f: _v for _f, _v in field_changes.items()
+                        if _f in cm.LOCKED_ENTITY_FIELDS
+                    }
+                    _locked_items = cm.diff_application_fields(app_dict, _proposed)
+                    if _locked_items:
+                        staged = cm.stage_locked_profile_edit(
+                            db, app_dict, _locked_items, user,
+                            source_channel="backoffice",
+                            source="backoffice_manual",
+                            reason=correction_reason or correction_note,
+                            log_audit_fn=self.log_audit,
+                        )
+                        self.set_status(409)
+                        self.write(json.dumps(staged, default=str))
+                        return
+                elif materiality in ("tier1", "tier2"):
+                    # Person-level / risk-field material corrections: block direct
+                    # mutation and direct the officer to raise a Change Request.
+                    self.log_audit(
+                        user, "Officer Correction Blocked: Approved Profile Locked",
+                        app_dict.get("ref", app_dict["id"]),
+                        f"Material {target_type} correction on approved profile blocked",
+                        db=db,
+                    )
+                    self.set_status(409)
+                    self.write(json.dumps({
+                        "action": "change_request_required",
+                        "recommended_next_action": "create_change_request",
+                        "target_type": target_type,
+                        "message": (
+                            "This profile is approved and locked. Material changes "
+                            "must go through a Change Request. Create one to update "
+                            "this information."
+                        ),
+                    }, default=str))
+                    return
+
             target_id = str(payload.get("target_id") or "").strip() or None
             subject_type = str(payload.get("subject_type") or "").strip().lower() or None
             correction_ts = _officer_correction_now()
@@ -7530,6 +7656,27 @@ class SubmitApplicationHandler(BaseHandler):
             return
 
         real_id = app["id"]
+
+        # ── PR-CM-LOCK-AND-AUTO-DRAFT-1: approved profiles cannot be re-submitted ──
+        # Re-submitting would reset an approved record back into the pricing /
+        # screening flow. Block it unconditionally (independent of CM
+        # availability) and direct the officer to Change Management.
+        if _profile_is_locked_status(app["status"]):
+            self.log_audit(
+                user, "Submit Blocked: Approved Profile Locked", app["ref"],
+                f"Re-submit attempt on approved application blocked (status={app['status']})",
+            )
+            self.set_status(409)
+            self.write(json.dumps({
+                "action": "submit_blocked_profile_locked",
+                "recommended_next_action": "create_change_request",
+                "message": (
+                    "This application is approved and locked. It cannot be "
+                    "re-submitted. To change approved information, create a "
+                    "Change Request."
+                ),
+            }, default=str))
+            return
 
         # EX-05: Capture before-state for audit trail
         _before = snapshot_app_state(app)
