@@ -1,7 +1,7 @@
 # RegMind — Investor-Grade Product Audit Report
 
 **Classification:** CONFIDENTIAL — Due Diligence Material  
-**Report Date:** May 2026  
+**Report Date:** June 2026  
 **Methodology:** Main-branch code audit of `onboarda1234/onboarda` + GitHub Actions evidence + AWS staging deployment evidence where available  
 **Auditor Role:** Senior Product Auditor / Enterprise SaaS Analyst / Technical Due Diligence Expert
 
@@ -42,9 +42,11 @@ RegMind is a genuine compliance operating system, not a collection of tools. It 
 1. **Deterministic AI pipeline** — 4-layer architecture (rules → memo → validation → supervisor) prevents AI hallucination from reaching compliance decisions
 2. **35+ database tables** with comprehensive relational integrity — not a thin prototype
 3. **10 specialized AI agents** with defined authority levels (authoritative vs decision_support)
-4. **4,000+ automated tests** — latest `main` validation recorded 4,087 passed / 23 skipped, with CI enforcing a minimum 3,800 collected tests
+4. **5,200+ automated tests** — latest `main` validation recorded 5,222 passed / 17 skipped, with CI enforcing minimum collected test thresholds
 5. **Closed remediation sprint (EX-01 to EX-13)** — approval, audit, screening, and client-side hardening controls are now materially stronger
 6. **Validated AWS staging path** — ECS Fargate staging deploys from `main`, with SHA-tagged images, health checks, and post-deploy verification
+7. **Authority model materially strengthened** — role authority design, approval authority matrix, Submit to Compliance workflow, UX gates, and E2E authority matrix are all closed; wrong-role denials, override use, and terminal decision attempts are audited
+8. **Periodic Review remediation A→F closed** — lifecycle/queue cleanup, document evidence gates, risk elevation floor, memo-gated completion, and queue filter/action controls are all verified on `main`
 
 ### Key Weaknesses
 1. **Monolithic server.py** (13,765 lines) — technical debt that will constrain team scaling and raises deployment blast radius
@@ -260,7 +262,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 ### Ongoing Monitoring
 - **Purpose:** Post-onboarding continuous compliance surveillance
 - **Functionality:** 3 monitoring agents (6, 7, 8), alert management with severity/disposition, periodic review scheduling with risk-level-driven frequency, agent execution tracking
-- **Completeness:** ⚠️ **Pilot-ready with limitations** — agents and review state management exist, but automatic scheduler / trigger automation is still not implemented
+- **Completeness:** ⚠️ **Pilot-ready with conditions** — agents and review state management are implemented and tested. The automatic scheduler (Tornado `PeriodicCallback`) is active in staging and production environments by default. The `/api/monitoring/reviews/schedule` backfill endpoint is API-only; no manual UI button exists. ComplyAdvantage Mesh ongoing-monitoring screening path is provider-dependent.
 - **Dependencies:** supervisor/ module, agent_executors.py, monitoring tables
 - **Commercial relevance:** Critical for ongoing regulatory compliance — transforms RegMind from onboarding tool to lifecycle system
 
@@ -772,6 +774,63 @@ This is a stronger position than the earlier "demo-ready with production-grade s
 
 > The close-out posture above is consistent with the protected-controls registry on `main`, the associated dedicated test suites, and the current validated staging/deploy evidence. It materially improves the prior audit narrative.
 
+### Post-EX Remediation Tracks (June 2026)
+
+The following remediation tracks were completed after the EX-01 to EX-13 sprint and have been merged to `main`.
+
+#### Authority Track — Closed / Verified
+
+The authority governance model has been materially strengthened. All items below are considered closed.
+
+| Item | Summary | Status |
+|---|---|---|
+| ROLE-AUTHORITY-DESIGN-AUDIT-1 | Role authority design audit completed; authority model documented | **Closed / verified** |
+| PR-APPROVAL-AUTHORITY-MATRIX-1 | Approval authority matrix formalised and enforced | **Closed / verified** |
+| PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1 | Submit to Compliance escalation workflow live | **Closed / verified** |
+| PR-APPROVAL-UX-GATES-1 | Approval UX gate controls in place for terminal decisions | **Closed / verified** |
+| PR-AUTHORITY-AUDIT-HARDENING-1 | Authority audit hardening; denial and override events logged | **Closed / verified** |
+| E2E-AUTHORITY-MATRIX-1 | Browser E2E authority matrix test passed after audit-access fix | **Closed / verified** |
+
+**Controls confirmed in force:**
+- Terminal approve/reject bypass via generic `PATCH` endpoint is closed; the endpoint no longer allows role-authority circumvention
+- `can_decide` authority gate covers both approve and reject paths
+- Submit to Compliance workflow is live; escalated cases route to SCO/Compliance
+- Onboarding Officer can approve clean LOW/MEDIUM risk cases
+- Onboarding Officer is blocked from approving HIGH / VERY_HIGH / EDD / material screening cases and must submit to SCO/Compliance
+- Wrong-role denials, override use, waiver use, and terminal decision attempts are audited to `audit_log`
+
+#### Periodic Review Remediation Track — Closed / Verified
+
+All Periodic Review remediation items (A through F) have been merged to `main`. No remaining substantive Periodic Review blocker is open.
+
+| Item | Subject | Status |
+|---|---|---|
+| PR-PRS-A | Lifecycle / queue / legacy endpoint cleanup | **Closed** |
+| PR-PRS-B | Document evidence gates and Agent 1 controls | **Closed** |
+| PR-PRS-C1 | Canonical risk elevation floor | **Closed** |
+| PR-PRS-C2 | No silent risk downgrade | **Closed** |
+| PR-PRS-D | Memo-gated completion (`completion_pending_memo` state added) | **Closed** |
+| PR-PRS-E | Pending memo UX and retry path; memo-stuck alert hardening | **Closed** |
+| PR-PRS-F | Completed/all queue filters and document view/download actions | **Closed** |
+| R4 | Closed as no-code / obsolete by design | **Closed** |
+| R5 | `/backoffice` favicon 404 cleanup | **Closed** |
+
+The Tornado `PeriodicCallback` automatic scheduler is active in staging and production environments by default. The `/api/monitoring/reviews/schedule` backfill endpoint is API-only; no manual UI button exists or is required.
+
+#### KYC/EDD Matrix Alignment — Closed / Verified
+
+| Item | Summary | Status |
+|---|---|---|
+| PR-KYC-EDD-REQUIREMENTS-1A | Portal wording cleanup; KYC/EDD v5 matrix alignment | **Closed** |
+
+**Controls confirmed:**
+- Client portal "blocked" wording removed; portal messaging is aligned with current onboarding flow
+- KYC/EDD v5 matrix alignment completed
+- Section F/G internal controls are not exposed in the client portal
+- Screening gates were independently verified outside the Enhanced Requirements track
+
+**Evidence limitation (non-blocking):** Selected portal fixture did not positively exercise all Bank Reference / Source of Wealth visibility cases. This is recorded as a non-blocking evidence gap, not a functional defect. It does not prevent pilot deployment but should be closed in a follow-up fixture pass.
+
 ### Components That Are Production-Ready Within the Current Pilot Posture
 
 | Component | Evidence |
@@ -865,7 +924,7 @@ This is a stronger position than the earlier "demo-ready with production-grade s
 
 ### Technical Strengths
 1. **142,441 lines of Python** across 303 files — substantial codebase, not a prototype
-2. **4,000+ automated tests** — current main-branch validation recorded 4,087 passed / 23 skipped
+2. **5,200+ automated tests** — current main-branch validation recorded 5,222 passed / 17 skipped
 3. **10 AI agents** with defined authority levels (authoritative vs decision_support) — sophisticated agent architecture
 4. **5-layer document verification** (gate → rule → hybrid → AI → aggregation) — defense-in-depth
 5. **Pydantic validation on AI outputs** — prevents malformed AI responses from propagating
@@ -900,7 +959,7 @@ This is a stronger position than the earlier "demo-ready with production-grade s
 ### Incomplete Workflows
 1. **SAR filing** — SAR data structure exists (sar_reports table) but no regulatory submission API integration
 2. **Agent 9 (Regulatory Impact)** — marked as future_phase; not implemented
-3. **Monitoring automation** — agents exist but production scheduling (cron/scheduler) not wired
+3. **Monitoring automation** — Tornado `PeriodicCallback` scheduler is active in staging/production; `/api/monitoring/reviews/schedule` backfill is API-only. ComplyAdvantage ongoing-monitoring screening path requires CA production workspace validation before full activation.
 4. **Regulatory intelligence analysis** — structure present but AI analysis pipeline not production-tested
 
 ### Inconsistencies
@@ -953,9 +1012,10 @@ This is a stronger position than the earlier "demo-ready with production-grade s
 
 | Provider | Dependency | Risk | Mitigation |
 |---|---|---|---|
-| Sumsub | KYC/AML screening | High — single provider | Screening abstraction layer exists but is not yet the live runtime path |
+| Sumsub | KYC/IDV screening | High — single provider | Screening abstraction layer exists but is not yet the live runtime path |
+| ComplyAdvantage (Mesh) | AML/PEP/sanctions/watchlist/adverse-media/ongoing-monitoring screening | Medium — active when configured | Sandbox path validated for staging/pilot use. **Production workspace validation is a separate controlled workstream — CA production validation / PR-PROV1 / PR-PROV1A are not yet complete.** PR-7 Pilot Role / Provider Readiness should not be marked done until CA production validation closes. |
 | Anthropic Claude | AI agent execution | High — sole AI provider | Fail-closed mock blocking in production |
-| OpenCorporates | Company registry lookup | Medium — enrichment only | Graceful degradation / partial implementation |
+| OpenCorporates | Company registry enrichment | Medium — enrichment only | Graceful degradation / partial implementation |
 | AWS ECS Fargate | Staging / planned production hosting | Medium — current service is single-task and non-autoscaled | Portable Docker/ECR deployment path already exists |
 | Render.com | Demo hosting | Low | Isolated from the near-production AWS staging path |
 | WeasyPrint | PDF generation | Low — OSS library | Replaceable |
@@ -1008,7 +1068,7 @@ The codebase demonstrates depth that exceeds typical demo-stage platforms (142,4
 ### Strengths Supporting Valuation
 
 1. **Deep compliance domain encoding** — The verification matrix, risk model, and memo template represent months of regulatory expertise codified in software. This is not easily replicated.
-2. **Test coverage** — 4,000+ automated tests provide materially stronger deployment confidence and reduce future development risk.
+2. **Test coverage** — 5,200+ automated tests provide materially stronger deployment confidence and reduce future development risk.
 3. **Architecture sophistication** — 4-layer AI pipeline with deterministic controls is a genuinely novel approach to compliance automation.
 4. **Complete workflow coverage** — From client registration through ongoing monitoring and change management — this is not a point solution.
 5. **Security posture** — 9-point approval gate, PII encryption, cryptographic audit chain, prompt injection defense — demonstrates production security thinking.
@@ -1033,6 +1093,52 @@ The codebase demonstrates depth that exceeds typical demo-stage platforms (142,4
 
 ---
 
+## 16. Paused Work, Pending Items & Remaining Risks
+
+### Paused Pending Compliance Policy Input
+
+The following items are **paused** and must not be marked complete or started until the underlying policy question is resolved.
+
+| Item | Status | Detail |
+|---|---|---|
+| RISK-SCREENING-E2E-RELIABILITY-AUDIT-1 | **Identified — not fixed** | Sector taxonomy / synonym false-negative risk identified in the risk and screening pipeline |
+| PR-RISK-SECTOR-POLICY-MATRIX-1 | **Paused** | Pending compliance policy input on canonical regulated-financial-activity taxonomy |
+| PR-RISK-SECTOR-SYNONYM-CALIBRATION-1 | **Blocked** | Must not start until the policy matrix is locked |
+
+**Policy issue:** The core risk here is not merely a synonym-matching gap. It is the **absence of a canonical regulated-financial-activity taxonomy** applied consistently across: portal intake fields, backend risk engine sector scoring, EDD requirements, compliance memo generation, back-office display labels, and test fixtures. Until this taxonomy is agreed and formalised as compliance policy, synonym calibration work cannot safely proceed without risk of creating inconsistencies across the pipeline. **This must not be represented as fixed in any investor or compliance communication.**
+
+### Pending Items
+
+The following items are open or unconfirmed as of this report date.
+
+| Item | Detail | Status |
+|---|---|---|
+| PR-PRS-QUEUE-LIST-LITE-PERF-1 | Periodic Review queue performance optimisation | Implemented/reviewed; closed only if confirmed evidence exists |
+| PR-E2E-SCREENING-SANDBOX-FIXTURES-1 | Deterministic screening sandbox E2E fixtures | **Pending** |
+| PR-SCREENING-QUEUE-QUERY-PERF-1 | Screening queue query correctness and performance | **Pending** |
+| E2E-PILOT-READINESS-3 | Final broad paid-pilot E2E gate | **Pending** |
+| PR-TRACKER-RECON-2 | Remediation tracker reconciliation | **Pending** |
+| Change Management post-approval controls | Post-approval change controls audit and remediation | **Pending audit** |
+| CA production validation (PR-PROV1 / PR-PROV1A) | ComplyAdvantage production workspace validation | **Pending — separate workstream** |
+| PR-7 Pilot Role / Provider Readiness | Pilot provider readiness gate | **Not yet complete** |
+| Country risk maker/checker and impact alerts | Additional governance enhancement | **Deferred — post-pilot hardening** |
+| Reports/export completeness | Export controls if committed in pilot contract scope | **Pending pilot scoping** |
+
+### Remediation Discipline Summary
+
+| Track | Items closed | Items pending / paused |
+|---|---|---|
+| EX sprint (EX-01 to EX-13) | 13 | 0 |
+| Authority governance | 6 | 0 |
+| Periodic Review (A→F, R4, R5) | 9 | 0 |
+| KYC/EDD matrix alignment | 1 | 1 (evidence limitation, non-blocking) |
+| Provider readiness (CA) | 0 | 2 (PR-PROV1, PR-PROV1A) |
+| Sector taxonomy / risk policy | 0 | 3 (paused pending policy) |
+| Performance / E2E / tracker | 0 | 5 |
+| Post-approval controls / governance | 0 | 2 |
+
+---
+
 ## Final Verdict
 
 ### "Is RegMind a scalable, enterprise-grade compliance operating system with real market value?"
@@ -1043,22 +1149,40 @@ The codebase demonstrates depth that exceeds typical demo-stage platforms (142,4
 - A complete compliance operating system (not a tool or platform)
 - Architecturally sophisticated (4-layer deterministic AI pipeline)
 - Deeply encoded with compliance domain knowledge (verification matrix, risk model, memo templates)
-- Well-tested (4,000+ automated tests)
-- Security-conscious (PII encryption, approval gates, cryptographic audit chain)
+- Well-tested (5,200+ automated tests on `main`)
+- Security-conscious (PII encryption, fail-closed approval gates, cryptographic audit chain)
 - Workflow-complete (onboarding through ongoing monitoring and change management)
+- Authority-governed (role authority model, Submit to Compliance workflow, `can_decide` gate, override/denial audit — all verified closed)
+- Periodic Review mature (A→F remediation closed; scheduler active in staging/production; no remaining substantive PR blocker)
 
 **It is NOT yet:**
 - Horizontally scalable (single-process Tornado / single ECS desired task)
 - Enterprise-ready (no SSO, no multi-tenancy, no compliance certifications)
 - Broad-production-proven (limited customer/runtime evidence beyond controlled staging and pilot posture)
 - Architecturally modular (13,765-line server.py, single-file frontends)
+- Fully provider-validated (ComplyAdvantage production workspace validation incomplete)
+- Sector-taxonomy-consistent (canonical regulated-financial-activity taxonomy not yet formalised — policy input required before calibration work)
 
-**Assessment:** RegMind has moved beyond a pure demo narrative and should now be positioned as **production-pilot-ready for controlled deployment**. The compliance domain depth, AI pipeline architecture, remediation close-out, and staging evidence create a strong foundation. The remaining risks are structural and operational — monolith, scaling posture, enterprise identity, certification, tenancy, and DR — rather than conceptual.
+**Assessment:** RegMind has moved well beyond a pure demo narrative. The EX-01 to EX-13 sprint, the authority governance closure track, and the Periodic Review A→F remediation collectively represent a disciplined, evidence-driven hardening programme. The platform should be positioned as **paid-pilot-ready with controls**: authority-governed, audit-complete, memo-gated, fail-closed — with explicit caveats on CA production validation, sector taxonomy policy, and infrastructure scalability. The remaining risks are structural and operational rather than conceptual.
 
-**For acquisition purposes:** The value is in the compliance IP (verification matrix, risk model, memo pipeline, supervisor framework) and the architectural approach (deterministic AI controls), not in the current deployment infrastructure. An acquirer would likely retain the compliance logic and re-platform the infrastructure.
+**For acquisition purposes:** The value is in the compliance IP (verification matrix, risk model, memo pipeline, supervisor framework, authority governance model) and the architectural approach (deterministic AI controls with human approval gates), not in the current deployment infrastructure. An acquirer would retain the compliance logic and re-platform the infrastructure.
 
-**For investment purposes:** The platform demonstrates exceptional depth for its stage. The 142,441 lines of Python, 4,000+ automated tests, 10 AI agents, and current AWS staging posture represent substantial engineering investment. With first-customer pilot validation and architectural hardening, RegMind could command a meaningful valuation in the compliance technology space.
+**For investment purposes:** The platform demonstrates exceptional depth for its stage. The 5,200+ automated tests, 10 AI agents, closed authority/PR remediation tracks, and current AWS staging posture represent substantial engineering investment. With first-customer pilot validation, CA production workspace clearance, and architectural hardening, RegMind could command a meaningful valuation in the compliance technology space.
 
 ---
 
 *Report generated from codebase audit of `onboarda1234/onboarda` repository. All findings are evidence-based and traceable to specific source files, line numbers, and implementation patterns documented above.*
+
+---
+
+## Evidence Discipline
+
+**Closure standard:** An item is considered closed only when all of the following conditions are met:
+
+1. The fix is merged to `main` (not a feature branch or draft PR)
+2. Deployed to AWS staging where applicable, with a confirmed `/api/version` response matching the target commit SHA
+3. GitHub Actions CI passes on `main` at or after the relevant commit
+4. API smoke tests and/or browser smoke evidence exists (manual or automated)
+5. Closure evidence is recorded — in a sprint report, audit note, or evidence attachment — and not merely asserted
+
+Items that are merged but lack staging deployment evidence, CI confirmation, or recorded smoke evidence are classified as **merged but evidence-limited**, not closed. Items that are coded but not yet merged are classified as **in progress** or **pending**. Items blocked on a policy decision, third-party validation, or compliance input are classified as **paused**. No item is marked closed on the basis of a PR description or a commit message alone.
