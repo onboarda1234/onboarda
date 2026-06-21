@@ -27469,10 +27469,14 @@ class PeriodicReviewsListHandler(BaseHandler):
         )
         result = []
         for review in reviews:
+            # PR-PRS-QUEUE-LIST-LITE-PERF-1: queue (list) view uses the lite
+            # serializer — projection-only, zero per-row DB work. The detail
+            # endpoint (PeriodicReviewDetailHandler) still uses the full serializer.
             payload = _serialize_periodic_review_row(
                 db,
                 review,
                 projection=projections.get(review["id"]),
+                lite=True,
             )
             if not _periodic_review_projection_matches_queue_filter(payload.get("projection") or {}, queue_filter):
                 continue
@@ -28582,16 +28586,18 @@ def _refined_periodic_review_projection_from_row(db, review_row, *, projection=N
     return dict(serialised.get("projection") or projection or {})
 
 
-def _serialize_periodic_review_row(db, review_row, *, projection=None):
+def _serialize_periodic_review_row(db, review_row, *, projection=None, lite=False):
     import document_health_monitor as dhm
     import monitoring_routing as mr
     import periodic_review_engine as pre
 
     result = dict(review_row)
     projection = projection or _get_periodic_review_projection(db, result["id"]) or {}
-    items = pre.get_required_items(db, result["id"])
-    result["required_items"] = items
-    result["required_items_count"] = len(items)
+    items = []
+    if not lite:
+        items = pre.get_required_items(db, result["id"])
+        result["required_items"] = items
+        result["required_items_count"] = len(items)
     result["assigned_officer"] = projection.get("assigned_officer")
     result["assigned_officer_name"] = projection.get("assigned_officer_name")
     result["owner_display_name"] = projection.get("owner_display_name")
@@ -28655,21 +28661,29 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["client_attestation_submitted_by"] = projection.get("attestation_submitted_by", result.get("client_attestation_submitted_by"))
     result["client_attestation_has_material_changes"] = projection.get("attestation_has_material_changes", False)
     result["client_attestation_material_change_question_keys"] = projection.get("attestation_material_change_question_keys", [])
-    result["client_attestation"] = _attestation_snapshot_from_review(review_row)
-    app_row = db.execute(
-        "SELECT * FROM applications WHERE id = ?",
-        (result.get("application_id"),),
-    ).fetchone()
-    app_dict = dict(app_row) if app_row else {"id": result.get("application_id"), "ref": result.get("application_ref")}
-    result["periodic_review_baseline"] = _periodic_review_baseline_snapshot(
-        _application_periodic_review_baseline_source(app_dict, result)
-    )
-    result["periodic_review_document_requests"] = _list_backoffice_periodic_review_document_requests(
-        db,
-        app_dict,
-        result["id"],
-    )
-    result["periodic_review_document_request_count"] = len(result["periodic_review_document_requests"])
+    # PR-PRS-QUEUE-LIST-LITE-PERF-1: in lite (queue/list) mode, skip the per-row
+    # DB detail work — application re-fetch, document requests, risk-reassessment
+    # snapshot, alerts — and the workspace/refine. The projection already carries
+    # the FINAL operational labels (build_review_projection runs the same
+    # derive_operational_review_status with the same document signals), so all
+    # projection-derived display fields below still populate; only the redundant
+    # per-row DB work is skipped (~5 queries/row). Detail view is unchanged.
+    if not lite:
+        result["client_attestation"] = _attestation_snapshot_from_review(review_row)
+        app_row = db.execute(
+            "SELECT * FROM applications WHERE id = ?",
+            (result.get("application_id"),),
+        ).fetchone()
+        app_dict = dict(app_row) if app_row else {"id": result.get("application_id"), "ref": result.get("application_ref")}
+        result["periodic_review_baseline"] = _periodic_review_baseline_snapshot(
+            _application_periodic_review_baseline_source(app_dict, result)
+        )
+        result["periodic_review_document_requests"] = _list_backoffice_periodic_review_document_requests(
+            db,
+            app_dict,
+            result["id"],
+        )
+        result["periodic_review_document_request_count"] = len(result["periodic_review_document_requests"])
     result["client_notification_status"] = projection.get("client_notification_status")
     result["client_notification_status_label"] = projection.get("client_notification_status_label")
     result["initial_notification_sent_at"] = projection.get("initial_notification_sent_at")
@@ -28688,12 +28702,13 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["officer_internal_review_note"] = result.get("officer_internal_review_note")
     result["findings_updated_by"] = result.get("findings_updated_by")
     result["findings_updated_at"] = result.get("findings_updated_at")
-    try:
-        import periodic_review_risk_reassessment as prr
-        result["risk_reassessment"] = prr.build_reassessment_snapshot(db, result["id"])
-    except Exception:
-        logger.exception("Failed to build periodic review risk reassessment snapshot review_id=%s", result.get("id"))
-        result["risk_reassessment"] = {}
+    if not lite:
+        try:
+            import periodic_review_risk_reassessment as prr
+            result["risk_reassessment"] = prr.build_reassessment_snapshot(db, result["id"])
+        except Exception:
+            logger.exception("Failed to build periodic review risk reassessment snapshot review_id=%s", result.get("id"))
+            result["risk_reassessment"] = {}
     result["review_reference"] = projection.get("review_reference")
     result["audit_reference"] = projection.get("audit_reference")
     result["created_at"] = projection.get("created_at", result.get("created_at"))
@@ -28703,27 +28718,28 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["primary_action_label"] = projection.get("primary_action_label", "Open review case")
     result["can_take_action"] = projection.get("can_take_action", True)
     result["is_terminal"] = projection.get("is_terminal", False)
-    alert_rows = db.execute(
-        "SELECT id, alert_type, status, resolved_at "
-        "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
-        (result.get("application_id"),),
-    ).fetchall()
-    unresolved_alerts = [row for row in alert_rows if mr.is_alert_unresolved(row)]
-    result["open_document_issues_count"] = len([
-        row for row in unresolved_alerts
-        if row["alert_type"] in dhm.DOCUMENT_ALERT_TYPES
-    ])
-    result["open_alerts_count"] = len([
-        row for row in unresolved_alerts
-        if row["alert_type"] not in dhm.DOCUMENT_ALERT_TYPES
-    ])
-    screening_items = [it for it in items if it.get("item_type") == "screening_refresh"]
-    if screening_items:
-        result["screening_status"] = screening_items[0].get("label")
-    elif result.get("status") == "completed":
-        result["screening_status"] = "Completed"
-    else:
-        result["screening_status"] = "Pending review"
+    if not lite:
+        alert_rows = db.execute(
+            "SELECT id, alert_type, status, resolved_at "
+            "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
+            (result.get("application_id"),),
+        ).fetchall()
+        unresolved_alerts = [row for row in alert_rows if mr.is_alert_unresolved(row)]
+        result["open_document_issues_count"] = len([
+            row for row in unresolved_alerts
+            if row["alert_type"] in dhm.DOCUMENT_ALERT_TYPES
+        ])
+        result["open_alerts_count"] = len([
+            row for row in unresolved_alerts
+            if row["alert_type"] not in dhm.DOCUMENT_ALERT_TYPES
+        ])
+        screening_items = [it for it in items if it.get("item_type") == "screening_refresh"]
+        if screening_items:
+            result["screening_status"] = screening_items[0].get("label")
+        elif result.get("status") == "completed":
+            result["screening_status"] = "Completed"
+        else:
+            result["screening_status"] = "Pending review"
 
     raw_status = str(result.get("status") or "").strip().lower()
     ui_status = projection.get("queue_status") or "open"
@@ -28750,6 +28766,30 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None):
     result["ui_status"] = ui_status
     result["ui_status_label"] = projection.get("queue_status_label") or projection.get("status_label") or ui_status_label
     result["legacy_decision"] = result.get("decision")
+    if lite:
+        # Queue (list) view: projection already carries the final labels; no
+        # workspace/refine (redundant) and no further per-row DB work. Preserve
+        # the response CONTRACT — set safe lightweight defaults for the detail
+        # fields the full serializer computes, so no key silently disappears
+        # from the list response. Real values for these live on the detail
+        # endpoint; counts that the projection already computed are reused.
+        result.setdefault("required_items", [])
+        result["required_items_count"] = int(projection.get("required_items_count") or 0)
+        result.setdefault("client_attestation", None)
+        result.setdefault("periodic_review_baseline", {})
+        result.setdefault("periodic_review_document_requests", [])
+        result["periodic_review_document_request_count"] = int(
+            projection.get("periodic_review_document_request_count") or 0
+        )
+        result.setdefault("risk_reassessment", {})
+        result["open_document_issues_count"] = int(projection.get("open_document_issues_count") or 0)
+        result["open_alerts_count"] = int(projection.get("open_alerts_count") or 0)
+        result.setdefault(
+            "screening_status",
+            "Completed" if str(result.get("status")) == "completed" else "Pending review",
+        )
+        result["projection"] = dict(projection)
+        return result
     workspace = _periodic_review_workspace_snapshot(result)
     projection = _refine_periodic_review_operational_projection(result, projection, workspace)
     result["status_label"] = projection.get("status_label")
