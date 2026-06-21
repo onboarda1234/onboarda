@@ -1824,6 +1824,210 @@ def attach_document_to_request(
 
 
 # ============================================================================
+# Approved-Profile Locking & Auto-Draft (PR-CM-LOCK-AND-AUTO-DRAFT-1)
+# ============================================================================
+
+# Application statuses in which the entity profile is considered approved and
+# locked. Material edits to records in these states must NOT mutate live data;
+# they are staged as a Change Request instead.
+LOCKED_PROFILE_STATUSES = frozenset({
+    "approved",
+})
+
+# Non-terminal Change Request statuses. An attempted edit that matches an
+# already-open request of one of these statuses is reused rather than spawning
+# a duplicate (idempotency). Terminal statuses (approved/rejected/implemented/
+# cancelled/superseded) are intentionally excluded so a fresh edit after a
+# closed request starts a new draft.
+OPEN_CHANGE_REQUEST_STATUSES = frozenset({
+    "draft",
+    "submitted",
+    "triage_in_progress",
+    "pending_information",
+    "ready_for_review",
+    "screening_in_progress",
+    "risk_review_required",
+    "approval_pending",
+})
+
+# Application-table fields that remain directly editable on a locked profile
+# (cosmetic / contact-only). Everything else is treated as material and routed
+# through Change Management.
+MINOR_DIRECT_EDIT_FIELDS = frozenset({
+    "website",
+    "contact_email",
+    "contact_phone",
+    "phone",
+    "email",
+})
+
+# Core entity-identity fields that must route through Change Management on a
+# locked profile. This is a clearer-named alias of the pre-existing
+# SAFE_ENTITY_FIELDS (defined earlier in this module from the apply side); a
+# change to any of these on an approved profile is staged as a CR regardless of
+# the officer-correction heuristic tier (e.g. BRN, which the heuristic tiers as
+# tier3, is protected here).
+LOCKED_ENTITY_FIELDS = SAFE_ENTITY_FIELDS
+
+# Map an application field to the canonical CM change_type used for items.
+_FIELD_TO_CHANGE_TYPE = {
+    "company_name": "company_details",
+    "brn": "company_details",
+    "entity_type": "company_details",
+    "ownership_structure": "company_details",
+    "country": "address_change",
+    "sector": "business_activity_change",
+}
+
+
+def is_profile_locked(status: Optional[str]) -> bool:
+    """Return True if an application status represents an approved/locked profile."""
+    return (status or "") in LOCKED_PROFILE_STATUSES
+
+
+def _field_change_type(field_name: str) -> str:
+    """Map an application field to the canonical CM change_type (safe default)."""
+    return _FIELD_TO_CHANGE_TYPE.get(field_name, "company_details")
+
+
+def diff_application_fields(app: Dict, proposed: Dict) -> List[Dict]:
+    """Compute material field changes between a live app row and a proposed update.
+
+    Returns CM-ready change items for fields that (a) are present in
+    ``proposed``, (b) differ from the current stored value, and (c) are not in
+    the minor-direct-edit whitelist. None and "" are treated as equal. Returns
+    an empty list when nothing material changed.
+    """
+    items: List[Dict] = []
+    for field, new_value in proposed.items():
+        if field in MINOR_DIRECT_EDIT_FIELDS:
+            continue
+        current = app.get(field)
+        cur_norm = "" if current is None else str(current).strip()
+        new_norm = "" if new_value is None else str(new_value).strip()
+        if cur_norm == new_norm:
+            continue
+        ct = _field_change_type(field)
+        items.append({
+            "change_type": ct,
+            "field_name": field,
+            "old_value": None if current is None else str(current),
+            "new_value": None if new_value is None else str(new_value),
+            "materiality": classify_materiality(ct),
+        })
+    return items
+
+
+def find_open_draft_for_items(db, application_id: str, items: List[Dict]) -> Optional[str]:
+    """Find an existing open (non-terminal) change request covering the same items.
+
+    Idempotency guard: an attempted edit whose (change_type, field_name) set
+    exactly matches an already-open request returns that request id rather than
+    creating a duplicate. Returns the request id or None.
+    """
+    target_keys = {(i.get("change_type"), i.get("field_name")) for i in items}
+    if not target_keys:
+        return None
+    statuses = sorted(OPEN_CHANGE_REQUEST_STATUSES)
+    placeholders = ",".join(["?"] * len(statuses))
+    try:
+        rows = db.execute(
+            f"""SELECT id FROM change_requests
+                WHERE application_id = ? AND status IN ({placeholders})
+                ORDER BY created_at DESC""",
+            (application_id, *statuses),
+        ).fetchall()
+    except Exception as e:
+        logger.error("find_open_draft_for_items failed: %s", e)
+        return None
+    for row in rows:
+        rid = row["id"]
+        item_rows = db.execute(
+            "SELECT change_type, field_name FROM change_request_items WHERE request_id = ?",
+            (rid,),
+        ).fetchall()
+        existing_keys = {(r["change_type"], r["field_name"]) for r in item_rows}
+        if existing_keys == target_keys:
+            return rid
+    return None
+
+
+def stage_locked_profile_edit(
+    db,
+    app: Dict,
+    items: List[Dict],
+    user: Dict,
+    source_channel: str = "backoffice",
+    source: str = "backoffice_manual",
+    reason: Optional[str] = None,
+    log_audit_fn=None,
+) -> Dict[str, Any]:
+    """Stage an attempted edit to a locked/approved profile as a draft Change Request.
+
+    This NEVER mutates the live profile — the proposed values are recorded as
+    change request items only. Idempotent: if an open draft already covers the
+    same change set, that draft is returned instead of creating a duplicate.
+
+    Returns a structured payload for the handler to return to the client
+    (intended HTTP 409).
+    """
+    application_id = app["id"]
+    app_ref = app.get("ref", application_id)
+
+    existing_id = find_open_draft_for_items(db, application_id, items)
+    if existing_id:
+        detail = get_change_request_detail(db, existing_id)
+        if log_audit_fn:
+            log_audit_fn(
+                user, "Change Request Draft Reused", app_ref,
+                f"Attempted edit on locked profile matched existing open request {existing_id}",
+                db=db,
+            )
+        return {
+            "action": "change_request_exists",
+            "request_id": existing_id,
+            "request": detail,
+            "prefilled_items": (detail or {}).get("items", items),
+            "recommended_next_action": "open_existing_change_request",
+            "message": (
+                "A draft Change Request already exists for this change. "
+                "Add evidence and submit it for approval."
+            ),
+        }
+
+    request = create_change_request(
+        db=db,
+        application_id=application_id,
+        source=source,
+        source_channel=source_channel,
+        reason=reason or "Auto-drafted from a blocked edit on an approved profile.",
+        items=items,
+        user=user,
+        log_audit_fn=log_audit_fn,
+    )
+
+    if log_audit_fn:
+        log_audit_fn(
+            user, "Change Request Auto-Drafted", app_ref,
+            f"Blocked edit on approved profile auto-drafted as {request['id']} "
+            f"({len(items)} item(s), materiality={request['materiality']})",
+            db=db,
+        )
+
+    return {
+        "action": "change_request_drafted",
+        "request_id": request["id"],
+        "request": request,
+        "prefilled_items": items,
+        "recommended_next_action": "complete_change_request",
+        "message": (
+            "Approved profile is protected. We've started a Change Request from "
+            "your edit — add supporting evidence and submit it for approval."
+        ),
+    }
+
+
+# ============================================================================
 # Statistics / Dashboard
 # ============================================================================
 
