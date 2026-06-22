@@ -657,6 +657,8 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .toast.toast-error { background:#dc2626; }
 .toast.toast-success { background:#16a34a; }
 .toast.toast-warning { background:#d97706; }
+.toast-action { border:1px solid rgba(255,255,255,0.6); background:rgba(255,255,255,0.14); color:#fff; border-radius:var(--radius-sm); padding:6px 9px; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; }
+.toast-action:hover { background:rgba(255,255,255,0.24); }
 /* ── Theme Toggle ── */
 .theme-toggle { background:none; border:1px solid var(--border2); border-radius:var(--radius-sm); padding:6px 10px; cursor:pointer; font-size:16px; line-height:1; color:var(--text2); display:flex; align-items:center; transition:all 0.2s var(--ease); }
 .theme-toggle:hover { border-color:var(--brand); color:var(--brand); }
@@ -4086,6 +4088,62 @@ function getCookieValue(name) {
   return '';
 }
 
+function cmLockGuidanceFor(payload) {
+  payload = payload || {};
+  var action = payload.action || '';
+  var requestId = payload.request_id || payload.change_request_id || payload.id || '';
+  if (action === 'change_request_drafted') {
+    return {
+      message: 'Approved profile is protected. A Change Request has been created with your proposed change.',
+      ctaLabel: requestId ? 'View Change Request' : 'Open Change Management',
+      requestId: requestId
+    };
+  }
+  if (action === 'change_request_exists') {
+    return {
+      message: 'A draft Change Request already exists for this proposed change.',
+      ctaLabel: requestId ? 'View Change Request' : 'Open Change Management',
+      requestId: requestId
+    };
+  }
+  if (action === 'change_request_required') {
+    return {
+      message: 'Approved profile is protected. Please create a Change Request to update this item.',
+      ctaLabel: 'Open Change Management'
+    };
+  }
+  if (action === 'submit_blocked_profile_locked') {
+    return {
+      message: 'Approved applications cannot be resubmitted. Use Change Management for post-approval changes.',
+      ctaLabel: 'Open Change Management'
+    };
+  }
+  if (action === 'approved_profile_locked_cm_unavailable') {
+    return {
+      message: 'Approved profile is protected. Change Management is temporarily unavailable. Try again shortly or contact an administrator if this persists.'
+    };
+  }
+  return null;
+}
+
+function openChangeManagementRequestsList() {
+  showView('change-mgmt');
+  showChangeMgmtTab('requests');
+}
+
+function showCmGuidanceToast(guidance) {
+  if (!guidance || !guidance.message) return;
+  showToast(guidance.message, 'warning', {
+    cmGuidance: true,
+    duration: 6500,
+    actionLabel: guidance.ctaLabel || '',
+    onAction: function() {
+      if (guidance.requestId) openChangeRequestFromApplication(guidance.requestId);
+      else openChangeManagementRequestsList();
+    }
+  });
+}
+
 async function boApiCall(method, path, body) {
   var options = arguments.length > 3 ? (arguments[3] || {}) : {};
   var callSessionId = options.sessionId != null ? options.sessionId : BO_ACTIVE_SESSION_ID;
@@ -4114,9 +4172,12 @@ async function boApiCall(method, path, body) {
     }
     if (res.status === 401) throw new Error(data.error || 'Authentication required');
     if (!res.ok) {
-      var apiErr = new Error(data.error || 'Request failed');
+      var guidance = cmLockGuidanceFor(data);
+      if (guidance) showCmGuidanceToast(guidance);
+      var apiErr = new Error(guidance ? guidance.message : (data.error || 'Request failed'));
       apiErr.status = res.status;
       apiErr.payload = data;
+      apiErr.cmGuidance = guidance;
       throw apiErr;
     }
     return data;
@@ -25186,12 +25247,41 @@ async function toggleUserStatus(id) {
 // ═══════════════════════════════════════════════════════════
 // UTILITIES
 // ═══════════════════════════════════════════════════════════
+var BO_TOAST_HIDE_TIMER = null;
+var CM_LOCK_ACTIVE_GUIDANCE_MESSAGE = '';
+
 function showToast(msg, type) {
+  var options = arguments.length > 2 ? (arguments[2] || {}) : {};
+  msg = String(msg || '');
+  if (CM_LOCK_ACTIVE_GUIDANCE_MESSAGE && msg === CM_LOCK_ACTIVE_GUIDANCE_MESSAGE && !options.cmGuidance) return;
   var t = document.getElementById('toast');
-  t.textContent = msg;
+  if (!t) return;
+  if (BO_TOAST_HIDE_TIMER) clearTimeout(BO_TOAST_HIDE_TIMER);
+  t.textContent = '';
+  var textEl = document.createElement('span');
+  textEl.textContent = msg;
+  textEl.style.flex = '1';
+  t.appendChild(textEl);
+  if (options.actionLabel && typeof options.onAction === 'function') {
+    var actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
+    actionBtn.className = 'toast-action';
+    actionBtn.textContent = options.actionLabel;
+    actionBtn.onclick = function(event) {
+      event.preventDefault();
+      t.classList.remove('show');
+      CM_LOCK_ACTIVE_GUIDANCE_MESSAGE = '';
+      options.onAction();
+    };
+    t.appendChild(actionBtn);
+  }
+  CM_LOCK_ACTIVE_GUIDANCE_MESSAGE = options.cmGuidance ? msg : '';
   t.className = 'toast' + (type ? ' toast-' + type : '');
   t.classList.add('show');
-  setTimeout(function() { t.classList.remove('show'); }, 3500);
+  BO_TOAST_HIDE_TIMER = setTimeout(function() {
+    t.classList.remove('show');
+    if (CM_LOCK_ACTIVE_GUIDANCE_MESSAGE === msg) CM_LOCK_ACTIVE_GUIDANCE_MESSAGE = '';
+  }, options.duration || 3500);
 }
 
 function showNotifications() { showToast('No new notifications.'); }
