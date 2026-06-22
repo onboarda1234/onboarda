@@ -1,6 +1,5 @@
 import json
 import os
-import socket
 import sys
 import threading
 import time
@@ -9,19 +8,12 @@ import pytest
 import requests
 import tornado.httpserver
 import tornado.ioloop
+import tornado.netutil
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("ENVIRONMENT", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
-
-
-def _find_free_port():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
 
 
 def _profile_with_raw(company_number="12345678", *, name="Registry Verified Ltd", secret="server-only"):
@@ -79,7 +71,7 @@ def intake_api(monkeypatch, tmp_path):
     import db as db_module
 
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    os.environ["DB_PATH"] = db_path
+    monkeypatch.setenv("DB_PATH", db_path)
 
     from db import get_db, init_db
 
@@ -108,8 +100,8 @@ def intake_api(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "get_companies_house_profile_with_raw", fake_profile)
 
     app = make_app()
-    port = _find_free_port()
     server_ref = {}
+    port_ref = {}
     started = threading.Event()
 
     def run_server():
@@ -118,8 +110,10 @@ def intake_api(monkeypatch, tmp_path):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         io_loop = tornado.ioloop.IOLoop.current()
+        sockets = tornado.netutil.bind_sockets(0, address="127.0.0.1")
+        port_ref["port"] = sockets[0].getsockname()[1]
         srv = tornado.httpserver.HTTPServer(app)
-        srv.listen(port, "127.0.0.1")
+        srv.add_sockets(sockets)
         server_ref["server"] = srv
         server_ref["loop"] = io_loop
         started.set()
@@ -127,13 +121,13 @@ def intake_api(monkeypatch, tmp_path):
 
     thread = threading.Thread(target=run_server, daemon=True)
     thread.start()
-    started.wait(timeout=3)
+    assert started.wait(timeout=3), "Test server failed to start within timeout"
     time.sleep(0.2)
 
     from auth import create_token
 
     yield {
-        "base_url": f"http://127.0.0.1:{port}",
+        "base_url": f"http://127.0.0.1:{port_ref['port']}",
         "client1": create_token("client-intake-1", "client", "Client One", "client"),
         "client2": create_token("client-intake-2", "client", "Client Two", "client"),
         "calls": calls,
