@@ -535,6 +535,94 @@ def _request_companies_house(endpoint: str, result_type: str, params: dict[str, 
     return normalize_registry_result(COMPANIES_HOUSE_PROVIDER, raw, result_type)
 
 
+def _request_companies_house_with_raw(
+    endpoint: str,
+    result_type: str,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    """Return raw and normalized Companies House data for server-side evidence writes."""
+    api_key = _clean_text(COMPANIES_HOUSE_API_KEY)
+    if not api_key:
+        if is_production():
+            logger.error("Companies House lookup blocked: API key missing in production")
+            return provider_error(
+                "provider_not_configured",
+                "Company registry is not configured. Please continue manually.",
+            )
+        logger.info("Companies House simulation used for endpoint=%s", endpoint)
+        raw = _simulate_companies_house_raw(
+            endpoint,
+            result_type,
+            company_number=endpoint.split("/")[2] if endpoint.startswith("/company/") else None,
+            query=(params or {}).get("q"),
+        )
+        normalized = normalize_registry_result(COMPANIES_HOUSE_PROVIDER, raw, result_type)
+        metadata = _metadata(raw, endpoint)
+        return {
+            "provider": COMPANIES_HOUSE_PROVIDER,
+            "raw_response": raw,
+            "normalized": normalized,
+            "response_hash": metadata["response_hash"],
+            "fetched_at": metadata["fetched_at"],
+            "source_endpoint": metadata["endpoint"],
+            "simulation_used": metadata["simulation"],
+        }
+
+    url = f"{COMPANIES_HOUSE_API_URL.rstrip('/')}{endpoint}"
+    try:
+        response = requests.get(
+            url,
+            params=params or None,
+            auth=(api_key, ""),
+            timeout=COMPANIES_HOUSE_TIMEOUT_SECONDS,
+        )
+    except Timeout:
+        logger.warning("Companies House request timed out for endpoint=%s", endpoint)
+        return provider_error("provider_timeout")
+    except RequestException as exc:
+        logger.warning(
+            "Companies House request failed for endpoint=%s error=%s",
+            endpoint,
+            sanitize_provider_error(exc),
+        )
+        return provider_error("provider_unavailable")
+
+    if response.status_code == 400:
+        return provider_error("invalid_query", "Invalid company registry query. Please check the input or continue manually.")
+    if response.status_code == 404:
+        return provider_error("company_not_found", "Company was not found in the registry. Please continue manually.")
+    if response.status_code == 429:
+        return provider_error("provider_rate_limited")
+    if response.status_code < 200 or response.status_code >= 300:
+        logger.warning("Companies House returned HTTP %s for endpoint=%s", response.status_code, endpoint)
+        return provider_error("provider_unavailable")
+
+    try:
+        raw = response.json()
+    except ValueError:
+        return provider_error("provider_malformed_response")
+
+    if not isinstance(raw, dict):
+        return provider_error("provider_malformed_response")
+
+    raw = dict(raw)
+    raw["_endpoint"] = endpoint
+    malformed = _malformed_response(raw, result_type)
+    if malformed:
+        return provider_error("provider_malformed_response")
+    normalized = normalize_registry_result(COMPANIES_HOUSE_PROVIDER, raw, result_type)
+    metadata = _metadata(raw, endpoint)
+    return {
+        "provider": COMPANIES_HOUSE_PROVIDER,
+        "raw_response": raw,
+        "normalized": normalized,
+        "response_hash": metadata["response_hash"],
+        "fetched_at": metadata["fetched_at"],
+        "source_endpoint": metadata["endpoint"],
+        "simulation_used": metadata["simulation"],
+    }
+
+
 def _malformed_response(raw: dict[str, Any], result_type: str) -> bool:
     if result_type == "search":
         return not isinstance(raw.get("items"), list)
@@ -557,6 +645,13 @@ def get_companies_house_profile(company_number: str) -> Any:
     if not company_number:
         return provider_error("invalid_query", "A company number is required.")
     return _request_companies_house(f"/company/{company_number}", "profile")
+
+
+def get_companies_house_profile_with_raw(company_number: str) -> Any:
+    company_number = (company_number or "").strip()
+    if not company_number:
+        return provider_error("invalid_query", "A company number is required.")
+    return _request_companies_house_with_raw(f"/company/{company_number}", "profile")
 
 
 def get_companies_house_officers(company_number: str) -> Any:

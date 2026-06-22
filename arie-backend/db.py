@@ -2715,6 +2715,11 @@ def init_db():
         db.commit()
         logger.info("startup: completed _run_migrations (inline)")
 
+        logger.info("startup: entering _ensure_company_registry_schema")
+        _ensure_company_registry_schema(db)
+        db.commit()
+        logger.info("startup: completed _ensure_company_registry_schema")
+
         logger.info("startup: entering _apply_pr_cr1r_manual_score_defaults_once")
         _apply_pr_cr1r_manual_score_defaults_once(db)
         db.commit()
@@ -3197,6 +3202,111 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _ensure_company_registry_schema(db: DBConnection) -> None:
+    """Create company registry evidence/cache tables and party provenance columns.
+
+    PR-CH-INTAKE-2 keeps applications, directors, and UBOs as the source of
+    truth. The intake session table is intentionally thin: it tracks progress
+    and links to a registry lookup but does not duplicate confirmed parties.
+    """
+    json_type = "JSONB" if db.is_postgres else "TEXT"
+    timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    bool_type = "BOOLEAN" if db.is_postgres else "INTEGER"
+    bool_default_false = "FALSE" if db.is_postgres else "0"
+    default_now = "CURRENT_TIMESTAMP" if db.is_postgres else "(datetime('now'))"
+    id_default = "encode(gen_random_bytes(8), 'hex')" if db.is_postgres else "(lower(hex(randomblob(8))))"
+
+    db.executescript(f"""
+    CREATE TABLE IF NOT EXISTS company_registry_lookups (
+        id TEXT PRIMARY KEY DEFAULT {id_default},
+        provider TEXT NOT NULL,
+        jurisdiction TEXT,
+        company_number TEXT,
+        query TEXT,
+        result_type TEXT,
+        raw_response_json {json_type},
+        normalized_json {json_type},
+        response_hash TEXT,
+        fetched_at {timestamp_type},
+        fetched_by TEXT,
+        application_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+        status TEXT,
+        error_code TEXT,
+        source_endpoint TEXT,
+        simulation_used {bool_type} DEFAULT {bool_default_false},
+        created_at {timestamp_type} DEFAULT {default_now},
+        updated_at {timestamp_type} DEFAULT {default_now}
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_company_registry_lookups_provider_company
+        ON company_registry_lookups(provider, jurisdiction, company_number, result_type);
+    CREATE INDEX IF NOT EXISTS idx_company_registry_lookups_application
+        ON company_registry_lookups(application_id);
+    CREATE INDEX IF NOT EXISTS idx_company_registry_lookups_response_hash
+        ON company_registry_lookups(response_hash);
+
+    CREATE TABLE IF NOT EXISTS company_intake_sessions (
+        id TEXT PRIMARY KEY DEFAULT {id_default},
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        client_user_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        registry_lookup_id TEXT REFERENCES company_registry_lookups(id) ON DELETE SET NULL,
+        country_of_incorporation TEXT,
+        provider TEXT,
+        company_number TEXT,
+        stage TEXT,
+        completion_score REAL DEFAULT 0,
+        missing_answers_json {json_type} DEFAULT '[]',
+        document_checklist_json {json_type} DEFAULT '[]',
+        created_at {timestamp_type} DEFAULT {default_now},
+        updated_at {timestamp_type} DEFAULT {default_now}
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_company_intake_sessions_client
+        ON company_intake_sessions(client_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_company_intake_sessions_application
+        ON company_intake_sessions(application_id);
+    CREATE INDEX IF NOT EXISTS idx_company_intake_sessions_registry_lookup
+        ON company_intake_sessions(registry_lookup_id);
+    """)
+
+    director_columns = {
+        "source": "TEXT",
+        "officer_role": "TEXT",
+        "officer_entity_type": "TEXT",
+        "requires_individual_kyc": bool_type,
+        "requires_corporate_structure_review": bool_type,
+        "registry_lookup_id": "TEXT",
+        "response_hash": "TEXT",
+        "source_metadata_json": json_type,
+        "imported_at": timestamp_type,
+        "imported_by": "TEXT",
+    }
+    ubo_columns = {
+        "source": "TEXT",
+        "psc_state": "TEXT",
+        "registry_statement_type": "TEXT",
+        "psc_status_reason": "TEXT",
+        "psc_kind": "TEXT",
+        "is_candidate_ubo": bool_type,
+        "registry_lookup_id": "TEXT",
+        "response_hash": "TEXT",
+        "source_metadata_json": json_type,
+        "imported_at": timestamp_type,
+        "imported_by": "TEXT",
+    }
+    for table_name, columns in (("directors", director_columns), ("ubos", ubo_columns)):
+        if not _safe_table_exists(db, table_name):
+            continue
+        for column_name, column_type in columns.items():
+            if not _safe_column_exists(db, table_name, column_name):
+                db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+    db.execute("CREATE INDEX IF NOT EXISTS idx_directors_registry_lookup ON directors(registry_lookup_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ubos_registry_lookup ON ubos(registry_lookup_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_directors_source_person ON directors(application_id, source, person_key)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ubos_source_person ON ubos(application_id, source, person_key)")
 
 
 def _ensure_country_risk_governance(db: DBConnection):

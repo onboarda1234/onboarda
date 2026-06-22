@@ -2476,6 +2476,7 @@ from screening_routing import run_screening_for_active_provider
 from company_registry import (
     get_companies_house_officers,
     get_companies_house_profile,
+    get_companies_house_profile_with_raw,
     get_companies_house_pscs,
     is_provider_error as is_company_registry_provider_error,
     provider_error,
@@ -4897,6 +4898,12 @@ CLIENT_PARTY_FORBIDDEN_KEYS = {
     "screening_disposition",
     "screening_provider",
     "screening_reference",
+    "imported_at",
+    "imported_by",
+    "registry_lookup_id",
+    "response_hash",
+    "source",
+    "source_metadata_json",
     "verified_pep",
 }
 
@@ -21641,6 +21648,668 @@ def _company_registry_success_envelope(kind, result):
     return envelope
 
 
+def _company_intake_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _company_intake_json(value):
+    return json.dumps(value if value is not None else {}, default=str, sort_keys=True)
+
+
+def _company_intake_hash(value):
+    return hashlib.sha256(_company_intake_json(value).encode("utf-8")).hexdigest()
+
+
+def _company_intake_user_id(user):
+    return str((user or {}).get("sub") or "")
+
+
+def _company_intake_require_client(handler, user):
+    if str((user or {}).get("type") or "").lower() != "client" or not _company_intake_user_id(user):
+        handler.error("Company intake is available to authenticated client users only.", 403)
+        return False
+    return True
+
+
+def _company_intake_country_is_gb(value):
+    text = str(value or "").strip().lower()
+    return text in {"gb", "gbr", "uk", "united kingdom", "great britain", "england", "wales", "scotland", "northern ireland"}
+
+
+def _company_intake_profile_indicates_gb(profile):
+    if not isinstance(profile, dict):
+        return False
+    if _company_intake_country_is_gb(profile.get("jurisdiction")):
+        return True
+    address = profile.get("registered_address")
+    if isinstance(address, dict):
+        return _company_intake_country_is_gb(address.get("country"))
+    return False
+
+
+def _company_intake_registry_metadata(normalized):
+    if isinstance(normalized, dict):
+        metadata = normalized.get("source_metadata")
+        return metadata if isinstance(metadata, dict) else {}
+    if isinstance(normalized, list) and normalized:
+        metadata = normalized[0].get("source_metadata") if isinstance(normalized[0], dict) else {}
+        return metadata if isinstance(metadata, dict) else {}
+    return {}
+
+
+def _company_intake_persist_lookup(
+    db,
+    *,
+    provider,
+    jurisdiction=None,
+    company_number=None,
+    query=None,
+    result_type,
+    raw_response=None,
+    normalized=None,
+    response_hash=None,
+    fetched_at=None,
+    fetched_by=None,
+    application_id=None,
+    status="success",
+    error_code=None,
+    source_endpoint=None,
+    simulation_used=False,
+):
+    lookup_id = uuid.uuid4().hex[:16]
+    metadata = _company_intake_registry_metadata(normalized)
+    response_hash = response_hash or metadata.get("response_hash") or _company_intake_hash(raw_response if raw_response is not None else normalized)
+    fetched_at = fetched_at or metadata.get("fetched_at") or _company_intake_now_iso()
+    source_endpoint = source_endpoint or metadata.get("endpoint")
+    if not simulation_used:
+        simulation_used = bool(metadata.get("simulation"))
+    db.execute(
+        """
+        INSERT INTO company_registry_lookups (
+            id, provider, jurisdiction, company_number, query, result_type,
+            raw_response_json, normalized_json, response_hash, fetched_at,
+            fetched_by, application_id, status, error_code, source_endpoint,
+            simulation_used, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            lookup_id,
+            provider,
+            jurisdiction,
+            company_number,
+            query,
+            result_type,
+            _company_intake_json(raw_response) if raw_response is not None else None,
+            _company_intake_json(normalized) if normalized is not None else None,
+            response_hash,
+            fetched_at,
+            fetched_by,
+            application_id,
+            status,
+            error_code,
+            source_endpoint,
+            bool(simulation_used),
+            _company_intake_now_iso(),
+            _company_intake_now_iso(),
+        ),
+    )
+    return lookup_id, response_hash
+
+
+def _company_intake_find_existing_draft(db, client_id, provider, company_number):
+    rows = db.execute(
+        """
+        SELECT id, ref, company_name, prescreening_data
+        FROM applications
+        WHERE client_id = ? AND status = 'draft'
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        (client_id,),
+    ).fetchall()
+    target_provider = str(provider or "").strip().lower()
+    target_number = str(company_number or "").strip().lower()
+    for row in rows:
+        prescreening = parse_json_field(row.get("prescreening_data"), {})
+        registry = prescreening.get("registry_provenance") if isinstance(prescreening, dict) else {}
+        if not isinstance(registry, dict):
+            continue
+        if (
+            str(registry.get("provider") or "").strip().lower() == target_provider
+            and str(registry.get("company_number") or "").strip().lower() == target_number
+        ):
+            return row
+    return None
+
+
+_COMPANY_INTAKE_NON_TERMINAL_STAGES = (
+    "profile_verified",
+    "profile_confirmed",
+    "officers_confirmed",
+    "pscs_confirmed",
+)
+
+
+def _company_intake_find_active_session(db, *, client_id, provider, company_number, application_id):
+    placeholders = ",".join("?" for _ in _COMPANY_INTAKE_NON_TERMINAL_STAGES)
+    return db.execute(
+        f"""
+        SELECT s.*, a.ref AS application_ref, a.status AS application_status,
+               a.company_name AS application_company_name, a.prescreening_data
+        FROM company_intake_sessions s
+        JOIN applications a ON a.id = s.application_id
+        WHERE s.client_user_id = ?
+          AND s.application_id = ?
+          AND LOWER(COALESCE(s.provider, '')) = ?
+          AND LOWER(COALESCE(s.company_number, '')) = ?
+          AND s.stage IN ({placeholders})
+          AND a.status = 'draft'
+        ORDER BY s.updated_at DESC, s.created_at DESC
+        LIMIT 1
+        """,
+        (
+            client_id,
+            application_id,
+            str(provider or "").strip().lower(),
+            str(company_number or "").strip().lower(),
+            *_COMPANY_INTAKE_NON_TERMINAL_STAGES,
+        ),
+    ).fetchone()
+
+
+def _company_intake_start_response(*, session_id, stage, completion_score, app, created, lookup, company, session_reused):
+    return {
+        "success": True,
+        "session_reused": bool(session_reused),
+        "session": {
+            "id": session_id,
+            "stage": stage,
+            "completion_score": completion_score,
+        },
+        "application": {
+            "id": app["id"],
+            "ref": app.get("ref"),
+            "status": "draft",
+            "created": bool(created),
+        },
+        "registry_lookup": lookup,
+        "company": company,
+    }
+
+
+def _company_intake_create_or_reuse_application(db, *, client_id, profile, provider, company_number, country):
+    existing = _company_intake_find_existing_draft(db, client_id, provider, company_number)
+    if existing:
+        return dict(existing), False
+
+    app_id = uuid.uuid4().hex[:16]
+    ref = generate_ref()
+    company_name = first_non_empty(profile.get("company_name"), "Registry draft")
+    country_value = "United Kingdom" if _company_intake_country_is_gb(country) or _company_intake_profile_indicates_gb(profile) else country
+    db.execute(
+        """
+        INSERT INTO applications (
+            id, ref, client_id, company_name, brn, country, sector,
+            entity_type, ownership_structure, prescreening_data, status
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            app_id,
+            ref,
+            client_id,
+            company_name,
+            company_number,
+            country_value,
+            "",
+            profile.get("entity_type") or "",
+            "",
+            "{}",
+            "draft",
+        ),
+    )
+    return {
+        "id": app_id,
+        "ref": ref,
+        "company_name": company_name,
+        "prescreening_data": "{}",
+    }, True
+
+
+def _company_intake_update_application_registry_profile(db, app_id, profile, *, provider, country, lookup_id, response_hash):
+    row = db.execute("SELECT prescreening_data FROM applications WHERE id = ?", (app_id,)).fetchone() or {}
+    prescreening = parse_json_field(row.get("prescreening_data"), {})
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    metadata = _company_intake_registry_metadata(profile)
+    country_value = "United Kingdom" if _company_intake_country_is_gb(country) or _company_intake_profile_indicates_gb(profile) else country
+    prescreening["registry_provenance"] = {
+        "provider": provider,
+        "jurisdiction": profile.get("jurisdiction"),
+        "company_number": profile.get("company_number"),
+        "registry_lookup_id": lookup_id,
+        "source_metadata": metadata,
+        "response_hash": response_hash,
+        "simulation_used": bool(metadata.get("simulation")),
+        "source": provider,
+    }
+    prescreening["registry_profile"] = profile
+    prescreening.setdefault("country_of_incorporation", country_value)
+    prescreening.setdefault("registration_number", profile.get("company_number"))
+    prescreening.setdefault("brn", profile.get("company_number"))
+    db.execute(
+        """
+        UPDATE applications
+        SET company_name = ?, brn = ?, country = ?, entity_type = ?,
+            prescreening_data = ?, updated_at = ?, inputs_updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            first_non_empty(profile.get("company_name"), "Registry draft"),
+            profile.get("company_number"),
+            country_value,
+            profile.get("entity_type"),
+            json.dumps(prescreening, default=str, sort_keys=True),
+            _company_intake_now_iso(),
+            _company_intake_now_iso(),
+            app_id,
+        ),
+    )
+    return prescreening
+
+
+def _company_intake_get_owned_session(db, session_id, client_id):
+    return db.execute(
+        """
+        SELECT s.*, a.ref AS application_ref, a.status AS application_status,
+               a.company_name AS application_company_name, a.prescreening_data
+        FROM company_intake_sessions s
+        JOIN applications a ON a.id = s.application_id
+        WHERE s.id = ? AND s.client_user_id = ?
+        LIMIT 1
+        """,
+        (session_id, client_id),
+    ).fetchone()
+
+
+def _company_intake_lookup_row(db, lookup_id):
+    if not lookup_id:
+        return None
+    return db.execute(
+        """
+        SELECT id, provider, jurisdiction, company_number, query, result_type,
+               normalized_json, response_hash, fetched_at, fetched_by,
+               application_id, status, error_code, source_endpoint,
+               simulation_used, created_at, updated_at
+        FROM company_registry_lookups
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (lookup_id,),
+    ).fetchone()
+
+
+def _company_intake_session_payload(db, session):
+    item = dict(session)
+    item["missing_answers"] = parse_json_field(item.pop("missing_answers_json", None), [])
+    item["document_checklist"] = parse_json_field(item.pop("document_checklist_json", None), [])
+    item.pop("prescreening_data", None)
+    lookup = _company_intake_lookup_row(db, item.get("registry_lookup_id"))
+    if lookup:
+        lookup = dict(lookup)
+        lookup["normalized"] = parse_json_field(lookup.pop("normalized_json", None), {})
+        lookup["simulation_used"] = bool(lookup.get("simulation_used"))
+        item["registry_lookup"] = lookup
+    return item
+
+
+def _company_intake_update_session(db, session_id, *, stage, completion_score):
+    db.execute(
+        """
+        UPDATE company_intake_sessions
+        SET stage = ?, completion_score = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (stage, completion_score, _company_intake_now_iso(), session_id),
+    )
+
+
+def _company_intake_normalize_overrides(overrides):
+    normalized = []
+    if isinstance(overrides, dict):
+        iterable = overrides.items()
+        for field_name, spec in iterable:
+            if isinstance(spec, dict):
+                user_value = spec.get("value")
+                reason = spec.get("override_reason") or spec.get("reason")
+            else:
+                user_value = spec
+                reason = None
+            normalized.append({
+                "field_name": str(field_name),
+                "user_value": user_value,
+                "override_reason": reason,
+            })
+    elif isinstance(overrides, list):
+        for item in overrides:
+            if not isinstance(item, dict) or not item.get("field_name"):
+                continue
+            normalized.append({
+                "field_name": str(item.get("field_name")),
+                "user_value": item.get("user_value", item.get("value")),
+                "override_reason": item.get("override_reason") or item.get("reason"),
+            })
+    return normalized
+
+
+def _company_intake_profile_values(profile, country):
+    country_value = "United Kingdom" if _company_intake_country_is_gb(country) or _company_intake_profile_indicates_gb(profile) else country
+    sic_codes = profile.get("sic_codes") or []
+    return {
+        "registered_entity_name": profile.get("company_name"),
+        "entity_type": profile.get("entity_type"),
+        "registered_office_address": profile.get("registered_address"),
+        "incorporation_date": profile.get("incorporation_date"),
+        "country_of_incorporation": country_value,
+        "registration_number": profile.get("company_number"),
+        "company_number": profile.get("company_number"),
+        "sic_codes": sic_codes,
+        "business_activity": ", ".join(str(code) for code in sic_codes if str(code).strip()),
+    }
+
+
+def _company_intake_apply_profile_confirmation(db, *, app_id, profile, country, overrides, user, lookup_id, response_hash):
+    registry_values = _company_intake_profile_values(profile, country)
+    override_records = []
+    final_values = dict(registry_values)
+    override_index = {item["field_name"]: item for item in _company_intake_normalize_overrides(overrides)}
+    for field_name, override in override_index.items():
+        if field_name not in registry_values:
+            continue
+        registry_value = registry_values.get(field_name)
+        user_value = override.get("user_value")
+        if user_value == registry_value:
+            continue
+        final_values[field_name] = user_value
+        override_records.append({
+            "field_name": field_name,
+            "registry_value": registry_value,
+            "user_value": user_value,
+            "override_reason": override.get("override_reason"),
+            "overridden_at": _company_intake_now_iso(),
+            "overridden_by": _company_intake_user_id(user),
+        })
+
+    row = db.execute("SELECT prescreening_data FROM applications WHERE id = ?", (app_id,)).fetchone() or {}
+    prescreening = parse_json_field(row.get("prescreening_data"), {})
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    prescreening.update({
+        "registered_entity_name": final_values.get("registered_entity_name"),
+        "entity_type": final_values.get("entity_type"),
+        "registered_office_address": final_values.get("registered_office_address"),
+        "incorporation_date": final_values.get("incorporation_date"),
+        "country_of_incorporation": final_values.get("country_of_incorporation"),
+        "registration_number": final_values.get("registration_number"),
+        "brn": final_values.get("registration_number"),
+        "sic_codes": final_values.get("sic_codes") or [],
+        "business_activity": final_values.get("business_activity"),
+    })
+    prescreening["registry_profile"] = profile
+    prescreening["registry_sourced_values"] = registry_values
+    existing_overrides = prescreening.get("registry_field_overrides")
+    if not isinstance(existing_overrides, list):
+        existing_overrides = []
+    prescreening["registry_field_overrides"] = existing_overrides + override_records
+    provenance = prescreening.get("registry_provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+    provenance.update({
+        "provider": profile.get("provider"),
+        "jurisdiction": profile.get("jurisdiction"),
+        "company_number": profile.get("company_number"),
+        "registry_lookup_id": lookup_id,
+        "source_metadata": _company_intake_registry_metadata(profile),
+        "response_hash": response_hash,
+        "source": profile.get("provider"),
+    })
+    prescreening["registry_provenance"] = provenance
+    db.execute(
+        """
+        UPDATE applications
+        SET company_name = ?, brn = ?, country = ?, entity_type = ?,
+            prescreening_data = ?, updated_at = ?, inputs_updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            final_values.get("registered_entity_name"),
+            final_values.get("registration_number"),
+            final_values.get("country_of_incorporation"),
+            final_values.get("entity_type"),
+            json.dumps(prescreening, default=str, sort_keys=True),
+            _company_intake_now_iso(),
+            _company_intake_now_iso(),
+            app_id,
+        ),
+    )
+    return prescreening, override_records
+
+
+def _company_intake_person_key(prefix, company_number, *parts):
+    raw = "|".join(str(part or "").strip().lower() for part in (company_number, *parts))
+    return f"{prefix}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _company_intake_dob_from_month_year(value):
+    if not isinstance(value, dict):
+        return ""
+    year = value.get("year")
+    month = value.get("month")
+    if year and month:
+        try:
+            return f"{int(year):04d}-{int(month):02d}-01"
+        except Exception:
+            return ""
+    return ""
+
+
+def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response_hash, imported_by, company_number):
+    imported = 0
+    skipped = 0
+    for officer in officers or []:
+        if not isinstance(officer, dict):
+            continue
+        name = first_non_empty(officer.get("name"), officer.get("full_name"))
+        if not name:
+            skipped += 1
+            continue
+        role = str(officer.get("officer_role") or "").strip().lower()
+        if officer.get("resigned_on") or "secretary" in role or "director" not in role:
+            skipped += 1
+            continue
+        person_key = _company_intake_person_key("ch-dir", company_number, name, role)
+        existing = db.execute(
+            "SELECT id FROM directors WHERE application_id = ? AND person_key = ? LIMIT 1",
+            (app_id, person_key),
+        ).fetchone()
+        source_metadata = officer.get("source_metadata") if isinstance(officer.get("source_metadata"), dict) else {}
+        encrypted = encrypt_pii_fields({"nationality": officer.get("nationality") or ""}, PII_FIELDS_DIRECTORS)
+        values = (
+            person_key,
+            name,
+            encrypted.get("nationality", ""),
+            _company_intake_dob_from_month_year(officer.get("date_of_birth")),
+            "companies_house",
+            officer.get("officer_role"),
+            officer.get("officer_entity_type") or "unknown",
+            bool(officer.get("requires_individual_kyc")),
+            bool(officer.get("requires_corporate_structure_review")),
+            lookup_id,
+            response_hash,
+            json.dumps(source_metadata, default=str, sort_keys=True),
+            _company_intake_now_iso(),
+            imported_by,
+        )
+        if existing:
+            db.execute(
+                """
+                UPDATE directors
+                SET full_name = ?, nationality = ?, date_of_birth = ?, source = ?,
+                    officer_role = ?, officer_entity_type = ?,
+                    requires_individual_kyc = ?, requires_corporate_structure_review = ?,
+                    registry_lookup_id = ?, response_hash = ?, source_metadata_json = ?,
+                    imported_at = ?, imported_by = ?
+                WHERE application_id = ? AND person_key = ?
+                """,
+                values[1:] + (app_id, person_key),
+            )
+            skipped += 1
+            continue
+        db.execute(
+            """
+            INSERT INTO directors (
+                application_id, person_key, full_name, nationality, is_pep,
+                pep_declaration, date_of_birth, source, officer_role,
+                officer_entity_type, requires_individual_kyc,
+                requires_corporate_structure_review, registry_lookup_id,
+                response_hash, source_metadata_json, imported_at, imported_by
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                app_id,
+                person_key,
+                name,
+                encrypted.get("nationality", ""),
+                "No",
+                "{}",
+                _company_intake_dob_from_month_year(officer.get("date_of_birth")),
+                "companies_house",
+                officer.get("officer_role"),
+                officer.get("officer_entity_type") or "unknown",
+                bool(officer.get("requires_individual_kyc")),
+                bool(officer.get("requires_corporate_structure_review")),
+                lookup_id,
+                response_hash,
+                json.dumps(source_metadata, default=str, sort_keys=True),
+                _company_intake_now_iso(),
+                imported_by,
+            ),
+        )
+        imported += 1
+    return imported, skipped
+
+
+def _company_intake_store_psc_review_metadata(db, *, app_id, psc_result, lookup_id, response_hash, imported_by):
+    row = db.execute("SELECT prescreening_data FROM applications WHERE id = ?", (app_id,)).fetchone() or {}
+    prescreening = parse_json_field(row.get("prescreening_data"), {})
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    state = psc_result.get("psc_state")
+    metadata = {
+        "psc_state": state,
+        "registry_statement_type": psc_result.get("registry_statement_type"),
+        "psc_status_reason": psc_result.get("psc_status_reason"),
+        "registry_lookup_id": lookup_id,
+        "response_hash": response_hash,
+        "imported_at": _company_intake_now_iso(),
+        "imported_by": imported_by,
+        "source": "companies_house",
+    }
+    if state in {"no_psc", "psc_exempt"}:
+        prescreening["psc_review"] = metadata
+    if state == "corporate_psc":
+        prescreening["corporate_ownership_review"] = metadata
+    db.execute(
+        "UPDATE applications SET prescreening_data = ?, updated_at = ?, inputs_updated_at = ? WHERE id = ?",
+        (json.dumps(prescreening, default=str, sort_keys=True), _company_intake_now_iso(), _company_intake_now_iso(), app_id),
+    )
+
+
+def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_hash, imported_by, company_number):
+    state = psc_result.get("psc_state")
+    owners = psc_result.get("beneficial_owners") if isinstance(psc_result, dict) else []
+    if not isinstance(owners, list):
+        owners = []
+    imported = 0
+    skipped = 0
+    for owner in owners:
+        if not isinstance(owner, dict):
+            continue
+        name = first_non_empty(owner.get("name"), owner.get("full_name"))
+        if not name:
+            skipped += 1
+            continue
+        person_key = _company_intake_person_key("ch-psc", company_number, name, state, owner.get("kind"))
+        existing = db.execute(
+            "SELECT id FROM ubos WHERE application_id = ? AND person_key = ? LIMIT 1",
+            (app_id, person_key),
+        ).fetchone()
+        encrypted = encrypt_pii_fields({"nationality": owner.get("nationality") or ""}, PII_FIELDS_UBOS)
+        metadata = _company_intake_registry_metadata(psc_result)
+        common_values = (
+            name,
+            encrypted.get("nationality", ""),
+            _company_intake_dob_from_month_year(owner.get("date_of_birth")),
+            "companies_house",
+            state,
+            psc_result.get("registry_statement_type"),
+            psc_result.get("psc_status_reason"),
+            owner.get("kind"),
+            True,
+            lookup_id,
+            response_hash,
+            json.dumps(metadata, default=str, sort_keys=True),
+            _company_intake_now_iso(),
+            imported_by,
+        )
+        if existing:
+            db.execute(
+                """
+                UPDATE ubos
+                SET full_name = ?, nationality = ?, date_of_birth = ?, source = ?,
+                    psc_state = ?, registry_statement_type = ?, psc_status_reason = ?,
+                    psc_kind = ?, is_candidate_ubo = ?, registry_lookup_id = ?,
+                    response_hash = ?, source_metadata_json = ?, imported_at = ?, imported_by = ?
+                WHERE application_id = ? AND person_key = ?
+                """,
+                common_values + (app_id, person_key),
+            )
+            skipped += 1
+            continue
+        db.execute(
+            """
+            INSERT INTO ubos (
+                application_id, person_key, full_name, nationality, ownership_pct,
+                is_pep, pep_declaration, date_of_birth, source, psc_state,
+                registry_statement_type, psc_status_reason, psc_kind,
+                is_candidate_ubo, registry_lookup_id, response_hash,
+                source_metadata_json, imported_at, imported_by
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                app_id,
+                person_key,
+                name,
+                encrypted.get("nationality", ""),
+                None,
+                "No",
+                "{}",
+                _company_intake_dob_from_month_year(owner.get("date_of_birth")),
+                "companies_house",
+                state,
+                psc_result.get("registry_statement_type"),
+                psc_result.get("psc_status_reason"),
+                owner.get("kind"),
+                True,
+                lookup_id,
+                response_hash,
+                json.dumps(metadata, default=str, sort_keys=True),
+                _company_intake_now_iso(),
+                imported_by,
+            ),
+        )
+        imported += 1
+    return imported, skipped
+
+
 class _CompanyIntakeBaseHandler(BaseHandler):
     provider_endpoint = ""
     result_key = "result"
@@ -21753,6 +22422,529 @@ class CompanyIntakePSCsHandler(_CompanyIntakeBaseHandler):
             company_number,
             lambda: get_companies_house_pscs(company_number),
         )
+
+
+class CompanyIntakeStartHandler(BaseHandler):
+    """POST /api/company-intake/start — server-side registry verification and draft creation."""
+
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+        if not _company_intake_require_client(self, user):
+            return
+
+        data = self.get_json()
+        provider = str(data.get("provider") or "").strip().lower()
+        country = first_non_empty(data.get("country_of_incorporation"), data.get("country"))
+        company_number = str(data.get("company_number") or "").strip()
+        selected_result = data.get("selected_registry_result")
+        selected_jurisdiction = selected_result.get("jurisdiction") if isinstance(selected_result, dict) else data.get("jurisdiction")
+
+        if provider != "companies_house":
+            return self.error("Only Companies House company intake is supported in this step.", 400)
+        if not company_number:
+            return self.error("company_number is required.", 400)
+
+        client_id = _company_intake_user_id(user)
+        db = get_db()
+        try:
+            existing_app = _company_intake_find_existing_draft(db, client_id, provider, company_number)
+            if existing_app:
+                existing_app = dict(existing_app)
+                active_session = _company_intake_find_active_session(
+                    db,
+                    client_id=client_id,
+                    provider=provider,
+                    company_number=company_number,
+                    application_id=existing_app["id"],
+                )
+                if active_session:
+                    session_payload = _company_intake_session_payload(db, active_session)
+                    lookup_payload = session_payload.get("registry_lookup") or {}
+                    company = lookup_payload.get("normalized") if isinstance(lookup_payload.get("normalized"), dict) else {}
+                    registry_lookup = {
+                        "id": lookup_payload.get("id"),
+                        "provider": lookup_payload.get("provider"),
+                        "jurisdiction": lookup_payload.get("jurisdiction"),
+                        "company_number": lookup_payload.get("company_number"),
+                        "response_hash": lookup_payload.get("response_hash"),
+                        "source_endpoint": lookup_payload.get("source_endpoint"),
+                        "simulation_used": bool(lookup_payload.get("simulation_used")),
+                    }
+                    self.log_audit(
+                        user,
+                        "Company Intake Start",
+                        existing_app.get("ref") or existing_app["id"],
+                        json.dumps({
+                            "provider": provider,
+                            "company_number": company_number,
+                            "registry_lookup_id": active_session.get("registry_lookup_id"),
+                            "application_id": existing_app["id"],
+                            "draft_created": False,
+                            "session_reused": True,
+                        }, sort_keys=True),
+                        db=db,
+                        commit=False,
+                    )
+                    db.commit()
+                    self.success(_company_intake_start_response(
+                        session_id=active_session["id"],
+                        stage=active_session.get("stage") or "profile_verified",
+                        completion_score=active_session.get("completion_score") or 0,
+                        app=existing_app,
+                        created=False,
+                        lookup=registry_lookup,
+                        company=company,
+                        session_reused=True,
+                    ), 200)
+                    return
+        finally:
+            db.close()
+
+        raw_profile = get_companies_house_profile_with_raw(company_number)
+        if is_company_registry_provider_error(raw_profile):
+            self.set_status(provider_error_http_status(raw_profile))
+            self.write(raw_profile)
+            return
+
+        profile = raw_profile.get("normalized") if isinstance(raw_profile, dict) else None
+        if not isinstance(profile, dict):
+            self.set_status(provider_error_http_status(provider_error("provider_malformed_response")))
+            self.write(provider_error("provider_malformed_response"))
+            return
+
+        is_uk = (
+            provider == "companies_house"
+            and (
+                _company_intake_country_is_gb(country)
+                or _company_intake_country_is_gb(selected_jurisdiction)
+                or _company_intake_profile_indicates_gb(profile)
+            )
+        )
+        if not is_uk:
+            return self.error("Companies House intake requires a GB / United Kingdom registry profile.", 400)
+
+        db = get_db()
+        try:
+            app, created = _company_intake_create_or_reuse_application(
+                db,
+                client_id=client_id,
+                profile=profile,
+                provider=provider,
+                company_number=profile.get("company_number") or company_number,
+                country=country,
+            )
+            active_session = _company_intake_find_active_session(
+                db,
+                client_id=client_id,
+                provider=provider,
+                company_number=profile.get("company_number") or company_number,
+                application_id=app["id"],
+            )
+            if active_session:
+                session_payload = _company_intake_session_payload(db, active_session)
+                lookup_payload = session_payload.get("registry_lookup") or {}
+                company = lookup_payload.get("normalized") if isinstance(lookup_payload.get("normalized"), dict) else profile
+                registry_lookup = {
+                    "id": lookup_payload.get("id"),
+                    "provider": lookup_payload.get("provider"),
+                    "jurisdiction": lookup_payload.get("jurisdiction"),
+                    "company_number": lookup_payload.get("company_number"),
+                    "response_hash": lookup_payload.get("response_hash"),
+                    "source_endpoint": lookup_payload.get("source_endpoint"),
+                    "simulation_used": bool(lookup_payload.get("simulation_used")),
+                }
+                self.log_audit(
+                    user,
+                    "Company Intake Start",
+                    app.get("ref") or app["id"],
+                    json.dumps({
+                        "provider": provider,
+                        "company_number": profile.get("company_number") or company_number,
+                        "registry_lookup_id": active_session.get("registry_lookup_id"),
+                        "application_id": app["id"],
+                        "draft_created": False,
+                        "session_reused": True,
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                )
+                db.commit()
+                self.success(_company_intake_start_response(
+                    session_id=active_session["id"],
+                    stage=active_session.get("stage") or "profile_verified",
+                    completion_score=active_session.get("completion_score") or 0,
+                    app=app,
+                    created=False,
+                    lookup=registry_lookup,
+                    company=company,
+                    session_reused=True,
+                ), 200)
+                return
+            lookup_id, response_hash = _company_intake_persist_lookup(
+                db,
+                provider=provider,
+                jurisdiction=profile.get("jurisdiction"),
+                company_number=profile.get("company_number") or company_number,
+                query=data.get("query"),
+                result_type="profile",
+                raw_response=raw_profile.get("raw_response"),
+                normalized=profile,
+                response_hash=raw_profile.get("response_hash"),
+                fetched_at=raw_profile.get("fetched_at"),
+                fetched_by=client_id,
+                application_id=app["id"],
+                status="success",
+                source_endpoint=raw_profile.get("source_endpoint"),
+                simulation_used=bool(raw_profile.get("simulation_used")),
+            )
+            prescreening = _company_intake_update_application_registry_profile(
+                db,
+                app["id"],
+                profile,
+                provider=provider,
+                country=country,
+                lookup_id=lookup_id,
+                response_hash=response_hash,
+            )
+            session_id = uuid.uuid4().hex[:16]
+            db.execute(
+                """
+                INSERT INTO company_intake_sessions (
+                    id, application_id, client_user_id, registry_lookup_id,
+                    country_of_incorporation, provider, company_number, stage,
+                    completion_score, missing_answers_json, document_checklist_json,
+                    created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    session_id,
+                    app["id"],
+                    client_id,
+                    lookup_id,
+                    prescreening.get("country_of_incorporation"),
+                    provider,
+                    profile.get("company_number") or company_number,
+                    "profile_verified",
+                    0.25,
+                    "[]",
+                    "[]",
+                    _company_intake_now_iso(),
+                    _company_intake_now_iso(),
+                ),
+            )
+            self.log_audit(
+                user,
+                "Company Intake Start",
+                app.get("ref") or app["id"],
+                json.dumps({
+                    "provider": provider,
+                    "company_number": profile.get("company_number") or company_number,
+                    "registry_lookup_id": lookup_id,
+                    "application_id": app["id"],
+                    "draft_created": created,
+                    "session_reused": False,
+                    "simulation_used": bool(raw_profile.get("simulation_used")),
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        self.success(_company_intake_start_response(
+            session_id=session_id,
+            stage="profile_verified",
+            completion_score=0.25,
+            app=app,
+            created=created,
+            lookup={
+                "id": lookup_id,
+                "provider": provider,
+                "jurisdiction": profile.get("jurisdiction"),
+                "company_number": profile.get("company_number") or company_number,
+                "response_hash": response_hash,
+                "source_endpoint": raw_profile.get("source_endpoint"),
+                "simulation_used": bool(raw_profile.get("simulation_used")),
+            },
+            company=profile,
+            session_reused=False,
+        ), 201 if created else 200)
+
+
+class CompanyIntakeConfirmProfileHandler(BaseHandler):
+    """POST /api/company-intake/confirm-profile — write confirmed profile to draft application."""
+
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+        if not _company_intake_require_client(self, user):
+            return
+
+        data = self.get_json()
+        session_id = str(data.get("session_id") or "").strip()
+        if not session_id:
+            return self.error("session_id is required.", 400)
+
+        db = get_db()
+        try:
+            session = _company_intake_get_owned_session(db, session_id, _company_intake_user_id(user))
+            if not session:
+                return self.error("Company intake session not found.", 404)
+            if session.get("application_status") != "draft":
+                return self.error("Company intake profile can only update a draft application.", 403)
+            lookup = _company_intake_lookup_row(db, session.get("registry_lookup_id"))
+            lookup_profile = parse_json_field(lookup.get("normalized_json") if lookup else None, {})
+            profile = lookup_profile if lookup_profile else (data.get("company") or data.get("profile"))
+            if not isinstance(profile, dict):
+                return self.error("A normalized company profile is required.", 400)
+            response_hash = (lookup or {}).get("response_hash") or _company_intake_registry_metadata(profile).get("response_hash") or _company_intake_hash(profile)
+            _prescreening, overrides = _company_intake_apply_profile_confirmation(
+                db,
+                app_id=session["application_id"],
+                profile=profile,
+                country=session.get("country_of_incorporation"),
+                overrides=data.get("overrides") or data.get("field_overrides"),
+                user=user,
+                lookup_id=session.get("registry_lookup_id"),
+                response_hash=response_hash,
+            )
+            _company_intake_update_session(db, session_id, stage="profile_confirmed", completion_score=0.45)
+            self.log_audit(
+                user,
+                "Company Intake Confirm Profile",
+                session.get("application_ref") or session["application_id"],
+                json.dumps({
+                    "session_id": session_id,
+                    "application_id": session["application_id"],
+                    "registry_lookup_id": session.get("registry_lookup_id"),
+                    "override_count": len(overrides),
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        self.success({
+            "success": True,
+            "session_id": session_id,
+            "application_id": session["application_id"],
+            "stage": "profile_confirmed",
+            "completion_score": 0.45,
+            "override_count": len(overrides),
+            "company": profile,
+        })
+
+
+class CompanyIntakeConfirmOfficersHandler(BaseHandler):
+    """POST /api/company-intake/confirm-officers — import director candidates."""
+
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+        if not _company_intake_require_client(self, user):
+            return
+
+        data = self.get_json()
+        session_id = str(data.get("session_id") or "").strip()
+        officers = data.get("officers") or data.get("director_candidates")
+        if not session_id:
+            return self.error("session_id is required.", 400)
+        if not isinstance(officers, list):
+            return self.error("officers must be a list of normalized officer candidates.", 400)
+
+        db = get_db()
+        try:
+            session = _company_intake_get_owned_session(db, session_id, _company_intake_user_id(user))
+            if not session:
+                return self.error("Company intake session not found.", 404)
+            if session.get("application_status") != "draft":
+                return self.error("Company intake officers can only update a draft application.", 403)
+            metadata = _company_intake_registry_metadata(officers)
+            lookup_id, response_hash = _company_intake_persist_lookup(
+                db,
+                provider=session.get("provider") or "companies_house",
+                jurisdiction="GB",
+                company_number=session.get("company_number"),
+                result_type="officers",
+                normalized=officers,
+                response_hash=metadata.get("response_hash"),
+                fetched_at=metadata.get("fetched_at"),
+                fetched_by=_company_intake_user_id(user),
+                application_id=session["application_id"],
+                status="confirmed",
+                source_endpoint=metadata.get("endpoint"),
+                simulation_used=bool(metadata.get("simulation")),
+            )
+            imported, skipped = _company_intake_import_officers(
+                db,
+                app_id=session["application_id"],
+                officers=officers,
+                lookup_id=lookup_id,
+                response_hash=response_hash,
+                imported_by=_company_intake_user_id(user),
+                company_number=session.get("company_number"),
+            )
+            _company_intake_update_session(db, session_id, stage="officers_confirmed", completion_score=0.65)
+            self.log_audit(
+                user,
+                "Company Intake Confirm Officers",
+                session.get("application_ref") or session["application_id"],
+                json.dumps({
+                    "session_id": session_id,
+                    "application_id": session["application_id"],
+                    "registry_lookup_id": lookup_id,
+                    "imported_count": imported,
+                    "skipped_count": skipped,
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        self.success({
+            "success": True,
+            "session_id": session_id,
+            "application_id": session["application_id"],
+            "stage": "officers_confirmed",
+            "completion_score": 0.65,
+            "registry_lookup_id": lookup_id,
+            "imported_count": imported,
+            "skipped_count": skipped,
+        })
+
+
+class CompanyIntakeConfirmPSCsHandler(BaseHandler):
+    """POST /api/company-intake/confirm-pscs — import PSC/UBO candidates and review metadata."""
+
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+        if not _company_intake_require_client(self, user):
+            return
+
+        data = self.get_json()
+        session_id = str(data.get("session_id") or "").strip()
+        psc_result = data.get("pscs") or data.get("psc_result")
+        if isinstance(psc_result, list):
+            psc_result = {
+                "provider": "companies_house",
+                "jurisdiction": "GB",
+                "company_number": data.get("company_number"),
+                "psc_state": "psc_found",
+                "beneficial_owners": psc_result,
+            }
+        if not session_id:
+            return self.error("session_id is required.", 400)
+        if not isinstance(psc_result, dict):
+            return self.error("pscs must be a normalized PSC result object.", 400)
+
+        state = psc_result.get("psc_state")
+        if state not in {"psc_found", "no_psc", "psc_exempt", "corporate_psc"}:
+            return self.error("Unsupported psc_state.", 400)
+
+        db = get_db()
+        try:
+            session = _company_intake_get_owned_session(db, session_id, _company_intake_user_id(user))
+            if not session:
+                return self.error("Company intake session not found.", 404)
+            if session.get("application_status") != "draft":
+                return self.error("Company intake PSCs can only update a draft application.", 403)
+            metadata = _company_intake_registry_metadata(psc_result)
+            lookup_id, response_hash = _company_intake_persist_lookup(
+                db,
+                provider=session.get("provider") or "companies_house",
+                jurisdiction=psc_result.get("jurisdiction") or "GB",
+                company_number=session.get("company_number") or psc_result.get("company_number"),
+                result_type="pscs",
+                normalized=psc_result,
+                response_hash=metadata.get("response_hash"),
+                fetched_at=metadata.get("fetched_at"),
+                fetched_by=_company_intake_user_id(user),
+                application_id=session["application_id"],
+                status="confirmed",
+                source_endpoint=metadata.get("endpoint"),
+                simulation_used=bool(metadata.get("simulation")),
+            )
+            imported, skipped = (0, 0)
+            if state in {"psc_found", "corporate_psc"}:
+                imported, skipped = _company_intake_import_pscs(
+                    db,
+                    app_id=session["application_id"],
+                    psc_result=psc_result,
+                    lookup_id=lookup_id,
+                    response_hash=response_hash,
+                    imported_by=_company_intake_user_id(user),
+                    company_number=session.get("company_number") or psc_result.get("company_number"),
+                )
+            _company_intake_store_psc_review_metadata(
+                db,
+                app_id=session["application_id"],
+                psc_result=psc_result,
+                lookup_id=lookup_id,
+                response_hash=response_hash,
+                imported_by=_company_intake_user_id(user),
+            )
+            _company_intake_update_session(db, session_id, stage="pscs_confirmed", completion_score=0.8)
+            self.log_audit(
+                user,
+                "Company Intake Confirm PSCs",
+                session.get("application_ref") or session["application_id"],
+                json.dumps({
+                    "session_id": session_id,
+                    "application_id": session["application_id"],
+                    "registry_lookup_id": lookup_id,
+                    "psc_state": state,
+                    "imported_count": imported,
+                    "skipped_count": skipped,
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        self.success({
+            "success": True,
+            "session_id": session_id,
+            "application_id": session["application_id"],
+            "stage": "pscs_confirmed",
+            "completion_score": 0.8,
+            "registry_lookup_id": lookup_id,
+            "psc_state": state,
+            "imported_count": imported,
+            "skipped_count": skipped,
+        })
+
+
+class CompanyIntakeSessionHandler(BaseHandler):
+    """GET /api/company-intake/session/:session_id — client-owned intake progress."""
+
+    def get(self, session_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if not _company_intake_require_client(self, user):
+            return
+        db = get_db()
+        try:
+            session = _company_intake_get_owned_session(db, session_id, _company_intake_user_id(user))
+            if not session:
+                return self.error("Company intake session not found.", 404)
+            payload = _company_intake_session_payload(db, session)
+        finally:
+            db.close()
+        self.success({"success": True, "session": payload})
 
 
 class IPCheckHandler(BaseHandler):
@@ -32820,6 +34012,11 @@ def make_app():
         (r"/api/screening/company", CompanyLookupHandler),
         (r"/api/screening/ip", IPCheckHandler),
         (r"/api/screening/status", APIStatusHandler),
+        (r"/api/company-intake/start", CompanyIntakeStartHandler),
+        (r"/api/company-intake/confirm-profile", CompanyIntakeConfirmProfileHandler),
+        (r"/api/company-intake/confirm-officers", CompanyIntakeConfirmOfficersHandler),
+        (r"/api/company-intake/confirm-pscs", CompanyIntakeConfirmPSCsHandler),
+        (r"/api/company-intake/session/([^/]+)", CompanyIntakeSessionHandler),
         (r"/api/company-intake/search", CompanyIntakeSearchHandler),
         (r"/api/company-intake/company/([^/]+)/officers", CompanyIntakeOfficersHandler),
         (r"/api/company-intake/company/([^/]+)/pscs", CompanyIntakePSCsHandler),
