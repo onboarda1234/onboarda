@@ -108,6 +108,8 @@ SUMSUB_WEBHOOK_SECRET = os.getenv("SUMSUB_WEBHOOK_SECRET", "")
 
 OPENCORPORATES_API_KEY = os.getenv("OPENCORPORATES_API_KEY", "")
 OPENCORPORATES_API_URL = os.getenv("OPENCORPORATES_API_URL", "https://api.opencorporates.com/v0.4")
+COMPANIES_HOUSE_API_KEY = os.getenv("COMPANIES_HOUSE_API_KEY", "")
+COMPANIES_HOUSE_API_URL = os.getenv("COMPANIES_HOUSE_API_URL", "https://api.company-information.service.gov.uk")
 IP_GEOLOCATION_API_KEY = os.getenv("IP_GEOLOCATION_API_KEY", "")
 IP_GEOLOCATION_API_URL = os.getenv("IP_GEOLOCATION_API_URL", "https://ipapi.co")
 
