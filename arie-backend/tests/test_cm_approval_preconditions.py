@@ -14,6 +14,8 @@ Covers the approval gate added to Change Management:
 """
 
 import secrets
+from datetime import datetime, timezone
+from decimal import Decimal
 
 
 def _get_cm():
@@ -235,6 +237,57 @@ class TestScreeningEvidence:
         import json
         results = json.loads(detail["precondition_results"]) if isinstance(detail.get("precondition_results"), str) else detail.get("precondition_results")
         assert results["risk"]["risk_level"] == "HIGH"
+
+    def test_persisted_risk_snapshot_sanitizes_non_json_primitives(self, db, monkeypatch):
+        cm = _get_cm(); wdb = _DBWrapper(db)
+        app_id = _setup_app(db, risk_level="LOW")
+        req = _make_cr(cm, wdb, app_id, "tier1", creator=CREATOR)
+
+        def odd_persisted_snapshot(_db, _app_id):
+            assert _app_id == app_id
+            return {
+                "risk_level": b"VERY HIGH",
+                "risk_score": Decimal("42.5"),
+                "risk_computed_at": datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+            }
+
+        monkeypatch.setattr(cm, "_app_risk_snapshot", odd_persisted_snapshot)
+        ok, err = cm.record_precondition_result(wdb, req["id"], "risk", SCO)
+        assert ok, err
+        detail = cm.get_change_request_detail(wdb, req["id"])
+        import json
+        results = json.loads(detail["precondition_results"]) if isinstance(detail.get("precondition_results"), str) else detail.get("precondition_results")
+        assert results["risk"]["risk_level"] == "VERY_HIGH"
+        assert results["risk"]["risk_score"] == 42.5
+        assert results["risk"]["risk_computed_at"] == "2026-01-02T03:04:05+00:00"
+
+    def test_persisted_risk_odd_shape_rejected_without_exception(self, db, monkeypatch):
+        cm = _get_cm(); wdb = _DBWrapper(db)
+        req = _make_cr(cm, wdb, _setup_app(db, risk_level="LOW"), "tier1", creator=CREATOR)
+
+        class OddRiskLevel:
+            def __str__(self):
+                return "not-a-risk-level"
+
+        monkeypatch.setattr(cm, "_app_risk_snapshot", lambda _db, _app_id: {"risk_level": OddRiskLevel()})
+        ok, err = cm.record_precondition_result(wdb, req["id"], "risk", SCO)
+        assert not ok
+        assert "risk_result_invalid_level" in err
+
+    def test_explicit_json_safe_risk_evidence_still_records(self, db):
+        cm = _get_cm(); wdb = _DBWrapper(db)
+        req = _make_cr(cm, wdb, _setup_app(db, risk_level=None), "tier1", creator=CREATOR)
+        ok, err = cm.record_precondition_result(
+            wdb, req["id"], "risk", SCO,
+            result={"risk_level": "VERY HIGH", "risk_score": 71, "risk_computed_at": "2026-01-02T03:04:05Z"},
+        )
+        assert ok, err
+        detail = cm.get_change_request_detail(wdb, req["id"])
+        import json
+        results = json.loads(detail["precondition_results"]) if isinstance(detail.get("precondition_results"), str) else detail.get("precondition_results")
+        assert results["risk"]["risk_level"] == "VERY_HIGH"
+        assert results["risk"]["risk_score"] == 71
+        assert results["risk"]["risk_computed_at"] == "2026-01-02T03:04:05Z"
 
     def test_recorded_unresolved_match_blocks_and_not_overridable(self, db):
         cm = _get_cm(); wdb = _DBWrapper(db)

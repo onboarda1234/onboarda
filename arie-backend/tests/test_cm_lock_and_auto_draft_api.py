@@ -465,3 +465,49 @@ def test_approved_correction_fails_closed_when_cm_unavailable(api_server):
     # Approved profile untouched and no draft created when CM is down.
     assert _live(db_path, case["app_id"], "sector") == "Technology"
     assert _cr_count(db_path, case["app_id"]) == 0
+
+
+def test_risk_precondition_missing_evidence_returns_structured_409(api_server):
+    base_url, db_path = api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, sector="Technology")
+    conn.execute(
+        "UPDATE applications SET risk_level = NULL, risk_score = NULL, risk_computed_at = NULL WHERE id = ?",
+        (case["app_id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    create_resp = requests.post(
+        f"{base_url}/api/change-management/requests",
+        headers=_headers("co"),
+        json={
+            "application_id": case["app_id"],
+            "source": "backoffice_manual",
+            "source_channel": "backoffice",
+            "reason": "API regression: missing persisted risk evidence",
+            "items": [{
+                "change_type": "business_activity_change",
+                "field_name": "sector",
+                "old_value": "Technology",
+                "new_value": "Virtual assets",
+                "materiality": "tier1",
+            }],
+        },
+        timeout=5,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    request_id = create_resp.json()["id"]
+
+    precondition_resp = requests.post(
+        f"{base_url}/api/change-management/requests/{request_id}/preconditions",
+        headers=_headers("sco"),
+        json={"kind": "risk"},
+        timeout=5,
+    )
+    assert precondition_resp.status_code == 409, precondition_resp.text
+    body = precondition_resp.json()
+    assert body["action"] == "precondition_blocked"
+    assert body["kind"] == "risk"
+    assert body["code"] == "risk_result_evidence_missing"
+    assert body["blockers"][0]["code"] == "risk_result_evidence_missing"

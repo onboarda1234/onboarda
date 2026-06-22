@@ -16,8 +16,10 @@ This module provides:
 
 import json
 import logging
+import math
 import secrets
 from datetime import datetime, date, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -1018,11 +1020,56 @@ _PRECONDITION_LOCKED_STATUSES = frozenset({
 })
 
 
+def _json_safe_precondition_value(value):
+    """Return a JSON-safe copy of persisted precondition evidence."""
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value.hex()
+    if isinstance(value, Decimal):
+        if value.is_finite():
+            return int(value) if value == value.to_integral_value() else float(value)
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe_precondition_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_precondition_value(v) for v in value]
+    try:
+        return _json_safe_precondition_value(dict(value))
+    except Exception:
+        pass
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _json_safe_precondition_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return _json_safe_precondition_value(payload) or {}
+
+
+def _coerce_text(value):
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value.hex()
+    return value
+
+
 def _normalize_risk_level(v) -> Optional[str]:
     """Normalize a risk level to the canonical set, or None if unrecognized."""
     if not v:
         return None
-    n = str(v).strip().upper().replace(" ", "_")
+    n = str(_coerce_text(v)).strip().upper().replace(" ", "_")
     return n if n in VALID_RISK_LEVELS else None
 
 
@@ -1131,11 +1178,11 @@ def _app_risk_snapshot(db, application_id: str) -> Dict[str, Any]:
         if not row:
             return {}
         d = dict(row)
-        return {
+        return _json_safe_precondition_payload({
             "risk_level": d.get("risk_level"),
             "risk_score": d.get("risk_score"),
             "risk_computed_at": d.get("risk_computed_at"),
-        }
+        })
     except Exception:
         return {}
 
@@ -1168,7 +1215,7 @@ def record_precondition_result(
     results = _load_precondition_results(request)
     now = datetime.now(timezone.utc).isoformat()
     sig = _request_content_signature(db, request_id)
-    extra = result if isinstance(result, dict) else {}
+    extra = _json_safe_precondition_payload(result) if isinstance(result, dict) else {}
 
     entry = {
         "result": "recorded",
@@ -1207,20 +1254,26 @@ def record_precondition_result(
             return False, (
                 "risk_result_invalid_level: risk level must be one of "
                 "LOW, MEDIUM, HIGH, VERY_HIGH (got: " + str(risk_level_raw) + ")"
-            )
+        )
         entry["risk_level"] = risk_level
+        if extra.get("risk_score") is not None or snap.get("risk_score") is not None:
+            entry["risk_score"] = (
+                extra.get("risk_score")
+                if extra.get("risk_score") is not None
+                else snap.get("risk_score")
+            )
         entry["risk_computed_at"] = extra.get("risk_computed_at") or snap.get("risk_computed_at")
         entry["risk_increased"] = (
             extra.get("risk_increased") if "risk_increased" in extra
             else _risk_increased(request.get("pre_change_risk_level"), risk_level)
         )
 
-    results[kind] = entry
+    results[kind] = _json_safe_precondition_payload(entry)
     # NOTE: deliberately does NOT bump updated_at — staleness is keyed on the
     # request content signature, not on status-transition timestamps.
     db.execute(
         "UPDATE change_requests SET precondition_results = ? WHERE id = ?",
-        (json.dumps(results), request_id),
+        (json.dumps(_json_safe_precondition_payload(results)), request_id),
     )
     db.commit()
 
