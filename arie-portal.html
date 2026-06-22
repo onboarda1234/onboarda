@@ -1030,7 +1030,7 @@
   .lookup-wrap { min-height:calc(100vh - 64px); display:flex; align-items:center; justify-content:center; padding:40px 24px; }
   .lookup-card {
     background:var(--bg2); border:1px solid var(--border); border-radius:20px;
-    padding:48px 52px; width:100%; max-width:580px;
+    padding:48px 52px; width:100%; max-width:960px;
     box-shadow:0 24px 64px rgba(0,0,0,0.10);
     animation: fadeInUp 0.5s ease-out;
   }
@@ -1042,6 +1042,86 @@
     background: linear-gradient(135deg, var(--brand-dim), rgba(79,70,229,0.08));
     border:1px solid rgba(43,47,143,0.2); color:var(--brand); font-size:11px; font-weight:600; margin-bottom:20px;
   }
+  .company-intake-progress { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:22px; }
+  .company-intake-progress-text { font-size:12px; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }
+  .company-intake-stepper { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:28px; }
+  .company-intake-step {
+    min-height:54px; border:1px solid var(--border); background:var(--bg);
+    border-radius:var(--radius-sm); padding:9px 10px; display:flex; align-items:center; gap:8px;
+    color:var(--text3); font-size:12px; font-weight:700;
+  }
+  .company-intake-step-number {
+    width:24px; height:24px; border-radius:50%; background:var(--bg3); color:var(--text3);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:11px;
+  }
+  .company-intake-step.active { border-color:rgba(43,47,143,0.35); background:rgba(43,47,143,0.06); color:var(--brand); }
+  .company-intake-step.active .company-intake-step-number { background:var(--brand); color:#fff; }
+  .company-intake-step.done { border-color:rgba(16,185,129,0.28); color:var(--green); background:var(--green-dim); }
+  .company-intake-step.done .company-intake-step-number { background:var(--green); color:#fff; }
+  @media(max-width:780px) {
+    .company-intake-stepper { grid-template-columns:1fr; }
+    .company-intake-step { min-height:44px; }
+  }
+  .company-intake-panel { display:none; }
+  .company-intake-panel.active { display:block; }
+  .company-intake-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:22px; }
+  .company-intake-actions .btn-submit { width:auto; margin-top:0; min-width:190px; }
+  .company-intake-secondary {
+    padding:12px 16px; border:1px solid var(--border2); border-radius:var(--radius-sm);
+    background:var(--bg2); color:var(--text2); cursor:pointer; font-family:inherit; font-size:13px; font-weight:700;
+  }
+  .company-intake-secondary:hover { border-color:var(--brand); color:var(--brand); background:var(--brand-dim); }
+  .company-intake-muted { font-size:12px; color:var(--text3); line-height:1.6; }
+  .company-intake-alert {
+    display:none; padding:12px 14px; border-radius:var(--radius-sm); margin:14px 0;
+    font-size:13px; line-height:1.5; border:1px solid var(--border);
+  }
+  .company-intake-alert.info { display:block; background:rgba(43,47,143,0.06); border-color:rgba(43,47,143,0.24); color:var(--text2); }
+  .company-intake-alert.warn { display:block; background:var(--amber-dim); border-color:rgba(245,158,11,0.28); color:var(--text2); }
+  .company-intake-alert.error { display:block; background:var(--red-dim); border-color:rgba(239,68,68,0.25); color:var(--text2); }
+  .company-intake-loading { display:none; align-items:center; gap:10px; color:var(--text2); font-size:13px; margin:14px 0; }
+  .company-intake-loading.active { display:flex; }
+  .company-intake-spinner { width:16px; height:16px; border-radius:50%; border:2px solid var(--brand-dim); border-top-color:var(--brand); animation:spin 0.8s linear infinite; }
+  .company-intake-results { display:flex; flex-direction:column; gap:10px; margin-top:16px; }
+  .company-intake-result {
+    border:1px solid var(--border); background:var(--bg); border-radius:var(--radius-sm);
+    padding:16px; display:grid; grid-template-columns:1fr auto; gap:14px; align-items:center;
+  }
+  .company-intake-result-name { font-size:15px; font-weight:800; margin-bottom:6px; }
+  .company-intake-result-meta { display:flex; flex-wrap:wrap; gap:8px; color:var(--text2); font-size:12px; line-height:1.5; }
+  .company-intake-result-address { margin-top:8px; color:var(--text3); font-size:12px; line-height:1.5; }
+  .company-intake-result button {
+    padding:10px 14px; border-radius:var(--radius-sm); border:1px solid var(--brand); background:var(--brand); color:#fff;
+    font-weight:700; cursor:pointer; font-family:inherit;
+  }
+  @media(max-width:640px) { .company-intake-result { grid-template-columns:1fr; } }
+  .company-intake-summary {
+    border:1px solid var(--border); background:var(--bg); border-radius:var(--radius); padding:18px; margin-top:14px;
+  }
+  .company-intake-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+  @media(max-width:720px) { .company-intake-grid { grid-template-columns:1fr; } }
+  .company-intake-field { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:11px 12px; }
+  .company-intake-label { font-size:10px; color:var(--text3); font-weight:800; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px; }
+  .company-intake-value { font-size:13px; color:var(--text); font-weight:600; line-height:1.5; word-break:break-word; }
+  .company-intake-pill {
+    display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:99px;
+    background:var(--brand-dim); color:var(--brand); border:1px solid rgba(43,47,143,0.18);
+    font-size:11px; font-weight:800; margin:4px 6px 0 0;
+  }
+  .company-intake-review-list { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+  .company-intake-review-item {
+    border:1px solid var(--border); background:var(--bg); border-radius:var(--radius-sm);
+    padding:14px; display:flex; gap:12px; align-items:flex-start;
+  }
+  .company-intake-review-item input[type=checkbox] { margin-top:3px; accent-color:var(--brand); width:18px; height:18px; flex-shrink:0; }
+  .company-intake-review-main { flex:1; min-width:0; }
+  .company-intake-review-title { font-size:14px; font-weight:800; margin-bottom:5px; }
+  .company-intake-review-meta { display:flex; flex-wrap:wrap; gap:7px; color:var(--text2); font-size:12px; line-height:1.5; }
+  .company-intake-review-note { margin-top:8px; font-size:12px; color:var(--text3); line-height:1.5; }
+  .company-intake-edits { display:none; margin-top:14px; border:1px solid var(--border); border-radius:var(--radius-sm); padding:14px; background:var(--bg); }
+  .company-intake-edits.active { display:block; }
+  .company-intake-counts { display:none; margin-top:12px; font-size:13px; color:var(--text2); }
+  .company-intake-counts.active { display:block; }
 
   /* ── AI Search animation ── */
   .ai-search-overlay {
@@ -2038,148 +2118,143 @@
   <div id="view-company-lookup" class="hidden">
     <div class="lookup-wrap">
       <div class="lookup-card">
+        <div class="lookup-badge">Company Intake Assistant</div>
+        <div class="lookup-title">Start your company application</div>
+        <div class="lookup-sub">Search your company registry record to pre-fill your application and reduce manual entry. You remain responsible for confirming that the information is correct.</div>
 
-        <!-- Progress -->
-        <div class="steps" style="margin-bottom:32px;">
-          <div class="step done"><div class="step-circle">✓</div><div class="step-label">Register</div></div>
-          <div class="step active"><div class="step-circle">2</div><div class="step-label">Company Lookup</div></div>
-          <div class="step"><div class="step-circle">3</div><div class="step-label">Initial Review</div></div>
-          <div class="step"><div class="step-circle">4</div><div class="step-label">Review</div></div>
-          <div class="step"><div class="step-circle">5</div><div class="step-label">KYC Docs</div></div>
-          <div class="step"><div class="step-circle">6</div><div class="step-label">Approved</div></div>
+        <div class="company-intake-progress">
+          <div class="company-intake-progress-text" id="company-intake-progress-text">Step 1 of 5 - Find your company</div>
+          <div class="company-intake-muted">Registry information is source evidence and remains subject to compliance review.</div>
         </div>
 
-        <!-- Idle state: input form -->
-        <div id="lookup-idle">
-          <div class="lookup-badge">🏢 Company Details</div>
-          <div class="lookup-title">Tell us about your company</div>
-          <div class="lookup-sub">Enter your company's basic details below. These will be used to pre-fill your application form. You can review and edit all fields before submission.</div>
+        <div class="company-intake-stepper" id="company-intake-stepper" aria-label="Company intake progress">
+          <div class="company-intake-step active" data-company-intake-step="1"><span class="company-intake-step-number">1</span><span>Find company</span></div>
+          <div class="company-intake-step" data-company-intake-step="2"><span class="company-intake-step-number">2</span><span>Confirm profile</span></div>
+          <div class="company-intake-step" data-company-intake-step="3"><span class="company-intake-step-number">3</span><span>Confirm directors</span></div>
+          <div class="company-intake-step" data-company-intake-step="4"><span class="company-intake-step-number">4</span><span>Confirm ownership</span></div>
+          <div class="company-intake-step" data-company-intake-step="5"><span class="company-intake-step-number">5</span><span>Complete application</span></div>
+        </div>
 
-          <div class="form-group mb-2">
-            <label>Company Name <span class="req">*</span></label>
-            <input type="text" id="lu-name" placeholder="e.g. TechPay Solutions Limited" required oninput="handleCompanyNameInput()"/>
-            <div id="lu-name-validation" style="display:none;margin-top:8px;font-size:12px;padding:8px;border-radius:var(--radius-sm);"></div>
-          </div>
-          <div class="form-grid cols-3 mb-2" style="margin-top:0">
-            <div class="form-group span-2" style="grid-column:span 2">
-              <label>Company Registration Number <span class="req">*</span></label>
-              <input type="text" id="lu-reg" placeholder="e.g. 11924857 or C12345678" oninput="handleRegistrationInput()"/>
-              <div id="lu-reg-validation" style="display:none;margin-top:8px;font-size:12px;padding:8px;border-radius:var(--radius-sm);"></div>
-            </div>
+        <div id="company-intake-alert" class="company-intake-alert" role="status"></div>
+
+        <div id="company-intake-step-find" class="company-intake-panel active">
+          <div class="form-grid">
             <div class="form-group">
               <label>Country of Incorporation <span class="req">*</span></label>
-              <select id="lu-country" required>
-                <option value="">Select…</option>
+              <select id="lu-country" required onchange="handleCompanyIntakeCountryChange()">
+                <option value="">Select...</option>
               </select>
             </div>
-          </div>
-          <!-- Real-time Registry Verification Results -->
-          <div id="registry-verification-panel" style="display:none;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
-            <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2);">🔍 Input Validation</div>
-            <div id="registry-results" style="display:flex;flex-direction:column;gap:8px;"></div>
-          </div>
-
-          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
-            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">ℹ️ What happens next</div>
-            <div style="font-size:12px;color:var(--text2);line-height:1.5;">
-              Your company details will pre-fill the application form. You'll be able to review and edit all fields before submitting.
-              Company registry verification will be completed by our team during the review process.
+            <div class="form-group">
+              <label>Company Name or Registration Number <span class="req">*</span></label>
+              <input type="text" id="company-intake-query" placeholder="Enter company name or number" onkeydown="handleCompanyIntakeSearchKey(event)" />
             </div>
           </div>
 
-          <button class="btn-submit" onclick="startCompanyLookup()">
-            ➡️ Continue to Application
-          </button>
-        </div>
-
-        <!-- Loading state: registry search animation -->
-        <div id="lookup-loading" style="display:none;text-align:center;padding:20px 0;">
-          <div class="ai-orbit" style="margin:0 auto 24px;"></div>
-          <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Searching registry records…</div>
-          <div style="font-size:13px;color:var(--text2);margin-bottom:24px);">Querying live company registries</div>
-          <ul class="ai-step-list" id="lookup-steps" style="max-width:340px;margin:20px auto 0;">
-            <li id="ls1" class="waiting"><span class="step-icon"></span>Connecting to OpenCorporates API…</li>
-            <li id="ls2" class="waiting"><span class="step-icon"></span>Querying Companies House (UK)…</li>
-            <li id="ls3" class="waiting"><span class="step-icon"></span>Retrieving registered details…</li>
-            <li id="ls4" class="waiting"><span class="step-icon"></span>Extracting directors & shareholders…</li>
-            <li id="ls5" class="waiting"><span class="step-icon"></span>Cross-referencing public filings…</li>
-            <li id="ls6" class="waiting"><span class="step-icon"></span>Pre-filling your application…</li>
-          </ul>
-        </div>
-
-        <!-- Result state: Company found -->
-        <div id="lookup-result" style="display:none;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
-            <div style="width:36px;height:36px;background:var(--green-dim);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:2px solid var(--green);">✓</div>
-            <div>
-              <div style="font-size:15px;font-weight:700;">Company Found</div>
-              <div style="font-size:12px;color:var(--green);">Application pre-filled with registry data</div>
-            </div>
+          <div id="company-intake-non-uk" class="company-intake-alert info" style="display:none;">
+            Registry-assisted intake is currently available for UK companies. You can continue manually.
           </div>
 
-          <div style="background:var(--bg3);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius);padding:20px;margin-bottom:20px;">
-            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">Company Registry Data</div>
-            <div class="prefill-rows" id="prefill-preview"></div>
+          <div class="company-intake-actions">
+            <button type="button" class="btn-submit" id="company-intake-search-btn" onclick="searchCompanyIntakeRegistry()">Search Companies House</button>
+            <button type="button" class="company-intake-secondary" onclick="proceedManually()">I can’t find my company / enter manually</button>
           </div>
 
-          <!-- Corporate Data Agent: Mismatch Detection -->
-          <div class="ai-agent-panel" id="corporate-data-agent-panel" style="display:none;">
-            <div class="ai-agent-header">
-              <div class="ai-agent-icon blue">🏛️</div>
-              <div>
-                <div class="ai-agent-name">Company Information Review</div>
-                <div class="ai-agent-sub">Registry and application details</div>
+          <div id="company-intake-search-loading" class="company-intake-loading">
+            <span class="company-intake-spinner" aria-hidden="true"></span>
+            <span>Searching Companies House records...</span>
+          </div>
+          <div id="company-intake-empty" class="company-intake-alert warn" style="display:none;">
+            No matching company records were found. Check the name or number, or continue manually.
+          </div>
+          <div id="company-intake-results" class="company-intake-results"></div>
+        </div>
+
+        <div id="company-intake-step-profile" class="company-intake-panel">
+          <div class="company-intake-muted">We use Companies House data to pre-fill your application and reduce manual entry. Some information is not available from Companies House and will be requested later in the form.</div>
+          <div id="company-intake-profile-source" style="margin-top:12px;"></div>
+          <div id="company-intake-profile-summary" class="company-intake-summary"></div>
+
+          <div id="company-intake-profile-edits" class="company-intake-edits">
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Registered entity name</label>
+                <input type="text" id="intake-override-registered_entity_name" />
               </div>
-              <span class="ai-agent-badge running" id="cda-badge">Analysing</span>
+              <div class="form-group">
+                <label>Entity type</label>
+                <input type="text" id="intake-override-entity_type" />
+              </div>
+              <div class="form-group">
+                <label>Incorporation date</label>
+                <input type="date" id="intake-override-incorporation_date" />
+              </div>
+              <div class="form-group">
+                <label>Country of incorporation</label>
+                <input type="text" id="intake-override-country_of_incorporation" />
+              </div>
+              <div class="form-group span-2">
+                <label>Registered office address</label>
+                <textarea id="intake-override-registered_office_address"></textarea>
+              </div>
+              <div class="form-group span-2">
+                <label>Business activity / SIC codes</label>
+                <textarea id="intake-override-business_activity"></textarea>
+              </div>
+              <div class="form-group span-2">
+                <label>Override reason <span class="req">*</span></label>
+                <textarea id="intake-override-reason" placeholder="Tell us why the registry value needs to be changed"></textarea>
+                <div class="input-hint">Required when you edit registry-sourced fields.</div>
+              </div>
             </div>
-            <div class="ai-agent-checks" id="cda-checks"></div>
-            <div class="ai-agent-summary clear" id="cda-summary" style="display:none;"></div>
           </div>
 
-          <div style="background:var(--amber-dim);border:1px solid rgba(245,158,11,0.25);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:20px;font-size:12px;color:var(--text2);">
-            <strong style="color:var(--amber);">⚠️ Please review carefully.</strong> Data retrieved from public registries may be outdated or incomplete. Please verify and update any details before submitting.
+          <div class="company-intake-actions">
+            <button type="button" class="btn-submit" id="company-intake-confirm-profile-btn" onclick="confirmCompanyIntakeProfile()">Confirm profile</button>
+            <button type="button" class="company-intake-secondary" onclick="toggleCompanyIntakeProfileEdits()">Edit selected fields</button>
+            <button type="button" class="company-intake-secondary" onclick="companyIntakeSetStep(1)">Go back to search</button>
+            <button type="button" class="company-intake-secondary" onclick="proceedManually()">Continue manually</button>
           </div>
-
-          <button class="btn-submit" onclick="proceedToPreScreening()">
-            ✏️ Review &amp; Complete Application →
-          </button>
-          <button onclick="showView('company-lookup')" style="width:100%;margin-top:10px;padding:12px;background:none;border:1px solid var(--border2);border-radius:var(--radius-sm);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit;">
-            ← Search Again
-          </button>
         </div>
 
-        <!-- Not-found state -->
-        <div id="lookup-notfound" style="display:none;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
-            <div style="width:36px;height:36px;background:var(--amber-dim);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:2px solid var(--amber);">🔍</div>
-            <div>
-              <div style="font-size:15px;font-weight:700;">No Registry Data Found</div>
-              <div style="font-size:12px;color:var(--amber);">Could not retrieve data for this company</div>
-            </div>
+        <div id="company-intake-step-officers" class="company-intake-panel">
+          <div class="company-intake-muted">Confirm the active director candidates imported from Companies House. Corporate directors require structure review, not individual ID checks.</div>
+          <div id="company-intake-officers-loading" class="company-intake-loading">
+            <span class="company-intake-spinner" aria-hidden="true"></span>
+            <span>Loading director candidates...</span>
           </div>
-
-          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);padding:18px;margin-bottom:20px;">
-            <div style="font-size:13px;font-weight:600;margin-bottom:8px;">We searched the following registries but found no matching records:</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);color:var(--red);">✗ OpenCorporates</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);color:var(--red);">✗ Companies House</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);color:var(--red);">✗ Mauritius CBRIS</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);color:var(--red);">✗ ACRA Singapore</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);color:var(--red);">✗ EU BRIS Network</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);color:var(--red);">✗ Dun &amp; Bradstreet</span>
-            </div>
-            <div style="font-size:12px;color:var(--text2);line-height:1.6;">
-              This may happen if the company is newly registered, incorporated in a jurisdiction with limited public registry data, or if the name/number entered differs from the official record. <br/><br/>
-              You can <strong>proceed manually</strong> — your application form will be blank and you will need to fill in all details yourself. Our team will review your documents during review.
-            </div>
+          <div id="company-intake-officers-list" class="company-intake-review-list"></div>
+          <div id="company-intake-officers-counts" class="company-intake-counts"></div>
+          <div class="company-intake-actions">
+            <button type="button" class="btn-submit" id="company-intake-confirm-officers-btn" onclick="confirmCompanyIntakeOfficers()">Confirm directors</button>
+            <button type="button" class="company-intake-secondary" onclick="companyIntakeSetStep(2)">Back to profile</button>
+            <button type="button" class="company-intake-secondary" onclick="proceedManually()">Continue manually</button>
           </div>
+        </div>
 
-          <button class="btn-submit" onclick="proceedManually()" style="background:linear-gradient(135deg,var(--gold),var(--gold2));color:#fff;">
-            ✏️ Proceed &amp; Fill Application Manually →
-          </button>
-          <button onclick="resetLookup()" style="width:100%;margin-top:10px;padding:12px;background:none;border:1px solid var(--border2);border-radius:var(--radius-sm);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit;">
-            ← Try a Different Search
-          </button>
+        <div id="company-intake-step-pscs" class="company-intake-panel">
+          <div class="company-intake-muted">Confirm PSC / beneficial-owner candidates for compliance review. These candidates are not final approved UBOs.</div>
+          <div id="company-intake-pscs-loading" class="company-intake-loading">
+            <span class="company-intake-spinner" aria-hidden="true"></span>
+            <span>Loading PSC candidates...</span>
+          </div>
+          <div id="company-intake-pscs-summary" class="company-intake-summary"></div>
+          <div id="company-intake-pscs-counts" class="company-intake-counts"></div>
+          <div class="company-intake-actions">
+            <button type="button" class="btn-submit" id="company-intake-confirm-pscs-btn" onclick="confirmCompanyIntakePSCs()">Confirm ownership information</button>
+            <button type="button" class="company-intake-secondary" onclick="companyIntakeSetStep(3)">Back to directors</button>
+            <button type="button" class="company-intake-secondary" onclick="proceedManually()">Continue manually</button>
+          </div>
+        </div>
+
+        <div id="company-intake-step-complete" class="company-intake-panel">
+          <div id="company-intake-complete-summary" class="company-intake-summary">
+            Registry-sourced fields are ready to review in the application form. You will still need to complete contact, activity, source-of-funds, and other required information.
+          </div>
+          <div class="company-intake-actions">
+            <button type="button" class="btn-submit" onclick="continueCompanyIntakeToApplicationForm()">Continue to application form</button>
+            <button type="button" class="company-intake-secondary" onclick="companyIntakeSetStep(4)">Back to ownership</button>
+          </div>
         </div>
 
       </div>
@@ -4743,7 +4818,7 @@ async function apiCall(method, path, body, isFormData) {
       showView('login');
       throw new Error('Session expired');
     }
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) throw new Error(data.message || data.error || 'Request failed');
     return data;
   } catch (err) {
     console.error('API Error:', method, path, err);
@@ -4781,7 +4856,7 @@ function clearAuth() {
 
   // ── EX-12: Clear all auth token keys and draft data from browser storage ──
   try {
-    ['token', 'access_token', 'portal_token', 'auth_token', 'session_token'].forEach(function(k) {
+    ['token', 'access_token', 'portal_token', 'auth_token', 'session_token', 'arie_company_intake_state'].forEach(function(k) {
       localStorage.removeItem(k);
       sessionStorage.removeItem(k);
     });
@@ -5137,7 +5212,8 @@ async function startNewApplication() {
     if (!choice) return;
   }
   resetPortalApplicationState();
-  showView('prescreening');
+  showView('company-lookup');
+  resetLookup();
 }
 
 function buildDraftDataFromApplication(app) {
@@ -5877,28 +5953,36 @@ function updateProfitRow() {
 // ─── A. Real-time Registry Verification ────────────────────
 let registryValidationTimeout = null;
 function handleCompanyNameInput() {
-  const name = document.getElementById('lu-name').value.trim();
-  const reg = document.getElementById('lu-reg').value.trim();
+  const nameEl = document.getElementById('lu-name');
+  const regEl = document.getElementById('lu-reg');
+  if (!nameEl || !regEl) return;
+  const name = nameEl.value.trim();
   if (name.length > 2) {
     debounce('registry-check', () => triggerRegistryVerification(), 800);
   }
 }
 function handleRegistrationInput() {
-  const name = document.getElementById('lu-name').value.trim();
-  const reg = document.getElementById('lu-reg').value.trim();
+  const nameEl = document.getElementById('lu-name');
+  const regEl = document.getElementById('lu-reg');
+  if (!nameEl || !regEl) return;
+  const reg = regEl.value.trim();
   if (reg.length > 2) {
     debounce('registry-check', () => triggerRegistryVerification(), 800);
   }
 }
 
 function triggerRegistryVerification() {
-  const name = document.getElementById('lu-name').value.trim();
-  const reg = document.getElementById('lu-reg').value.trim();
+  const nameEl = document.getElementById('lu-name');
+  const regEl = document.getElementById('lu-reg');
+  if (!nameEl || !regEl) return;
+  const name = nameEl.value.trim();
+  const reg = regEl.value.trim();
 
   if (name.length < 3 || reg.length < 2) return;
 
   const panel = document.getElementById('registry-verification-panel');
   const results = document.getElementById('registry-results');
+  if (!panel || !results) return;
 
   // Show panel with loading state
   panel.style.display = 'block';
@@ -6530,6 +6614,8 @@ async function submitPrescreening(e) {
   const btn = e.target.querySelector('.btn-submit');
   btn.disabled = true;
   btn.textContent = '⏳ Submitting…';
+  var preserveImportedDirectors = companyIntakeShouldPreserveImportedDirectors();
+  var preserveImportedUbos = companyIntakeShouldPreserveImportedUBOs();
 
   function getFieldValue(id) {
     var el = document.getElementById(id);
@@ -6634,15 +6720,19 @@ async function submitPrescreening(e) {
   // Director/UBO mandatory field validation
   var dirRowsCheck = document.querySelectorAll('#directors-body tr');
   var dirValid = true;
-  dirRowsCheck.forEach(function(row) {
-    var inputs = row.querySelectorAll('input[type="text"]');
-    inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
-  });
+  if (!preserveImportedDirectors) {
+    dirRowsCheck.forEach(function(row) {
+      var inputs = row.querySelectorAll('input[type="text"]');
+      inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
+    });
+  }
   var uboRowsCheck = document.querySelectorAll('#ubos-body tr');
-  uboRowsCheck.forEach(function(row) {
-    var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
-    inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
-  });
+  if (!preserveImportedUbos) {
+    uboRowsCheck.forEach(function(row) {
+      var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
+      inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
+    });
+  }
   var interRowsCheck = document.querySelectorAll('#intermediaries-body tr');
   interRowsCheck.forEach(function(row) {
     var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
@@ -6657,13 +6747,15 @@ async function submitPrescreening(e) {
   // W2-2: Minimum director count check
   var dirRowsForCount = document.querySelectorAll('#directors-body tr');
   var validDirCount = 0;
-  dirRowsForCount.forEach(function(row) {
-    var nameInputs = row.querySelectorAll('input[type="text"]');
-    var hasName = false;
-    nameInputs.forEach(function(inp) { if (inp.value.trim()) hasName = true; });
-    if (hasName) validDirCount++;
-  });
-  if (validDirCount === 0) {
+  if (!preserveImportedDirectors) {
+    dirRowsForCount.forEach(function(row) {
+      var nameInputs = row.querySelectorAll('input[type="text"]');
+      var hasName = false;
+      nameInputs.forEach(function(inp) { if (inp.value.trim()) hasName = true; });
+      if (hasName) validDirCount++;
+    });
+  }
+  if (!preserveImportedDirectors && validDirCount === 0) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
     showToast('error', 'Director Required', 'At least one director is required before submitting the application.');
     return;
@@ -6902,6 +6994,8 @@ async function submitPrescreening(e) {
     ubos: ubos,
     intermediaries: intermediaries
   };
+  if (preserveImportedDirectors) delete payload.directors;
+  if (preserveImportedUbos) delete payload.ubos;
 
   try {
     // Priority C: suppress beforeunload guard during legitimate submit nav
@@ -10115,6 +10209,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setDobMaxToday();
   populateLookupCountry();
   populateIncCountry();
+  restoreCompanyIntakeFromStorage();
   syncConditionalFormState();
   syncJurisdictionRationaleState();
   // Set incorporation date max to today
@@ -10138,6 +10233,10 @@ document.addEventListener('DOMContentLoaded', () => {
 function populateLookupCountry() {
   const sel = document.getElementById('lu-country');
   if (!sel) return;
+  if (sel.options.length > 1) {
+    handleCompanyIntakeCountryChange();
+    return;
+  }
   ALL_COUNTRIES.forEach(c => {
     const opt = document.createElement('option');
     if (c.startsWith('──')) {
@@ -10147,6 +10246,7 @@ function populateLookupCountry() {
     }
     sel.appendChild(opt);
   });
+  handleCompanyIntakeCountryChange();
 }
 
 // ─── Populate Country of Incorporation dropdown from ALL_COUNTRIES ──
@@ -10408,7 +10508,8 @@ function submitRegister(e) {
       btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
       resetPortalApplicationState();
       prefillApplicationForm();
-      showView('prescreening');
+      showView('company-lookup');
+      resetLookup();
       showToast('success', 'Account created!', 'Welcome to Onboarda. Let\'s complete your application.');
     } catch (err) {
       btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
@@ -10670,49 +10771,807 @@ function checkPasswordStrength(val) {
   label.style.color = colors[score] || 'var(--text3)';
 }
 
-// ─── Company Lookup ───────────────────────────────────────────
-function startCompanyLookup() {
-  // No registry integration — redirect to manual entry for all environments
-  showToast('info', 'Manual Entry', 'Company details can be entered directly in the application form.');
-  showView('prescreening');
+// ─── Company Intake Assistant ─────────────────────────────────────────
+var COMPANY_INTAKE_STORAGE_KEY = 'arie_company_intake_state';
+var COMPANY_INTAKE_STEP_LABELS = {
+  1: 'Find your company',
+  2: 'Confirm profile',
+  3: 'Confirm directors',
+  4: 'Confirm ownership / PSCs',
+  5: 'Complete application'
+};
+
+function companyIntakeDefaultState() {
+  return {
+    currentStep: 1,
+    country: '',
+    query: '',
+    results: [],
+    selectedCompany: null,
+    company: null,
+    officers: [],
+    pscs: null,
+    profileOverrides: {},
+    session_id: '',
+    application_id: '',
+    application_ref: '',
+    registry_lookup: null,
+    session_reused: false,
+    profile_confirmed: false,
+    officers_confirmed: false,
+    pscs_confirmed: false
+  };
 }
 
-function showLookupResult(found) {
-  document.getElementById('lookup-loading').style.display  = 'none';
-  document.getElementById('lookup-result').style.display   = found ? 'block' : 'none';
-  document.getElementById('lookup-notfound').style.display = found ? 'none' : 'block';
+var companyIntakeState = companyIntakeDefaultState();
+
+function companyIntakePayload(resp) {
+  return (resp && resp.data && typeof resp.data === 'object') ? resp.data : (resp || {});
 }
 
-function proceedToPreScreening() {
-  resetPortalApplicationState();
-  showView('prescreening');
-  showToast('success', 'Application Ready', 'Please complete your application form.');
+function companyIntakeValue(value, fallback) {
+  if (value === null || value === undefined || value === '') return fallback || 'Not available';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : (fallback || 'Not available');
+  return String(value);
 }
 
-function prefillApplicationForm() {
-  // No-op — mock prefill logic removed (EX-03).
-  // When real registry integration is added, this function can populate
-  // form fields from the fetched data.
+function companyIntakeAddressSummary(address) {
+  if (!address) return '';
+  if (typeof address === 'string') return address;
+  if (typeof address !== 'object') return '';
+  if (address.full_address) return String(address.full_address);
+  return [
+    address.premises,
+    address.address_line_1,
+    address.address_line_2,
+    address.locality,
+    address.region,
+    address.postal_code,
+    address.country
+  ].filter(function(part) {
+    return part !== null && part !== undefined && String(part).trim();
+  }).join(', ');
+}
+
+function companyIntakeBusinessActivity(company) {
+  var sicCodes = (company && Array.isArray(company.sic_codes)) ? company.sic_codes.filter(function(code) {
+    return String(code || '').trim();
+  }) : [];
+  return sicCodes.length ? sicCodes.join(', ') : '';
+}
+
+function companyIntakeRegistryFieldValue(fieldName) {
+  var company = companyIntakeState.company || companyIntakeState.selectedCompany || {};
+  if (fieldName === 'registered_entity_name') return company.company_name || '';
+  if (fieldName === 'entity_type') return company.entity_type || '';
+  if (fieldName === 'registered_office_address') return companyIntakeAddressSummary(company.registered_address);
+  if (fieldName === 'incorporation_date') return company.incorporation_date || '';
+  if (fieldName === 'country_of_incorporation') return companyIntakeIsUkCountry(company.jurisdiction || companyIntakeState.country) ? 'United Kingdom' : (companyIntakeState.country || '');
+  if (fieldName === 'business_activity') return companyIntakeBusinessActivity(company);
+  if (fieldName === 'registration_number') return company.company_number || '';
+  return '';
+}
+
+function companyIntakeEffectiveFieldValue(fieldName) {
+  var override = companyIntakeState.profileOverrides && companyIntakeState.profileOverrides[fieldName];
+  if (override && override.value !== undefined && override.value !== null && String(override.value).trim() !== '') {
+    return override.value;
+  }
+  return companyIntakeRegistryFieldValue(fieldName);
+}
+
+function companyIntakePersistState() {
+  try {
+    var safe = {
+      currentStep: companyIntakeState.currentStep,
+      country: companyIntakeState.country,
+      query: companyIntakeState.query,
+      selectedCompany: companyIntakeState.selectedCompany,
+      company: companyIntakeState.company,
+      profileOverrides: companyIntakeState.profileOverrides,
+      session_id: companyIntakeState.session_id,
+      application_id: companyIntakeState.application_id,
+      application_ref: companyIntakeState.application_ref,
+      registry_lookup: companyIntakeState.registry_lookup,
+      session_reused: companyIntakeState.session_reused,
+      profile_confirmed: companyIntakeState.profile_confirmed,
+      officers_confirmed: companyIntakeState.officers_confirmed,
+      pscs_confirmed: companyIntakeState.pscs_confirmed
+    };
+    sessionStorage.setItem(COMPANY_INTAKE_STORAGE_KEY, JSON.stringify(safe));
+  } catch (e) {
+    console.warn('Company intake state was not persisted:', e);
+  }
+}
+
+function companyIntakeClearStoredState() {
+  try { sessionStorage.removeItem(COMPANY_INTAKE_STORAGE_KEY); } catch (e) {}
+}
+
+function companyIntakeStepForStage(stage) {
+  var normalized = String(stage || '').toLowerCase();
+  if (normalized === 'profile_verified') return 2;
+  if (normalized === 'profile_confirmed') return 3;
+  if (normalized === 'officers_confirmed') return 4;
+  if (normalized === 'pscs_confirmed') return 5;
+  return 1;
+}
+
+function companyIntakeApplySessionStage(stage) {
+  var normalized = String(stage || '').toLowerCase();
+  companyIntakeState.profile_confirmed = ['profile_confirmed', 'officers_confirmed', 'pscs_confirmed'].indexOf(normalized) >= 0;
+  companyIntakeState.officers_confirmed = ['officers_confirmed', 'pscs_confirmed'].indexOf(normalized) >= 0;
+  companyIntakeState.pscs_confirmed = normalized === 'pscs_confirmed';
+}
+
+function companyIntakeSetAlert(message, tone) {
+  var el = document.getElementById('company-intake-alert');
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = 'company-intake-alert' + (message ? ' ' + (tone || 'info') : '');
+  el.style.display = message ? 'block' : 'none';
+}
+
+function companyIntakeFriendlyError(err, fallback) {
+  var message = (err && err.message) ? String(err.message) : '';
+  if (/rate/i.test(message)) return 'Company registry is temporarily busy. Please try again shortly or continue manually.';
+  if (/not found/i.test(message)) return 'We could not find that company record. Check the name or number, or continue manually.';
+  if (/session expired|sign in|authenticated|unauthor/i.test(message)) return 'Your session needs to be refreshed. Please sign in again before continuing.';
+  return fallback || 'Company registry is temporarily unavailable. Please try again or continue manually.';
+}
+
+function companyIntakeIsUkCountry(value) {
+  var normalized = String(value || '').trim().toLowerCase().replace(/\./g, '');
+  return ['gb', 'uk', 'great britain', 'united kingdom', 'england', 'scotland', 'wales', 'northern ireland'].indexOf(normalized) >= 0;
+}
+
+function companyIntakeSetButtonBusy(id, busy, busyLabel) {
+  var btn = document.getElementById(id);
+  if (!btn) return;
+  if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+  btn.disabled = !!busy;
+  btn.textContent = busy ? busyLabel : btn.dataset.originalText;
+}
+
+function companyIntakeSetLoading(id, loading) {
+  var el = document.getElementById(id);
+  if (el) el.classList.toggle('active', !!loading);
+}
+
+function companyIntakeSetStep(step) {
+  companyIntakeState.currentStep = step;
+  var progress = document.getElementById('company-intake-progress-text');
+  if (progress) progress.textContent = 'Step ' + step + ' of 5 - ' + COMPANY_INTAKE_STEP_LABELS[step];
+  document.querySelectorAll('.company-intake-panel').forEach(function(panel) {
+    panel.classList.remove('active');
+  });
+  var activePanel = {
+    1: 'company-intake-step-find',
+    2: 'company-intake-step-profile',
+    3: 'company-intake-step-officers',
+    4: 'company-intake-step-pscs',
+    5: 'company-intake-step-complete'
+  }[step];
+  var panelEl = activePanel ? document.getElementById(activePanel) : null;
+  if (panelEl) panelEl.classList.add('active');
+  document.querySelectorAll('.company-intake-step').forEach(function(stepEl) {
+    var number = Number(stepEl.getAttribute('data-company-intake-step') || '0');
+    stepEl.classList.toggle('active', number === step);
+    stepEl.classList.toggle('done', number < step);
+    var marker = stepEl.querySelector('.company-intake-step-number');
+    if (marker) marker.textContent = number < step ? '✓' : String(number);
+  });
+  companyIntakePersistState();
+}
+
+function resetCompanyIntakeWizard(options) {
+  var keepStored = options && options.keepStored;
+  companyIntakeState = companyIntakeDefaultState();
+  var query = document.getElementById('company-intake-query');
+  if (query) query.value = '';
+  var results = document.getElementById('company-intake-results');
+  if (results) results.innerHTML = '';
+  var empty = document.getElementById('company-intake-empty');
+  if (empty) empty.style.display = 'none';
+  var source = document.getElementById('company-intake-profile-source');
+  if (source) source.innerHTML = '';
+  ['company-intake-profile-summary', 'company-intake-officers-list', 'company-intake-pscs-summary'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+  ['company-intake-officers-counts', 'company-intake-pscs-counts'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.classList.remove('active');
+      el.textContent = '';
+    }
+  });
+  var edits = document.getElementById('company-intake-profile-edits');
+  if (edits) edits.classList.remove('active');
+  companyIntakeSetAlert('', 'info');
+  companyIntakeSetStep(1);
+  handleCompanyIntakeCountryChange();
+  if (!keepStored) companyIntakeClearStoredState();
+}
+
+function handleCompanyIntakeCountryChange() {
+  var countryEl = document.getElementById('lu-country');
+  var country = countryEl ? countryEl.value : '';
+  companyIntakeState.country = country;
+  var isUk = companyIntakeIsUkCountry(country);
+  var hasCountry = String(country || '').trim() !== '';
+  var nonUk = document.getElementById('company-intake-non-uk');
+  if (nonUk) nonUk.style.display = (hasCountry && !isUk) ? 'block' : 'none';
+  var searchBtn = document.getElementById('company-intake-search-btn');
+  if (searchBtn) searchBtn.disabled = !isUk;
+  var query = document.getElementById('company-intake-query');
+  if (query) query.disabled = hasCountry && !isUk;
+}
+
+function handleCompanyIntakeSearchKey(event) {
+  if (event && event.key === 'Enter') {
+    event.preventDefault();
+    searchCompanyIntakeRegistry();
+  }
+}
+
+async function searchCompanyIntakeRegistry() {
+  var countryEl = document.getElementById('lu-country');
+  var queryEl = document.getElementById('company-intake-query');
+  var country = countryEl ? countryEl.value : '';
+  var query = queryEl ? queryEl.value.trim() : '';
+  companyIntakeState.country = country;
+  companyIntakeState.query = query;
+  companyIntakeSetAlert('', 'info');
+  var empty = document.getElementById('company-intake-empty');
+  if (empty) empty.style.display = 'none';
+  var resultsEl = document.getElementById('company-intake-results');
+  if (resultsEl) resultsEl.innerHTML = '';
+
+  if (!companyIntakeIsUkCountry(country)) {
+    companyIntakeSetAlert('Registry-assisted intake is currently available for UK companies. You can continue manually.', 'info');
+    return;
+  }
+  if (!query) {
+    companyIntakeSetAlert('Enter a company name or registration number to search Companies House.', 'warn');
+    if (queryEl) queryEl.focus();
+    return;
+  }
+
+  companyIntakeSetLoading('company-intake-search-loading', true);
+  companyIntakeSetButtonBusy('company-intake-search-btn', true, 'Searching...');
+  try {
+    var resp = companyIntakePayload(await apiCall('GET', '/company-intake/search?q=' + encodeURIComponent(query)));
+    var results = Array.isArray(resp.results) ? resp.results : [];
+    companyIntakeState.results = results;
+    renderCompanyIntakeResults(results);
+    if (!results.length && empty) empty.style.display = 'block';
+  } catch (err) {
+    companyIntakeSetAlert(companyIntakeFriendlyError(err), 'error');
+  } finally {
+    companyIntakeSetLoading('company-intake-search-loading', false);
+    companyIntakeSetButtonBusy('company-intake-search-btn', false);
+    companyIntakePersistState();
+  }
+}
+
+function renderCompanyIntakeResults(results) {
+  var el = document.getElementById('company-intake-results');
+  if (!el) return;
+  el.innerHTML = '';
+  results.forEach(function(company, idx) {
+    var address = companyIntakeAddressSummary(company.registered_address);
+    var meta = [
+      'No. ' + companyIntakeValue(company.company_number),
+      companyIntakeValue(company.company_status),
+      companyIntakeValue(company.entity_type),
+      companyIntakeValue(company.incorporation_date)
+    ];
+    el.innerHTML +=
+      '<div class="company-intake-result">' +
+        '<div>' +
+          '<div class="company-intake-result-name">' + escapeHtml(companyIntakeValue(company.company_name)) + '</div>' +
+          '<div class="company-intake-result-meta">' + meta.map(function(value) { return '<span>' + escapeHtml(value) + '</span>'; }).join('') + '</div>' +
+          (address ? '<div class="company-intake-result-address">' + escapeHtml(address) + '</div>' : '') +
+        '</div>' +
+        '<button type="button" onclick="useCompanyIntakeResult(' + idx + ')">Use this company</button>' +
+      '</div>';
+  });
+}
+
+async function useCompanyIntakeResult(index) {
+  var selected = companyIntakeState.results[index];
+  if (!selected || !selected.company_number) {
+    companyIntakeSetAlert('Select a valid company record before continuing.', 'warn');
+    return;
+  }
+  companyIntakeState.selectedCompany = selected;
+  companyIntakeSetAlert('', 'info');
+  companyIntakeSetButtonBusy('company-intake-search-btn', true, 'Starting...');
+  try {
+    var resp = companyIntakePayload(await apiCall('POST', '/company-intake/start', {
+      country_of_incorporation: 'GB',
+      provider: 'companies_house',
+      company_number: selected.company_number,
+      selected_registry_result: selected
+    }));
+    companyIntakeState.session_id = resp.session && resp.session.id ? resp.session.id : '';
+    companyIntakeState.application_id = resp.application && resp.application.id ? resp.application.id : '';
+    companyIntakeState.application_ref = resp.application && resp.application.ref ? resp.application.ref : '';
+    companyIntakeState.company = resp.company || selected;
+    companyIntakeState.registry_lookup = resp.registry_lookup || null;
+    companyIntakeState.session_reused = resp.session_reused === true;
+    currentApplicationId = companyIntakeState.application_id || currentApplicationId;
+    appRef = companyIntakeState.application_ref || appRef;
+    if (companyIntakeState.application_ref) setPortalReferenceDisplay('save-ref-display', 'Ref: ' + companyIntakeState.application_ref);
+    var sessionStage = resp.session && resp.session.stage ? resp.session.stage : 'profile_verified';
+    companyIntakeApplySessionStage(sessionStage);
+    renderCompanyIntakeProfile();
+    var targetStep = Math.max(2, companyIntakeStepForStage(sessionStage));
+    if (targetStep === 3) await fetchCompanyIntakeOfficers();
+    if (targetStep === 4) await fetchCompanyIntakePSCs();
+    if (targetStep === 5) renderCompanyIntakeComplete();
+    companyIntakeSetStep(targetStep);
+    if (resp.session_reused === true) {
+      companyIntakeSetAlert('We found your active intake session and reopened it for this draft application.', 'info');
+    }
+  } catch (err) {
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not start the company intake. Please try again or continue manually.'), 'error');
+  } finally {
+    companyIntakeSetButtonBusy('company-intake-search-btn', false);
+    companyIntakePersistState();
+  }
+}
+
+function companyIntakeSimulationUsed() {
+  var lookup = companyIntakeState.registry_lookup || {};
+  var company = companyIntakeState.company || {};
+  var metadata = company.source_metadata || {};
+  return lookup.simulation_used === true || metadata.simulation === true;
+}
+
+function companyIntakeIsCurrentDraft() {
+  return !!(
+    companyIntakeState &&
+    companyIntakeState.application_id &&
+    currentApplicationId &&
+    String(companyIntakeState.application_id) === String(currentApplicationId)
+  );
+}
+
+function companyIntakeShouldPreserveImportedDirectors() {
+  return companyIntakeIsCurrentDraft() && companyIntakeState.officers_confirmed === true;
+}
+
+function companyIntakeShouldPreserveImportedUBOs() {
+  return companyIntakeIsCurrentDraft() && companyIntakeState.pscs_confirmed === true;
+}
+
+function renderCompanyIntakeProfile() {
+  var company = companyIntakeState.company || companyIntakeState.selectedCompany || {};
+  var source = document.getElementById('company-intake-profile-source');
+  if (source) {
+    source.innerHTML =
+      '<span class="company-intake-pill">Source: Companies House</span>' +
+      '<span class="company-intake-pill">Registry lookup status: ' + (companyIntakeSimulationUsed() ? 'Simulation' : 'Live') + '</span>';
+  }
+  var summary = document.getElementById('company-intake-profile-summary');
+  if (summary) {
+    var rows = [
+      ['Registered entity name', companyIntakeValue(company.company_name)],
+      ['Company number', companyIntakeValue(company.company_number)],
+      ['Company status', companyIntakeValue(company.company_status)],
+      ['Entity type', companyIntakeValue(company.entity_type)],
+      ['Incorporation date', companyIntakeValue(company.incorporation_date)],
+      ['Registered office address', companyIntakeValue(companyIntakeAddressSummary(company.registered_address))],
+      ['SIC codes / business activity', companyIntakeValue(companyIntakeBusinessActivity(company))]
+    ];
+    summary.innerHTML = '<div class="company-intake-grid">' + rows.map(function(row) {
+      return '<div class="company-intake-field"><div class="company-intake-label">' + escapeHtml(row[0]) + '</div><div class="company-intake-value">' + escapeHtml(row[1]) + '</div></div>';
+    }).join('') + '</div>';
+  }
+  var fieldMap = {
+    'intake-override-registered_entity_name': 'registered_entity_name',
+    'intake-override-entity_type': 'entity_type',
+    'intake-override-incorporation_date': 'incorporation_date',
+    'intake-override-country_of_incorporation': 'country_of_incorporation',
+    'intake-override-registered_office_address': 'registered_office_address',
+    'intake-override-business_activity': 'business_activity'
+  };
+  Object.keys(fieldMap).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = companyIntakeEffectiveFieldValue(fieldMap[id]) || '';
+  });
+  var reason = document.getElementById('intake-override-reason');
+  if (reason) reason.value = '';
+}
+
+function toggleCompanyIntakeProfileEdits() {
+  var edits = document.getElementById('company-intake-profile-edits');
+  if (edits) edits.classList.toggle('active');
+}
+
+function companyIntakeCollectProfileOverrides() {
+  var fields = {
+    registered_entity_name: 'intake-override-registered_entity_name',
+    entity_type: 'intake-override-entity_type',
+    registered_office_address: 'intake-override-registered_office_address',
+    incorporation_date: 'intake-override-incorporation_date',
+    country_of_incorporation: 'intake-override-country_of_incorporation',
+    business_activity: 'intake-override-business_activity'
+  };
+  var overrides = {};
+  Object.keys(fields).forEach(function(fieldName) {
+    var el = document.getElementById(fields[fieldName]);
+    if (!el) return;
+    var registryValue = companyIntakeRegistryFieldValue(fieldName);
+    var userValue = el.value;
+    if (String(userValue || '').trim() !== String(registryValue || '').trim()) {
+      overrides[fieldName] = { value: userValue };
+    }
+  });
+  if (Object.keys(overrides).length) {
+    var reasonEl = document.getElementById('intake-override-reason');
+    var reason = reasonEl ? reasonEl.value.trim() : '';
+    if (!reason) {
+      companyIntakeSetAlert('Please add an override reason for the registry fields you edited.', 'warn');
+      if (reasonEl) reasonEl.focus();
+      return null;
+    }
+    Object.keys(overrides).forEach(function(fieldName) {
+      overrides[fieldName].override_reason = reason;
+    });
+  }
+  return overrides;
+}
+
+async function confirmCompanyIntakeProfile() {
+  if (!companyIntakeState.session_id) {
+    companyIntakeSetAlert('Start an intake session before confirming the profile.', 'warn');
+    return;
+  }
+  var overrides = companyIntakeCollectProfileOverrides();
+  if (overrides === null) return;
+  companyIntakeSetButtonBusy('company-intake-confirm-profile-btn', true, 'Confirming...');
+  try {
+    var resp = companyIntakePayload(await apiCall('POST', '/company-intake/confirm-profile', {
+      session_id: companyIntakeState.session_id,
+      overrides: overrides
+    }));
+    companyIntakeState.profileOverrides = overrides || {};
+    companyIntakeState.profile_confirmed = true;
+    if (resp.application_id) companyIntakeState.application_id = resp.application_id;
+    currentApplicationId = companyIntakeState.application_id || currentApplicationId;
+    showToast('success', 'Profile Confirmed', 'Registry profile values are saved to your draft application.');
+    await fetchCompanyIntakeOfficers();
+    companyIntakeSetStep(3);
+  } catch (err) {
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not confirm the company profile. Please try again or continue manually.'), 'error');
+  } finally {
+    companyIntakeSetButtonBusy('company-intake-confirm-profile-btn', false);
+    companyIntakePersistState();
+  }
+}
+
+async function fetchCompanyIntakeOfficers() {
+  var companyNumber = companyIntakeRegistryFieldValue('registration_number');
+  if (!companyNumber) return;
+  companyIntakeSetLoading('company-intake-officers-loading', true);
+  try {
+    var resp = companyIntakePayload(await apiCall('GET', '/company-intake/company/' + encodeURIComponent(companyNumber) + '/officers'));
+    companyIntakeState.officers = Array.isArray(resp.officers) ? resp.officers : [];
+    renderCompanyIntakeOfficers();
+  } catch (err) {
+    companyIntakeState.officers = [];
+    renderCompanyIntakeOfficers();
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not load director candidates. You can continue manually.'), 'error');
+  } finally {
+    companyIntakeSetLoading('company-intake-officers-loading', false);
+  }
+}
+
+function renderCompanyIntakeOfficers() {
+  var list = document.getElementById('company-intake-officers-list');
+  if (!list) return;
+  var officers = companyIntakeState.officers || [];
+  if (!officers.length) {
+    list.innerHTML = '<div class="company-intake-alert info">Companies House did not return active director candidates for this company. You can continue and complete directors in the application form.</div>';
+    return;
+  }
+  list.innerHTML = officers.map(function(officer, idx) {
+    var entityType = officer.officer_entity_type || 'unknown';
+    var individualKyc = officer.requires_individual_kyc === true ? 'Yes' : 'No';
+    var corporateReview = officer.requires_corporate_structure_review === true ? 'Yes' : 'No';
+    var meta = [
+      'Role: ' + companyIntakeValue(officer.officer_role),
+      'Officer entity type: ' + entityType,
+      'Appointed: ' + companyIntakeValue(officer.appointed_on),
+      'Individual KYC required: ' + individualKyc,
+      'Corporate structure review required: ' + corporateReview
+    ];
+    return '<label class="company-intake-review-item">' +
+      '<input type="checkbox" class="company-intake-officer-select" data-officer-index="' + idx + '" checked />' +
+      '<span class="company-intake-review-main">' +
+        '<span class="company-intake-review-title">' + escapeHtml(companyIntakeValue(officer.name, 'Unnamed officer')) + '</span>' +
+        '<span class="company-intake-review-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</span>' +
+        (entityType === 'corporate' ? '<span class="company-intake-review-note">Corporate structure review applies. This director is not treated as an ordinary individual KYC candidate.</span>' : '') +
+      '</span>' +
+    '</label>';
+  }).join('');
+}
+
+function selectedCompanyIntakeOfficers() {
+  var officers = companyIntakeState.officers || [];
+  var selected = [];
+  document.querySelectorAll('.company-intake-officer-select').forEach(function(cb) {
+    if (!cb.checked) return;
+    var idx = Number(cb.getAttribute('data-officer-index'));
+    if (officers[idx]) selected.push(officers[idx]);
+  });
+  return selected;
+}
+
+async function confirmCompanyIntakeOfficers() {
+  if (!companyIntakeState.session_id) {
+    companyIntakeSetAlert('Start an intake session before confirming directors.', 'warn');
+    return;
+  }
+  companyIntakeSetButtonBusy('company-intake-confirm-officers-btn', true, 'Confirming...');
+  try {
+    var selected = selectedCompanyIntakeOfficers();
+    var resp = companyIntakePayload(await apiCall('POST', '/company-intake/confirm-officers', {
+      session_id: companyIntakeState.session_id,
+      officers: selected
+    }));
+    companyIntakeState.officers_confirmed = true;
+    var counts = document.getElementById('company-intake-officers-counts');
+    if (counts) {
+      counts.classList.add('active');
+      counts.textContent = 'Directors imported: ' + (resp.imported_count || 0) + '. Already on the draft or skipped: ' + (resp.skipped_count || 0) + '.';
+    }
+    showToast('success', 'Directors Confirmed', 'Director candidates were saved to your draft application.');
+    await fetchCompanyIntakePSCs();
+    companyIntakeSetStep(4);
+  } catch (err) {
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not confirm directors. Please try again or continue manually.'), 'error');
+  } finally {
+    companyIntakeSetButtonBusy('company-intake-confirm-officers-btn', false);
+    companyIntakePersistState();
+  }
+}
+
+async function fetchCompanyIntakePSCs() {
+  var companyNumber = companyIntakeRegistryFieldValue('registration_number');
+  if (!companyNumber) return;
+  companyIntakeSetLoading('company-intake-pscs-loading', true);
+  try {
+    var resp = companyIntakePayload(await apiCall('GET', '/company-intake/company/' + encodeURIComponent(companyNumber) + '/pscs'));
+    companyIntakeState.pscs = resp.pscs || {
+      provider: 'companies_house',
+      jurisdiction: 'GB',
+      company_number: companyNumber,
+      psc_state: 'no_psc',
+      beneficial_owners: []
+    };
+    renderCompanyIntakePSCs();
+  } catch (err) {
+    companyIntakeState.pscs = {
+      provider: 'companies_house',
+      jurisdiction: 'GB',
+      company_number: companyNumber,
+      psc_state: 'no_psc',
+      psc_status_reason: 'PSC data could not be loaded during this portal session.',
+      beneficial_owners: []
+    };
+    renderCompanyIntakePSCs();
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not load ownership candidates. You can continue manually.'), 'error');
+  } finally {
+    companyIntakeSetLoading('company-intake-pscs-loading', false);
+  }
+}
+
+function renderCompanyIntakePSCs() {
+  var el = document.getElementById('company-intake-pscs-summary');
+  if (!el) return;
+  var pscs = companyIntakeState.pscs || {};
+  var state = pscs.psc_state || 'no_psc';
+  var owners = Array.isArray(pscs.beneficial_owners) ? pscs.beneficial_owners : [];
+  var reason = pscs.psc_status_reason || pscs.registry_statement_type || '';
+  var html = '<div class="company-intake-field" style="margin-bottom:12px;"><div class="company-intake-label">PSC state</div><div class="company-intake-value">' + escapeHtml(state) + (reason ? '<br><span class="company-intake-muted">' + escapeHtml(reason) + '</span>' : '') + '</div></div>';
+  if (state === 'psc_found') {
+    html += '<div class="company-intake-alert info">These are candidates for compliance review, not final approved UBOs.</div>';
+    html += renderCompanyIntakePscOwners(owners);
+  } else if (state === 'no_psc') {
+    html += '<div class="company-intake-alert info">Companies House did not return an active PSC record. ARIE may still require ownership confirmation during compliance review.</div>';
+  } else if (state === 'psc_exempt') {
+    html += '<div class="company-intake-alert warn">Companies House indicates PSC information may be exempt or unavailable. This will be flagged for compliance review.</div>';
+  } else if (state === 'corporate_psc') {
+    html += '<div class="company-intake-alert info">A corporate PSC candidate was returned. A structure chart / ownership explanation may be required later.</div>';
+    html += renderCompanyIntakePscOwners(owners);
+  } else {
+    html += '<div class="company-intake-alert warn">Ownership information needs manual review during the application.</div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderCompanyIntakePscOwners(owners) {
+  if (!owners.length) return '<div class="company-intake-muted">No active PSC candidates were returned.</div>';
+  return '<div class="company-intake-review-list">' + owners.map(function(owner) {
+    var controls = Array.isArray(owner.natures_of_control) ? owner.natures_of_control.join(', ') : '';
+    var meta = [
+      'Kind: ' + companyIntakeValue(owner.kind),
+      'Nature of control: ' + companyIntakeValue(controls),
+      'Notified: ' + companyIntakeValue(owner.notified_on)
+    ];
+    return '<div class="company-intake-review-item">' +
+      '<div class="company-intake-review-main">' +
+        '<div class="company-intake-review-title">' + escapeHtml(companyIntakeValue(owner.name, 'Unnamed PSC candidate')) + '</div>' +
+        '<div class="company-intake-review-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('') + '</div>';
+}
+
+async function confirmCompanyIntakePSCs() {
+  if (!companyIntakeState.session_id) {
+    companyIntakeSetAlert('Start an intake session before confirming ownership information.', 'warn');
+    return;
+  }
+  var pscResult = companyIntakeState.pscs;
+  if (!pscResult) {
+    companyIntakeSetAlert('Load PSC information before confirming ownership.', 'warn');
+    return;
+  }
+  companyIntakeSetButtonBusy('company-intake-confirm-pscs-btn', true, 'Confirming...');
+  try {
+    var resp = companyIntakePayload(await apiCall('POST', '/company-intake/confirm-pscs', {
+      session_id: companyIntakeState.session_id,
+      pscs: pscResult
+    }));
+    companyIntakeState.pscs_confirmed = true;
+    var counts = document.getElementById('company-intake-pscs-counts');
+    if (counts) {
+      counts.classList.add('active');
+      counts.textContent = 'Ownership candidates imported: ' + (resp.imported_count || 0) + '. Review metadata saved for state: ' + (resp.psc_state || pscResult.psc_state || 'review') + '.';
+    }
+    showToast('success', 'Ownership Confirmed', 'Ownership candidates and review state were saved to your draft application.');
+    renderCompanyIntakeComplete();
+    companyIntakeSetStep(5);
+  } catch (err) {
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not confirm ownership information. Please try again or continue manually.'), 'error');
+  } finally {
+    companyIntakeSetButtonBusy('company-intake-confirm-pscs-btn', false);
+    companyIntakePersistState();
+  }
+}
+
+function renderCompanyIntakeComplete() {
+  var el = document.getElementById('company-intake-complete-summary');
+  if (!el) return;
+  var companyName = companyIntakeEffectiveFieldValue('registered_entity_name') || 'Your company';
+  el.innerHTML =
+    '<div class="company-intake-field"><div class="company-intake-label">Ready for application form</div>' +
+    '<div class="company-intake-value">' + escapeHtml(companyName) + ' is linked to draft application ' + escapeHtml(companyIntakeState.application_ref || companyIntakeState.application_id || '') + '.</div></div>' +
+    '<div class="company-intake-muted" style="margin-top:12px;">Registry fields will pre-fill the existing form. You still need to complete trading name if different, ownership structure confirmation, contact details, activity profile, source of funds, and all other required fields.</div>';
+}
+
+function mapCompanyIntakeEntityType(value) {
+  var normalized = String(value || '').toLowerCase();
+  if (normalized.indexOf('plc') >= 0 || normalized.indexOf('public') >= 0) return 'Listed Company on Regulated Exchange';
+  if (normalized.indexOf('limited') >= 0 || normalized.indexOf('ltd') >= 0 || normalized.indexOf('private') >= 0) return 'SME / Private Company';
+  return value || '';
+}
+
+function companyIntakeSetFormField(id, value, aliasKey) {
+  var el = document.getElementById(id);
+  if (!el || value === null || value === undefined || value === '') return;
+  if (el.tagName === 'SELECT') _restoreSelectValue(el, value, aliasKey || id);
+  else el.value = value;
+}
+
+function applyCompanyIntakePrefillToForm() {
+  companyIntakeSetFormField('f-reg-name', companyIntakeEffectiveFieldValue('registered_entity_name'));
+  companyIntakeSetFormField('f-entity-type', mapCompanyIntakeEntityType(companyIntakeEffectiveFieldValue('entity_type')), 'f-entity-type');
+  companyIntakeSetFormField('f-reg-address', companyIntakeEffectiveFieldValue('registered_office_address'));
+  companyIntakeSetFormField('f-inc-date', companyIntakeEffectiveFieldValue('incorporation_date'));
+  companyIntakeSetFormField('f-inc-country', companyIntakeEffectiveFieldValue('country_of_incorporation') || 'United Kingdom', 'f-inc-country');
+  companyIntakeSetFormField('f-brn', companyIntakeRegistryFieldValue('registration_number'));
+  var activity = companyIntakeEffectiveFieldValue('business_activity');
+  var overview = document.getElementById('f-biz-overview');
+  if (overview && activity && !overview.value.trim()) {
+    overview.value = 'Companies House SIC codes / business activity: ' + activity;
+  }
+  var notice = document.getElementById('prefill-notice');
+  if (notice) notice.classList.remove('hidden');
+  syncConditionalFormState();
+  syncJurisdictionRationaleState();
+  updateProgress();
   updateKYCPersonNames();
 }
 
+function continueCompanyIntakeToApplicationForm() {
+  if (companyIntakeState.application_id) currentApplicationId = companyIntakeState.application_id;
+  if (companyIntakeState.application_ref) appRef = companyIntakeState.application_ref;
+  showView('prescreening');
+  applyCompanyIntakePrefillToForm();
+  _draftDirty = false;
+  _setSaveStatus('Registry prefill ready to review', 'var(--green)');
+  showToast('success', 'Application Pre-filled', 'Review the registry-sourced fields and complete the remaining required information.');
+}
+
+function startCompanyLookup() {
+  searchCompanyIntakeRegistry();
+}
+
+function proceedToPreScreening() {
+  continueCompanyIntakeToApplicationForm();
+}
+
+function prefillApplicationForm() {
+  if (companyIntakeState && companyIntakeState.company) applyCompanyIntakePrefillToForm();
+  updateKYCPersonNames();
+}
 
 // ─── Company lookup: manual proceed ────────────────────────────────────
 function proceedManually() {
-  // Don't prefill — just navigate with empty form
+  var existingApplicationId = companyIntakeState.application_id || '';
+  var existingRef = companyIntakeState.application_ref || '';
   resetPortalApplicationState();
+  if (existingApplicationId) currentApplicationId = existingApplicationId;
+  if (existingRef) appRef = existingRef;
   showView('prescreening');
-  showToast('info', 'Manual Entry Mode', 'Please fill in all company details manually.');
+  showToast('info', 'Manual Entry Mode', 'Please fill in the company details manually.');
 }
 
 function resetLookup() {
-  document.getElementById('lookup-idle').style.display      = 'block';
-  document.getElementById('lookup-loading').style.display   = 'none';
-  document.getElementById('lookup-result').style.display    = 'none';
-  document.getElementById('lookup-notfound').style.display  = 'none';
-  document.querySelectorAll('#lookup-steps li').forEach(li => {
-    li.classList.remove('done','active'); li.classList.add('waiting');
-  });
+  resetCompanyIntakeWizard({ keepStored: false });
+}
+
+async function restoreCompanyIntakeFromStorage() {
+  var saved = null;
+  try {
+    var raw = sessionStorage.getItem(COMPANY_INTAKE_STORAGE_KEY);
+    saved = raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    saved = null;
+  }
+  if (!saved || !saved.session_id) return;
+  companyIntakeState = Object.assign(companyIntakeDefaultState(), saved);
+  if (companyIntakeState.application_id) currentApplicationId = companyIntakeState.application_id;
+  if (companyIntakeState.application_ref) appRef = companyIntakeState.application_ref;
+  showView('company-lookup');
+  var countryEl = document.getElementById('lu-country');
+  if (countryEl && companyIntakeState.country) _restoreSelectValue(countryEl, companyIntakeState.country, 'f-inc-country');
+  var queryEl = document.getElementById('company-intake-query');
+  if (queryEl) queryEl.value = companyIntakeState.query || '';
+  try {
+    var resp = companyIntakePayload(await apiCall('GET', '/company-intake/session/' + encodeURIComponent(companyIntakeState.session_id)));
+    var session = resp.session || {};
+    companyIntakeState.application_id = session.application_id || companyIntakeState.application_id;
+    companyIntakeState.application_ref = session.application_ref || companyIntakeState.application_ref;
+    if (session.registry_lookup) {
+      companyIntakeState.registry_lookup = {
+        id: session.registry_lookup.id,
+        provider: session.registry_lookup.provider,
+        jurisdiction: session.registry_lookup.jurisdiction,
+        company_number: session.registry_lookup.company_number,
+        response_hash: session.registry_lookup.response_hash,
+        source_endpoint: session.registry_lookup.source_endpoint,
+        simulation_used: session.registry_lookup.simulation_used === true
+      };
+      if (session.registry_lookup.normalized) companyIntakeState.company = session.registry_lookup.normalized;
+    }
+    companyIntakeApplySessionStage(session.stage);
+    companyIntakeState.currentStep = Math.max(companyIntakeState.currentStep || 1, companyIntakeStepForStage(session.stage));
+  } catch (err) {
+    console.warn('Company intake session restore failed:', err);
+  }
+  if (companyIntakeState.company) renderCompanyIntakeProfile();
+  if (companyIntakeState.currentStep === 3) fetchCompanyIntakeOfficers();
+  if (companyIntakeState.currentStep === 4) fetchCompanyIntakePSCs();
+  if (companyIntakeState.currentStep === 5) renderCompanyIntakeComplete();
+  companyIntakeSetStep(companyIntakeState.currentStep || 1);
+  handleCompanyIntakeCountryChange();
 }
 
 // ─── KYC person cards: tab switching ───────────────────────────────────
