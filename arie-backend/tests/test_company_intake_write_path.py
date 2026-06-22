@@ -234,6 +234,7 @@ def test_start_intake_refetches_profile_creates_draft_session_and_persists_evide
 
     assert intake_api["calls"] == ["12345678"]
     assert body["success"] is True
+    assert body["session_reused"] is False
     assert body["application"]["created"] is True
     assert body["company"]["company_name"] == "Registry Verified Ltd"
     assert "Frontend Spoof" not in json.dumps(body)
@@ -272,8 +273,9 @@ def test_start_intake_reuses_existing_draft_for_same_client_and_company(intake_a
 
     assert second["application"]["id"] == first["application"]["id"]
     assert second["application"]["created"] is False
-    assert second["session"]["id"] != first["session"]["id"]
-    assert intake_api["calls"] == ["12345678", "12345678"]
+    assert second["session"]["id"] == first["session"]["id"]
+    assert second["session_reused"] is True
+    assert intake_api["calls"] == ["12345678"]
 
     apps = _db_rows(
         "SELECT id FROM applications WHERE client_id = ? AND brn = ?",
@@ -287,10 +289,23 @@ def test_start_intake_reuses_existing_draft_for_same_client_and_company(intake_a
         "SELECT id, application_id, raw_response_json FROM company_registry_lookups WHERE company_number = ?",
         ("12345678",),
     )
+    active_sessions = _db_rows(
+        """
+        SELECT id FROM company_intake_sessions
+        WHERE client_user_id = ?
+          AND application_id = ?
+          AND provider = ?
+          AND company_number = ?
+          AND stage IN ('profile_verified', 'profile_confirmed', 'officers_confirmed', 'pscs_confirmed')
+        """,
+        ("client-intake-1", first["application"]["id"], "companies_house", "12345678"),
+    )
     assert len(apps) == 1
-    assert len(sessions) == 2
+    assert len(sessions) == 1
     assert {row["application_id"] for row in sessions} == {first["application"]["id"]}
-    assert len(lookups) == 2
+    assert len(active_sessions) == 1
+    assert active_sessions[0]["id"] == first["session"]["id"]
+    assert len(lookups) == 1
     assert all(row["application_id"] == first["application"]["id"] for row in lookups)
 
 

@@ -21781,6 +21781,61 @@ def _company_intake_find_existing_draft(db, client_id, provider, company_number)
     return None
 
 
+_COMPANY_INTAKE_NON_TERMINAL_STAGES = (
+    "profile_verified",
+    "profile_confirmed",
+    "officers_confirmed",
+    "pscs_confirmed",
+)
+
+
+def _company_intake_find_active_session(db, *, client_id, provider, company_number, application_id):
+    placeholders = ",".join("?" for _ in _COMPANY_INTAKE_NON_TERMINAL_STAGES)
+    return db.execute(
+        f"""
+        SELECT s.*, a.ref AS application_ref, a.status AS application_status,
+               a.company_name AS application_company_name, a.prescreening_data
+        FROM company_intake_sessions s
+        JOIN applications a ON a.id = s.application_id
+        WHERE s.client_user_id = ?
+          AND s.application_id = ?
+          AND LOWER(COALESCE(s.provider, '')) = ?
+          AND LOWER(COALESCE(s.company_number, '')) = ?
+          AND s.stage IN ({placeholders})
+          AND a.status = 'draft'
+        ORDER BY s.updated_at DESC, s.created_at DESC
+        LIMIT 1
+        """,
+        (
+            client_id,
+            application_id,
+            str(provider or "").strip().lower(),
+            str(company_number or "").strip().lower(),
+            *_COMPANY_INTAKE_NON_TERMINAL_STAGES,
+        ),
+    ).fetchone()
+
+
+def _company_intake_start_response(*, session_id, stage, completion_score, app, created, lookup, company, session_reused):
+    return {
+        "success": True,
+        "session_reused": bool(session_reused),
+        "session": {
+            "id": session_id,
+            "stage": stage,
+            "completion_score": completion_score,
+        },
+        "application": {
+            "id": app["id"],
+            "ref": app.get("ref"),
+            "status": "draft",
+            "created": bool(created),
+        },
+        "registry_lookup": lookup,
+        "company": company,
+    }
+
+
 def _company_intake_create_or_reuse_application(db, *, client_id, profile, provider, company_number, country):
     existing = _company_intake_find_existing_draft(db, client_id, provider, company_number)
     if existing:
@@ -22391,6 +22446,62 @@ class CompanyIntakeStartHandler(BaseHandler):
         if not company_number:
             return self.error("company_number is required.", 400)
 
+        client_id = _company_intake_user_id(user)
+        db = get_db()
+        try:
+            existing_app = _company_intake_find_existing_draft(db, client_id, provider, company_number)
+            if existing_app:
+                existing_app = dict(existing_app)
+                active_session = _company_intake_find_active_session(
+                    db,
+                    client_id=client_id,
+                    provider=provider,
+                    company_number=company_number,
+                    application_id=existing_app["id"],
+                )
+                if active_session:
+                    session_payload = _company_intake_session_payload(db, active_session)
+                    lookup_payload = session_payload.get("registry_lookup") or {}
+                    company = lookup_payload.get("normalized") if isinstance(lookup_payload.get("normalized"), dict) else {}
+                    registry_lookup = {
+                        "id": lookup_payload.get("id"),
+                        "provider": lookup_payload.get("provider"),
+                        "jurisdiction": lookup_payload.get("jurisdiction"),
+                        "company_number": lookup_payload.get("company_number"),
+                        "response_hash": lookup_payload.get("response_hash"),
+                        "source_endpoint": lookup_payload.get("source_endpoint"),
+                        "simulation_used": bool(lookup_payload.get("simulation_used")),
+                    }
+                    self.log_audit(
+                        user,
+                        "Company Intake Start",
+                        existing_app.get("ref") or existing_app["id"],
+                        json.dumps({
+                            "provider": provider,
+                            "company_number": company_number,
+                            "registry_lookup_id": active_session.get("registry_lookup_id"),
+                            "application_id": existing_app["id"],
+                            "draft_created": False,
+                            "session_reused": True,
+                        }, sort_keys=True),
+                        db=db,
+                        commit=False,
+                    )
+                    db.commit()
+                    self.success(_company_intake_start_response(
+                        session_id=active_session["id"],
+                        stage=active_session.get("stage") or "profile_verified",
+                        completion_score=active_session.get("completion_score") or 0,
+                        app=existing_app,
+                        created=False,
+                        lookup=registry_lookup,
+                        company=company,
+                        session_reused=True,
+                    ), 200)
+                    return
+        finally:
+            db.close()
+
         raw_profile = get_companies_house_profile_with_raw(company_number)
         if is_company_registry_provider_error(raw_profile):
             self.set_status(provider_error_http_status(raw_profile))
@@ -22418,12 +22529,59 @@ class CompanyIntakeStartHandler(BaseHandler):
         try:
             app, created = _company_intake_create_or_reuse_application(
                 db,
-                client_id=_company_intake_user_id(user),
+                client_id=client_id,
                 profile=profile,
                 provider=provider,
                 company_number=profile.get("company_number") or company_number,
                 country=country,
             )
+            active_session = _company_intake_find_active_session(
+                db,
+                client_id=client_id,
+                provider=provider,
+                company_number=profile.get("company_number") or company_number,
+                application_id=app["id"],
+            )
+            if active_session:
+                session_payload = _company_intake_session_payload(db, active_session)
+                lookup_payload = session_payload.get("registry_lookup") or {}
+                company = lookup_payload.get("normalized") if isinstance(lookup_payload.get("normalized"), dict) else profile
+                registry_lookup = {
+                    "id": lookup_payload.get("id"),
+                    "provider": lookup_payload.get("provider"),
+                    "jurisdiction": lookup_payload.get("jurisdiction"),
+                    "company_number": lookup_payload.get("company_number"),
+                    "response_hash": lookup_payload.get("response_hash"),
+                    "source_endpoint": lookup_payload.get("source_endpoint"),
+                    "simulation_used": bool(lookup_payload.get("simulation_used")),
+                }
+                self.log_audit(
+                    user,
+                    "Company Intake Start",
+                    app.get("ref") or app["id"],
+                    json.dumps({
+                        "provider": provider,
+                        "company_number": profile.get("company_number") or company_number,
+                        "registry_lookup_id": active_session.get("registry_lookup_id"),
+                        "application_id": app["id"],
+                        "draft_created": False,
+                        "session_reused": True,
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                )
+                db.commit()
+                self.success(_company_intake_start_response(
+                    session_id=active_session["id"],
+                    stage=active_session.get("stage") or "profile_verified",
+                    completion_score=active_session.get("completion_score") or 0,
+                    app=app,
+                    created=False,
+                    lookup=registry_lookup,
+                    company=company,
+                    session_reused=True,
+                ), 200)
+                return
             lookup_id, response_hash = _company_intake_persist_lookup(
                 db,
                 provider=provider,
@@ -22435,7 +22593,7 @@ class CompanyIntakeStartHandler(BaseHandler):
                 normalized=profile,
                 response_hash=raw_profile.get("response_hash"),
                 fetched_at=raw_profile.get("fetched_at"),
-                fetched_by=_company_intake_user_id(user),
+                fetched_by=client_id,
                 application_id=app["id"],
                 status="success",
                 source_endpoint=raw_profile.get("source_endpoint"),
@@ -22463,7 +22621,7 @@ class CompanyIntakeStartHandler(BaseHandler):
                 (
                     session_id,
                     app["id"],
-                    _company_intake_user_id(user),
+                    client_id,
                     lookup_id,
                     prescreening.get("country_of_incorporation"),
                     provider,
@@ -22486,6 +22644,7 @@ class CompanyIntakeStartHandler(BaseHandler):
                     "registry_lookup_id": lookup_id,
                     "application_id": app["id"],
                     "draft_created": created,
+                    "session_reused": False,
                     "simulation_used": bool(raw_profile.get("simulation_used")),
                 }, sort_keys=True),
                 db=db,
@@ -22495,20 +22654,13 @@ class CompanyIntakeStartHandler(BaseHandler):
         finally:
             db.close()
 
-        self.success({
-            "success": True,
-            "session": {
-                "id": session_id,
-                "stage": "profile_verified",
-                "completion_score": 0.25,
-            },
-            "application": {
-                "id": app["id"],
-                "ref": app.get("ref"),
-                "status": "draft",
-                "created": created,
-            },
-            "registry_lookup": {
+        self.success(_company_intake_start_response(
+            session_id=session_id,
+            stage="profile_verified",
+            completion_score=0.25,
+            app=app,
+            created=created,
+            lookup={
                 "id": lookup_id,
                 "provider": provider,
                 "jurisdiction": profile.get("jurisdiction"),
@@ -22517,8 +22669,9 @@ class CompanyIntakeStartHandler(BaseHandler):
                 "source_endpoint": raw_profile.get("source_endpoint"),
                 "simulation_used": bool(raw_profile.get("simulation_used")),
             },
-            "company": profile,
-        }, 201 if created else 200)
+            company=profile,
+            session_reused=False,
+        ), 201 if created else 200)
 
 
 class CompanyIntakeConfirmProfileHandler(BaseHandler):
