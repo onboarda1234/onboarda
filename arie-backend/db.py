@@ -3214,6 +3214,7 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
     json_type = "JSONB" if db.is_postgres else "TEXT"
     timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
     bool_type = "BOOLEAN" if db.is_postgres else "INTEGER"
+    bool_default_false = "FALSE" if db.is_postgres else "0"
     default_now = "CURRENT_TIMESTAMP" if db.is_postgres else "(datetime('now'))"
     id_default = "encode(gen_random_bytes(8), 'hex')" if db.is_postgres else "(lower(hex(randomblob(8))))"
 
@@ -3234,7 +3235,7 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
         status TEXT,
         error_code TEXT,
         source_endpoint TEXT,
-        simulation_used {bool_type} DEFAULT 0,
+        simulation_used {bool_type} DEFAULT {bool_default_false},
         created_at {timestamp_type} DEFAULT {default_now},
         updated_at {timestamp_type} DEFAULT {default_now}
     );
