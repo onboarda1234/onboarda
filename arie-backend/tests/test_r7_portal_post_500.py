@@ -37,6 +37,17 @@ def _get_cm():
     return cm
 
 
+def _cm_clear_and_approve(cm, wrapper, req_id, log_audit_fn=None, decision_notes="OK"):
+    """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
+    preconditions and approve with a checker distinct from the creator."""
+    rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    cm.record_precondition_result(wrapper, req_id, "screening", rec, log_audit_fn=log_audit_fn, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
+    cm.record_precondition_result(wrapper, req_id, "risk", rec, log_audit_fn=log_audit_fn, result={"risk_level": "MEDIUM"})
+    cr = dict(wrapper.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
+    checker = {"sub": (cr.get("created_by") or "creator") + "::checker", "name": "Checker", "role": "admin"}
+    return cm.approve_change_request(wrapper, req_id, checker, decision_notes=decision_notes, log_audit_fn=log_audit_fn)
+
+
 class _DBWrapper:
     """Wrap raw sqlite3 connection to match cm module expectations."""
     def __init__(self, conn):
@@ -373,7 +384,7 @@ class TestBackofficeLifecycle:
         ok, _ = cm.update_change_request_status(wdb, req["id"], "approval_pending", officer)
         assert ok
 
-        ok, _ = cm.approve_change_request(wdb, req["id"], officer)
+        ok, _ = _cm_clear_and_approve(cm, wdb, req["id"])
         assert ok
 
         ok, _, _ = cm.implement_change_request(wdb, req["id"], officer)
@@ -441,7 +452,7 @@ class TestAnalystRBAC:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", officer)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", officer)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", officer)
-        cm.approve_change_request(wdb, req["id"], officer)
+        _cm_clear_and_approve(cm, wdb, req["id"])
 
         ok, _, _ = cm.implement_change_request(wdb, req["id"], analyst)
         assert not ok

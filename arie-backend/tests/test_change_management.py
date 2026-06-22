@@ -33,6 +33,17 @@ def _get_db_module():
     return db_module
 
 
+def _cm_clear_and_approve(cm, wdb, req_id, decision_notes="OK"):
+    """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
+    preconditions and approve with a checker distinct from the creator."""
+    rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    cm.record_precondition_result(wdb, req_id, "screening", rec, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
+    cm.record_precondition_result(wdb, req_id, "risk", rec, result={"risk_level": "MEDIUM"})
+    cr = dict(wdb.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
+    checker = {"sub": (cr.get("created_by") or "creator") + "::checker", "name": "Checker", "role": "admin"}
+    return cm.approve_change_request(wdb, req_id, checker, decision_notes=decision_notes)
+
+
 def _setup_test_data(raw_db):
     """Create a test application with directors/UBOs."""
     app_id = f"test-cm-{secrets.token_hex(4)}"
@@ -404,7 +415,7 @@ class TestDBIntegration:
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", sco)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", sco)
 
-        ok, err = cm.approve_change_request(wdb, req["id"], sco, decision_notes="OK")
+        ok, err = _cm_clear_and_approve(cm, wdb, req["id"], decision_notes="OK")
         assert ok, f"Approve failed: {err}"
 
         ok, err, vid = cm.implement_change_request(wdb, req["id"], sco)
@@ -487,7 +498,7 @@ class TestDBIntegration:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", sco)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", sco)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", sco)
-        cm.approve_change_request(wdb, req["id"], sco)
+        _cm_clear_and_approve(cm, wdb, req["id"])
 
         ok, err, _ = cm.implement_change_request(wdb, req["id"], sco)
         assert not ok
@@ -511,7 +522,7 @@ class TestDBIntegration:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", sco)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", sco)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", sco)
-        cm.approve_change_request(wdb, req["id"], sco)
+        _cm_clear_and_approve(cm, wdb, req["id"])
         ok, err, _ = cm.implement_change_request(wdb, req["id"], sco)
         assert ok, f"Failed: {err}"
 
@@ -533,7 +544,7 @@ class TestDBIntegration:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", sco)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", sco)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", sco)
-        cm.approve_change_request(wdb, req["id"], sco)
+        _cm_clear_and_approve(cm, wdb, req["id"])
         ok, _, _ = cm.implement_change_request(wdb, req["id"], sco)
         assert ok
 
@@ -682,7 +693,7 @@ class TestDBIntegration:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", sco)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", sco)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", sco)
-        cm.approve_change_request(wdb, req["id"], sco)
+        _cm_clear_and_approve(cm, wdb, req["id"])
         assert db.execute("SELECT company_name FROM applications WHERE id = ?",
                           (app_id,)).fetchone()["company_name"] == "Test Company Ltd"
 

@@ -31262,6 +31262,17 @@ class ChangeRequestDetailHandler(BaseHandler):
                 log_audit_fn=self.log_audit,
             )
             if not success:
+                if "blocked by preconditions" in err.lower():
+                    detail = cm.get_change_request_detail(db, request_id) or {}
+                    blockers = cm.approval_blockers(db, detail, approver_user=user) if detail else []
+                    self.set_status(409)
+                    self.write(json.dumps({
+                        "action": "approval_blocked",
+                        "error": err,
+                        "can_approve": False,
+                        "blockers": blockers,
+                    }, default=str))
+                    return
                 status_code = 403 if "not permitted" in err.lower() else 400
                 self.error(err, status_code)
                 return
@@ -31312,8 +31323,24 @@ class ChangeRequestApproveHandler(BaseHandler):
                 db, request_id, user,
                 decision_notes=data.get("decision_notes"),
                 log_audit_fn=self.log_audit,
+                override_codes=data.get("override_codes"),
+                override_reason=data.get("override_reason"),
             )
             if not success:
+                # Structured 409 for precondition/maker-checker blocks so the
+                # officer UI can render the specific blockers + next actions.
+                if "blocked by preconditions" in err.lower():
+                    detail = cm.get_change_request_detail(db, request_id) or {}
+                    approval = detail.get("approval") or {}
+                    blockers = cm.approval_blockers(db, detail, approver_user=user) if detail else approval.get("blockers", [])
+                    self.set_status(409)
+                    self.write(json.dumps({
+                        "action": "approval_blocked",
+                        "error": err,
+                        "can_approve": False,
+                        "blockers": blockers,
+                    }, default=str))
+                    return
                 self.error(err, 400 if "not found" not in err.lower() else 404)
                 return
             self.success({"status": "approved"})
@@ -31350,6 +31377,48 @@ class ChangeRequestRejectHandler(BaseHandler):
                 self.error(err, status_code)
                 return
             self.success({"status": "rejected"})
+        finally:
+            db.close()
+
+
+class ChangeRequestPreconditionHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/preconditions — record screening/risk result.
+
+    PR-CM-APPROVAL-PRECONDITIONS-1: records an evidence-backed precondition result
+    (references existing persisted screening/risk data; does not run a fresh check).
+    """
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json() if self.request.body else {}
+        kind = str(data.get("kind") or "").strip().lower()
+        if kind not in ("screening", "risk"):
+            self.error("kind must be 'screening' or 'risk'", 400)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.record_precondition_result(
+                db, request_id, kind, user,
+                result=data.get("result"),
+                note=data.get("note"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                status_code = 403 if "not permitted" in err.lower() else (404 if "not found" in err.lower() else 400)
+                self.error(err, status_code)
+                return
+            detail = cm.get_change_request_detail(db, request_id) or {}
+            self.success({
+                "status": "recorded",
+                "kind": kind,
+                "approval": detail.get("approval", {}),
+            })
         finally:
             db.close()
 
@@ -32680,6 +32749,7 @@ def make_app():
         (r"/api/change-management/alerts", ChangeAlertsListHandler),
         (r"/api/change-management/requests/([^/]+)/submit", ChangeRequestSubmitHandler),
         (r"/api/change-management/requests/([^/]+)/approve", ChangeRequestApproveHandler),
+        (r"/api/change-management/requests/([^/]+)/preconditions", ChangeRequestPreconditionHandler),
         (r"/api/change-management/requests/([^/]+)/reject", ChangeRequestRejectHandler),
         (r"/api/change-management/requests/([^/]+)/implement", ChangeRequestImplementHandler),
         (r"/api/change-management/requests/([^/]+)/documents", ChangeRequestDocumentHandler),

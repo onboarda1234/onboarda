@@ -28,6 +28,17 @@ def _get_cm():
     return cm
 
 
+def _cm_clear_and_approve(cm, wrapper, req_id, log_audit_fn=None, decision_notes="OK"):
+    """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
+    preconditions and approve with a checker distinct from the creator."""
+    rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    cm.record_precondition_result(wrapper, req_id, "screening", rec, log_audit_fn=log_audit_fn, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
+    cm.record_precondition_result(wrapper, req_id, "risk", rec, log_audit_fn=log_audit_fn, result={"risk_level": "MEDIUM"})
+    cr = dict(wrapper.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
+    checker = {"sub": (cr.get("created_by") or "creator") + "::checker", "name": "Checker", "role": "admin"}
+    return cm.approve_change_request(wrapper, req_id, checker, decision_notes=decision_notes, log_audit_fn=log_audit_fn)
+
+
 def _get_db_module():
     import db as db_module
     return db_module
@@ -414,7 +425,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, err = cm.update_change_request_status(
             wrapped, req["id"], "implemented", analyst, log_audit_fn=_noop_audit
@@ -458,7 +469,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, err = cm.update_change_request_status(
             wrapped, req["id"], "superseded", analyst, log_audit_fn=_noop_audit
@@ -514,7 +525,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, err, version_id = cm.implement_change_request(
             wrapped, req["id"], co, log_audit_fn=_noop_audit
@@ -546,7 +557,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, err, version_id = cm.implement_change_request(
             wrapped, req["id"], admin, log_audit_fn=_noop_audit
@@ -576,7 +587,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", sco, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", sco, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", sco, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], sco, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, err, version_id = cm.implement_change_request(
             wrapped, req["id"], sco, log_audit_fn=_noop_audit
@@ -612,7 +623,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         # CO tries to implement (should fail)
         success, _, _ = cm.implement_change_request(
@@ -649,7 +660,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, err, _ = cm.implement_change_request(
             wrapped, req["id"], analyst, log_audit_fn=_noop_audit
@@ -685,7 +696,7 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
-        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        _cm_clear_and_approve(cm, wrapped, req["id"], log_audit_fn=_noop_audit)
 
         success, _, _ = cm.implement_change_request(
             wrapped, req["id"], analyst, log_audit_fn=_noop_audit

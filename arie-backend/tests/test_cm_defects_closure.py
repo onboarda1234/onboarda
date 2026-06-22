@@ -85,6 +85,18 @@ def _setup_test_data(raw_db):
 ADMIN_USER = {"sub": "admin-1", "name": "Admin User", "role": "admin"}
 SCO_USER = {"sub": "sco-1", "name": "SCO User", "role": "sco"}
 CO_USER = {"sub": "co-1", "name": "CO User", "role": "co"}
+
+
+def _cm_clear_and_approve(cm, wdb, req_id, decision_notes="OK", log_audit_fn=None):
+    """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
+    preconditions and approve with a checker distinct from the creator."""
+    rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    cm.record_precondition_result(wdb, req_id, "screening", rec, log_audit_fn=log_audit_fn, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
+    cm.record_precondition_result(wdb, req_id, "risk", rec, log_audit_fn=log_audit_fn, result={"risk_level": "MEDIUM"})
+    cr = dict(wdb.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
+    checker = {"sub": (cr.get("created_by") or "creator") + "::checker", "name": "Checker", "role": "admin"}
+    return cm.approve_change_request(wdb, req_id, checker, decision_notes=decision_notes, log_audit_fn=log_audit_fn)
+
 ANALYST_USER = {"sub": "analyst-1", "name": "Analyst User", "role": "analyst"}
 
 
@@ -157,7 +169,7 @@ class TestDatetimeSerialization:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER, decision_notes="Approved")
+        _cm_clear_and_approve(cm, wdb, req["id"], decision_notes="Approved")
 
         success, err, version_id = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
         assert success, f"Implement failed: {err}"
@@ -180,7 +192,7 @@ class TestDatetimeSerialization:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req["id"])
         success, _, version_id = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
         assert success
 
@@ -230,7 +242,7 @@ class TestProfileVersionTracking:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req["id"])
         success, _, version_id = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
         assert success
 
@@ -270,7 +282,7 @@ class TestProfileVersionTracking:
         cm.update_change_request_status(wdb, req1["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req1["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req1["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req1["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req1["id"])
         success1, _, _ = cm.implement_change_request(wdb, req1["id"], ADMIN_USER)
         assert success1
 
@@ -279,7 +291,7 @@ class TestProfileVersionTracking:
         cm.update_change_request_status(wdb, req2["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req2["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req2["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req2["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req2["id"])
         success2, err2, _ = cm.implement_change_request(wdb, req2["id"], ADMIN_USER)
         assert not success2
         assert "version" in err2.lower() or "stale" in err2.lower() or "updated" in err2.lower()
@@ -300,7 +312,7 @@ class TestProfileVersionTracking:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req["id"])
         cm.implement_change_request(wdb, req["id"], ADMIN_USER)
 
         versions = cm.get_profile_versions(wdb, app_id)
@@ -476,7 +488,7 @@ class TestFullWorkflowLifecycle:
         assert app_before["company_name"] == "Test Company Ltd"
 
         # Approve
-        ok, err = cm.approve_change_request(wdb, req["id"], ADMIN_USER, decision_notes="Approved")
+        ok, err = _cm_clear_and_approve(cm, wdb, req["id"], decision_notes="Approved")
         assert ok, err
         detail = cm.get_change_request_detail(wdb, req["id"])
         assert detail["status"] == "approved"
@@ -528,7 +540,7 @@ class TestFullWorkflowLifecycle:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER, log_audit_fn=mock_audit)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER, log_audit_fn=mock_audit)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER, log_audit_fn=mock_audit)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER, log_audit_fn=mock_audit)
+        _cm_clear_and_approve(cm, wdb, req["id"], log_audit_fn=mock_audit)
         cm.implement_change_request(wdb, req["id"], ADMIN_USER, log_audit_fn=mock_audit)
 
         actions = [e["action"] for e in audit_entries]
@@ -677,7 +689,7 @@ class TestPermissions:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req["id"])
 
         ok, err, _ = cm.implement_change_request(wdb, req["id"], ANALYST_USER)
         assert not ok
@@ -784,7 +796,7 @@ class TestImplementTransactional:
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "approval_pending", ADMIN_USER)
-        cm.approve_change_request(wdb, req["id"], ADMIN_USER)
+        _cm_clear_and_approve(cm, wdb, req["id"])
 
         before = db.execute("SELECT sector FROM applications WHERE id = ?", (app_id,)).fetchone()["sector"]
         assert before == "Financial Services"

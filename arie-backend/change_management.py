@@ -892,13 +892,14 @@ def update_change_request_status(
     Returns (success, error_message).
     """
     row = db.execute(
-        "SELECT id, status, materiality FROM change_requests WHERE id = ?",
+        "SELECT * FROM change_requests WHERE id = ?",
         (request_id,),
     ).fetchone()
     if not row:
         return False, f"Request not found: {request_id}"
 
-    current_status = row["status"]
+    request = dict(row)
+    current_status = request["status"]
     valid, err = validate_request_transition(current_status, new_status)
     if not valid:
         return False, err
@@ -911,13 +912,25 @@ def update_change_request_status(
             f"Analysts may only move requests through preparatory statuses."
         )
 
-    # Role-based approval checks
-    materiality = row["materiality"]
+    # Role-based approval checks + precondition gate (PR-CM-APPROVAL-PRECONDITIONS-1).
+    # The PATCH→approved path is gated identically to the dedicated approve endpoint;
+    # overrides are only available through the approve endpoint, so this path blocks
+    # outright on any outstanding blocker.
+    materiality = request["materiality"]
     if new_status in ("approved", "partially_approved"):
         action = f"approve_{materiality}"
         allowed, role_err = check_role_permission(user.get("role", ""), action)
         if not allowed:
             return False, role_err
+        blockers = approval_blockers(db, request, approver_user=user)
+        if blockers:
+            codes = ", ".join(b["code"] for b in blockers)
+            if log_audit_fn:
+                log_audit_fn(
+                    user, "CM Approval Blocked", request_id,
+                    f"Approval blocked by: {codes}", db=db,
+                )
+            return False, f"Approval blocked by preconditions: {codes}"
 
     now = datetime.now(timezone.utc).isoformat()
     db.execute(
@@ -985,6 +998,356 @@ def submit_change_request(
 
 
 # ============================================================================
+# Approval Preconditions (PR-CM-APPROVAL-PRECONDITIONS-1)
+# ============================================================================
+
+# Materiality tiers that require maker/checker (creator != approver).
+# Non-waivable: segregation of duties has no break-glass.
+MAKER_CHECKER_TIERS = frozenset({"tier1", "tier2"})
+
+# Roles permitted to override (waivable) precondition blockers.
+_OVERRIDE_ROLES = ("admin", "sco")
+
+_RISK_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
+VALID_RISK_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH", "VERY_HIGH"})
+
+# CR statuses on which precondition results may NOT be (re)recorded — the
+# decision is already made or the request is closed.
+_PRECONDITION_LOCKED_STATUSES = frozenset({
+    "approved", "partially_approved", "rejected", "implemented", "cancelled", "superseded",
+})
+
+
+def _normalize_risk_level(v) -> Optional[str]:
+    """Normalize a risk level to the canonical set, or None if unrecognized."""
+    if not v:
+        return None
+    n = str(v).strip().upper().replace(" ", "_")
+    return n if n in VALID_RISK_LEVELS else None
+
+
+def _flag_true(v) -> bool:
+    """Interpret a stored boolean flag (bool / sqlite int / pg bool / text)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    return str(v).strip().lower() in ("1", "true", "t", "yes")
+
+
+def _risk_increased(pre, post):
+    if not pre or not post:
+        return None
+    return _RISK_ORDER.get(str(post).upper(), 0) > _RISK_ORDER.get(str(pre).upper(), 0)
+
+
+def _load_precondition_results(request: Dict) -> Dict[str, Any]:
+    raw = request.get("precondition_results")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _request_content_signature(db, request_id: str) -> str:
+    """Stable signature of a request's change items.
+
+    Used for stale-clearance detection: a recorded precondition is invalidated
+    only when the request's *content* (items) changes — NOT when its status
+    transitions (status changes bump updated_at, which must not stale a result).
+    """
+    try:
+        rows = db.execute(
+            """SELECT change_type, field_name, old_value, new_value, person_action, person_snapshot
+               FROM change_request_items WHERE request_id = ? ORDER BY id""",
+            (request_id,),
+        ).fetchall()
+    except Exception:
+        return ""
+    import hashlib
+    parts = []
+    for r in rows:
+        d = dict(r)
+        parts.append("|".join(str(d.get(k) if d.get(k) is not None else "") for k in
+                              ("change_type", "field_name", "old_value", "new_value",
+                               "person_action", "person_snapshot")))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _app_screening_snapshot(db, application_id: str) -> Dict[str, Any]:
+    """Capture EXISTING (persisted) screening evidence for an application.
+
+    PR-2 references existing screening data — it does NOT run a fresh screen
+    (that is PR-4). unresolved_match: True/False when determinable, else None.
+    """
+    snap = {"screening_ref": None, "screened_at": None, "unresolved_match": None}
+    try:
+        row = db.execute(
+            "SELECT prescreening_data FROM applications WHERE id = ?", (application_id,)
+        ).fetchone()
+        if not row:
+            return snap
+        raw = row["prescreening_data"]
+        data = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        report = (data or {}).get("screening_report") or {}
+        if not report:
+            return snap
+        snap["screened_at"] = report.get("screened_at") or report.get("screening_date")
+        snap["screening_ref"] = report.get("report_id") or report.get("id") or "application:screening_report"
+        total_hits = report.get("total_hits")
+        sanctions = report.get("sanctions") if isinstance(report.get("sanctions"), dict) else {}
+        matched = sanctions.get("matched")
+        unresolved = report.get("unresolved_matches")
+        status = str(report.get("status") or report.get("result") or "").strip().lower()
+        adverse_status = status in {"match", "hit", "unresolved", "escalate", "fail", "failed"}
+        clean_status = status in {"clear", "cleared", "no_match", "completed_clear", "clean", "pass", "passed"}
+        # Adverse signal → unresolved match.
+        if (matched is True or (isinstance(total_hits, int) and total_hits > 0)
+                or (isinstance(unresolved, int) and unresolved > 0) or adverse_status):
+            snap["unresolved_match"] = True
+        # Explicit clean signal → no unresolved match.
+        elif (matched is False or (isinstance(total_hits, int) and total_hits == 0)
+                or (isinstance(unresolved, int) and unresolved == 0) or clean_status):
+            snap["unresolved_match"] = False
+        else:
+            # Report present but NO determinate clean/adverse signal → indeterminate.
+            # Absence of match fields is NOT treated as clean (fail-safe).
+            snap["unresolved_match"] = None
+    except Exception:
+        return snap
+    return snap
+
+
+def _app_risk_snapshot(db, application_id: str) -> Dict[str, Any]:
+    try:
+        row = db.execute(
+            "SELECT risk_level, risk_score, risk_computed_at FROM applications WHERE id = ?",
+            (application_id,),
+        ).fetchone()
+        if not row:
+            return {}
+        d = dict(row)
+        return {
+            "risk_level": d.get("risk_level"),
+            "risk_score": d.get("risk_score"),
+            "risk_computed_at": d.get("risk_computed_at"),
+        }
+    except Exception:
+        return {}
+
+
+def record_precondition_result(
+    db, request_id, kind, user, result=None, note=None, log_audit_fn=None,
+) -> Tuple[bool, str]:
+    """Record an evidence-backed precondition result (screening|risk) on a CR.
+
+    Does NOT run screening or recompute risk (that is PR-4). It references the
+    existing persisted screening/risk data, the reviewer, and a content
+    signature (for stale detection). Returns (ok, error_message).
+    """
+    kind = str(kind or "").strip().lower()
+    if kind not in ("screening", "risk"):
+        return False, f"Unsupported precondition kind: {kind}"
+    allowed, role_err = check_role_permission(user.get("role", ""), "review_request")
+    if not allowed:
+        return False, role_err
+    row = db.execute("SELECT * FROM change_requests WHERE id = ?", (request_id,)).fetchone()
+    if not row:
+        return False, f"Request not found: {request_id}"
+    request = dict(row)
+    # Do not allow recording precondition results on terminal/decided requests.
+    if request.get("status") in _PRECONDITION_LOCKED_STATUSES:
+        return False, (
+            f"precondition_locked: cannot record a precondition result on a "
+            f"'{request.get('status')}' request"
+        )
+    results = _load_precondition_results(request)
+    now = datetime.now(timezone.utc).isoformat()
+    sig = _request_content_signature(db, request_id)
+    extra = result if isinstance(result, dict) else {}
+
+    entry = {
+        "result": "recorded",
+        "recorded_by": user.get("sub"),
+        "recorded_by_name": user.get("name"),
+        "recorded_at": now,
+        "note": ((note or extra.get("note") or "").strip() or None),
+        "content_sig": sig,
+    }
+    if kind == "screening":
+        snap = _app_screening_snapshot(db, request["application_id"])
+        ref = extra.get("screening_ref") or snap.get("screening_ref")
+        screened_at = extra.get("screened_at") or snap.get("screened_at")
+        unresolved = extra.get("unresolved_match") if "unresolved_match" in extra else snap.get("unresolved_match")
+        # Evidence-backed only: require a screening reference AND a determinate
+        # match status. A blank "screening reviewed" marker is rejected.
+        if not ref or unresolved is None:
+            return False, (
+                "screening_result_evidence_missing: a screening result requires a persisted "
+                "screening report (or explicit screening_ref + unresolved_match evidence). "
+                "A screening result cannot be recorded without underlying evidence."
+            )
+        entry["screening_ref"] = ref
+        entry["screened_at"] = screened_at
+        entry["unresolved_match"] = bool(unresolved)
+    else:
+        snap = _app_risk_snapshot(db, request["application_id"])
+        risk_level_raw = extra.get("risk_level") or snap.get("risk_level")
+        if not risk_level_raw:
+            return False, (
+                "risk_result_evidence_missing: a risk result requires a risk level "
+                "(from the application's computed risk or an explicit risk_level)."
+            )
+        risk_level = _normalize_risk_level(risk_level_raw)
+        if not risk_level:
+            return False, (
+                "risk_result_invalid_level: risk level must be one of "
+                "LOW, MEDIUM, HIGH, VERY_HIGH (got: " + str(risk_level_raw) + ")"
+            )
+        entry["risk_level"] = risk_level
+        entry["risk_computed_at"] = extra.get("risk_computed_at") or snap.get("risk_computed_at")
+        entry["risk_increased"] = (
+            extra.get("risk_increased") if "risk_increased" in extra
+            else _risk_increased(request.get("pre_change_risk_level"), risk_level)
+        )
+
+    results[kind] = entry
+    # NOTE: deliberately does NOT bump updated_at — staleness is keyed on the
+    # request content signature, not on status-transition timestamps.
+    db.execute(
+        "UPDATE change_requests SET precondition_results = ? WHERE id = ?",
+        (json.dumps(results), request_id),
+    )
+    db.commit()
+
+    if log_audit_fn:
+        log_audit_fn(
+            user, "CM Precondition Recorded", request_id,
+            f"kind={kind}; recorded_by={user.get('name', user.get('sub'))}; note={entry.get('note') or 'n/a'}",
+            db=db,
+        )
+    return True, ""
+
+
+def _blocker(code, label, next_action, waivable):
+    return {"code": code, "label": label, "next_action": next_action, "waivable": waivable}
+
+
+def approval_blockers(db, request: Dict, approver_user: Optional[Dict] = None) -> List[Dict]:
+    """Return structured blockers preventing approval of a change request."""
+    blockers: List[Dict] = []
+    materiality = request.get("materiality")
+    results = _load_precondition_results(request)
+    sig = _request_content_signature(db, request["id"])
+
+    # Maker/checker — non-waivable for tier1/tier2.
+    if materiality in MAKER_CHECKER_TIERS and approver_user is not None:
+        if approver_user.get("sub") and approver_user.get("sub") == request.get("created_by"):
+            blockers.append(_blocker(
+                "maker_checker_same_user",
+                "Maker/checker: the request creator cannot approve their own change",
+                "A different officer (SCO/Admin) must approve",
+                False,
+            ))
+
+    # Screening precondition.
+    if _flag_true(request.get("screening_required")):
+        sc = results.get("screening")
+        if not sc or sc.get("result") != "recorded":
+            # No evidence-backed screening result recorded — non-waivable
+            # (you cannot override a screening that was never performed).
+            blockers.append(_blocker(
+                "screening_required_uncleared",
+                "Screening review required",
+                "Record an evidence-backed screening result for this change",
+                False,
+            ))
+        elif sc.get("content_sig") != sig:
+            blockers.append(_blocker(
+                "screening_clearance_stale",
+                "Screening result is stale (the request changed after it was recorded)",
+                "Re-record the screening result",
+                sc.get("unresolved_match") is False,  # waivable only if the prior result was clean
+            ))
+        elif sc.get("unresolved_match") is True:
+            blockers.append(_blocker(
+                "screening_unresolved_match",
+                "Screening shows an unresolved match — cannot approve",
+                "Resolve/disposition the screening match before approval",
+                False,
+            ))
+        elif sc.get("unresolved_match") is not False:
+            blockers.append(_blocker(
+                "screening_result_indeterminate",
+                "Screening result is indeterminate — a clean result could not be confirmed",
+                "Record a determinate screening result",
+                False,
+            ))
+
+    # Risk precondition.
+    if _flag_true(request.get("risk_review_required")):
+        rk = results.get("risk")
+        if not rk or rk.get("result") != "recorded":
+            blockers.append(_blocker(
+                "risk_review_required_uncleared",
+                "Risk review required",
+                "Record the risk review result for this change",
+                True,
+            ))
+        elif rk.get("content_sig") != sig:
+            blockers.append(_blocker(
+                "risk_clearance_stale",
+                "Risk review result is stale (the request changed after it was recorded)",
+                "Re-record the risk review result",
+                True,
+            ))
+    return blockers
+
+
+def evaluate_approval(db, request: Dict) -> Dict[str, Any]:
+    """Neutral approval *readiness* for UI/detail.
+
+    Excludes approver-specific maker/checker (no current user here), so this
+    reports whether PRECONDITIONS are met — NOT whether a given user may approve.
+    The field is intentionally named ``preconditions_met`` (not ``can_approve``)
+    so the UI never tells a creator they can approve their own tier1/tier2 change.
+    """
+    blockers = approval_blockers(db, request, approver_user=None)
+    notes = []
+    if request.get("materiality") in MAKER_CHECKER_TIERS:
+        notes.append({
+            "code": "maker_checker_required",
+            "label": "Approval requires a different officer than the creator (maker/checker)",
+        })
+    return {"preconditions_met": len(blockers) == 0, "blockers": blockers, "approval_notes": notes}
+
+
+def _apply_overrides(blockers: List[Dict], override_codes, override_reason, user: Dict):
+    """Return (remaining_blockers, applied_codes, error_message).
+
+    SCO/Admin only; reason mandatory; non-waivable blockers can never be overridden.
+    """
+    codes = set(override_codes or [])
+    if not codes:
+        return blockers, [], ""
+    if user.get("role", "") not in _OVERRIDE_ROLES:
+        return blockers, [], f"Role '{user.get('role','')}' may not override approval blockers"
+    if not (override_reason and str(override_reason).strip()):
+        return blockers, [], "override_reason is required to override an approval blocker"
+    remaining, applied = [], []
+    for b in blockers:
+        if b["code"] in codes and b.get("waivable"):
+            applied.append(b["code"])
+        else:
+            remaining.append(b)
+    return remaining, applied, ""
+
+
+# ============================================================================
 # Approval & Implementation
 # ============================================================================
 
@@ -994,27 +1357,53 @@ def approve_change_request(
     user: Dict,
     decision_notes: Optional[str] = None,
     log_audit_fn=None,
+    override_codes=None,
+    override_reason: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Approve a change request (does NOT implement — separate step).
+
+    Enforces approval preconditions (PR-CM-APPROVAL-PRECONDITIONS-1): maker/checker
+    (non-waivable for tier1/tier2) and screening/risk precondition results. SCO/Admin
+    may override waivable blockers with a mandatory reason.
 
     Returns (success, error_message).
     """
     row = db.execute(
-        "SELECT id, status, materiality FROM change_requests WHERE id = ?",
+        "SELECT * FROM change_requests WHERE id = ?",
         (request_id,),
     ).fetchone()
     if not row:
         return False, f"Request not found: {request_id}"
 
-    materiality = row["materiality"]
+    request = dict(row)
+    materiality = request["materiality"]
     action = f"approve_{materiality}"
     allowed, role_err = check_role_permission(user.get("role", ""), action)
     if not allowed:
         return False, role_err
 
-    valid, err = validate_request_transition(row["status"], "approved")
+    valid, err = validate_request_transition(request["status"], "approved")
     if not valid:
         return False, err
+
+    # --- Approval precondition gate (maker/checker + screening/risk) ---
+    blockers = approval_blockers(db, request, approver_user=user)
+    remaining, applied, ov_err = _apply_overrides(blockers, override_codes, override_reason, user)
+    if ov_err:
+        return False, ov_err
+    if remaining:
+        codes = ", ".join(b["code"] for b in remaining)
+        if log_audit_fn:
+            log_audit_fn(
+                user, "CM Approval Blocked", request_id,
+                f"Approval blocked by: {codes}", db=db,
+            )
+        return False, f"Approval blocked by preconditions: {codes}"
+    if applied and log_audit_fn:
+        log_audit_fn(
+            user, "CM Approval Override", request_id,
+            f"Overrode {', '.join(applied)}; reason: {override_reason}", db=db,
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     db.execute(
@@ -1749,6 +2138,12 @@ def get_change_request_detail(db, request_id: str) -> Optional[Dict]:
         if app_meta:
             result["application_ref"] = app_meta["ref"]
             result["company_name"] = app_meta["company_name"]
+
+        # Approval readiness (PR-CM-APPROVAL-PRECONDITIONS-1) for officer UI.
+        try:
+            result["approval"] = evaluate_approval(db, result)
+        except Exception:
+            result["approval"] = {"can_approve": None, "blockers": [], "approval_notes": []}
 
         return result
     except Exception as e:
