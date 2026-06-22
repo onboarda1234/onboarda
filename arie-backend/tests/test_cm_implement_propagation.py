@@ -86,13 +86,22 @@ ANALYST_USER = {"sub": "analyst-1", "name": "Analyst User", "role": "analyst"}
 
 
 def _approve_request(cm, wdb, req_id, user=None):
-    """Move a request through the full workflow to approved state."""
+    """Move a request through the full workflow to approved state.
+
+    PR-CM-APPROVAL-PRECONDITIONS-1: records evidence-backed screening/risk
+    preconditions and approves with an officer other than the creator
+    (maker/checker is non-waivable for tier1/tier2).
+    """
     u = user or ADMIN_USER
     cm.submit_change_request(wdb, req_id, u)
     cm.update_change_request_status(wdb, req_id, "triage_in_progress", u)
     cm.update_change_request_status(wdb, req_id, "ready_for_review", u)
     cm.update_change_request_status(wdb, req_id, "approval_pending", u)
-    cm.approve_change_request(wdb, req_id, u)
+    cm.record_precondition_result(wdb, req_id, "screening", SCO_USER, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
+    cm.record_precondition_result(wdb, req_id, "risk", SCO_USER, result={"risk_level": "MEDIUM"})
+    cr = dict(wdb.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
+    approver = ADMIN_USER if cr.get("created_by") != ADMIN_USER["sub"] else SCO_USER
+    cm.approve_change_request(wdb, req_id, approver)
 
 
 # ============================================================================

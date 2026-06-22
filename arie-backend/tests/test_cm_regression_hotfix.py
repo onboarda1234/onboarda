@@ -83,13 +83,24 @@ def _setup_test_data(raw_db, company_name="test", client_id=None):
     return app_id, client_id
 
 
+def _cm_clear_and_approve(cm, wdb, req_id, decision_notes="OK"):
+    """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
+    preconditions and approve with a checker distinct from the creator."""
+    rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    cm.record_precondition_result(wdb, req_id, "screening", rec, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
+    cm.record_precondition_result(wdb, req_id, "risk", rec, result={"risk_level": "MEDIUM"})
+    cr = dict(wdb.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
+    checker = {"sub": (cr.get("created_by") or "creator") + "::checker", "name": "Checker", "role": "admin"}
+    return cm.approve_change_request(wdb, req_id, checker, decision_notes=decision_notes)
+
+
 def _drive_to_approved(cm, wdb, req_id, user):
     """Drive a request through the lifecycle to 'approved' status."""
     cm.submit_change_request(wdb, req_id, user)
     cm.update_change_request_status(wdb, req_id, "triage_in_progress", user)
     cm.update_change_request_status(wdb, req_id, "ready_for_review", user)
     cm.update_change_request_status(wdb, req_id, "approval_pending", user)
-    ok, err = cm.approve_change_request(wdb, req_id, user, decision_notes="Approved")
+    ok, err = _cm_clear_and_approve(cm, wdb, req_id, decision_notes="Approved")
     assert ok, f"Approve failed: {err}"
 
 
@@ -238,7 +249,7 @@ class TestFullLifecycleRegression:
         ).fetchone())
         assert app_before["company_name"] == "test", "Company name should not change before implement"
 
-        ok, err = cm.approve_change_request(wdb, req["id"], sco, decision_notes="Approved for test")
+        ok, err = _cm_clear_and_approve(cm, wdb, req["id"], decision_notes="Approved for test")
         assert ok, f"Approve failed: {err}"
 
         app_after_approve = dict(db.execute(
@@ -469,7 +480,7 @@ class TestApproveDoesNotMutate:
         cm.update_change_request_status(wdb, req["id"], "approval_pending", sco)
 
         # Approve
-        ok, err = cm.approve_change_request(wdb, req["id"], sco, decision_notes="OK")
+        ok, err = _cm_clear_and_approve(cm, wdb, req["id"], decision_notes="OK")
         assert ok
 
         # Profile must still show original

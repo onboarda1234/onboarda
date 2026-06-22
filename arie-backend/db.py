@@ -5278,6 +5278,7 @@ def _run_migrations(db: DBConnection):
                         periodic_review_acceleration_hook BOOLEAN DEFAULT FALSE,
                         pre_change_risk_level TEXT,
                         post_change_risk_level TEXT,
+                        precondition_results TEXT,
                         created_by TEXT,
                         submitted_at TIMESTAMP,
                         approved_by TEXT,
@@ -5319,6 +5320,7 @@ def _run_migrations(db: DBConnection):
                         periodic_review_acceleration_hook INTEGER DEFAULT 0,
                         pre_change_risk_level TEXT,
                         post_change_risk_level TEXT,
+                        precondition_results TEXT,
                         created_by TEXT,
                         submitted_at TEXT,
                         approved_by TEXT,
@@ -6591,6 +6593,34 @@ def _run_migrations(db: DBConnection):
                 db.rollback()
             except Exception:
                 pass
+
+    # Migration v2.44: Change Request approval preconditions
+    # (PR-CM-APPROVAL-PRECONDITIONS-1). Stores evidence-backed precondition
+    # result markers (screening/risk) used to gate CM approval. Additive — no
+    # change to existing rows or approval behaviour by itself.
+    try:
+        _ensure_change_request_precondition_schema(db)
+        db.commit()
+        logger.info("Migration v2.44: Ensured change request precondition schema")
+    except Exception as e:
+        logger.error("Migration v2.44 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_change_request_precondition_schema(db: 'DBConnection'):
+    """Add CM approval-precondition result storage (PR-CM-APPROVAL-PRECONDITIONS-1).
+
+    Additive: a single JSON column on change_requests holding evidence-backed
+    screening/risk precondition results. No behaviour change from the column
+    itself; the approval gate that reads it lives in change_management.py.
+    """
+    if not _safe_table_exists(db, "change_requests"):
+        return
+    if not _safe_column_exists(db, "change_requests", "precondition_results"):
+        db.execute("ALTER TABLE change_requests ADD COLUMN precondition_results TEXT")
 
 
 def _ensure_submit_to_compliance_columns(db: 'DBConnection'):
