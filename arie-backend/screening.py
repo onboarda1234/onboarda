@@ -33,6 +33,7 @@ from config import (
 from rule_engine import SANCTIONED, FATF_BLACK, FATF_GREY
 from sumsub_client import get_sumsub_client
 from provider_errors import sanitize_provider_error
+from company_registry import normalize_registry_result
 from environment import (
     ENV, is_production, is_staging, is_demo,
     get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
@@ -304,7 +305,15 @@ def lookup_opencorporates(company_name, jurisdiction=None):
 
         if resp.status_code == 200:
             data = resp.json()
+            if not isinstance(data, dict):
+                return _simulate_company_lookup(company_name, note="Malformed API response — simulated result")
+            data["_endpoint"] = "/companies/search"
             companies_raw = data.get("results", {}).get("companies", [])
+            normalized_companies = normalize_registry_result(
+                "opencorporates",
+                data,
+                "search",
+            )[:5]
             companies = []
             for c_wrap in companies_raw[:5]:  # Top 5 matches
                 c = c_wrap.get("company", {})
@@ -324,6 +333,7 @@ def lookup_opencorporates(company_name, jurisdiction=None):
             return {
                 "found": len(companies) > 0,
                 "companies": companies,
+                "normalized_companies": normalized_companies,
                 "total_results": data.get("results", {}).get("total_count", 0),
                 "source": "opencorporates",
                 "api_status": "live",
@@ -362,9 +372,29 @@ def _simulate_company_lookup(company_name, note="No API key configured — simul
             "registered_address": "Port Louis, Mauritius",
             "opencorporates_url": "",
         })
+    normalized_raw = {
+        "_endpoint": "simulation:/companies/search",
+        "_simulated": True,
+        "results": {
+            "companies": [
+                {"company": {
+                    "name": company.get("name"),
+                    "company_number": company.get("company_number"),
+                    "jurisdiction_code": company.get("jurisdiction"),
+                    "incorporation_date": company.get("incorporation_date"),
+                    "company_type": company.get("company_type"),
+                    "current_status": company.get("status"),
+                    "registered_address_in_full": company.get("registered_address"),
+                }}
+                for company in companies
+            ],
+        },
+    }
+    normalized_companies = normalize_registry_result("opencorporates", normalized_raw, "search")
     return {
         "found": found,
         "companies": companies,
+        "normalized_companies": normalized_companies,
         "total_results": 1 if found else 0,
         "source": "simulated",
         "api_status": "simulated",

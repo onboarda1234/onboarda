@@ -38,6 +38,8 @@ from config import (
     SUMSUB_WEBHOOK_SECRET as _CFG_SUMSUB_WEBHOOK_SECRET,
     OPENCORPORATES_API_KEY as _CFG_OPENCORPORATES_API_KEY,
     OPENCORPORATES_API_URL as _CFG_OPENCORPORATES_API_URL,
+    COMPANIES_HOUSE_API_KEY as _CFG_COMPANIES_HOUSE_API_KEY,
+    COMPANIES_HOUSE_API_URL as _CFG_COMPANIES_HOUSE_API_URL,
     IP_GEOLOCATION_API_KEY as _CFG_IP_GEOLOCATION_API_KEY,
     IP_GEOLOCATION_API_URL as _CFG_IP_GEOLOCATION_API_URL,
     S3_BUCKET as _CFG_S3_BUCKET,
@@ -1058,6 +1060,8 @@ TOKEN_EXPIRY_HOURS = 24
 # ── External API Keys (from unified config module) ────────
 OPENCORPORATES_API_KEY = _CFG_OPENCORPORATES_API_KEY
 OPENCORPORATES_API_URL = _CFG_OPENCORPORATES_API_URL
+COMPANIES_HOUSE_API_KEY = _CFG_COMPANIES_HOUSE_API_KEY
+COMPANIES_HOUSE_API_URL = _CFG_COMPANIES_HOUSE_API_URL
 IP_GEOLOCATION_API_KEY = _CFG_IP_GEOLOCATION_API_KEY
 IP_GEOLOCATION_API_URL = _CFG_IP_GEOLOCATION_API_URL
 
@@ -2469,6 +2473,15 @@ from screening import (
     run_full_screening as _legacy_run_full_screening, ScreeningProviderError,
 )
 from screening_routing import run_screening_for_active_provider
+from company_registry import (
+    get_companies_house_officers,
+    get_companies_house_profile,
+    get_companies_house_pscs,
+    is_provider_error as is_company_registry_provider_error,
+    provider_error,
+    provider_error_http_status,
+    search_companies_house,
+)
 
 
 def run_full_screening(application_data, directors, ubos, intermediaries=None, client_ip=None, db=None):
@@ -21590,6 +21603,158 @@ class CompanyLookupHandler(BaseHandler):
         self.success(result)
 
 
+def _company_registry_result_simulated(result):
+    if isinstance(result, list):
+        return any(_company_registry_result_simulated(item) for item in result)
+    if not isinstance(result, dict):
+        return False
+    metadata = result.get("source_metadata") if isinstance(result.get("source_metadata"), dict) else {}
+    if metadata.get("simulation"):
+        return True
+    return any(
+        _company_registry_result_simulated(result.get(key))
+        for key in ("results", "officers", "beneficial_owners")
+    )
+
+
+def _company_registry_audit_detail(endpoint, outcome, *, error_code=None, result=None):
+    detail = {
+        "provider": "companies_house",
+        "endpoint": endpoint,
+        "outcome": outcome,
+    }
+    if error_code:
+        detail["error_code"] = str(error_code)
+    if _company_registry_result_simulated(result):
+        detail["simulation_used"] = True
+    return json.dumps(detail, sort_keys=True)
+
+
+def _company_registry_success_envelope(kind, result):
+    envelope = {
+        "success": True,
+        "provider": "companies_house",
+        kind: result,
+    }
+    if _company_registry_result_simulated(result):
+        envelope["simulation_used"] = True
+    return envelope
+
+
+class _CompanyIntakeBaseHandler(BaseHandler):
+    provider_endpoint = ""
+    result_key = "result"
+
+    def _run_company_registry_lookup(self, user, target, lookup_fn):
+        target = str(target or "unknown")[:160]
+        self.log_audit(
+            user,
+            "Company Registry Lookup",
+            target,
+            _company_registry_audit_detail(self.provider_endpoint, "attempt"),
+        )
+        try:
+            result = lookup_fn()
+        except Exception as exc:
+            logger.error(
+                "company_registry_lookup_failed endpoint=%s error=%s",
+                self.provider_endpoint,
+                sanitize_provider_error(exc),
+            )
+            result = provider_error("provider_unavailable")
+
+        if is_company_registry_provider_error(result):
+            error_code = result.get("error_code")
+            outcome = "not_found" if error_code == "company_not_found" else "provider_error"
+            self.log_audit(
+                user,
+                "Company Registry Lookup",
+                target,
+                _company_registry_audit_detail(self.provider_endpoint, outcome, error_code=error_code),
+            )
+            self.set_status(provider_error_http_status(result))
+            self.write(result)
+            return
+
+        outcome = "success"
+        if isinstance(result, list) and not result:
+            outcome = "not_found"
+        if isinstance(result, dict) and result.get("psc_state") == "no_psc":
+            outcome = "no_psc"
+        self.log_audit(
+            user,
+            "Company Registry Lookup",
+            target,
+            _company_registry_audit_detail(self.provider_endpoint, outcome, result=result),
+        )
+        self.success(_company_registry_success_envelope(self.result_key, result))
+
+
+class CompanyIntakeSearchHandler(_CompanyIntakeBaseHandler):
+    """GET /api/company-intake/search?q= — Companies House search."""
+    provider_endpoint = "search"
+    result_key = "results"
+
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        query = self.get_argument("q", "").strip()
+        self._run_company_registry_lookup(
+            user,
+            query or "empty-query",
+            lambda: search_companies_house(query),
+        )
+
+
+class CompanyIntakeProfileHandler(_CompanyIntakeBaseHandler):
+    """GET /api/company-intake/company/:company_number — Companies House profile."""
+    provider_endpoint = "profile"
+    result_key = "company"
+
+    def get(self, company_number):
+        user = self.require_auth()
+        if not user:
+            return
+        self._run_company_registry_lookup(
+            user,
+            company_number,
+            lambda: get_companies_house_profile(company_number),
+        )
+
+
+class CompanyIntakeOfficersHandler(_CompanyIntakeBaseHandler):
+    """GET /api/company-intake/company/:company_number/officers."""
+    provider_endpoint = "officers"
+    result_key = "officers"
+
+    def get(self, company_number):
+        user = self.require_auth()
+        if not user:
+            return
+        self._run_company_registry_lookup(
+            user,
+            company_number,
+            lambda: get_companies_house_officers(company_number),
+        )
+
+
+class CompanyIntakePSCsHandler(_CompanyIntakeBaseHandler):
+    """GET /api/company-intake/company/:company_number/pscs."""
+    provider_endpoint = "pscs"
+    result_key = "pscs"
+
+    def get(self, company_number):
+        user = self.require_auth()
+        if not user:
+            return
+        self._run_company_registry_lookup(
+            user,
+            company_number,
+            lambda: get_companies_house_pscs(company_number),
+        )
+
+
 class IPCheckHandler(BaseHandler):
     """GET /api/screening/ip — check IP geolocation"""
     def get(self):
@@ -32639,6 +32804,10 @@ def make_app():
         (r"/api/screening/company", CompanyLookupHandler),
         (r"/api/screening/ip", IPCheckHandler),
         (r"/api/screening/status", APIStatusHandler),
+        (r"/api/company-intake/search", CompanyIntakeSearchHandler),
+        (r"/api/company-intake/company/([^/]+)/officers", CompanyIntakeOfficersHandler),
+        (r"/api/company-intake/company/([^/]+)/pscs", CompanyIntakePSCsHandler),
+        (r"/api/company-intake/company/([^/]+)", CompanyIntakeProfileHandler),
 
         # Sumsub KYC
         (r"/api/kyc/applicant", SumsubApplicantHandler),
