@@ -31575,6 +31575,22 @@ class ChangeRequestPreconditionHandler(BaseHandler):
                 log_audit_fn=self.log_audit,
             )
             if not success:
+                if err.startswith(("risk_result_", "screening_result_")):
+                    code = err.split(":", 1)[0]
+                    self.set_status(409)
+                    self.write(json.dumps({
+                        "action": "precondition_blocked",
+                        "kind": kind,
+                        "code": code,
+                        "error": err,
+                        "blockers": [{
+                            "code": code,
+                            "label": err.split(":", 1)[0].replace("_", " "),
+                            "next_action": "Record valid evidence for this precondition",
+                            "waivable": False,
+                        }],
+                    }, default=str))
+                    return
                 status_code = 403 if "not permitted" in err.lower() else (404 if "not found" in err.lower() else 400)
                 self.error(err, status_code)
                 return
