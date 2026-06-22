@@ -162,29 +162,70 @@ class TestCompaniesHouseProvider:
         assert "Resigned Director" not in names
         assert "Company Secretary" not in names
 
+    @patch("company_registry.requests.get")
+    def test_individual_director_classification_requires_individual_kyc(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "Individual Director",
+                "officer_role": "director",
+                "appointed_on": "2020-01-01",
+            }],
+        })
+
+        officers = company_registry.get_companies_house_officers("12345678")
+
+        assert officers[0]["officer_entity_type"] == "individual"
+        assert officers[0]["requires_individual_kyc"] is True
+        assert officers[0]["requires_corporate_structure_review"] is False
+        assert officers[0]["is_candidate_director"] is True
+
+    @patch("company_registry.requests.get")
+    def test_corporate_director_classification_requires_structure_review(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "Corporate Director Ltd",
+                "officer_role": "corporate-director",
+                "appointed_on": "2020-01-01",
+            }],
+        })
+
+        officers = company_registry.get_companies_house_officers("12345678")
+
+        assert officers[0]["officer_entity_type"] == "corporate"
+        assert officers[0]["requires_individual_kyc"] is False
+        assert officers[0]["requires_corporate_structure_review"] is True
+        assert officers[0]["is_candidate_director"] is True
+
     @pytest.mark.parametrize(
-        "payload,expected_state,expected_names",
+        "payload,expected_state,expected_names,reason_text",
         [
             (
                 {"items": [{"name": "Jane Owner", "kind": "individual-person-with-significant-control"}]},
                 "psc_found",
                 ["Jane Owner"],
+                "active individual PSC entries",
             ),
-            ({"active_count": 0, "items": []}, "no_psc", []),
+            ({"active_count": 0, "items": []}, "no_psc", [], "No active PSC entries"),
             (
                 {"items": [{"kind": "persons-with-significant-control-statement", "statement": "psc-exempt"}]},
                 "psc_exempt",
                 [],
+                "PSC exemption statement",
             ),
             (
                 {"items": [{"name": "HoldCo Ltd", "kind": "corporate-entity-person-with-significant-control"}]},
                 "corporate_psc",
                 ["HoldCo Ltd"],
+                "corporate or legal-person PSC",
             ),
         ],
     )
     @patch("company_registry.requests.get")
-    def test_psc_states_are_first_class(self, mock_get, payload, expected_state, expected_names):
+    def test_psc_states_are_first_class(self, mock_get, payload, expected_state, expected_names, reason_text):
         import company_registry
 
         mock_get.return_value = _mock_response(200, payload)
@@ -192,11 +233,59 @@ class TestCompaniesHouseProvider:
         result = company_registry.get_companies_house_pscs("12345678")
 
         assert result["psc_state"] == expected_state
+        assert result["registry_statement_type"]
+        assert reason_text in result["psc_status_reason"]
         assert [owner["name"] for owner in result["beneficial_owners"]] == expected_names
         assert not _contains(result, "shareholder")
         for owner in result["beneficial_owners"]:
             assert owner["candidate_type"] == "beneficial_owner_candidate"
             assert owner["is_candidate_beneficial_owner"] is True
+
+    @patch("company_registry.requests.get")
+    def test_no_psc_reason_uses_empty_registry_result(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {"items": []})
+
+        result = company_registry.get_companies_house_pscs("12345678")
+
+        assert result["psc_state"] == "no_psc"
+        assert result["registry_statement_type"] == "no_active_psc_entries"
+        assert "No active PSC entries" in result["psc_status_reason"]
+
+    @patch("company_registry.requests.get")
+    def test_psc_exempt_reason_uses_registry_statement(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "kind": "persons-with-significant-control-statement",
+                "statement": "psc-exempt",
+            }],
+        })
+
+        result = company_registry.get_companies_house_pscs("12345678")
+
+        assert result["psc_state"] == "psc_exempt"
+        assert result["registry_statement_type"] == "persons-with-significant-control-statement"
+        assert "PSC exemption statement" in result["psc_status_reason"]
+
+    @patch("company_registry.requests.get")
+    def test_corporate_psc_reason_requires_structure_review(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "HoldCo Ltd",
+                "kind": "corporate-entity-person-with-significant-control",
+            }],
+        })
+
+        result = company_registry.get_companies_house_pscs("12345678")
+
+        assert result["psc_state"] == "corporate_psc"
+        assert result["registry_statement_type"] == "corporate-entity-person-with-significant-control"
+        assert "requires corporate structure review" in result["psc_status_reason"]
 
     @pytest.mark.parametrize(
         "status_code,error_code",

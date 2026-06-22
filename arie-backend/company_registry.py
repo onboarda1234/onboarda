@@ -208,12 +208,24 @@ def _is_active_director_type(officer: dict[str, Any]) -> bool:
     return "director" in role
 
 
+def _officer_entity_type(officer_role: Any) -> str:
+    role = str(officer_role or "").strip().lower()
+    normalized_role = role.replace("_", "-")
+    if "corporate-director" in normalized_role or "corporate director" in role:
+        return "corporate"
+    if "director" in role:
+        return "individual"
+    return "unknown"
+
+
 def _normalize_companies_house_officer(raw: dict[str, Any], source_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    officer_entity_type = _officer_entity_type(raw.get("officer_role"))
     return {
         "provider": COMPANIES_HOUSE_PROVIDER,
         "jurisdiction": "GB",
         "name": _clean_text(raw.get("name")),
         "officer_role": _clean_text(raw.get("officer_role")),
+        "officer_entity_type": officer_entity_type,
         "appointed_on": _clean_text(raw.get("appointed_on")),
         "resigned_on": None,
         "nationality": _clean_text(raw.get("nationality")),
@@ -221,6 +233,8 @@ def _normalize_companies_house_officer(raw: dict[str, Any], source_metadata: dic
         "date_of_birth": _normalize_date_of_birth(raw.get("date_of_birth")),
         "candidate_type": "director",
         "is_candidate_director": True,
+        "requires_individual_kyc": officer_entity_type == "individual",
+        "requires_corporate_structure_review": officer_entity_type == "corporate",
         "status": "active",
         "source_metadata": source_metadata or {},
     }
@@ -272,6 +286,39 @@ def _psc_state(raw: dict[str, Any]) -> str:
     return "psc_found"
 
 
+def _psc_registry_statement_type(raw: dict[str, Any], state: str) -> str:
+    items = [item for item in (raw.get("items") or []) if isinstance(item, dict)]
+    if state == "no_psc":
+        for item in items:
+            text = _psc_text(item)
+            if "no-individual-or-entity" in text or "no registrable" in text:
+                return _clean_text(item.get("kind") or item.get("statement")) or "no_registrable_psc_statement"
+        return "no_active_psc_entries"
+    if state == "psc_exempt":
+        for item in items:
+            if "exempt" in _psc_text(item):
+                return _clean_text(item.get("kind") or item.get("statement")) or "psc_exempt_statement"
+        return "psc_exempt_statement"
+    if state == "corporate_psc":
+        for item in items:
+            if not item.get("ceased_on") and _is_corporate_psc(item):
+                return _clean_text(item.get("kind")) or "active_corporate_psc"
+        return "active_corporate_psc"
+    return "active_individual_psc"
+
+
+def _psc_status_reason(raw: dict[str, Any], state: str, statement_type: str) -> str:
+    if state == "no_psc":
+        if statement_type == "no_active_psc_entries":
+            return "No active PSC entries were returned by the registry."
+        return "The registry statement indicates there is no registrable person or entity with significant control."
+    if state == "psc_exempt":
+        return "The registry returned a PSC exemption statement."
+    if state == "corporate_psc":
+        return "An active PSC entry is a corporate or legal-person PSC and requires corporate structure review."
+    return "One or more active individual PSC entries were returned by the registry as beneficial owner candidates."
+
+
 def _normalize_psc_candidate(raw: dict[str, Any], state: str) -> dict[str, Any]:
     is_corporate = _is_corporate_psc(raw)
     kind = "corporate" if is_corporate else "individual"
@@ -299,6 +346,7 @@ def _normalize_psc_candidate(raw: dict[str, Any], state: str) -> dict[str, Any]:
 
 def _normalize_pscs(raw: dict[str, Any], endpoint: str | None = None) -> dict[str, Any]:
     state = _psc_state(raw)
+    statement_type = _psc_registry_statement_type(raw, state)
     items = [item for item in (raw.get("items") or []) if isinstance(item, dict)]
     owners = []
     if state in {"psc_found", "corporate_psc"}:
@@ -312,6 +360,8 @@ def _normalize_pscs(raw: dict[str, Any], endpoint: str | None = None) -> dict[st
         "jurisdiction": "GB",
         "company_number": _clean_text(raw.get("company_number")),
         "psc_state": state,
+        "registry_statement_type": statement_type,
+        "psc_status_reason": _psc_status_reason(raw, state, statement_type),
         "beneficial_owners": owners,
         "source_metadata": _metadata(raw, endpoint),
     }
