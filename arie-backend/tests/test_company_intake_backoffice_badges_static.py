@@ -30,34 +30,41 @@ def _extract_js_function(html: str, function_name: str) -> str:
     raise AssertionError(f"Could not extract function {function_name}")
 
 
-def test_registry_badge_legend_is_single_compact_prescreen_legend():
+def test_registry_badge_legend_is_single_compact_verified_only_legend():
     html = _backoffice_html()
     summary_body = _extract_js_function(html, "renderPrescreenSummary")
     badge_body = _extract_js_function(html, "renderCompaniesHouseRegistryBadge")
     legend_body = _extract_js_function(html, "renderCompaniesHouseIndicatorLegend")
 
-    assert html.count("Registry indicators:") == 1
+    assert html.count("Registry indicator:") == 1
+    assert "Registry indicators:" not in html
     assert summary_body.count("renderCompaniesHouseIndicatorLegend(app)") == 1
     assert "✓ Verified" in badge_body
-    assert "Review" in badge_body
-    assert "Issue" in badge_body
-    assert "✅ Verified" not in badge_body
-    assert "⚠️ Review" not in badge_body
-    assert "🔴 Registry issue" not in badge_body
-    assert "ch-indicator-legend-separator" in legend_body
+    assert "Supported by registry data." in badge_body
+    assert "Review" not in badge_body
+    assert "Issue" not in badge_body
+    assert "review:" not in badge_body
+    assert "issue:" not in badge_body
+    assert "ch-indicator-legend-separator" not in legend_body
+    assert "renderCompaniesHouseRegistryBadge('verified'" in legend_body
+    assert "renderCompaniesHouseRegistryBadge('review'" not in legend_body
+    assert "renderCompaniesHouseRegistryBadge('issue'" not in legend_body
 
 
-def test_registry_badge_css_is_compact_and_not_a_large_notice_panel():
+def test_registry_badge_css_is_compact_and_green_only():
     html = _backoffice_html()
 
     assert ".ch-registry-badge" in html
     assert "font-size:9px" in html
     assert "padding:1px 5px" in html
     assert "min-height:16px" in html
+    assert ".ch-registry-badge.verified" in html
+    assert ".ch-registry-badge.review" not in html
+    assert ".ch-registry-badge.issue" not in html
     assert ".ch-party-review-note" not in html
 
 
-def test_company_profile_badge_logic_uses_registry_values_overrides_and_status_issue():
+def test_company_profile_badge_logic_only_verifies_registry_matches():
     html = _backoffice_html()
     field_body = _extract_js_function(html, "renderCompaniesHouseFieldBadges")
     override_body = _extract_js_function(html, "registryFieldOverride")
@@ -66,11 +73,12 @@ def test_company_profile_badge_logic_uses_registry_values_overrides_and_status_i
 
     assert "registry_sourced_values" in sourced_body
     assert "registry_field_overrides" in override_body
+    assert "registryFieldOverride(app, field)" in field_body
     assert "registryCompanyStatusHasMaterialIssue(app)" in field_body
     assert "registryComparableValue(currentRaw)" in field_body
     assert "renderCompaniesHouseRegistryBadge('verified'" in field_body
-    assert "renderCompaniesHouseRegistryBadge('review'" in field_body
-    assert "renderCompaniesHouseRegistryBadge('issue'" in field_body
+    assert "renderCompaniesHouseRegistryBadge('review'" not in field_body
+    assert "renderCompaniesHouseRegistryBadge('issue'" not in field_body
     for status in ("inactive", "dissolved", "liquidation", "administration", "receivership", "insolvency", "removed", "closed"):
         assert status in status_body
 
@@ -124,55 +132,56 @@ def test_party_mapping_preserves_pr570_fields_and_sanitized_registry_provenance(
     assert "source_metadata_json" not in fetch_body
 
 
-def test_imported_individual_directors_members_and_corporate_members_have_distinct_badges():
+def test_imported_individual_directors_members_can_verify_but_corporates_do_not_badge():
     html = _backoffice_html()
+    verified_helper_body = _extract_js_function(html, "partyHasVerifiedRegistryBadge")
     party_badge_body = _extract_js_function(html, "renderCompaniesHousePartyBadge")
     party_card_body = _extract_js_function(html, "renderPartyCard")
 
-    assert "partyType === 'director'" in party_badge_body
-    assert "officer_entity_type" in party_badge_body
-    assert "requires_corporate_structure_review" in party_badge_body
-    assert "requires_individual_kyc" in party_badge_body
-    assert "Corporate director — corporate structure review required." in party_badge_body
-    assert "Corporate LLP member — corporate structure review required." in party_badge_body
-    assert "Director, officer, or member imported from Companies House." in party_badge_body
-    assert "role.indexOf('secretary')" in party_badge_body
-    assert "renderCompaniesHouseRegistryBadge('review'" in party_badge_body
+    assert "partyType === 'director'" in verified_helper_body
+    assert "officer_entity_type" in verified_helper_body
+    assert "requires_corporate_structure_review" in verified_helper_body
+    assert "return false" in verified_helper_body
+    assert "requires_individual_kyc" in verified_helper_body
+    assert "role.indexOf('secretary')" in verified_helper_body
     assert "renderCompaniesHouseRegistryBadge('verified'" in party_badge_body
+    assert "renderCompaniesHouseRegistryBadge('review'" not in party_badge_body
+    assert "renderCompaniesHouseRegistryBadge('issue'" not in party_badge_body
+    assert "Corporate director" not in party_badge_body
+    assert "Corporate LLP member" not in party_badge_body
     assert "registryBadge" in party_card_body
 
 
-def test_psc_candidate_no_psc_exempt_and_corporate_intermediary_states_have_badges():
+def test_psc_candidate_can_verify_but_review_branches_do_not_badge():
     html = _backoffice_html()
+    verified_helper_body = _extract_js_function(html, "partyHasVerifiedRegistryBadge")
     party_badge_body = _extract_js_function(html, "renderCompaniesHousePartyBadge")
     psc_section_body = _extract_js_function(html, "renderCompaniesHousePscSectionBadge")
     party_section_body = _extract_js_function(html, "renderPartySection")
 
-    assert "partyType === 'ubo'" in party_badge_body
-    assert "partyType === 'intermediary'" in party_badge_body
-    assert "psc_found" in party_badge_body
-    assert "corporate_psc" in party_badge_body
-    assert "is_candidate_ubo" in party_badge_body
-    assert "PSC candidate imported from Companies House." in party_badge_body
-    assert "Corporate PSC — ownership structure review required." in party_badge_body
-    assert "Corporate PSC or intermediary ownership structure review required." in party_badge_body
-    assert "no_psc" in psc_section_body
-    assert "psc_exempt" in psc_section_body
-    assert "No active PSC returned — ownership confirmation required." in psc_section_body
-    assert "PSC information exempt or unavailable — officer review required." in psc_section_body
+    assert "partyType === 'ubo'" in verified_helper_body
+    assert "psc_found" in verified_helper_body
+    assert "corporate_psc" in verified_helper_body
+    assert "is_candidate_ubo" in verified_helper_body
+    assert "PSC or beneficial-owner candidate imported from registry data." in party_badge_body
+    assert "renderCompaniesHouseRegistryBadge('verified'" in party_badge_body
+    assert "renderCompaniesHouseRegistryBadge('review'" not in party_badge_body
+    assert "renderCompaniesHouseRegistryBadge('issue'" not in party_badge_body
+    assert "Corporate PSC" not in party_badge_body
+    assert "ownership structure review" not in party_badge_body
+    assert psc_section_body.count("return '';") == 1
     assert "renderCompaniesHousePscSectionBadge(app, 'ubo')" in party_section_body
     assert "renderCompaniesHousePscSectionBadge(app, 'intermediary')" in party_section_body
-    assert "final approved UBO" not in party_badge_body
 
 
-def test_no_badge_rendered_when_party_has_no_registry_evidence():
+def test_no_verified_badge_for_parties_without_registry_source():
     html = _backoffice_html()
-    evidence_body = _extract_js_function(html, "partyHasRegistryEvidence")
+    verified_helper_body = _extract_js_function(html, "partyHasVerifiedRegistryBadge")
     party_badge_body = _extract_js_function(html, "renderCompaniesHousePartyBadge")
 
-    assert "partySourceIsCompaniesHouse(party) || !!party.psc_state" in evidence_body
-    assert "registry_lookup_id" not in evidence_body
-    assert "if (!partyHasRegistryEvidence(party)) return ''" in party_badge_body
+    assert "if (!partySourceIsCompaniesHouse(party)) return false" in verified_helper_body
+    assert "registry_lookup_id" not in verified_helper_body
+    assert "if (!partyHasVerifiedRegistryBadge(party, partyType)) return ''" in party_badge_body
 
 
 def test_badges_are_backoffice_only_not_rendered_in_client_portal():
@@ -181,10 +190,10 @@ def test_badges_are_backoffice_only_not_rendered_in_client_portal():
     assert "ch-registry-badge" not in portal
     assert "ch-indicator-legend" not in portal
     assert "renderCompaniesHouseRegistryBadge" not in portal
-    assert "Registry indicators:" not in portal
+    assert "Registry indicator:" not in portal
 
 
-def test_no_unavailable_badge_approval_language_or_raw_registry_payload_surface_added():
+def test_no_review_issue_approval_language_or_raw_registry_payload_surface_added():
     html = _backoffice_html()
     badge_body = _extract_js_function(html, "renderCompaniesHouseRegistryBadge")
     legend_body = _extract_js_function(html, "renderCompaniesHouseIndicatorLegend")
@@ -193,7 +202,6 @@ def test_no_unavailable_badge_approval_language_or_raw_registry_payload_surface_
 
     for forbidden in (
         "Registry unavailable",
-        "Not verified",
         "Missing registry data",
         "Approved",
         "Cleared",
@@ -202,6 +210,7 @@ def test_no_unavailable_badge_approval_language_or_raw_registry_payload_surface_
         "COMPANIES_HOUSE_API_KEY",
         "api.company-information.service.gov.uk",
         "source_metadata_json",
+        "ciphertext",
     ):
         assert forbidden not in badge_body
         assert forbidden not in legend_body
