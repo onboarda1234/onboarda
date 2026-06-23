@@ -52,8 +52,10 @@ def test_portal_pep_form_contains_discrete_required_fields():
 def test_portal_pep_fields_save_resume_and_submit_payload():
     html = (REPO_ROOT / "arie-portal.html").read_text()
 
-    assert "pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'director')" in html
-    assert "pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'ubo')" in html
+    assert "pep_declaration: collectPepDeclarationPayload(personKey, pepValue === 'Yes', 'director')" in html
+    assert "pep_declaration: collectPepDeclarationPayload(personKey, pepValue === 'Yes', 'ubo')" in html
+    assert "pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes', 'director')" in html
+    assert "pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes', 'ubo')" in html
     assert "restorePepDeclarationList(data.directors)" in html
     assert "restorePepDeclarationList(data.ubos)" in html
     assert "restorePepDeclarationFieldsFromPrescreening(prescreeningData)" in html

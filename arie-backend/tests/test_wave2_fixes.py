@@ -206,14 +206,25 @@ class TestW2_6_NationalityNormalization:
 # ═══════════════════════════════════════════════════════════
 
 class TestW2_7_OwnershipPctValidation:
-    """Verify ownership_pct is validated and clamped."""
+    """Verify ownership_pct is validated before persistence."""
 
-    def test_ownership_pct_clamped_in_code(self):
+    def test_ownership_pct_validated_in_code(self):
         import server
         import inspect
         src = inspect.getsource(server.store_application_parties)
-        assert "max(0.0, min(100.0" in src, \
-            "ownership_pct should be clamped to 0-100 range"
+        assert "_parse_ownership_pct" in src, \
+            "ownership_pct should be validated before persistence"
+
+    def test_ownership_pct_rejects_out_of_range(self):
+        import pytest
+        from server import _parse_ownership_pct
+
+        assert _parse_ownership_pct("25") == 25.0
+        assert _parse_ownership_pct("") is None
+        with pytest.raises(ValueError):
+            _parse_ownership_pct("101")
+        with pytest.raises(ValueError):
+            _parse_ownership_pct("-1")
 
     def test_store_parties_callable(self):
         from server import store_application_parties

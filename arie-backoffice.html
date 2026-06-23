@@ -7882,7 +7882,10 @@ function buildPrescreeningPartyFallback(items, personType) {
         last_name: item.last_name || '',
         nat: item.nationality || '',
         dob: item.date_of_birth || '',
-        pct: item.ownership_pct || item.pct || 0,
+        country_of_residence: item.country_of_residence || '',
+        residential_address: item.residential_address || '',
+        date_of_appointment: item.date_of_appointment || '',
+        pct: item.ownership_pct == null || item.ownership_pct === '' ? (item.pct || '') : item.ownership_pct,
         pep: declared ? 'Yes' : normalizePepDisplay(item.is_pep),
         pep_declaration: declaration,
         declared_pep: declared,
@@ -9594,6 +9597,9 @@ async function fetchApplicationDetail(ref) {
       last_name: d.last_name || '',
       nat: d.nationality || d.nat || '',
       dob: d.date_of_birth || '',
+      country_of_residence: d.country_of_residence || '',
+      residential_address: d.residential_address || '',
+      date_of_appointment: d.date_of_appointment || '',
       pep: d.pep_status_display || d.pep || normalizePepDisplay(d.is_pep),
       pep_declaration: d.pep_declaration || {},
       declared_pep: d.declared_pep,
@@ -9617,7 +9623,9 @@ async function fetchApplicationDetail(ref) {
       last_name: u.last_name || '',
       nat: u.nationality || u.nat || '',
       dob: u.date_of_birth || '',
-      pct: u.ownership_pct || u.pct || 0,
+      country_of_residence: u.country_of_residence || '',
+      residential_address: u.residential_address || '',
+      pct: u.ownership_pct == null || u.ownership_pct === '' ? (u.pct || '') : u.ownership_pct,
       pep: u.pep_status_display || u.pep || normalizePepDisplay(u.is_pep),
       pep_declaration: u.pep_declaration || {},
       declared_pep: u.declared_pep,
@@ -9638,7 +9646,10 @@ async function fetchApplicationDetail(ref) {
       name: i.entity_name || i.full_name || '',
       entity_name: i.entity_name || '',
       jurisdiction: i.jurisdiction || '',
-      pct: i.ownership_pct || 0
+      registration_number: i.registration_number || '',
+      registered_address: i.registered_address || '',
+      owned_or_controlled_by: i.owned_or_controlled_by || '',
+      pct: i.ownership_pct == null || i.ownership_pct === '' ? '' : i.ownership_pct
     };
   });
   var riskState = buildRiskDisplayState(detail);
@@ -10006,6 +10017,27 @@ function renderPartyCard(party, partyType, app) {
   var ownershipValue = partyType === 'director' ? 'N/A' : party.pct;
   var nationalityLabel = partyType === 'intermediary' ? 'Jurisdiction' : 'Nationality';
   var nationalityValue = partyType === 'intermediary' ? party.jurisdiction : party.nat;
+  var ownershipDisplay = ownershipValue === 'N/A'
+    ? 'N/A'
+    : (ownershipValue === null || ownershipValue === undefined || ownershipValue === '' ? '' : normalizeDetailValue(ownershipValue) + '%');
+  var facts =
+    renderPartyFact('Role', roleLabel, 'Missing') +
+    renderPartyFact(nationalityLabel, nationalityValue, 'Missing') +
+    renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing') +
+    renderPartyFact('Ownership', ownershipDisplay, partyType === 'director' ? 'N/A' : 'Missing') +
+    renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured');
+  if (partyType === 'director') {
+    facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing') +
+      renderPartyFact('Residential Address', party.residential_address, 'Missing') +
+      renderPartyFact('Date of Appointment', party.date_of_appointment, 'Missing');
+  } else if (partyType === 'ubo') {
+    facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing') +
+      renderPartyFact('Residential Address', party.residential_address, 'Missing');
+  } else if (partyType === 'intermediary') {
+    facts += renderPartyFact('Registration Number', party.registration_number, 'Missing') +
+      renderPartyFact('Registered Address', party.registered_address, 'Missing') +
+      renderPartyFact('Owned / Controlled By', party.owned_or_controlled_by, 'Missing');
+  }
   return '<div class="party-review-card" style="padding:12px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
     '<div style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div>' +
@@ -10018,13 +10050,7 @@ function renderPartyCard(party, partyType, app) {
         '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'screening\')">Review screening</button>' +
       '</div>' +
     '</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-bottom:10px;">' +
-      renderPartyFact('Role', roleLabel, 'Missing') +
-      renderPartyFact(nationalityLabel, nationalityValue, 'Missing') +
-      renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing') +
-      renderPartyFact('Ownership', ownershipValue === 'N/A' ? 'N/A' : normalizeDetailValue(ownershipValue) + '%', partyType === 'director' ? 'N/A' : 'Missing') +
-      renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured') +
-    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-bottom:10px;">' + facts + '</div>' +
   '</div>';
 }
 

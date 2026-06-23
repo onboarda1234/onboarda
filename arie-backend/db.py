@@ -431,6 +431,9 @@ def _get_postgres_schema() -> str:
         is_pep BOOLEAN DEFAULT false,
         pep_declaration JSONB DEFAULT '{}',
         date_of_birth TEXT,
+        country_of_residence TEXT,
+        residential_address TEXT,
+        date_of_appointment TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -447,6 +450,8 @@ def _get_postgres_schema() -> str:
         is_pep BOOLEAN DEFAULT false,
         pep_declaration JSONB DEFAULT '{}',
         date_of_birth TEXT,
+        country_of_residence TEXT,
+        residential_address TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -457,7 +462,10 @@ def _get_postgres_schema() -> str:
         person_key TEXT,
         entity_name TEXT NOT NULL,
         jurisdiction TEXT,
+        registration_number TEXT,
+        registered_address TEXT,
         ownership_pct REAL,
+        owned_or_controlled_by TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1599,6 +1607,9 @@ def _get_sqlite_schema() -> str:
         is_pep TEXT DEFAULT 'No',
         pep_declaration TEXT DEFAULT '{}',
         date_of_birth TEXT,
+        country_of_residence TEXT,
+        residential_address TEXT,
+        date_of_appointment TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -1615,6 +1626,8 @@ def _get_sqlite_schema() -> str:
         is_pep TEXT DEFAULT 'No',
         pep_declaration TEXT DEFAULT '{}',
         date_of_birth TEXT,
+        country_of_residence TEXT,
+        residential_address TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -1625,7 +1638,10 @@ def _get_sqlite_schema() -> str:
         person_key TEXT,
         entity_name TEXT NOT NULL,
         jurisdiction TEXT,
+        registration_number TEXT,
+        registered_address TEXT,
         ownership_pct REAL,
+        owned_or_controlled_by TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -3272,6 +3288,9 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
     """)
 
     director_columns = {
+        "country_of_residence": "TEXT",
+        "residential_address": "TEXT",
+        "date_of_appointment": "TEXT",
         "source": "TEXT",
         "officer_role": "TEXT",
         "officer_entity_type": "TEXT",
@@ -3284,6 +3303,8 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
         "imported_by": "TEXT",
     }
     ubo_columns = {
+        "country_of_residence": "TEXT",
+        "residential_address": "TEXT",
         "source": "TEXT",
         "psc_state": "TEXT",
         "registry_statement_type": "TEXT",
@@ -3296,7 +3317,23 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
         "imported_at": timestamp_type,
         "imported_by": "TEXT",
     }
-    for table_name, columns in (("directors", director_columns), ("ubos", ubo_columns)):
+    intermediary_columns = {
+        "registration_number": "TEXT",
+        "registered_address": "TEXT",
+        "ownership_pct": "REAL",
+        "owned_or_controlled_by": "TEXT",
+        "source": "TEXT",
+        "psc_state": "TEXT",
+        "psc_kind": "TEXT",
+        "is_candidate_intermediary": bool_type,
+        "requires_corporate_structure_review": bool_type,
+        "registry_lookup_id": "TEXT",
+        "response_hash": "TEXT",
+        "source_metadata_json": json_type,
+        "imported_at": timestamp_type,
+        "imported_by": "TEXT",
+    }
+    for table_name, columns in (("directors", director_columns), ("ubos", ubo_columns), ("intermediaries", intermediary_columns)):
         if not _safe_table_exists(db, table_name):
             continue
         for column_name, column_type in columns.items():
@@ -3305,8 +3342,10 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
 
     db.execute("CREATE INDEX IF NOT EXISTS idx_directors_registry_lookup ON directors(registry_lookup_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ubos_registry_lookup ON ubos(registry_lookup_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intermediaries_registry_lookup ON intermediaries(registry_lookup_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_directors_source_person ON directors(application_id, source, person_key)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ubos_source_person ON ubos(application_id, source, person_key)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intermediaries_source_person ON intermediaries(application_id, source, person_key)")
 
 
 def _ensure_country_risk_governance(db: DBConnection):

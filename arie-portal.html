@@ -220,6 +220,7 @@
 
   /* ── Page Wrapper ── */
   .page { max-width: 860px; margin: 0 auto; padding: 40px 24px 80px; }
+  .page.application-page { max-width: 1280px; }
   .page-wide { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
 
   /* ── Global client sidebar ── */
@@ -357,6 +358,11 @@
 
   /* ── Dynamic table rows ── */
   .dyn-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  .related-party-table { min-width: 1120px; }
+  #directors-container,
+  #intermediaries-container,
+  #ubos-container { overflow-x: auto; padding-bottom: 4px; }
+  #intermediaries-table { min-width: 1040px; }
   .dyn-table th {
     font-size: 11px; font-weight: 600; color: var(--text3);
     text-align: left; padding: 8px 10px;
@@ -365,6 +371,12 @@
   }
   .dyn-table td { padding: 6px 4px; }
   .dyn-table td input, .dyn-table td select { border-radius: var(--radius-sm); font-size: 13px; padding: 9px 12px; }
+  .date-with-helper { min-width: 148px; }
+  .dob-helper { min-height: 14px; margin-top: 3px; font-size: 10px; line-height: 1.3; color: var(--text3); }
+  .related-party-guidance {
+    font-size: 12px; color: var(--text3); margin: -4px 0 12px 0;
+    line-height: 1.5;
+  }
   .btn-icon {
     background: none; border: none; cursor: pointer; color: var(--text3);
     font-size: 16px; padding: 6px; border-radius: var(--radius-sm);
@@ -2297,7 +2309,7 @@
        VIEW: PRE-SCREENING APPLICATION
   ══════════════════════════════════════ -->
   <div id="view-prescreening" class="hidden">
-    <div class="page">
+    <div class="page application-page">
 
       <!-- Steps -->
       <div class="steps">
@@ -2676,19 +2688,23 @@
           <!-- 5. Directors -->
           <div class="section-title">Directors</div>
           <p style="font-size:12px;color:var(--text3);margin:-8px 0 12px 0;">PEP = Politically Exposed Person (includes family members and close associates)</p>
-          <div id="company-intake-imported-directors" class="company-intake-import-summary" aria-live="polite"></div>
+          <p id="company-intake-related-party-guidance" class="related-party-guidance">Some details may have been pre-filled from registry data. Please complete any missing fields.</p>
+          <p id="company-intake-corporate-officer-note" class="related-party-guidance hidden"></p>
           <div id="directors-container">
-            <table class="dyn-table" id="directors-table">
+            <table class="dyn-table related-party-table" id="directors-table">
               <thead>
-                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>Date of Birth</th><th>PEP</th><th></th></tr>
+                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>Date of Birth</th><th>Country of Residence</th><th>Residential Address</th><th>Date of Appointment</th><th>PEP</th><th></th></tr>
               </thead>
               <tbody id="directors-body">
                 <tr>
-                  <td><input type="text" placeholder="First name" /></td>
-                  <td><input type="text" placeholder="Last name" /></td>
-                  <td><select class="nat-select"><option value="">Nationality</option></select></td>
-                  <td><input type="date" class="dob-input" /></td>
-                  <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+                  <td><input type="text" data-field="first_name" placeholder="First name" /></td>
+                  <td><input type="text" data-field="last_name" placeholder="Last name" /></td>
+                  <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
+                  <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
+                  <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
+                  <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
+                  <td><input type="date" data-field="date_of_appointment" /></td>
+                  <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
                   <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
                 </tr>
               </tbody>
@@ -2700,9 +2716,9 @@
           <div class="section-title">Intermediary Shareholders (if applicable)</div>
           <p style="font-size:12px;color:var(--text3);margin:-8px 0 12px 0;">Add any corporate entities that hold shares between the UBOs and the applicant company (e.g., holding companies, SPVs, trusts acting as shareholders)</p>
           <div id="intermediaries-container">
-            <table class="dyn-table" id="intermediaries-table">
+            <table class="dyn-table related-party-table" id="intermediaries-table">
               <thead>
-                <tr><th>Name</th><th>Country of Incorporation</th><th>% Ownership</th><th></th></tr>
+                <tr><th>Company Name</th><th>Country of Incorporation</th><th>Registration Number</th><th>Registered Address</th><th>% Ownership in Applicant</th><th>Owned / Controlled By</th><th></th></tr>
               </thead>
               <tbody id="intermediaries-body">
               </tbody>
@@ -2712,20 +2728,21 @@
 
           <!-- 6. UBOs -->
           <div class="section-title">Ultimate Beneficial Owners (≥ 20% ownership)</div>
-          <div id="company-intake-imported-pscs" class="company-intake-import-summary" aria-live="polite"></div>
           <div id="ubos-container">
-            <table class="dyn-table" id="ubos-table">
+            <table class="dyn-table related-party-table" id="ubos-table">
               <thead>
-                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>Date of Birth</th><th>% Ownership</th><th>PEP</th><th></th></tr>
+                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>Date of Birth</th><th>Country of Residence</th><th>Residential Address</th><th>% Ownership</th><th>PEP</th><th></th></tr>
               </thead>
               <tbody id="ubos-body">
                 <tr>
-                  <td><input type="text" placeholder="First name" /></td>
-                  <td><input type="text" placeholder="Last name" /></td>
-                  <td><select class="nat-select"><option value="">Nationality</option></select></td>
-                  <td><input type="date" class="dob-input" /></td>
-                  <td><input type="number" placeholder="% Ownership" min="0" max="100" /></td>
-                  <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+                  <td><input type="text" data-field="first_name" placeholder="First name" /></td>
+                  <td><input type="text" data-field="last_name" placeholder="Last name" /></td>
+                  <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
+                  <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
+                  <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
+                  <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
+                  <td><input type="number" data-field="ownership_pct" placeholder="% Ownership" min="0" max="100" /></td>
+                  <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
                   <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
                 </tr>
               </tbody>
@@ -6050,10 +6067,14 @@ function addDirectorRowWithValidation() {
   const tbody = document.getElementById('directors-body');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><select class="nat-select"><option value="">Nationality</option></select></td>
-    <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
+    <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
+    <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
+    <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
+    <td><input type="date" data-field="date_of_appointment" /></td>
+    <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
     <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
   tbody.appendChild(tr);
@@ -6065,11 +6086,14 @@ function addUBORowWithValidation() {
   const tbody = document.getElementById('ubos-body');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><select class="nat-select"><option value="">Nationality</option></select></td>
-    <td><input type="number" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
-    <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
+    <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
+    <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
+    <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
+    <td><input type="number" data-field="ownership_pct" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
+    <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
     <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
   tbody.appendChild(tr);
@@ -6170,6 +6194,130 @@ function getOrAssignOwnershipPersonKey(row, prefix, selector) {
   return row.dataset.personKey;
 }
 
+function partyRowField(row, field) {
+  return row ? row.querySelector('[data-field="' + field + '"]') : null;
+}
+
+function partyRowValue(row, field) {
+  var el = partyRowField(row, field);
+  return el && typeof el.value === 'string' ? el.value : '';
+}
+
+function partyRowHasAnyValue(row, fields) {
+  return fields.some(function(field) {
+    var value = partyRowValue(row, field);
+    return value && String(value).trim() !== '';
+  });
+}
+
+function markPartyField(row, field, invalid) {
+  var el = partyRowField(row, field);
+  if (el) el.style.borderColor = invalid ? 'var(--red)' : '';
+}
+
+function setPartyRowValue(row, field, value, restoreSelectAlias) {
+  var el = partyRowField(row, field);
+  if (!el) return;
+  var safeValue = value === null || value === undefined ? '' : value;
+  if (el.tagName === 'SELECT') {
+    _restoreSelectValue(el, safeValue, restoreSelectAlias || 'nat-select');
+  } else {
+    el.value = safeValue;
+  }
+}
+
+function companyIntakeSplitPersonName(name) {
+  var clean = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!clean) return { first_name: '', last_name: '' };
+  if (clean.indexOf(',') >= 0) {
+    var parts = clean.split(',');
+    return {
+      first_name: parts.slice(1).join(',').trim(),
+      last_name: parts[0].trim()
+    };
+  }
+  var tokens = clean.split(' ');
+  if (tokens.length === 1) return { first_name: clean, last_name: '' };
+  return {
+    first_name: tokens.slice(0, -1).join(' '),
+    last_name: tokens[tokens.length - 1]
+  };
+}
+
+function companyIntakeFullDobValue(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
+  if (typeof value !== 'object') return '';
+  var year = value.year;
+  var month = value.month;
+  var day = value.day || value.date;
+  if (year && month && day) {
+    return String(year).padStart(4, '0') + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+  }
+  return '';
+}
+
+function companyIntakeDobHelperText(value) {
+  if (!value || typeof value !== 'object') return '';
+  if ((value.day || value.date) && value.month && value.year) return '';
+  if (value.month && value.year) return 'Month/year available: ' + String(value.month).padStart(2, '0') + '/' + String(value.year);
+  if (value.year) return 'Year available: ' + String(value.year);
+  return '';
+}
+
+function applyDobHelper(row, rawDob) {
+  var helper = row ? row.querySelector('.dob-helper') : null;
+  if (helper) helper.textContent = companyIntakeDobHelperText(rawDob);
+}
+
+function setPartyRowMetadata(row, data) {
+  if (!row || !data) return;
+  [
+    'source',
+    'officer_role',
+    'officer_entity_type',
+    'requires_individual_kyc',
+    'requires_corporate_structure_review',
+    'psc_state',
+    'psc_kind',
+    'is_candidate_ubo',
+    'is_candidate_intermediary',
+    'registry_lookup_id',
+    'response_hash',
+    'source_metadata_json',
+    'imported_at',
+    'imported_by'
+  ].forEach(function(key) {
+    if (data[key] !== undefined && data[key] !== null && data[key] !== '') {
+      row.dataset[key] = String(data[key]);
+    }
+  });
+}
+
+function getPartyRowMetadata(row) {
+  var result = {};
+  if (!row || !row.dataset) return result;
+  [
+    'source',
+    'officer_role',
+    'officer_entity_type',
+    'requires_individual_kyc',
+    'requires_corporate_structure_review',
+    'psc_state',
+    'psc_kind',
+    'is_candidate_ubo',
+    'is_candidate_intermediary',
+    'registry_lookup_id',
+    'response_hash',
+    'source_metadata_json',
+    'imported_at',
+    'imported_by'
+  ].forEach(function(key) {
+    if (row.dataset[key] !== undefined && row.dataset[key] !== '') result[key] = row.dataset[key];
+  });
+  return result;
+}
+
 function addDirectorRow() {
   const tbody = document.getElementById('directors-body');
   tbody.querySelectorAll('tr').forEach(function(row) {
@@ -6178,11 +6326,14 @@ function addDirectorRow() {
   const tr = document.createElement('tr');
   tr.dataset.personKey = nextOwnershipPersonKey('dir', '#directors-body tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><select class="nat-select"><option value="">Nationality</option></select></td>
-    <td><input type="date" class="dob-input" /></td>
-    <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
+    <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
+    <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
+    <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
+    <td><input type="date" data-field="date_of_appointment" /></td>
+    <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
     <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
   tbody.appendChild(tr);
@@ -6199,12 +6350,14 @@ function addUBORow() {
   const tr = document.createElement('tr');
   tr.dataset.personKey = nextOwnershipPersonKey('ubo', '#ubos-body tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><select class="nat-select"><option value="">Nationality</option></select></td>
-    <td><input type="date" class="dob-input" /></td>
-    <td><input type="number" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
-    <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
+    <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
+    <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
+    <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
+    <td><input type="number" data-field="ownership_pct" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
+    <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
     <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
   tbody.appendChild(tr);
@@ -6222,9 +6375,12 @@ function addIntermediaryRow() {
   const tr = document.createElement('tr');
   tr.dataset.personKey = nextOwnershipPersonKey('int', '#intermediaries-body tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="Entity name" /></td>
-    <td><select class="nat-select"><option value="">Country</option></select></td>
-    <td><input type="number" placeholder="% Ownership" min="0" max="100" /></td>
+    <td><input type="text" data-field="entity_name" placeholder="Company name" /></td>
+    <td><select class="nat-select" data-field="jurisdiction"><option value="">Country</option></select></td>
+    <td><input type="text" data-field="registration_number" placeholder="Registration number" /></td>
+    <td><input type="text" data-field="registered_address" placeholder="Registered address" /></td>
+    <td><input type="number" data-field="ownership_pct" placeholder="% Ownership" min="0" max="100" /></td>
+    <td><input type="text" data-field="owned_or_controlled_by" placeholder="Owned / controlled by" /></td>
     <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
   `;
   tbody.appendChild(tr);
@@ -6659,8 +6815,6 @@ async function submitPrescreening(e) {
   const btn = e.target.querySelector('.btn-submit');
   btn.disabled = true;
   btn.textContent = '⏳ Submitting…';
-  var preserveImportedDirectors = companyIntakeShouldPreserveImportedDirectors();
-  var preserveImportedUbos = companyIntakeShouldPreserveImportedUBOs();
 
   function getFieldValue(id) {
     var el = document.getElementById(id);
@@ -6765,42 +6919,43 @@ async function submitPrescreening(e) {
   // Director/UBO mandatory field validation
   var dirRowsCheck = document.querySelectorAll('#directors-body tr');
   var dirValid = true;
-  if (!preserveImportedDirectors) {
-    dirRowsCheck.forEach(function(row) {
-      var inputs = row.querySelectorAll('input[type="text"]');
-      inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
-    });
-  }
+  dirRowsCheck.forEach(function(row) {
+    var hasAny = partyRowHasAnyValue(row, ['first_name', 'last_name', 'nationality', 'date_of_birth', 'country_of_residence', 'residential_address', 'date_of_appointment']);
+    var missingFirst = hasAny && !partyRowValue(row, 'first_name').trim();
+    var missingLast = hasAny && !partyRowValue(row, 'last_name').trim();
+    markPartyField(row, 'first_name', missingFirst);
+    markPartyField(row, 'last_name', missingLast);
+    if (missingFirst || missingLast) dirValid = false;
+  });
   var uboRowsCheck = document.querySelectorAll('#ubos-body tr');
-  if (!preserveImportedUbos) {
-    uboRowsCheck.forEach(function(row) {
-      var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
-      inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
-    });
-  }
+  uboRowsCheck.forEach(function(row) {
+    var hasAny = partyRowHasAnyValue(row, ['first_name', 'last_name', 'nationality', 'date_of_birth', 'country_of_residence', 'residential_address', 'ownership_pct']);
+    var missingFirst = hasAny && !partyRowValue(row, 'first_name').trim();
+    var missingLast = hasAny && !partyRowValue(row, 'last_name').trim();
+    markPartyField(row, 'first_name', missingFirst);
+    markPartyField(row, 'last_name', missingLast);
+    if (missingFirst || missingLast) dirValid = false;
+  });
   var interRowsCheck = document.querySelectorAll('#intermediaries-body tr');
   interRowsCheck.forEach(function(row) {
-    var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
-    inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
+    var hasAny = partyRowHasAnyValue(row, ['entity_name', 'jurisdiction', 'registration_number', 'registered_address', 'ownership_pct', 'owned_or_controlled_by']);
+    var missingName = hasAny && !partyRowValue(row, 'entity_name').trim();
+    markPartyField(row, 'entity_name', missingName);
+    if (missingName) dirValid = false;
   });
   if (!dirValid) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
-    showToast('error', 'Incomplete Fields', 'All fields for Directors, UBOs, and Intermediary Shareholders are mandatory. Please complete all highlighted fields.');
+    showToast('error', 'Incomplete Related Parties', 'Please complete highlighted first/last names or company names before submitting.');
     return;
   }
 
   // W2-2: Minimum director count check
   var dirRowsForCount = document.querySelectorAll('#directors-body tr');
   var validDirCount = 0;
-  if (!preserveImportedDirectors) {
-    dirRowsForCount.forEach(function(row) {
-      var nameInputs = row.querySelectorAll('input[type="text"]');
-      var hasName = false;
-      nameInputs.forEach(function(inp) { if (inp.value.trim()) hasName = true; });
-      if (hasName) validDirCount++;
-    });
-  }
-  if (!preserveImportedDirectors && validDirCount === 0) {
+  dirRowsForCount.forEach(function(row) {
+    if (partyRowValue(row, 'first_name').trim() && partyRowValue(row, 'last_name').trim()) validDirCount++;
+  });
+  if (validDirCount === 0) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
     showToast('error', 'Director Required', 'At least one director is required before submitting the application.');
     return;
@@ -6873,24 +7028,24 @@ async function submitPrescreening(e) {
   var directors = [];
   dirRows.forEach(function(row) {
     var personKey = getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
-    var names = row.querySelectorAll('input[type="text"]');
-    var firstName = names[0] ? names[0].value.trim() : '';
-    var lastName = names[1] ? names[1].value.trim() : '';
+    var firstName = partyRowValue(row, 'first_name').trim();
+    var lastName = partyRowValue(row, 'last_name').trim();
     var fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
-    var pepSelect = row.querySelector('.pep-select');
-    var isPep = pepSelect ? (pepSelect.value || 'No') : 'No';
-    var dobInput = row.querySelector('.dob-input');
+    var isPep = partyRowValue(row, 'is_pep') || 'No';
     if (fullName) {
-      directors.push({
+      directors.push(Object.assign({
         person_key: personKey,
         first_name: firstName,
         last_name: lastName,
         full_name: fullName,
-        nationality: (row.querySelector('.nat-select') || {}).value || '',
-        date_of_birth: dobInput ? dobInput.value : '',
+        nationality: partyRowValue(row, 'nationality'),
+        date_of_birth: partyRowValue(row, 'date_of_birth'),
+        country_of_residence: partyRowValue(row, 'country_of_residence'),
+        residential_address: partyRowValue(row, 'residential_address'),
+        date_of_appointment: partyRowValue(row, 'date_of_appointment'),
         is_pep: isPep,
         pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes', 'director')
-      });
+      }, getPartyRowMetadata(row)));
     }
   });
 
@@ -6898,26 +7053,25 @@ async function submitPrescreening(e) {
   var ubos = [];
   uboRows.forEach(function(row) {
     var personKey = getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
-    var names = row.querySelectorAll('input[type="text"]');
-    var firstName = names[0] ? names[0].value.trim() : '';
-    var lastName = names[1] ? names[1].value.trim() : '';
+    var firstName = partyRowValue(row, 'first_name').trim();
+    var lastName = partyRowValue(row, 'last_name').trim();
     var fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
-    var ownershipInput = row.querySelector('input[type="number"]');
-    var pepSelect = row.querySelector('.pep-select');
-    var isPep = pepSelect ? (pepSelect.value || 'No') : 'No';
-    var dobInput = row.querySelector('.dob-input');
+    var ownershipValue = partyRowValue(row, 'ownership_pct');
+    var isPep = partyRowValue(row, 'is_pep') || 'No';
     if (fullName) {
-      ubos.push({
+      ubos.push(Object.assign({
         person_key: personKey,
         first_name: firstName,
         last_name: lastName,
         full_name: fullName,
-        nationality: (row.querySelector('.nat-select') || {}).value || '',
-        date_of_birth: dobInput ? dobInput.value : '',
-        ownership_pct: ownershipInput ? (parseFloat(ownershipInput.value) || 0) : 0,
+        nationality: partyRowValue(row, 'nationality'),
+        date_of_birth: partyRowValue(row, 'date_of_birth'),
+        country_of_residence: partyRowValue(row, 'country_of_residence'),
+        residential_address: partyRowValue(row, 'residential_address'),
+        ownership_pct: ownershipValue === '' ? '' : (parseFloat(ownershipValue) || 0),
         is_pep: isPep,
         pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes', 'ubo')
-      });
+      }, getPartyRowMetadata(row)));
     }
   });
 
@@ -6925,17 +7079,18 @@ async function submitPrescreening(e) {
   var intermediaries = [];
   intermediaryRows.forEach(function(row) {
     var personKey = getOrAssignOwnershipPersonKey(row, 'int', '#intermediaries-body tr');
-    var entityInput = row.querySelector('input[type="text"]');
-    var jurisdictionSelect = row.querySelector('.nat-select');
-    var ownershipInput = row.querySelector('input[type="number"]');
-    var entityName = entityInput ? entityInput.value.trim() : '';
+    var entityName = partyRowValue(row, 'entity_name').trim();
+    var ownershipValue = partyRowValue(row, 'ownership_pct');
     if (entityName) {
-      intermediaries.push({
+      intermediaries.push(Object.assign({
         person_key: personKey,
         entity_name: entityName,
-        jurisdiction: jurisdictionSelect ? jurisdictionSelect.value : '',
-        ownership_pct: ownershipInput ? (parseFloat(ownershipInput.value) || 0) : 0
-      });
+        jurisdiction: partyRowValue(row, 'jurisdiction'),
+        registration_number: partyRowValue(row, 'registration_number'),
+        registered_address: partyRowValue(row, 'registered_address'),
+        ownership_pct: ownershipValue === '' ? '' : (parseFloat(ownershipValue) || 0),
+        owned_or_controlled_by: partyRowValue(row, 'owned_or_controlled_by')
+      }, getPartyRowMetadata(row)));
     }
   });
 
@@ -7039,9 +7194,6 @@ async function submitPrescreening(e) {
     ubos: ubos,
     intermediaries: intermediaries
   };
-  if (preserveImportedDirectors) delete payload.directors;
-  if (preserveImportedUbos) delete payload.ubos;
-
   try {
     // Priority C: suppress beforeunload guard during legitimate submit nav
     _draftSubmitting = true;
@@ -8227,57 +8379,54 @@ function collectFormData() {
   // Collect directors with stable positional keys
   data.directors = [];
   document.querySelectorAll('#directors-body tr').forEach(function(row) {
-    var texts = row.querySelectorAll('input[type="text"]');
-    var natSel = row.querySelector('select.nat-select');
-    var pepSel = row.querySelector('select.pep-select');
-    var dobInput = row.querySelector('.dob-input') || row.querySelector('input[type="date"]');
     var personKey = row.dataset.personkey || row.dataset.personKey || getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
-    var isPep = pepSel ? pepSel.value === 'Yes' : false;
-    data.directors.push({
-      first_name: texts[0] ? texts[0].value : '',
-      last_name: texts[1] ? texts[1].value : '',
-      nationality: natSel ? natSel.value : '',
-      date_of_birth: dobInput ? dobInput.value : '',
-      is_pep: pepSel ? pepSel.value : 'No',
+    var pepValue = partyRowValue(row, 'is_pep') || 'No';
+    var rowPayload = Object.assign({
+      first_name: partyRowValue(row, 'first_name'),
+      last_name: partyRowValue(row, 'last_name'),
+      nationality: partyRowValue(row, 'nationality'),
+      date_of_birth: partyRowValue(row, 'date_of_birth'),
+      country_of_residence: partyRowValue(row, 'country_of_residence'),
+      residential_address: partyRowValue(row, 'residential_address'),
+      date_of_appointment: partyRowValue(row, 'date_of_appointment'),
+      is_pep: pepValue,
       person_key: personKey,
-      pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'director')
-    });
+      pep_declaration: collectPepDeclarationPayload(personKey, pepValue === 'Yes', 'director')
+    }, getPartyRowMetadata(row));
+    data.directors.push(rowPayload);
   });
 
   // Collect UBOs with stable positional keys
   data.ubos = [];
   document.querySelectorAll('#ubos-body tr').forEach(function(row) {
-    var texts = row.querySelectorAll('input[type="text"]');
-    var natSel = row.querySelector('select.nat-select');
-    var pepSel = row.querySelector('select.pep-select');
-    var numInput = row.querySelector('input[type="number"]');
-    var dobInput = row.querySelector('.dob-input') || row.querySelector('input[type="date"]');
     var personKey = row.dataset.personkey || row.dataset.personKey || getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
-    var isPep = pepSel ? pepSel.value === 'Yes' : false;
-    data.ubos.push({
-      first_name: texts[0] ? texts[0].value : '',
-      last_name: texts[1] ? texts[1].value : '',
-      nationality: natSel ? natSel.value : '',
-      date_of_birth: dobInput ? dobInput.value : '',
-      ownership_pct: numInput ? numInput.value : '',
-      is_pep: pepSel ? pepSel.value : 'No',
+    var pepValue = partyRowValue(row, 'is_pep') || 'No';
+    data.ubos.push(Object.assign({
+      first_name: partyRowValue(row, 'first_name'),
+      last_name: partyRowValue(row, 'last_name'),
+      nationality: partyRowValue(row, 'nationality'),
+      date_of_birth: partyRowValue(row, 'date_of_birth'),
+      country_of_residence: partyRowValue(row, 'country_of_residence'),
+      residential_address: partyRowValue(row, 'residential_address'),
+      ownership_pct: partyRowValue(row, 'ownership_pct'),
+      is_pep: pepValue,
       person_key: personKey,
-      pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'ubo')
-    });
+      pep_declaration: collectPepDeclarationPayload(personKey, pepValue === 'Yes', 'ubo')
+    }, getPartyRowMetadata(row)));
   });
 
   // Collect intermediaries with stable positional keys
   data.intermediaries = [];
   document.querySelectorAll('#intermediaries-body tr').forEach(function(row) {
-    var textInput = row.querySelector('input[type="text"]');
-    var natSel = row.querySelector('select.nat-select');
-    var numInput = row.querySelector('input[type="number"]');
-    data.intermediaries.push({
-      entity_name: textInput ? textInput.value : '',
-      jurisdiction: natSel ? natSel.value : '',
-      ownership_pct: numInput ? numInput.value : '',
+    data.intermediaries.push(Object.assign({
+      entity_name: partyRowValue(row, 'entity_name'),
+      jurisdiction: partyRowValue(row, 'jurisdiction'),
+      registration_number: partyRowValue(row, 'registration_number'),
+      registered_address: partyRowValue(row, 'registered_address'),
+      ownership_pct: partyRowValue(row, 'ownership_pct'),
+      owned_or_controlled_by: partyRowValue(row, 'owned_or_controlled_by'),
       person_key: row.dataset.personkey || row.dataset.personKey || ''
-    });
+    }, getPartyRowMetadata(row)));
   });
 
   return data;
@@ -8304,9 +8453,15 @@ function isDraftPartyRowMeaningful(row) {
     'last_name',
     'nationality',
     'date_of_birth',
+    'country_of_residence',
+    'residential_address',
+    'date_of_appointment',
     'ownership_pct',
     'entity_name',
-    'jurisdiction'
+    'jurisdiction',
+    'registration_number',
+    'registered_address',
+    'owned_or_controlled_by'
   ];
   if (interestingKeys.some(function(key) { return isDraftValueMeaningful(row[key]); })) {
     return true;
@@ -8735,27 +8890,31 @@ function restorePartyRows(tbodyId, rows, partyType) {
     if (!lastRow) return;
 
     if (partyType === 'intermediary') {
-      var textInput = lastRow.querySelector('input[type="text"]');
-      var natSel = lastRow.querySelector('select.nat-select');
-      var numInput = lastRow.querySelector('input[type="number"]');
-      if (textInput) textInput.value = rowData.entity_name || '';
-      if (natSel) _restoreSelectValue(natSel, rowData.jurisdiction || '', 'nat-select');
-      if (numInput) numInput.value = rowData.ownership_pct || '';
+      setPartyRowValue(lastRow, 'entity_name', rowData.entity_name || rowData.full_name || rowData.name || '');
+      setPartyRowValue(lastRow, 'jurisdiction', rowData.jurisdiction || rowData.country_of_incorporation || '');
+      setPartyRowValue(lastRow, 'registration_number', rowData.registration_number || '');
+      setPartyRowValue(lastRow, 'registered_address', rowData.registered_address || '');
+      setPartyRowValue(lastRow, 'ownership_pct', rowData.ownership_pct || '');
+      setPartyRowValue(lastRow, 'owned_or_controlled_by', rowData.owned_or_controlled_by || '');
     } else {
-      var texts = lastRow.querySelectorAll('input[type="text"]');
-      var natSel = lastRow.querySelector('select.nat-select');
-      var pepSel = lastRow.querySelector('select.pep-select');
-      if (texts[0]) texts[0].value = rowData.first_name || '';
-      if (texts[1]) texts[1].value = rowData.last_name || '';
-      if (natSel) _restoreSelectValue(natSel, rowData.nationality || '', 'nat-select');
-      var dobInput = lastRow.querySelector('.dob-input') || lastRow.querySelector('input[type="date"]');
-      if (dobInput) dobInput.value = rowData.date_of_birth || '';
-      if (pepSel) pepSel.value = rowData.is_pep || 'No';
+      var nameParts = companyIntakeSplitPersonName(rowData.full_name || rowData.name || '');
+      setPartyRowValue(lastRow, 'first_name', rowData.first_name || nameParts.first_name || '');
+      setPartyRowValue(lastRow, 'last_name', rowData.last_name || nameParts.last_name || '');
+      setPartyRowValue(lastRow, 'nationality', rowData.nationality || rowData.nat || '');
+      var rawDob = rowData.raw_date_of_birth || rowData.date_of_birth_raw || rowData.date_of_birth || '';
+      setPartyRowValue(lastRow, 'date_of_birth', companyIntakeFullDobValue(rowData.date_of_birth) || '');
+      applyDobHelper(lastRow, rawDob);
+      setPartyRowValue(lastRow, 'country_of_residence', rowData.country_of_residence || '');
+      setPartyRowValue(lastRow, 'residential_address', rowData.residential_address || '');
+      if (partyType === 'director') {
+        setPartyRowValue(lastRow, 'date_of_appointment', rowData.date_of_appointment || rowData.appointed_on || '');
+      }
+      setPartyRowValue(lastRow, 'is_pep', rowData.is_pep || 'No');
       if (partyType === 'ubo') {
-        var numInput = lastRow.querySelector('input[type="number"]');
-        if (numInput) numInput.value = rowData.ownership_pct || '';
+        setPartyRowValue(lastRow, 'ownership_pct', rowData.ownership_pct || '');
       }
     }
+    setPartyRowMetadata(lastRow, rowData);
 
     // Set person_key if present
     if (rowData.person_key) {
@@ -10836,8 +10995,11 @@ function companyIntakeDefaultState() {
     company: null,
     officers: [],
     imported_officers: null,
+    imported_director_rows: null,
     pscs: null,
     imported_pscs: null,
+    imported_ubo_rows: null,
+    imported_intermediary_rows: null,
     profileOverrides: {},
     session_id: '',
     application_id: '',
@@ -10916,6 +11078,11 @@ function companyIntakePersistState() {
       selectedCompany: companyIntakeState.selectedCompany,
       company: companyIntakeState.company,
       profileOverrides: companyIntakeState.profileOverrides,
+      imported_officers: companyIntakeState.imported_officers,
+      imported_director_rows: companyIntakeState.imported_director_rows,
+      imported_pscs: companyIntakeState.imported_pscs,
+      imported_ubo_rows: companyIntakeState.imported_ubo_rows,
+      imported_intermediary_rows: companyIntakeState.imported_intermediary_rows,
       session_id: companyIntakeState.session_id,
       application_id: companyIntakeState.application_id,
       application_ref: companyIntakeState.application_ref,
@@ -11265,93 +11432,200 @@ function companyIntakePscMissingFields(owner) {
   return missing;
 }
 
-function companyIntakeImportedSummaryHead(title) {
-  return '<div class="company-intake-import-head">' +
-    '<div class="company-intake-import-title">' + escapeHtml(title) + '</div>' +
-    '<div class="company-intake-import-source">Source: Companies House</div>' +
-  '</div>';
+function companyIntakeIsCorporatePartyCandidate(item) {
+  var kind = String((item && (item.kind || item.officer_entity_type || item.psc_kind)) || '').toLowerCase();
+  return kind.indexOf('corporate') >= 0 ||
+    kind.indexOf('legal') >= 0 ||
+    (item && item.requires_corporate_structure_review === true);
+}
+
+function companyIntakeMergeRawRows(persistedRows, rawRows, matchFn) {
+  return (persistedRows || []).map(function(row) {
+    var raw = (rawRows || []).find(function(candidate) { return matchFn(row, candidate); }) || {};
+    var merged = Object.assign({}, raw, row);
+    if (raw.date_of_birth && !merged.raw_date_of_birth) merged.raw_date_of_birth = raw.date_of_birth;
+    if (raw.appointed_on && !merged.date_of_appointment) merged.date_of_appointment = raw.appointed_on;
+    return merged;
+  });
+}
+
+function companyIntakeOfficerMatchesRow(row, officer) {
+  var rowName = String(row.full_name || row.name || '').toLowerCase();
+  var officerName = String(officer.name || officer.full_name || '').toLowerCase();
+  var rowRole = String(row.officer_role || '').toLowerCase();
+  var officerRole = String(officer.officer_role || '').toLowerCase();
+  return rowName && rowName === officerName && (!rowRole || !officerRole || rowRole === officerRole);
+}
+
+function companyIntakePscMatchesRow(row, owner) {
+  var rowName = String(row.full_name || row.name || row.entity_name || '').toLowerCase();
+  var ownerName = String(owner.name || owner.full_name || owner.entity_name || '').toLowerCase();
+  return rowName && rowName === ownerName;
+}
+
+function companyIntakeOfficerToDirectorRow(officer) {
+  if (!officer || companyIntakeIsCorporatePartyCandidate(officer)) return null;
+  var nameParts = companyIntakeSplitPersonName(officer.full_name || officer.name || '');
+  return {
+    person_key: officer.person_key || '',
+    first_name: officer.first_name || nameParts.first_name || '',
+    last_name: officer.last_name || nameParts.last_name || '',
+    full_name: officer.full_name || officer.name || '',
+    nationality: officer.nationality || '',
+    date_of_birth: companyIntakeFullDobValue(officer.date_of_birth),
+    raw_date_of_birth: officer.raw_date_of_birth || officer.date_of_birth || '',
+    country_of_residence: officer.country_of_residence || '',
+    residential_address: officer.residential_address || '',
+    date_of_appointment: officer.date_of_appointment || officer.appointed_on || '',
+    is_pep: officer.is_pep || 'No',
+    pep_declaration: officer.pep_declaration || {},
+    source: officer.source || 'companies_house',
+    officer_role: officer.officer_role || '',
+    officer_entity_type: officer.officer_entity_type || 'individual',
+    requires_individual_kyc: officer.requires_individual_kyc,
+    requires_corporate_structure_review: officer.requires_corporate_structure_review,
+    registry_lookup_id: officer.registry_lookup_id || '',
+    response_hash: officer.response_hash || '',
+    source_metadata_json: officer.source_metadata_json || '',
+    imported_at: officer.imported_at || '',
+    imported_by: officer.imported_by || ''
+  };
+}
+
+function companyIntakeOwnerToUboRow(owner) {
+  if (!owner || companyIntakeIsCorporatePartyCandidate(owner)) return null;
+  var nameParts = companyIntakeSplitPersonName(owner.full_name || owner.name || '');
+  return {
+    person_key: owner.person_key || '',
+    first_name: owner.first_name || nameParts.first_name || '',
+    last_name: owner.last_name || nameParts.last_name || '',
+    full_name: owner.full_name || owner.name || '',
+    nationality: owner.nationality || '',
+    date_of_birth: companyIntakeFullDobValue(owner.date_of_birth),
+    raw_date_of_birth: owner.raw_date_of_birth || owner.date_of_birth || '',
+    country_of_residence: owner.country_of_residence || '',
+    residential_address: owner.residential_address || '',
+    ownership_pct: owner.ownership_pct || '',
+    is_pep: owner.is_pep || 'No',
+    pep_declaration: owner.pep_declaration || {},
+    source: owner.source || 'companies_house',
+    psc_state: owner.psc_state || '',
+    psc_kind: owner.psc_kind || owner.kind || '',
+    is_candidate_ubo: owner.is_candidate_ubo,
+    registry_lookup_id: owner.registry_lookup_id || '',
+    response_hash: owner.response_hash || '',
+    source_metadata_json: owner.source_metadata_json || '',
+    imported_at: owner.imported_at || '',
+    imported_by: owner.imported_by || ''
+  };
+}
+
+function companyIntakeOwnerToIntermediaryRow(owner) {
+  if (!owner || !companyIntakeIsCorporatePartyCandidate(owner)) return null;
+  return {
+    person_key: owner.person_key || '',
+    entity_name: owner.entity_name || owner.full_name || owner.name || '',
+    jurisdiction: owner.jurisdiction || owner.country_of_incorporation || '',
+    registration_number: owner.registration_number || '',
+    registered_address: companyIntakeAddressSummary(owner.registered_address) || '',
+    ownership_pct: owner.ownership_pct || '',
+    owned_or_controlled_by: owner.owned_or_controlled_by || '',
+    source: owner.source || 'companies_house',
+    psc_state: owner.psc_state || '',
+    psc_kind: owner.psc_kind || owner.kind || '',
+    is_candidate_intermediary: owner.is_candidate_intermediary,
+    requires_corporate_structure_review: owner.requires_corporate_structure_review,
+    registry_lookup_id: owner.registry_lookup_id || '',
+    response_hash: owner.response_hash || '',
+    source_metadata_json: owner.source_metadata_json || '',
+    imported_at: owner.imported_at || '',
+    imported_by: owner.imported_by || ''
+  };
+}
+
+function companyIntakeImportedDirectorRowsForTable() {
+  var persisted = Array.isArray(companyIntakeState.imported_director_rows) ? companyIntakeState.imported_director_rows : [];
+  var raw = companyIntakeImportedOfficersForSummary();
+  var rows = persisted.length ? companyIntakeMergeRawRows(persisted, raw, companyIntakeOfficerMatchesRow) : raw;
+  return rows.map(companyIntakeOfficerToDirectorRow).filter(Boolean);
+}
+
+function companyIntakeRawPscOwnersForTable() {
+  var pscs = companyIntakePscResultForSummary();
+  return pscs && Array.isArray(pscs.beneficial_owners) ? pscs.beneficial_owners : [];
+}
+
+function companyIntakeImportedUboRowsForTable() {
+  var persisted = Array.isArray(companyIntakeState.imported_ubo_rows) ? companyIntakeState.imported_ubo_rows : [];
+  var raw = companyIntakeRawPscOwnersForTable();
+  var rows = persisted.length ? companyIntakeMergeRawRows(persisted, raw, companyIntakePscMatchesRow) : raw;
+  return rows.map(companyIntakeOwnerToUboRow).filter(Boolean);
+}
+
+function companyIntakeImportedIntermediaryRowsForTable() {
+  var persisted = Array.isArray(companyIntakeState.imported_intermediary_rows) ? companyIntakeState.imported_intermediary_rows : [];
+  var raw = companyIntakeRawPscOwnersForTable();
+  var rows = persisted.length ? companyIntakeMergeRawRows(persisted, raw, companyIntakePscMatchesRow) : raw;
+  return rows.map(companyIntakeOwnerToIntermediaryRow).filter(Boolean);
+}
+
+function companyIntakeTableHasData(tbodyId, partyType) {
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return false;
+  var fields = partyType === 'intermediary'
+    ? ['entity_name', 'jurisdiction', 'registration_number', 'registered_address', 'ownership_pct', 'owned_or_controlled_by']
+    : ['first_name', 'last_name', 'nationality', 'date_of_birth', 'country_of_residence', 'residential_address', 'date_of_appointment', 'ownership_pct'];
+  return Array.from(tbody.querySelectorAll('tr')).some(function(row) {
+    return partyRowHasAnyValue(row, fields);
+  });
+}
+
+function companyIntakeRestoreImportedRowsIfBlank(tbodyId, rows, partyType) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  if (companyIntakeTableHasData(tbodyId, partyType)) return;
+  restorePartyRows(tbodyId, rows, partyType);
+}
+
+function renderCompanyIntakeCorporateOfficerNote() {
+  var el = document.getElementById('company-intake-corporate-officer-note');
+  if (!el) return;
+  var corporate = companyIntakeImportedOfficersForSummary().filter(companyIntakeIsCorporatePartyCandidate);
+  if (!corporate.length) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  el.textContent = corporate.length + ' corporate officer/member candidate' + (corporate.length === 1 ? ' is' : 's are') + ' saved for corporate structure review and not shown as individual directors.';
+  el.classList.remove('hidden');
 }
 
 function renderCompanyIntakeImportedDirectorsSummary() {
   var el = document.getElementById('company-intake-imported-directors');
-  if (!el) return;
-  var officers = companyIntakeImportedOfficersForSummary();
-  if (!companyIntakeShouldPreserveImportedDirectors()) {
+  if (el) {
     el.innerHTML = '';
     el.classList.remove('active');
-    return;
   }
-  var html = companyIntakeImportedSummaryHead('Imported directors / officers / members from Companies House') +
-    '<div class="company-intake-import-note">These director, officer, or member candidates were saved to the draft from Companies House. The editable management official table below is for any additional manual officials or client-supplied corrections.</div>';
-  if (!officers.length) {
-    var noOfficerMessage = Array.isArray(companyIntakeState.imported_officers)
-      ? 'No director, officer, or member candidates were selected for import during assisted intake.'
-      : 'Officer candidates were imported during assisted intake and saved to the draft. Reopen the assistant review steps if you need to inspect the original candidate details.';
-    html += '<div class="company-intake-import-note">' + escapeHtml(noOfficerMessage) + '</div>';
-  } else {
-    html += '<div class="company-intake-import-list">' + officers.map(function(officer) {
-      var entityType = officer.officer_entity_type || 'unknown';
-      var meta = [
-        'Role: ' + companyIntakeValue(officer.officer_role),
-        'Officer entity type: ' + entityType,
-        'Appointed: ' + companyIntakeValue(officer.appointed_on),
-        'Date of birth: ' + companyIntakeDateOfBirthLabel(officer.date_of_birth),
-        'Individual KYC required: ' + (officer.requires_individual_kyc === true ? 'Yes' : 'No'),
-        'Corporate structure review required: ' + (officer.requires_corporate_structure_review === true ? 'Yes' : 'No')
-      ];
-      return '<div class="company-intake-import-card">' +
-        '<div class="company-intake-import-card-title">' + escapeHtml(companyIntakeValue(officer.name, 'Unnamed officer candidate')) + '</div>' +
-        '<div class="company-intake-import-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</div>' +
-        '<div class="company-intake-import-missing"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(companyIntakeOfficerMissingFields(officer).join(', ')) + '</div>' +
-      '</div>';
-    }).join('') + '</div>';
-  }
-  el.innerHTML = html;
-  el.classList.add('active');
 }
 
 function renderCompanyIntakeImportedPscSummary() {
   var el = document.getElementById('company-intake-imported-pscs');
-  if (!el) return;
-  var pscs = companyIntakePscResultForSummary();
-  if (!pscs) {
+  if (el) {
     el.innerHTML = '';
     el.classList.remove('active');
-    return;
   }
-  var state = pscs.psc_state || 'review';
-  var reason = pscs.psc_status_reason || pscs.registry_statement_type || '';
-  var owners = Array.isArray(pscs.beneficial_owners) ? pscs.beneficial_owners : [];
-  var html = companyIntakeImportedSummaryHead('Imported PSC / beneficial-owner candidates') +
-    '<div class="company-intake-import-note">These records are candidate beneficial owners for compliance review, not final approved UBOs. The editable UBO table below is for any additional manual owners or client-supplied corrections.</div>' +
-    '<div class="company-intake-import-note"><strong>Registry state:</strong> ' + escapeHtml(state) + (reason ? ' - ' + escapeHtml(reason) : '') + '</div>';
-  if (!owners.length) {
-    var missing = state === 'no_psc' || state === 'psc_exempt'
-      ? 'Ownership confirmation, exact ownership percentage where applicable, PEP declaration where individual owners are later identified'
-      : 'Ownership confirmation, exact ownership percentage where unavailable, PEP declaration';
-    html += '<div class="company-intake-import-note"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(missing) + '</div>';
-  } else {
-    html += '<div class="company-intake-import-list">' + owners.map(function(owner) {
-      var meta = [
-        'Kind: ' + companyIntakeValue(owner.kind),
-        'Nature of control: ' + companyIntakeNatureOfControlLabel(owner.natures_of_control),
-        'Notified: ' + companyIntakeValue(owner.notified_on),
-        'Date of birth: ' + companyIntakeDateOfBirthLabel(owner.date_of_birth)
-      ];
-      return '<div class="company-intake-import-card">' +
-        '<div class="company-intake-import-card-title">' + escapeHtml(companyIntakeValue(owner.name, 'Unnamed PSC candidate')) + '</div>' +
-        '<div class="company-intake-import-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</div>' +
-        '<div class="company-intake-import-missing"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(companyIntakePscMissingFields(owner).join(', ')) + '</div>' +
-      '</div>';
-    }).join('') + '</div>';
-  }
-  el.innerHTML = html;
-  el.classList.add('active');
+}
+
+function applyCompanyIntakeImportedPartiesToTables() {
+  companyIntakeRestoreImportedRowsIfBlank('directors-body', companyIntakeImportedDirectorRowsForTable(), 'director');
+  companyIntakeRestoreImportedRowsIfBlank('ubos-body', companyIntakeImportedUboRowsForTable(), 'ubo');
+  companyIntakeRestoreImportedRowsIfBlank('intermediaries-body', companyIntakeImportedIntermediaryRowsForTable(), 'intermediary');
+  renderCompanyIntakeCorporateOfficerNote();
 }
 
 function renderCompanyIntakeImportedPartySummaries() {
   renderCompanyIntakeImportedDirectorsSummary();
   renderCompanyIntakeImportedPscSummary();
+  applyCompanyIntakeImportedPartiesToTables();
 }
 
 function renderCompanyIntakeProfile() {
@@ -11530,7 +11804,10 @@ async function confirmCompanyIntakeOfficers() {
       session_id: companyIntakeState.session_id,
       officers: selected
     }));
-    companyIntakeState.imported_officers = selected;
+    companyIntakeState.imported_director_rows = Array.isArray(resp.directors)
+      ? companyIntakeMergeRawRows(resp.directors, selected, companyIntakeOfficerMatchesRow)
+      : selected;
+    companyIntakeState.imported_officers = companyIntakeState.imported_director_rows;
     companyIntakeState.officers_confirmed = true;
     var counts = document.getElementById('company-intake-officers-counts');
     if (counts) {
@@ -11637,6 +11914,12 @@ async function confirmCompanyIntakePSCs() {
       pscs: pscResult
     }));
     companyIntakeState.imported_pscs = pscResult;
+    companyIntakeState.imported_ubo_rows = Array.isArray(resp.ubos)
+      ? companyIntakeMergeRawRows(resp.ubos, pscResult.beneficial_owners || [], companyIntakePscMatchesRow)
+      : null;
+    companyIntakeState.imported_intermediary_rows = Array.isArray(resp.intermediaries)
+      ? companyIntakeMergeRawRows(resp.intermediaries, pscResult.beneficial_owners || [], companyIntakePscMatchesRow)
+      : null;
     companyIntakeState.pscs_confirmed = true;
     var counts = document.getElementById('company-intake-pscs-counts');
     if (counts) {
@@ -12483,13 +12766,56 @@ async function resumeApplication(ref, stage) {
 
       if (dirEmpty && Array.isArray(psDirs) && psDirs.length) {
         restorePartyRows('directors-body', psDirs.map(function(d) {
-          return { first_name: d.first_name || '', last_name: d.last_name || '', date_of_birth: d.date_of_birth || '', nationality: d.nationality || '', is_pep: d.is_pep || 'No', person_key: d.person_key || '', pep_declaration: d.pep_declaration || {} };
+          return {
+            first_name: d.first_name || '',
+            last_name: d.last_name || '',
+            full_name: d.full_name || d.name || '',
+            date_of_birth: d.date_of_birth || '',
+            nationality: d.nationality || d.nat || '',
+            country_of_residence: d.country_of_residence || '',
+            residential_address: d.residential_address || '',
+            date_of_appointment: d.date_of_appointment || '',
+            is_pep: d.is_pep || 'No',
+            person_key: d.person_key || '',
+            pep_declaration: d.pep_declaration || {},
+            source: d.source || '',
+            officer_role: d.officer_role || '',
+            officer_entity_type: d.officer_entity_type || '',
+            requires_individual_kyc: d.requires_individual_kyc,
+            requires_corporate_structure_review: d.requires_corporate_structure_review,
+            registry_lookup_id: d.registry_lookup_id || '',
+            response_hash: d.response_hash || '',
+            source_metadata_json: d.source_metadata_json || '',
+            imported_at: d.imported_at || '',
+            imported_by: d.imported_by || ''
+          };
         }), 'director');
         restoredFields = true;
       }
       if (uboEmpty && Array.isArray(psUbos) && psUbos.length) {
         restorePartyRows('ubos-body', psUbos.map(function(u) {
-          return { first_name: u.first_name || '', last_name: u.last_name || '', date_of_birth: u.date_of_birth || '', nationality: u.nationality || '', ownership_pct: u.ownership_pct || '', is_pep: u.is_pep || 'No', person_key: u.person_key || '', pep_declaration: u.pep_declaration || {} };
+          return {
+            first_name: u.first_name || '',
+            last_name: u.last_name || '',
+            full_name: u.full_name || u.name || '',
+            date_of_birth: u.date_of_birth || '',
+            nationality: u.nationality || u.nat || '',
+            country_of_residence: u.country_of_residence || '',
+            residential_address: u.residential_address || '',
+            ownership_pct: u.ownership_pct || '',
+            is_pep: u.is_pep || 'No',
+            person_key: u.person_key || '',
+            pep_declaration: u.pep_declaration || {},
+            source: u.source || '',
+            psc_state: u.psc_state || '',
+            psc_kind: u.psc_kind || '',
+            is_candidate_ubo: u.is_candidate_ubo,
+            registry_lookup_id: u.registry_lookup_id || '',
+            response_hash: u.response_hash || '',
+            source_metadata_json: u.source_metadata_json || '',
+            imported_at: u.imported_at || '',
+            imported_by: u.imported_by || ''
+          };
         }), 'ubo');
         restoredFields = true;
       }
@@ -12497,7 +12823,25 @@ async function resumeApplication(ref, stage) {
         var intEmpty = !intTbody || !intTbody.querySelector('input[type="text"]') || !intTbody.querySelector('input[type="text"]').value.trim();
         if (intEmpty) {
           restorePartyRows('intermediaries-body', psInts.map(function(i) {
-            return { entity_name: i.entity_name || '', jurisdiction: i.jurisdiction || '', ownership_pct: i.ownership_pct || '', person_key: i.person_key || '' };
+            return {
+              entity_name: i.entity_name || i.full_name || i.name || '',
+              jurisdiction: i.jurisdiction || i.country_of_incorporation || '',
+              registration_number: i.registration_number || '',
+              registered_address: i.registered_address || '',
+              ownership_pct: i.ownership_pct || '',
+              owned_or_controlled_by: i.owned_or_controlled_by || '',
+              person_key: i.person_key || '',
+              source: i.source || '',
+              psc_state: i.psc_state || '',
+              psc_kind: i.psc_kind || '',
+              is_candidate_intermediary: i.is_candidate_intermediary,
+              requires_corporate_structure_review: i.requires_corporate_structure_review,
+              registry_lookup_id: i.registry_lookup_id || '',
+              response_hash: i.response_hash || '',
+              source_metadata_json: i.source_metadata_json || '',
+              imported_at: i.imported_at || '',
+              imported_by: i.imported_by || ''
+            };
           }), 'intermediary');
           restoredFields = true;
         }

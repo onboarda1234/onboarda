@@ -453,18 +453,23 @@ class TestLegacyNormalization:
 
         directors = [
             {"person_key": "dir1", "first_name": "Alice", "last_name": "Doe",
-             "nationality": "Mauritius", "is_pep": "No"},
+             "nationality": "Mauritius", "country_of_residence": "Mauritius",
+             "residential_address": "1 Director Road", "date_of_appointment": "2024-01-15",
+             "is_pep": "No"},
             {"person_key": "dir2", "first_name": "Bob", "last_name": "Smith",
              "nationality": "South Africa", "is_pep": "Yes",
              "pep_declaration": {"public_function": "Member of Parliament"}},
         ]
         ubos = [
             {"person_key": "ubo1", "first_name": "Charlie", "last_name": "Brown",
-             "nationality": "UK", "ownership_pct": 60, "is_pep": "No"},
+             "nationality": "UK", "country_of_residence": "United Kingdom",
+             "residential_address": "2 Owner Lane", "ownership_pct": 60, "is_pep": "No"},
         ]
         intermediaries = [
             {"person_key": "int1", "entity_name": "HoldCo Ltd",
-             "jurisdiction": "BVI", "ownership_pct": 40},
+             "jurisdiction": "BVI", "registration_number": "BVI-123",
+             "registered_address": "3 Corporate Avenue", "ownership_pct": 40,
+             "owned_or_controlled_by": "Charlie Brown"},
         ]
         store_application_parties(db, app_id,
                                  directors=directors, ubos=ubos,
@@ -475,17 +480,33 @@ class TestLegacyNormalization:
         assert dirs_out[0]["first_name"] == "Alice"
         assert dirs_out[0]["last_name"] == "Doe"
         assert dirs_out[0]["full_name"] == "Alice Doe"
+        assert dirs_out[0]["country_of_residence"] == "Mauritius"
+        assert dirs_out[0]["residential_address"] == "1 Director Road"
+        assert dirs_out[0]["date_of_appointment"] == "2024-01-15"
         assert dirs_out[1]["first_name"] == "Bob"
         assert dirs_out[1]["pep_declaration"]["public_function"] == "Member of Parliament"
 
         assert len(ubos_out) == 1
         assert ubos_out[0]["first_name"] == "Charlie"
+        assert ubos_out[0]["country_of_residence"] == "United Kingdom"
+        assert ubos_out[0]["residential_address"] == "2 Owner Lane"
         assert ubos_out[0]["ownership_pct"] == 60
 
         assert len(ints_out) == 1
         assert ints_out[0]["entity_name"] == "HoldCo Ltd"
         assert ints_out[0]["jurisdiction"] == "BVI"
+        assert ints_out[0]["registration_number"] == "BVI-123"
+        assert ints_out[0]["registered_address"] == "3 Corporate Avenue"
+        assert ints_out[0]["owned_or_controlled_by"] == "Charlie Brown"
         assert ints_out[0]["ownership_pct"] == 40
+        raw_intermediary = db.execute(
+            "SELECT owned_or_controlled_by FROM intermediaries WHERE application_id=?",
+            (app_id,),
+        ).fetchone()
+        from party_utils import extract_fernet_token
+
+        assert raw_intermediary["owned_or_controlled_by"] != "Charlie Brown"
+        assert extract_fernet_token(raw_intermediary["owned_or_controlled_by"])
 
         db.close()
 

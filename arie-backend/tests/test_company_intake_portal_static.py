@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -45,6 +46,17 @@ def _extract_js_function(html: str, function_name: str) -> str:
             if depth == 0:
                 return html[start:pos + 1]
     raise AssertionError(f"Could not extract function {function_name}")
+
+
+def _extract_table_headers(html: str, table_id: str) -> list[str]:
+    marker = f'id="{table_id}"'
+    marker_index = html.index(marker)
+    table_start = html.rfind("<table", 0, marker_index)
+    thead_end = html.index("</thead>", marker_index)
+    return [
+        re.sub(r"<.*?>", "", match).strip()
+        for match in re.findall(r"<th>(.*?)</th>", html[table_start:thead_end], flags=re.S)
+    ]
 
 
 def test_company_intake_assistant_appears_before_long_application_form():
@@ -161,7 +173,8 @@ def test_officer_confirmation_displays_corporate_director_review_not_individual_
 
     confirm_body = _extract_js_function(html, "confirmCompanyIntakeOfficers")
     assert "apiCall('POST', '/company-intake/confirm-officers'" in confirm_body
-    assert "companyIntakeState.imported_officers = selected" in confirm_body
+    assert "companyIntakeState.imported_director_rows" in confirm_body
+    assert "companyIntakeState.imported_officers = companyIntakeState.imported_director_rows" in confirm_body
     assert "imported_count" in confirm_body
     assert "skipped_count" in confirm_body
 
@@ -205,12 +218,14 @@ def test_manual_fallback_and_save_draft_paths_are_preserved():
 def test_assisted_form_submit_preserves_imported_directors_and_ubo_candidates():
     html = _portal_html()
     submit_body = _extract_js_function(html, "submitPrescreening")
-    assert "companyIntakeShouldPreserveImportedDirectors()" in submit_body
-    assert "companyIntakeShouldPreserveImportedUBOs()" in submit_body
-    assert "if (!preserveImportedDirectors)" in submit_body
-    assert "if (!preserveImportedUbos)" in submit_body
-    assert "if (preserveImportedDirectors) delete payload.directors;" in submit_body
-    assert "if (preserveImportedUbos) delete payload.ubos;" in submit_body
+    assert "delete payload.directors" not in submit_body
+    assert "delete payload.ubos" not in submit_body
+    assert "country_of_residence" in submit_body
+    assert "residential_address" in submit_body
+    assert "date_of_appointment" in submit_body
+    assert "registration_number" in submit_body
+    assert "registered_address" in submit_body
+    assert "owned_or_controlled_by" in submit_body
 
     preserve_directors_body = _extract_js_function(html, "companyIntakeShouldPreserveImportedDirectors")
     preserve_ubos_body = _extract_js_function(html, "companyIntakeShouldPreserveImportedUBOs")
@@ -220,43 +235,95 @@ def test_assisted_form_submit_preserves_imported_directors_and_ubo_candidates():
     assert "pscs_confirmed === true" in preserve_ubos_body
 
 
-def test_assisted_handoff_renders_read_only_imported_party_summaries_above_long_form_tables():
+def test_application_layout_is_wider_for_related_party_tables():
     html = _portal_html()
-    directors_marker = 'id="company-intake-imported-directors"'
-    directors_table_marker = 'id="directors-container"'
-    pscs_marker = 'id="company-intake-imported-pscs"'
-    ubos_table_marker = 'id="ubos-container"'
-    assert directors_marker in html
-    assert pscs_marker in html
-    assert html.index(directors_marker) < html.index(directors_table_marker)
-    assert html.index(pscs_marker) < html.index(ubos_table_marker)
+    assert ".page.application-page { max-width: 1280px; }" in html
+    assert '<div class="page application-page">' in html
+    assert "#directors-container," in html
+    assert "overflow-x: auto" in html
+    assert "related-party-table" in html
 
-    summary_head_body = _extract_js_function(html, "companyIntakeImportedSummaryHead")
-    assert "Source: Companies House" in summary_head_body
 
-    directors_summary_body = _extract_js_function(html, "renderCompanyIntakeImportedDirectorsSummary")
-    assert "Imported directors / officers / members from Companies House" in directors_summary_body
-    assert "director, officer, or member candidates" in directors_summary_body
-    assert "Missing fields requiring client completion" in directors_summary_body
-    assert "Individual KYC required" in directors_summary_body
-    assert "Corporate structure review required" in directors_summary_body
+def test_related_party_tables_have_approved_columns_only():
+    html = _portal_html()
+    assert _extract_table_headers(html, "directors-table") == [
+        "First Name",
+        "Last Name",
+        "Nationality",
+        "Date of Birth",
+        "Country of Residence",
+        "Residential Address",
+        "Date of Appointment",
+        "PEP",
+        "",
+    ]
+    assert _extract_table_headers(html, "intermediaries-table") == [
+        "Company Name",
+        "Country of Incorporation",
+        "Registration Number",
+        "Registered Address",
+        "% Ownership in Applicant",
+        "Owned / Controlled By",
+        "",
+    ]
+    assert _extract_table_headers(html, "ubos-table") == [
+        "First Name",
+        "Last Name",
+        "Nationality",
+        "Date of Birth",
+        "Country of Residence",
+        "Residential Address",
+        "% Ownership",
+        "PEP",
+        "",
+    ]
 
-    officer_missing_body = _extract_js_function(html, "companyIntakeOfficerMissingFields")
-    assert "Full date of birth" in officer_missing_body
-    assert "PEP declaration" in officer_missing_body
+    for forbidden in ("Role", "capacity", "Entity type", "Nature of Control", "Notes"):
+        assert forbidden not in _extract_table_headers(html, "directors-table")
+        assert forbidden not in _extract_table_headers(html, "intermediaries-table")
+        assert forbidden not in _extract_table_headers(html, "ubos-table")
 
-    psc_summary_body = _extract_js_function(html, "renderCompanyIntakeImportedPscSummary")
-    assert "Imported PSC / beneficial-owner candidates" in psc_summary_body
-    assert "Missing fields requiring client completion" in psc_summary_body
-    assert "candidate beneficial owners for compliance review, not final approved UBOs" in psc_summary_body
 
-    psc_missing_body = _extract_js_function(html, "companyIntakePscMissingFields")
-    assert "Full date of birth" in psc_missing_body
-    assert "PEP declaration" in psc_missing_body
-    assert "Exact ownership percentage" in psc_missing_body
+def test_assisted_handoff_prefills_editable_tables_without_bulky_client_cards():
+    html = _portal_html()
+    assert 'id="company-intake-imported-directors"' not in html
+    assert 'id="company-intake-imported-pscs"' not in html
+    assert "Imported directors / officers / members from Companies House" not in html
+    assert "Imported PSC / beneficial-owner candidates" not in html
+    assert "Some details may have been pre-filled from registry data. Please complete any missing fields." in html
 
     prefill_body = _extract_js_function(html, "applyCompanyIntakePrefillToForm")
     assert "renderCompanyIntakeImportedPartySummaries()" in prefill_body
+
+    table_apply_body = _extract_js_function(html, "applyCompanyIntakeImportedPartiesToTables")
+    assert "companyIntakeImportedDirectorRowsForTable()" in table_apply_body
+    assert "companyIntakeImportedUboRowsForTable()" in table_apply_body
+    assert "companyIntakeImportedIntermediaryRowsForTable()" in table_apply_body
+
+    director_map_body = _extract_js_function(html, "companyIntakeOfficerToDirectorRow")
+    assert "companyIntakeIsCorporatePartyCandidate(officer)" in director_map_body
+    assert "date_of_appointment" in director_map_body
+    assert "country_of_residence" in director_map_body
+
+    ubo_map_body = _extract_js_function(html, "companyIntakeOwnerToUboRow")
+    assert "companyIntakeIsCorporatePartyCandidate(owner)" in ubo_map_body
+    assert "country_of_residence" in ubo_map_body
+
+    intermediary_map_body = _extract_js_function(html, "companyIntakeOwnerToIntermediaryRow")
+    assert "registration_number" in intermediary_map_body
+    assert "registered_address" in intermediary_map_body
+    assert "owned_or_controlled_by" in intermediary_map_body
+
+    collect_body = _extract_js_function(html, "collectFormData")
+    for field in (
+        "country_of_residence",
+        "residential_address",
+        "date_of_appointment",
+        "registration_number",
+        "registered_address",
+        "owned_or_controlled_by",
+    ):
+        assert field in collect_body
 
 
 def test_no_secret_or_raw_provider_surface_added_to_portal():
