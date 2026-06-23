@@ -88,6 +88,21 @@ def test_sync_hides_approve_and_gates_reject_override():
     assert "indexOf(submitRole) >= 0" in sync
 
 
+def test_pricing_review_move_cta_does_not_broaden_submit_to_compliance():
+    html = _html()
+    sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
+    submit_states = re.search(r"var submitEligibleStates = \[(.*?)\];", sync).group(1)
+    assert "'pricing_review'" not in submit_states
+    assert "'compliance_review'" in submit_states and "'edd_required'" in submit_states
+    assert "pricing.move_to_compliance_review" in html
+    assert "function movePricingToComplianceReview(" in html
+    assert "/move-to-compliance-review" in html
+    # The standard action bar remains intact; the new CTA is in the blocker row.
+    assert 'id="btn-approve"' in html
+    assert 'id="btn-rmi"' in html
+    assert 'class="topbar-more-menu"' in html
+
+
 def test_blocker_hint_element_and_messaging():
     html = _html()
     assert 'id="approval-authority-hint"' in html

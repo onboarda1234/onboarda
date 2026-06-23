@@ -43,6 +43,7 @@ def _runtime_js(html, config):
                 const elements = {{}};
                 const switchTabCalls = [];
                 const eddCalls = [];
+                const moveToComplianceCalls = [];
                 const toastCalls = [];
 
                 function makeElement(id) {{
@@ -79,6 +80,7 @@ def _runtime_js(html, config):
                 function switchDetailTab(tab) {{ switchTabCalls.push(tab); }}
                 function openEDDCaseFromApplication(caseId, applicationId, applicationRef) {{ eddCalls.push({{ type:'case', caseId, applicationId, applicationRef }}); }}
                 function openEDDQueueForApplication(applicationId, applicationRef) {{ eddCalls.push({{ type:'queue', applicationId, applicationRef }}); }}
+                function movePricingToComplianceReview() {{ moveToComplianceCalls.push({{ ref: app && app.ref, statusRaw: app && app.statusRaw }}); }}
                 function showToast(message, level) {{ toastCalls.push({{ message, level }}); }}
                 function screeningTruthBlockedReasons(screeningTruth) {{
                   if (!screeningTruth) return [];
@@ -153,6 +155,7 @@ def _runtime_js(html, config):
                   visibleBlockerCardCount: (document.getElementById('detail-case-command-centre').innerHTML.match(/case-command-group-row/g) || []).length,
                   switchTabCalls,
                   eddCalls,
+                  moveToComplianceCalls,
                   toastCalls,
                   targetScrollCalls: CONFIG.resolveTarget ? document.getElementById(CONFIG.resolveTarget.anchorId).scrollCalls : 0
                 }));
@@ -242,6 +245,93 @@ class TestCaseCommandCentreRuntime:
         assert 'Unassigned' in result["html"]
         assert 'Blocked —' in result["html"]
         assert 'case-command-centre-status' not in result["html"]
+
+    def test_pricing_review_backend_stage_blocker_moves_to_compliance_review(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        ref="ARF-PRICING-CTA-001",
+                        status="Pricing Under Review",
+                        statusRaw="pricing_review",
+                        gateBlockers=[
+                            {
+                                "id": "case_stage",
+                                "category": "Case Stage",
+                                "title": "Application is not in compliance review",
+                                "description": "Current status is 'pricing_review'. Move the application into compliance review before final approval.",
+                                "ctaLabel": "Move to Compliance Review",
+                                "action_key": "pricing.move_to_compliance_review",
+                                "action_label": "Move to Compliance Review",
+                                "tab": "overview",
+                                "anchorId": "detail-company-name",
+                            }
+                        ],
+                    ),
+                    "approvalReadiness": {"ready": False, "blockers": ["Case stage"]},
+                    "runActionKey": "pricing.move_to_compliance_review",
+                },
+            )
+        )
+        assert "Move to Compliance Review" in result["html"]
+        action_target = next(iter(result["actionTargets"].values()))
+        assert action_target["action_mode"] == "move_to_compliance_review"
+        assert result["moveToComplianceCalls"] == [
+            {"ref": "ARF-PRICING-CTA-001", "statusRaw": "pricing_review"}
+        ]
+        assert result["switchTabCalls"] == []
+
+    def test_pricing_review_fallback_stage_blocker_uses_clear_move_label(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        ref="ARF-PRICING-CTA-002",
+                        status="Pricing Under Review",
+                        statusRaw="pricing_review",
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Case stage"]},
+                    "runActionKey": "pricing.move_to_compliance_review",
+                },
+            )
+        )
+        assert "Move to Compliance Review" in result["html"]
+        assert "Review case stage" not in result["html"]
+        assert result["moveToComplianceCalls"] == [
+            {"ref": "ARF-PRICING-CTA-002", "statusRaw": "pricing_review"}
+        ]
+
+    def test_non_pricing_pre_review_stage_blocker_keeps_review_case_stage(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        ref="ARF-DRAFT-CTA-001",
+                        status="Draft",
+                        statusRaw="draft",
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Case stage"]},
+                },
+            )
+        )
+        assert "Review case stage" in result["html"]
+        assert "Move to Compliance Review" not in result["html"]
 
     def test_terminal_record_renders_decision_context_not_approval_blockers(self):
         html = _read_backoffice()
