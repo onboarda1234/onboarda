@@ -1115,6 +1115,15 @@ def update_change_request_status(
             f"Analysts may only move requests through preparatory statuses."
         )
 
+    # PATCH -> implemented must use the same live-profile implementation path
+    # as the dedicated endpoint.  A plain status flip would mark the request as
+    # implemented without applying the controlled change.
+    if new_status == "implemented":
+        success, err, _version_id = implement_change_request(
+            db, request_id, user, log_audit_fn=log_audit_fn,
+        )
+        return success, err
+
     # Role-based approval checks + precondition gate (PR-CM-APPROVAL-PRECONDITIONS-1).
     # The PATCH→approved path is gated identically to the dedicated approve endpoint;
     # overrides are only available through the approve endpoint, so this path blocks
@@ -1891,6 +1900,203 @@ def approval_blockers(db, request: Dict, approver_user: Optional[Dict] = None) -
     return blockers
 
 
+# ============================================================================
+# Implementation Preconditions (PR-CM-RISK-SCREENING-BEFORE-IMPLEMENTATION-1)
+# ============================================================================
+
+_IMPLEMENTATION_SCREENING_CHANGE_KEYS = frozenset({
+    "director_added",
+    "director_removed",
+    "director_details_changed",
+    "shareholder_added",
+    "shareholder_removed",
+    "shareholding_percentage_changed",
+    "ubo_added",
+    "ubo_removed",
+    "source_of_funds_changed",
+})
+
+_IMPLEMENTATION_RISK_CHANGE_KEYS = frozenset({
+    "legal_name_change",
+    "registration_number_change",
+    "registered_address_change",
+    "director_added",
+    "director_removed",
+    "director_details_changed",
+    "shareholder_added",
+    "shareholder_removed",
+    "shareholding_percentage_changed",
+    "ubo_added",
+    "ubo_removed",
+    "business_activity_changed",
+    "regulated_activity_changed",
+    "source_of_funds_changed",
+    "source_of_wealth_changed",
+    "contact_details_changed",
+})
+
+
+def _implementation_blocker(code, label, next_action, *, details=None):
+    blocker = _blocker(code, label, next_action, False)
+    if details:
+        blocker["details"] = details
+    return blocker
+
+
+def _request_items_for_gate(db, request: Dict[str, Any]) -> List[Dict[str, Any]]:
+    items = request.get("items")
+    if isinstance(items, list) and items:
+        return [dict(item) for item in items]
+    try:
+        return _load_cr_items(db, request.get("id"))
+    except Exception:
+        return []
+
+
+def _request_change_keys(db, request: Dict[str, Any]) -> List[str]:
+    keys = []
+    for item in _request_items_for_gate(db, request):
+        key = _canonical_change_key(item)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _implementation_requires_screening(db, request: Dict[str, Any]) -> bool:
+    if _flag_true(request.get("screening_required")):
+        return True
+    return any(key in _IMPLEMENTATION_SCREENING_CHANGE_KEYS for key in _request_change_keys(db, request))
+
+
+def _implementation_requires_risk(db, request: Dict[str, Any]) -> bool:
+    if _flag_true(request.get("risk_review_required")):
+        return True
+    return any(key in _IMPLEMENTATION_RISK_CHANGE_KEYS for key in _request_change_keys(db, request))
+
+
+def _risk_escalation_handled(risk_result: Dict[str, Any]) -> bool:
+    for key in (
+        "edd_review_completed", "edd_completed", "senior_approval",
+        "sco_approval", "admin_approval", "risk_escalation_resolved",
+    ):
+        if _flag_true(risk_result.get(key)):
+            return True
+    return bool(
+        risk_result.get("edd_review_ref")
+        or risk_result.get("senior_approval_ref")
+        or risk_result.get("risk_escalation_ref")
+    )
+
+
+def implementation_blockers(db, request: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return structured blockers preventing implementation into live profile.
+
+    This gate does not run screening or recompute risk. It requires the existing
+    approval-time evidence to be current for the exact request item signature and
+    fails closed for missing, stale, unresolved, or indeterminate results.
+    """
+    blockers: List[Dict[str, Any]] = []
+    request = dict(request or {})
+    request_id = request.get("id")
+    status = request.get("status")
+
+    if status == "implemented":
+        return []
+    if status != "approved":
+        return [_implementation_blocker(
+            "cm_implementation_not_approved",
+            "Change Request is not approved",
+            "Approve the Change Request before implementation",
+            details={"status": status},
+        )]
+
+    application_id = request.get("application_id")
+    current_version_id = _get_current_profile_version_id(db, application_id) if application_id else None
+    base_version_id = request.get("base_profile_version_id")
+    if base_version_id and current_version_id and base_version_id != current_version_id:
+        blockers.append(_implementation_blocker(
+            "cm_implementation_locked",
+            "Profile version conflict blocks implementation",
+            "Rebase this Change Request or create a fresh request against the current profile",
+            details={"base_profile_version_id": base_version_id, "current_profile_version_id": current_version_id},
+        ))
+
+    evidence_blockers = evidence_approval_blockers(db, request)
+    if evidence_blockers:
+        blockers.append(_implementation_blocker(
+            "cm_implementation_evidence_incomplete",
+            "Evidence or Agent 1 gate is incomplete",
+            "Resolve all required evidence and Agent 1 blockers before implementation",
+            details={"approval_blockers": evidence_blockers},
+        ))
+
+    results = _load_precondition_results(request)
+    sig = _request_content_signature(db, request_id)
+
+    if _implementation_requires_screening(db, request):
+        sc = results.get("screening") if isinstance(results, dict) else None
+        if not sc or sc.get("result") != "recorded":
+            blockers.append(_implementation_blocker(
+                "cm_implementation_screening_required",
+                "Current screening evidence is required before implementation",
+                "Record a clean/resolved screening result for this Change Request",
+            ))
+        elif sc.get("content_sig") != sig:
+            blockers.append(_implementation_blocker(
+                "cm_implementation_screening_stale",
+                "Screening evidence is stale for this Change Request",
+                "Re-record screening against the current approved change",
+            ))
+        elif sc.get("unresolved_match") is True:
+            blockers.append(_implementation_blocker(
+                "cm_implementation_screening_unresolved_match",
+                "Screening has an unresolved material match",
+                "Resolve or disposition the screening match before implementation",
+            ))
+        elif sc.get("unresolved_match") is not False:
+            blockers.append(_implementation_blocker(
+                "cm_implementation_screening_indeterminate",
+                "Screening result is indeterminate",
+                "Record a determinate clean/resolved screening result before implementation",
+            ))
+
+    if _implementation_requires_risk(db, request):
+        rk = results.get("risk") if isinstance(results, dict) else None
+        if not rk or rk.get("result") != "recorded":
+            blockers.append(_implementation_blocker(
+                "cm_implementation_risk_review_required",
+                "Current risk review is required before implementation",
+                "Record the risk review result for this Change Request",
+            ))
+        elif rk.get("content_sig") != sig:
+            blockers.append(_implementation_blocker(
+                "cm_implementation_risk_stale",
+                "Risk review is stale for this Change Request",
+                "Re-record risk review against the current approved change",
+            ))
+        else:
+            risk_level = _normalize_risk_level(rk.get("risk_level"))
+            if not risk_level:
+                blockers.append(_implementation_blocker(
+                    "cm_implementation_risk_review_required",
+                    "Risk review result is missing a valid risk level",
+                    "Record a valid normalized risk level before implementation",
+                ))
+            elif (
+                risk_level in {"HIGH", "VERY_HIGH"}
+                and _flag_true(rk.get("risk_increased"))
+                and not _risk_escalation_handled(rk)
+            ):
+                blockers.append(_implementation_blocker(
+                    "cm_implementation_risk_escalation_required",
+                    "Risk escalation must be resolved before implementation",
+                    "Record senior/EDD handling for the risk-elevating change",
+                    details={"risk_level": risk_level},
+                ))
+
+    return blockers
+
+
 def evaluate_approval(db, request: Dict) -> Dict[str, Any]:
     """Neutral approval *readiness* for UI/detail.
 
@@ -2114,20 +2320,25 @@ def implement_change_request(
         return False, f"Request not found: {request_id}", None
 
     request = dict(row)
-    if request["status"] != "approved":
-        return False, f"Request must be approved before implementation (current: {request['status']})", None
+    if request["status"] == "implemented":
+        return True, "", request.get("result_profile_version_id")
+
+    blockers = implementation_blockers(db, request)
+    if blockers:
+        codes = ", ".join(b["code"] for b in blockers)
+        summary = "; ".join(
+            f"{b.get('code')} ({b.get('label')})"
+            for b in blockers
+        )
+        if log_audit_fn:
+            log_audit_fn(
+                user, "CM Implementation Blocked", request_id,
+                f"Implementation blocked by: {codes}",
+                db=db,
+            )
+        return False, f"Implementation blocked: {summary}", None
 
     application_id = request["application_id"]
-
-    # Stale version check
-    current_version_id = _get_current_profile_version_id(db, application_id)
-    base_version_id = request.get("base_profile_version_id")
-    if base_version_id and current_version_id and base_version_id != current_version_id:
-        return False, (
-            f"Profile has been updated since this request was created. "
-            f"Base version: {base_version_id}, current: {current_version_id}. "
-            f"Please rebase or create a new request."
-        ), None
 
     # Snapshot current profile (before)
     before_snapshot = snapshot_entity_profile(db, application_id)

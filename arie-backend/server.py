@@ -33071,6 +33071,17 @@ class ChangeRequestDetailHandler(BaseHandler):
                 log_audit_fn=self.log_audit,
             )
             if not success:
+                if "implementation blocked" in err.lower():
+                    detail = cm.get_change_request_detail(db, request_id) or {}
+                    blockers = cm.implementation_blockers(db, detail) if detail else []
+                    self.set_status(409)
+                    self.write(json.dumps({
+                        "action": "implementation_blocked",
+                        "error": err,
+                        "can_implement": False,
+                        "blockers": blockers,
+                    }, default=str))
+                    return
                 if "blocked by preconditions" in err.lower():
                     detail = cm.get_change_request_detail(db, request_id) or {}
                     blockers = cm.approval_blockers(db, detail, approver_user=user) if detail else []
@@ -33274,6 +33285,17 @@ class ChangeRequestImplementHandler(BaseHandler):
                 recompute_risk_fn=recompute_risk_fn,
             )
             if not success:
+                if "implementation blocked" in err.lower():
+                    detail = cm.get_change_request_detail(db, request_id) or {}
+                    blockers = cm.implementation_blockers(db, detail) if detail else []
+                    self.set_status(409)
+                    self.write(json.dumps({
+                        "action": "implementation_blocked",
+                        "error": err,
+                        "can_implement": False,
+                        "blockers": blockers,
+                    }, default=str))
+                    return
                 if "not permitted" in err.lower() or "not authorized" in err.lower():
                     status_code = 403
                 elif "stale" in err.lower() or "conflict" in err.lower() or "version" in err.lower():
