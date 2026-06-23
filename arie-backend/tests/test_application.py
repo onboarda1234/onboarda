@@ -239,6 +239,108 @@ class TestApplicationWorkflow:
         assert intermediary["jurisdiction"] == "BVI"
         assert intermediary["ownership_pct"] == 100
 
+    def test_batch_b_manual_party_rows_store_null_imported_at(self, db, sample_application):
+        """Manual party completion must not write an empty string into timestamp columns."""
+        from server import store_application_parties
+
+        store_application_parties(
+            db,
+            sample_application,
+            directors=[{
+                "person_key": "dir-manual",
+                "first_name": "Alice",
+                "last_name": "Director",
+                "is_pep": "No",
+            }],
+            ubos=[{
+                "person_key": "ubo-manual",
+                "first_name": "Bob",
+                "last_name": "Owner",
+                "ownership_pct": 50,
+                "is_pep": "No",
+            }],
+            intermediaries=[{
+                "person_key": "int-manual",
+                "entity_name": "Manual Holdco Ltd",
+                "ownership_pct": 50,
+            }],
+        )
+        db.commit()
+
+        for table_name in ("directors", "ubos", "intermediaries"):
+            row = db.execute(
+                f"SELECT imported_at FROM {table_name} WHERE application_id=?",
+                (sample_application,),
+            ).fetchone()
+            assert row["imported_at"] is None
+
+    def test_batch_b_imported_party_timestamp_is_preserved_on_completion(self, db, sample_application):
+        """Completing imported candidates should retain silent provenance timestamps."""
+        from server import store_application_parties
+
+        imported_at = "2026-06-22T12:00:00+00:00"
+        store_application_parties(
+            db,
+            sample_application,
+            directors=[{
+                "person_key": "dir-imported",
+                "first_name": "Imported",
+                "last_name": "Director",
+                "is_pep": "No",
+                "source": "companies_house",
+                "imported_at": imported_at,
+            }],
+            ubos=[{
+                "person_key": "ubo-imported",
+                "first_name": "Imported",
+                "last_name": "Owner",
+                "ownership_pct": 50,
+                "is_pep": "No",
+                "source": "companies_house",
+                "imported_at": imported_at,
+            }],
+            intermediaries=[{
+                "person_key": "int-imported",
+                "entity_name": "Imported Holdco Ltd",
+                "ownership_pct": 50,
+                "source": "companies_house",
+                "imported_at": imported_at,
+            }],
+        )
+        store_application_parties(
+            db,
+            sample_application,
+            directors=[{
+                "person_key": "dir-imported",
+                "first_name": "Imported",
+                "last_name": "Director",
+                "country_of_residence": "United Kingdom",
+                "is_pep": "No",
+            }],
+            ubos=[{
+                "person_key": "ubo-imported",
+                "first_name": "Imported",
+                "last_name": "Owner",
+                "country_of_residence": "United Kingdom",
+                "ownership_pct": 50,
+                "is_pep": "No",
+            }],
+            intermediaries=[{
+                "person_key": "int-imported",
+                "entity_name": "Imported Holdco Ltd",
+                "ownership_pct": 50,
+                "owned_or_controlled_by": "Imported Owner",
+            }],
+        )
+        db.commit()
+
+        for table_name in ("directors", "ubos", "intermediaries"):
+            row = db.execute(
+                f"SELECT imported_at FROM {table_name} WHERE application_id=?",
+                (sample_application,),
+            ).fetchone()
+            assert row["imported_at"] == imported_at
+
     def test_batch_b_resolves_person_references_by_person_key(self, db, sample_application):
         """Document linkage helpers should resolve stored person keys without row-order fallbacks."""
         from server import resolve_application_person, store_application_parties
