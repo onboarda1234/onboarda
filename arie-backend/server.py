@@ -33224,8 +33224,10 @@ class ChangeRequestDocumentHandler(BaseHandler):
 
             # Validate file
             if HAS_SECURITY_HARDENING:
-                valid, validation_err = FileUploadValidator.validate_upload(
-                    uploaded["filename"], uploaded["body"]
+                valid, _reason_code, validation_err = FileUploadValidator.validate_with_reason(
+                    uploaded["filename"],
+                    uploaded.get("content_type", "application/octet-stream"),
+                    uploaded["body"],
                 )
                 if not valid:
                     self.error(validation_err, 400)

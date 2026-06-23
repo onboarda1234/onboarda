@@ -8,6 +8,7 @@ Agent 1 verification/acceptance where required before approval.
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 def _get_cm():
@@ -317,3 +318,16 @@ class TestContactAndApprovalPaths:
         assert "maker_checker_same_user" in err
         assert "screening_required_uncleared" in err
         assert "risk_review_required_uncleared" in err
+
+
+def test_cm_document_upload_uses_existing_file_validator_api():
+    """Regression: CM evidence upload must not call a non-existent validator."""
+    source = Path(__file__).resolve().parents[1] / "server.py"
+    text = source.read_text()
+    block = text.split("class ChangeRequestDocumentHandler", 1)[1].split(
+        "class ChangeManagementStatsHandler", 1
+    )[0]
+
+    assert "FileUploadValidator.validate_upload" not in block
+    assert "FileUploadValidator.validate_with_reason" in block
+    assert 'uploaded.get("content_type", "application/octet-stream")' in block
