@@ -1287,18 +1287,31 @@
   .periodic-review-task-footer { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
   .periodic-review-task-hint { font-size:11px; color:var(--text3); line-height:1.5; max-width:360px; }
   .periodic-review-modal {
-    position:fixed; inset:0; background:rgba(15,23,42,0.45); display:none; align-items:center; justify-content:center;
-    padding:24px; z-index:1200;
+    position:fixed; top:0; right:0; bottom:0; left:0; background:rgba(15,23,42,0.52);
+    display:none; align-items:center; justify-content:center;
+    width:100vw; height:100vh; height:100dvh; padding:clamp(16px, 4vw, 32px);
+    z-index:5000; overflow:hidden; isolation:isolate;
   }
   .periodic-review-modal.open { display:flex; }
+  body.periodic-review-modal-open {
+    overflow:hidden;
+  }
   .periodic-review-modal-card {
-    width:min(920px,100%); max-height:calc(100vh - 48px); overflow:auto; background:var(--bg2);
+    width:min(920px, calc(100vw - 48px)); max-width:920px; max-height:calc(100vh - 48px); max-height:calc(100dvh - 48px);
+    overflow:hidden; background:var(--bg2); display:flex; flex-direction:column; min-width:0;
     border:1px solid var(--border); border-radius:24px; box-shadow:0 32px 80px rgba(15,23,42,0.28);
   }
   .periodic-review-modal-head {
     padding:24px 28px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
+    flex:0 0 auto;
   }
-  .periodic-review-modal-body { padding:24px 28px 28px; display:grid; gap:18px; }
+  .periodic-review-modal-head > div { min-width:0; }
+  .periodic-review-modal-head .btn-outline { flex:0 0 auto; }
+  .periodic-review-modal-body {
+    padding:24px 28px 28px; display:grid; gap:18px; overflow-y:auto; overflow-x:hidden;
+    min-width:0; overscroll-behavior:contain;
+  }
+  .periodic-review-modal-body > * { min-width:0; }
   .periodic-review-modal-title { font-size:22px; font-weight:800; letter-spacing:-0.4px; margin-bottom:6px; }
   .periodic-review-modal-sub { font-size:13px; color:var(--text2); line-height:1.6; }
   .periodic-review-banner {
@@ -1312,9 +1325,10 @@
   .periodic-review-errors.open { display:block; }
   .periodic-review-question {
     border:1px solid var(--border); border-radius:18px; padding:18px 18px 16px; background:var(--bg);
+    min-width:0;
   }
   .periodic-review-question-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
-  .periodic-review-question-title { font-size:14px; font-weight:700; line-height:1.5; }
+  .periodic-review-question-title { font-size:14px; font-weight:700; line-height:1.5; overflow-wrap:anywhere; }
   .periodic-review-answer-group { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
   .periodic-review-answer-pill {
     display:inline-flex; align-items:center; gap:8px; border:1px solid var(--border2); border-radius:999px; padding:8px 14px; background:var(--bg2);
@@ -1342,7 +1356,9 @@
   @media(max-width:640px) {
     .periodic-review-task-meta { grid-template-columns:1fr; }
     .periodic-review-modal { padding:12px; }
+    .periodic-review-modal-card { width:calc(100vw - 24px); max-height:calc(100vh - 24px); max-height:calc(100dvh - 24px); border-radius:18px; }
     .periodic-review-modal-head, .periodic-review-modal-body { padding:18px; }
+    .periodic-review-modal-head { align-items:flex-start; gap:12px; }
     .periodic-review-modal-actions { flex-direction:column; align-items:stretch; }
     .periodic-review-modal-actions .btn-outline,
     .periodic-review-modal-actions .btn-submit { width:100%; }
@@ -5439,15 +5455,24 @@ function renderPeriodicReviewTasks(tasks) {
   }).join('');
 }
 
+function ensurePeriodicReviewModalLayer() {
+  var modal = document.getElementById('periodic-review-modal');
+  if (modal && modal.parentElement !== document.body) {
+    document.body.appendChild(modal);
+  }
+  return modal;
+}
+
 function closePeriodicReviewModal() {
   currentPortalPeriodicReviewTask = null;
-  var modal = document.getElementById('periodic-review-modal');
+  var modal = ensurePeriodicReviewModalLayer();
   var body = document.getElementById('periodic-review-modal-body');
   var subtitle = document.getElementById('periodic-review-modal-subtitle');
   if (modal) {
     modal.classList.remove('open');
     modal.setAttribute('aria-hidden', 'true');
   }
+  document.body.classList.remove('periodic-review-modal-open');
   if (body) body.innerHTML = '<div class="periodic-review-banner">Loading review task…</div>';
   if (subtitle) subtitle.textContent = 'Loading review task…';
 }
@@ -5639,7 +5664,7 @@ function periodicReviewDocumentRequestSummaryHtml(task) {
 
 function renderPeriodicReviewModal(task) {
   currentPortalPeriodicReviewTask = task;
-  var modal = document.getElementById('periodic-review-modal');
+  var modal = ensurePeriodicReviewModalLayer();
   var title = document.getElementById('periodic-review-modal-title');
   var subtitle = document.getElementById('periodic-review-modal-subtitle');
   var body = document.getElementById('periodic-review-modal-body');
@@ -5712,6 +5737,7 @@ function renderPeriodicReviewModal(task) {
   showPeriodicReviewErrors([]);
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('periodic-review-modal-open');
 }
 
 async function openPeriodicReviewTask(applicationId) {
@@ -5719,11 +5745,12 @@ async function openPeriodicReviewTask(applicationId) {
   var taskMeta = portalPeriodicReviewTasks.find(function(task) {
     return String((task && task.application_id) || '') === String(applicationId || '');
   }) || {};
-  var modal = document.getElementById('periodic-review-modal');
+  var modal = ensurePeriodicReviewModalLayer();
   var body = document.getElementById('periodic-review-modal-body');
   if (modal) {
     modal.classList.add('open');
     modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('periodic-review-modal-open');
   }
   if (body) {
     body.innerHTML = '<div class="periodic-review-banner">Loading review task…</div>';
