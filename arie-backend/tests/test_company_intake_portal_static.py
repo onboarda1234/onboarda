@@ -4,10 +4,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PORTAL_HTML = REPO_ROOT / "arie-portal.html"
+BACKOFFICE_HTML = REPO_ROOT / "arie-backoffice.html"
 
 
 def _portal_html() -> str:
     return PORTAL_HTML.read_text(encoding="utf-8")
+
+
+def _backoffice_html() -> str:
+    return BACKOFFICE_HTML.read_text(encoding="utf-8")
 
 
 def _extract_div_by_id(html: str, element_id: str) -> str:
@@ -339,3 +344,139 @@ def test_no_secret_or_raw_provider_surface_added_to_portal():
     ):
         assert forbidden not in html
         assert forbidden not in lookup_view
+
+
+def test_draft_company_documents_section_is_compact_and_draft_worded():
+    html = _portal_html()
+    section = _extract_div_by_id(html, "draft-company-documents-section")
+
+    assert "Draft company documents" in section
+    assert (
+        "Generate draft company documents from the information entered in this application. "
+        "Review, sign where required, and upload signed copies later in KYC &amp; Documents."
+    ) in section
+    assert section.count('id="draft-documents-trigger"') == 1
+    assert "Generate drafts ▾" in section
+    for option in (
+        "Register of Directors",
+        "Register of Members / Shareholders",
+        "Ownership Structure Chart",
+        "Download all drafts",
+    ):
+        assert option in section
+
+    assert "btn-submit" not in section
+    assert "document dashboard" not in section.lower()
+    assert html.index('id="draft-company-documents-section"') > html.index('id="ubos-table"')
+    assert html.index('id="draft-company-documents-section"') < html.index("<!-- 14. Consent & Data Protection -->")
+
+
+def test_draft_company_documents_are_generated_client_side_from_form_data():
+    html = _portal_html()
+    draft_region = html[
+        html.index("function toggleDraftDocumentsMenu"):
+        html.index("function isDraftValueMeaningful")
+    ]
+
+    assert "function collectDraftCompanyDocumentData" in draft_region
+    assert "collectFormData()" in draft_region
+    assert "buildDraftRegisterOfDirectorsSection" in draft_region
+    assert "buildDraftMembersRegisterSection" in draft_region
+    assert "buildDraftOwnershipStructureSection" in draft_region
+    assert "new Blob([html], { type: 'text/html;charset=utf-8' })" in draft_region
+    assert "link.download = filename" in draft_region
+    assert "apiCall(" not in draft_region
+    assert "/api/" not in draft_region
+    assert "handleKYCUpload" not in draft_region
+    assert "submitDocuments" not in draft_region
+    assert "checklist" not in draft_region.lower()
+    assert "evidence" not in draft_region.lower()
+    assert "document_status" not in draft_region
+
+    for field in (
+        "date_of_birth",
+        "nationality",
+        "country_of_residence",
+        "residential_address",
+        "date_of_appointment",
+        "ownership_pct",
+        "registration_number",
+        "jurisdiction",
+        "owned_or_controlled_by",
+    ):
+        assert field in draft_region
+
+
+def test_draft_company_document_output_is_marked_draft_and_sanitized():
+    html = _portal_html()
+    draft_region = html[
+        html.index("function toggleDraftDocumentsMenu"):
+        html.index("function isDraftValueMeaningful")
+    ]
+
+    assert "DRAFT" in draft_region
+    assert "Generated on:" in draft_region
+    assert "Application reference:" in draft_region
+    assert "Draft documents are generated from the information entered in this application." in draft_region
+    assert "KYC &amp; Documents" in draft_region
+    assert "Draft only. UBO data may not equal legal member/shareholder data." in draft_region
+    assert "Review shareholder and member status before using this draft as a legal register." in draft_region
+
+    for forbidden in (
+        "raw_response_json",
+        "source_metadata_json",
+        "COMPANIES_HOUSE_API_KEY",
+        "provider credentials",
+        "ciphertext",
+        "officially verified",
+        "accepted evidence",
+        "RegMind-certified",
+        "approved register",
+    ):
+        assert forbidden not in draft_region
+
+
+def test_draft_company_document_dynamic_values_are_escaped_before_html_output():
+    html = _portal_html()
+    esc_body = _extract_js_function(html, "draftCompanyDocumentEsc")
+    assert "escapeHtml(draftCompanyDocumentValue(value))" in esc_body
+
+    table_body = _extract_js_function(html, "draftCompanyDocumentTable")
+    assert "draftCompanyDocumentEsc(header)" in table_body
+    assert "draftCompanyDocumentEsc(cell)" in table_body
+    assert "'<td>' + cell" not in table_body
+    assert "'<th>' + header" not in table_body
+
+    shell_body = _extract_js_function(html, "buildDraftCompanyDocumentHtml")
+    assert "draftCompanyDocumentEsc(titleMap[type] || titleMap.all)" in shell_body
+    assert "draftCompanyDocumentEsc(data.appRef)" in shell_body
+    assert "draftCompanyDocumentEsc(generatedAt)" in shell_body
+    assert "draftCompanyDocumentTable(['Company field', 'Value']" in shell_body
+
+    structure_body = _extract_js_function(html, "buildDraftOwnershipStructureSection")
+    assert "draftCompanyDocumentEsc(companyName + companyNumber)" in structure_body
+    assert "draftCompanyDocumentEsc(member.owned_or_controlled_by)" in structure_body
+    assert "draftCompanyDocumentEsc(member.entity_name + pct)" in structure_body
+    assert "draftCompanyDocumentEsc(draftCompanyDocumentFullName(owner) + pct)" in structure_body
+
+
+def test_draft_company_documents_do_not_add_backoffice_or_registry_badge_surface():
+    portal_html = _portal_html()
+    backoffice_html = _backoffice_html()
+
+    for forbidden in (
+        "draft-company-documents-section",
+        "Generate drafts ▾",
+        "Draft company documents",
+    ):
+        assert forbidden not in backoffice_html
+
+    draft_section = _extract_div_by_id(portal_html, "draft-company-documents-section")
+    for forbidden in (
+        "registry-badge",
+        "ch-registry-badge",
+        "source_metadata_json",
+        "raw_response_json",
+        "response_hash",
+    ):
+        assert forbidden not in draft_section
