@@ -73,9 +73,13 @@ def _setup_app(raw_db, with_screen_report=False, risk_level="MEDIUM"):
 
 
 def _make_cr(cm, wdb, app_id, materiality="tier1", creator=CREATOR):
-    ct = {"tier1": "company_details", "tier2": "company_details", "tier3": "contact_detail_update"}[materiality]
-    item = {"change_type": ct, "field_name": "company_name" if ct == "company_details" else "contact_email",
-            "old_value": "Co Ltd", "new_value": "Co2 Ltd", "materiality": materiality}
+    item = {
+        "change_type": "other",
+        "field_name": "operational_note",
+        "old_value": "old",
+        "new_value": "new",
+        "materiality": materiality,
+    }
     return cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "r", [item], creator)
 
 

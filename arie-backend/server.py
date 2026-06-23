@@ -33188,7 +33188,10 @@ class ChangeRequestDocumentHandler(BaseHandler):
         db = get_db()
         try:
             # Verify request exists
-            row = db.execute("SELECT id FROM change_requests WHERE id = ?", (request_id,)).fetchone()
+            row = db.execute(
+                "SELECT id, application_id FROM change_requests WHERE id = ?",
+                (request_id,),
+            ).fetchone()
             if not row:
                 self.error("Request not found", 404)
                 return
@@ -33229,14 +33232,40 @@ class ChangeRequestDocumentHandler(BaseHandler):
             with open(file_path, "wb") as f:
                 f.write(uploaded["body"])
 
+            linked_document_id = f"cm-doc-{secrets.token_hex(8)}"
+            db.execute(
+                """INSERT INTO documents
+                   (id, application_id, doc_type, doc_name, file_path, file_size,
+                    mime_type, verification_status, uploaded_by,
+                    uploaded_by_actor_type, uploaded_by_actor_id,
+                    uploaded_by_display, upload_source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+                (
+                    linked_document_id,
+                    row["application_id"],
+                    doc_type,
+                    uploaded["filename"],
+                    str(file_path),
+                    len(uploaded["body"] or b""),
+                    uploaded.get("content_type"),
+                    user.get("sub"),
+                    "officer",
+                    user.get("sub"),
+                    user.get("name") or user.get("email") or user.get("sub"),
+                    "change_management",
+                ),
+            )
+
             doc = cm.attach_document_to_request(
                 db, request_id, uploaded["filename"], doc_type,
                 str(file_path), item_id=item_id,
                 uploaded_by=user.get("sub"),
+                linked_document_id=linked_document_id,
             )
+            doc["verification_trigger_path"] = f"/api/documents/{linked_document_id}/verify"
 
             self.log_audit(user, "Change Request Document Uploaded", request_id,
-                          f"Document: {uploaded['filename']}, type: {doc_type}")
+                          f"Document: {uploaded['filename']}, type: {doc_type}, linked_document_id={linked_document_id}")
             self.success(doc, 201)
         finally:
             db.close()

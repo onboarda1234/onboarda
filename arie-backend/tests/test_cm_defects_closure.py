@@ -30,6 +30,8 @@ import pytest
 # Ensure backend is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from tests.cm_evidence_test_helpers import attach_verified_cm_evidence
+
 
 def _get_cm():
     import change_management as cm
@@ -91,6 +93,7 @@ def _cm_clear_and_approve(cm, wdb, req_id, decision_notes="OK", log_audit_fn=Non
     """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
     preconditions and approve with a checker distinct from the creator."""
     rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    attach_verified_cm_evidence(cm, wdb, req_id)
     cm.record_precondition_result(wdb, req_id, "screening", rec, log_audit_fn=log_audit_fn, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
     cm.record_precondition_result(wdb, req_id, "risk", rec, log_audit_fn=log_audit_fn, result={"risk_level": "MEDIUM"})
     cr = dict(wdb.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
