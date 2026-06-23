@@ -1958,6 +1958,13 @@ def _preserved_party_nullable_value(incoming, existing, key):
     return _preserved_party_value(incoming, existing, key, default=None)
 
 
+def _preserved_party_json_text(incoming, existing, key, default="{}"):
+    value = _preserved_party_value(incoming, existing, key, default=default)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str, sort_keys=True)
+    return value
+
+
 def _preserved_party_bool(incoming, existing, key, default=False):
     if isinstance(incoming, dict) and incoming.get(key) not in (None, ""):
         value = incoming.get(key)
@@ -2033,7 +2040,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_bool(director, existing, "requires_corporate_structure_review"),
                 _preserved_party_value(director, existing, "registry_lookup_id"),
                 _preserved_party_value(director, existing, "response_hash"),
-                _preserved_party_value(director, existing, "source_metadata_json", "{}"),
+                _preserved_party_json_text(director, existing, "source_metadata_json"),
                 _preserved_party_nullable_value(director, existing, "imported_at"),
                 _preserved_party_value(director, existing, "imported_by"),
             ))
@@ -2096,7 +2103,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_bool(ubo, existing, "is_candidate_ubo"),
                 _preserved_party_value(ubo, existing, "registry_lookup_id"),
                 _preserved_party_value(ubo, existing, "response_hash"),
-                _preserved_party_value(ubo, existing, "source_metadata_json", "{}"),
+                _preserved_party_json_text(ubo, existing, "source_metadata_json"),
                 _preserved_party_nullable_value(ubo, existing, "imported_at"),
                 _preserved_party_value(ubo, existing, "imported_by"),
             ))
@@ -2138,7 +2145,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_bool(intermediary, existing, "requires_corporate_structure_review"),
                 _preserved_party_value(intermediary, existing, "registry_lookup_id"),
                 _preserved_party_value(intermediary, existing, "response_hash"),
-                _preserved_party_value(intermediary, existing, "source_metadata_json", "{}"),
+                _preserved_party_json_text(intermediary, existing, "source_metadata_json"),
                 _preserved_party_nullable_value(intermediary, existing, "imported_at"),
                 _preserved_party_value(intermediary, existing, "imported_by"),
             ))
