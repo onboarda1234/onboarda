@@ -1,0 +1,243 @@
+{
+  "ok": true,
+  "base_url": "http://127.0.0.1:60247",
+  "staging_api": "https://staging.regmind.co",
+  "branch_head": "c699d4db856a03edafa45f92f20052c6448f8af5",
+  "fixture": {
+    "client_id": "prportalmodal-c0925b5d-client",
+    "application_id": "prportalmodal-c0925b5d-app",
+    "review_id": 147
+  },
+  "screenshots": {
+    "1024": "/Users/Aisha/CodexWork/onboarda-queue-list-lite-perf-1/docs/audits/evidence/remediation_sprints/PR-PRS-PORTAL-ATTESTATION-MODAL-LAYOUT-FIX-1_20260623T023801Z/screenshots/after-1024.png",
+    "1280": "/Users/Aisha/CodexWork/onboarda-queue-list-lite-perf-1/docs/audits/evidence/remediation_sprints/PR-PRS-PORTAL-ATTESTATION-MODAL-LAYOUT-FIX-1_20260623T023801Z/screenshots/after-1280.png",
+    "1440": "/Users/Aisha/CodexWork/onboarda-queue-list-lite-perf-1/docs/audits/evidence/remediation_sprints/PR-PRS-PORTAL-ATTESTATION-MODAL-LAYOUT-FIX-1_20260623T023801Z/screenshots/after-1440.png"
+  },
+  "checks": {
+    "viewport_1440": true,
+    "viewport_1280": true,
+    "viewport_1024": true,
+    "close_button": true,
+    "no_console_errors": true,
+    "no_bad_api_responses": true
+  },
+  "geometry": {
+    "1024": {
+      "viewport": {
+        "width": 1024,
+        "height": 768
+      },
+      "scrollWidth": 1024,
+      "bodyLocked": true,
+      "modalOpen": true,
+      "modalZ": 5000,
+      "sidebarZ": 90,
+      "card": {
+        "left": 52,
+        "right": 972,
+        "top": 24,
+        "bottom": 744,
+        "width": 920,
+        "height": 720
+      },
+      "close": {
+        "left": 878.90625,
+        "right": 943,
+        "top": 49,
+        "bottom": 82,
+        "width": 64.09375,
+        "height": 33
+      },
+      "titleVisible": true,
+      "questionsVisible": true,
+      "answerControlsVisible": true,
+      "bodyCanScroll": true,
+      "modalAtLeftEdge": true,
+      "failures": []
+    },
+    "1280": {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scrollWidth": 1280,
+      "bodyLocked": true,
+      "modalOpen": true,
+      "modalZ": 5000,
+      "sidebarZ": 90,
+      "card": {
+        "left": 180,
+        "right": 1100,
+        "top": 24,
+        "bottom": 776,
+        "width": 920,
+        "height": 752
+      },
+      "close": {
+        "left": 1006.90625,
+        "right": 1071,
+        "top": 49,
+        "bottom": 82,
+        "width": 64.09375,
+        "height": 33
+      },
+      "titleVisible": true,
+      "questionsVisible": true,
+      "answerControlsVisible": true,
+      "bodyCanScroll": true,
+      "modalAtLeftEdge": true,
+      "failures": []
+    },
+    "1440": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scrollWidth": 1440,
+      "bodyLocked": true,
+      "modalOpen": true,
+      "modalZ": 5000,
+      "sidebarZ": 90,
+      "card": {
+        "left": 260,
+        "right": 1180,
+        "top": 24,
+        "bottom": 876,
+        "width": 920,
+        "height": 852
+      },
+      "close": {
+        "left": 1086.90625,
+        "right": 1151,
+        "top": 49,
+        "bottom": 82,
+        "width": 64.09375,
+        "height": 33
+      },
+      "titleVisible": true,
+      "questionsVisible": true,
+      "answerControlsVisible": true,
+      "bodyCanScroll": true,
+      "modalAtLeftEdge": true,
+      "failures": []
+    }
+  },
+  "console_errors": [],
+  "console_warnings": [],
+  "page_errors": [],
+  "network": [
+    {
+      "method": "GET",
+      "url": "/api/config/environment",
+      "status": 200,
+      "ms": 689
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications",
+      "status": 200,
+      "ms": 324
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications",
+      "status": 200,
+      "ms": 365
+    },
+    {
+      "method": "GET",
+      "url": "/api/save-resume/active",
+      "status": 200,
+      "ms": 101
+    },
+    {
+      "method": "GET",
+      "url": "/api/save-resume/active",
+      "status": 200,
+      "ms": 109
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications/prportalmodal-c0925b5d-app/periodic-review",
+      "status": 200,
+      "ms": 103
+    },
+    {
+      "method": "GET",
+      "url": "/api/config/environment",
+      "status": 200,
+      "ms": 96
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications",
+      "status": 200,
+      "ms": 94
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications",
+      "status": 200,
+      "ms": 108
+    },
+    {
+      "method": "GET",
+      "url": "/api/save-resume/active",
+      "status": 200,
+      "ms": 101
+    },
+    {
+      "method": "GET",
+      "url": "/api/save-resume/active",
+      "status": 200,
+      "ms": 88
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications/prportalmodal-c0925b5d-app/periodic-review",
+      "status": 200,
+      "ms": 130
+    },
+    {
+      "method": "GET",
+      "url": "/api/config/environment",
+      "status": 200,
+      "ms": 94
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications",
+      "status": 200,
+      "ms": 125
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications",
+      "status": 200,
+      "ms": 153
+    },
+    {
+      "method": "GET",
+      "url": "/api/save-resume/active",
+      "status": 200,
+      "ms": 92
+    },
+    {
+      "method": "GET",
+      "url": "/api/save-resume/active",
+      "status": 200,
+      "ms": 106
+    },
+    {
+      "method": "GET",
+      "url": "/api/portal/applications/prportalmodal-c0925b5d-app/periodic-review",
+      "status": 200,
+      "ms": 110
+    }
+  ],
+  "bad_responses": [],
+  "cleanup": {
+    "cleaned": true,
+    "prefix": "prportalmodal-c0925b5d"
+  }
+}

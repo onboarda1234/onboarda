@@ -37,6 +37,21 @@ def test_portal_periodic_review_modal_wires_fetch_save_submit_and_read_only_copy
     assert "Thank you. Based on the changes declared, additional documents may be required." in html
 
 
+def test_portal_periodic_review_modal_is_viewport_scoped_and_scroll_locked():
+    html = PORTAL_HTML.read_text()
+    assert ".periodic-review-modal {" in html
+    assert "position:fixed; top:0; right:0; bottom:0; left:0;" in html
+    assert "width:100vw; height:100vh; height:100dvh;" in html
+    assert "z-index:5000;" in html
+    assert "body.periodic-review-modal-open" in html
+    assert "function ensurePeriodicReviewModalLayer()" in html
+    assert "document.body.appendChild(modal)" in html
+    assert "overflow:hidden;" in html
+    assert "overflow-y:auto; overflow-x:hidden;" in html
+    assert "document.body.classList.add('periodic-review-modal-open')" in html
+    assert "document.body.classList.remove('periodic-review-modal-open')" in html
+
+
 def test_backoffice_lifecycle_surfaces_read_only_client_attestation_summary():
     html = BACKOFFICE_HTML.read_text()
     assert "function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection)" in html
