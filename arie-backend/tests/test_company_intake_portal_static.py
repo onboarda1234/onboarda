@@ -155,6 +155,7 @@ def test_officer_confirmation_displays_corporate_director_review_not_individual_
 
     confirm_body = _extract_js_function(html, "confirmCompanyIntakeOfficers")
     assert "apiCall('POST', '/company-intake/confirm-officers'" in confirm_body
+    assert "companyIntakeState.imported_officers = selected" in confirm_body
     assert "imported_count" in confirm_body
     assert "skipped_count" in confirm_body
 
@@ -174,6 +175,7 @@ def test_psc_branches_render_clear_compliance_review_messages():
     confirm_body = _extract_js_function(html, "confirmCompanyIntakePSCs")
     assert "apiCall('POST', '/company-intake/confirm-pscs'" in confirm_body
     assert "pscs: pscResult" in confirm_body
+    assert "companyIntakeState.imported_pscs = pscResult" in confirm_body
 
 
 def test_manual_fallback_and_save_draft_paths_are_preserved():
@@ -210,6 +212,44 @@ def test_assisted_form_submit_preserves_imported_directors_and_ubo_candidates():
     assert "officers_confirmed === true" in preserve_directors_body
     assert "companyIntakeIsCurrentDraft()" in preserve_ubos_body
     assert "pscs_confirmed === true" in preserve_ubos_body
+
+
+def test_assisted_handoff_renders_read_only_imported_party_summaries_above_long_form_tables():
+    html = _portal_html()
+    directors_marker = 'id="company-intake-imported-directors"'
+    directors_table_marker = 'id="directors-container"'
+    pscs_marker = 'id="company-intake-imported-pscs"'
+    ubos_table_marker = 'id="ubos-container"'
+    assert directors_marker in html
+    assert pscs_marker in html
+    assert html.index(directors_marker) < html.index(directors_table_marker)
+    assert html.index(pscs_marker) < html.index(ubos_table_marker)
+
+    summary_head_body = _extract_js_function(html, "companyIntakeImportedSummaryHead")
+    assert "Source: Companies House" in summary_head_body
+
+    directors_summary_body = _extract_js_function(html, "renderCompanyIntakeImportedDirectorsSummary")
+    assert "Imported directors from Companies House" in directors_summary_body
+    assert "Missing fields requiring client completion" in directors_summary_body
+    assert "Individual KYC required" in directors_summary_body
+    assert "Corporate structure review required" in directors_summary_body
+
+    officer_missing_body = _extract_js_function(html, "companyIntakeOfficerMissingFields")
+    assert "Full date of birth" in officer_missing_body
+    assert "PEP declaration" in officer_missing_body
+
+    psc_summary_body = _extract_js_function(html, "renderCompanyIntakeImportedPscSummary")
+    assert "Imported PSC / beneficial-owner candidates" in psc_summary_body
+    assert "Missing fields requiring client completion" in psc_summary_body
+    assert "candidate beneficial owners for compliance review, not final approved UBOs" in psc_summary_body
+
+    psc_missing_body = _extract_js_function(html, "companyIntakePscMissingFields")
+    assert "Full date of birth" in psc_missing_body
+    assert "PEP declaration" in psc_missing_body
+    assert "Exact ownership percentage" in psc_missing_body
+
+    prefill_body = _extract_js_function(html, "applyCompanyIntakePrefillToForm")
+    assert "renderCompanyIntakeImportedPartySummaries()" in prefill_body
 
 
 def test_no_secret_or_raw_provider_surface_added_to_portal():
