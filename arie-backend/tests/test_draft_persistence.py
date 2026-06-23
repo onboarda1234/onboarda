@@ -1166,7 +1166,8 @@ def test_portal_restore_normalizes_key_dropdowns_and_nationality():
     assert "'f-ownership-structure'" in src
     assert "'f-sector'" in src
     assert "'nat-select'" in src
-    assert "_restoreSelectValue(natSel, rowData.nationality || '', 'nat-select')" in src
+    assert "setPartyRowValue(lastRow, 'nationality', rowData.nationality || rowData.nat || '')" in src
+    assert "_restoreSelectValue(el, safeValue, restoreSelectAlias || 'nat-select')" in src
 
 
 def test_portal_draft_discard_uses_in_app_confirmation_not_native():
