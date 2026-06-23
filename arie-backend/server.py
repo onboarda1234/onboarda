@@ -27127,6 +27127,101 @@ SUBMIT_TO_COMPLIANCE_ROLES = ("admin", "sco", "co")
 SUBMISSION_NOTE_MIN_LENGTH = 10
 
 
+PRICING_TO_COMPLIANCE_REVIEW_ROLES = ("admin", "sco", "co")
+
+
+class PricingToComplianceReviewHandler(BaseHandler):
+    """POST /api/applications/:id/move-to-compliance-review.
+
+    Narrow stage handoff for pricing-review cases whose approval gate says they
+    must enter compliance review before final approval. This is not a terminal
+    decision and does not bypass any screening, IDV, document, memo, risk, or
+    approval-gate control.
+    """
+
+    def post(self, app_id):
+        user = self.require_auth(roles=list(PRICING_TO_COMPLIANCE_REVIEW_ROLES))
+        if not user:
+            return
+        if not self.check_rate_limit("pricing_to_compliance_review", max_attempts=20, window_seconds=60):
+            return
+
+        data = self.get_json()
+        note = str(data.get("transition_note") or data.get("note") or "").strip()
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        current_status = str(app["status"] or "").strip().lower()
+        if current_status != "pricing_review":
+            reason = (
+                "Move to Compliance Review is only available from pricing_review. "
+                f"Current status: '{current_status or 'unknown'}'."
+            )
+            self.log_governance_attempt(
+                user,
+                "application.move_to_compliance_review",
+                app["ref"],
+                "rejected",
+                409,
+                reason,
+                {"from_status": current_status, "target_status": "compliance_review"},
+                db=db,
+                commit=False,
+            )
+            db.commit()
+            db.close()
+            return self.error(reason, 409)
+
+        db.execute(
+            "UPDATE applications SET status='compliance_review', updated_at=datetime('now') WHERE id=?",
+            (app["id"],),
+        )
+        detail = {
+            "event": "application.move_to_compliance_review",
+            "from_status": current_status,
+            "to_status": "compliance_review",
+            "source_surface": "backoffice/application_review",
+        }
+        if note:
+            detail["transition_note"] = note[:500]
+        self.log_audit(
+            user,
+            "Move to Compliance Review",
+            app["ref"],
+            json.dumps(detail, sort_keys=True),
+            db=db,
+            commit=False,
+            before_state=snapshot_app_state(app),
+            after_state={"status": "compliance_review"},
+        )
+        self.log_governance_attempt(
+            user,
+            "application.move_to_compliance_review",
+            app["ref"],
+            "accepted",
+            200,
+            "pricing_review -> compliance_review",
+            {"from_status": current_status, "target_status": "compliance_review"},
+            db=db,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+
+        return self.success({
+            "status": "compliance_review",
+            "application_ref": app["ref"],
+            "previous_status": current_status,
+            "message": "Application moved to compliance review.",
+        }, 200)
+
+
 class SubmitToComplianceHandler(BaseHandler):
     """POST /api/applications/:id/submit-to-compliance — route a case to the SCO queue.
 
@@ -34333,6 +34428,7 @@ def make_app():
         (r"/api/applications/([^/]+)/memo/supervisor/run", MemoSupervisorHandler),
         (r"/api/applications/([^/]+)/memo/supervisor", MemoSupervisorResultHandler),
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
+        (r"/api/applications/([^/]+)/move-to-compliance-review", PricingToComplianceReviewHandler),
         (r"/api/applications/([^/]+)/submit-to-compliance", SubmitToComplianceHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),

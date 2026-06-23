@@ -1527,14 +1527,17 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
         "kyc_documents",
     }
     if status in pre_kyc_states:
+        cta_label = "Move to Compliance Review" if status == "pricing_review" else "Review case stage"
+        action_key = "pricing.move_to_compliance_review" if status == "pricing_review" else ""
         blockers.append(_approval_gate_blocker(
             "case_stage",
             "Case Stage",
             "Application is not in compliance review",
             f"Current status is '{status}'. Move the application into compliance review before final approval.",
-            cta_label="Review case stage",
+            cta_label=cta_label,
             tab="overview",
             anchor_id="detail-company-name",
+            action_key=action_key,
         ))
 
     risk_error = _approval_risk_integrity_error(app, "approve application")

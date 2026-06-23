@@ -22655,6 +22655,7 @@ var CASE_COMMAND_ACTION_TARGETS = {
   'override.open': { target_view:'application_review', target_tab:'overview', target_section:'btn-override', scroll_anchor:'btn-override', action_mode:'open_override' },
   'escalate.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'open_escalation' },
   'reassign.open': { target_view:'application_review', target_tab:'overview', target_section:'btn-reassign', scroll_anchor:'btn-reassign', action_mode:'open_reassign' },
+  'pricing.move_to_compliance_review': { target_view:'application_review', target_tab:'overview', target_section:'detail-company-name', scroll_anchor:'detail-company-name', action_mode:'move_to_compliance_review' },
   'approval.review': { target_view:'application_review', target_tab:'overview', target_section:'detail-approval-blockers', scroll_anchor:'detail-approval-blockers', action_mode:'focus_section' },
   'alerts.review': { target_view:'application_review', target_tab:'alerts', target_section:'detail-tab-alerts', scroll_anchor:'detail-tab-alerts', action_mode:'focus_section' },
   'lifecycle.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'focus_section' }
@@ -22702,6 +22703,10 @@ function runCaseCommandAction(actionId) {
   }
   if (target.action_mode === 'open_reassign' && typeof reassignCase === 'function') {
     reassignCase();
+    return true;
+  }
+  if (target.action_mode === 'move_to_compliance_review' && typeof movePricingToComplianceReview === 'function') {
+    movePricingToComplianceReview();
     return true;
   }
   activateCaseCommandTarget(target.target_tab, target.scroll_anchor || target.target_section);
@@ -22782,6 +22787,13 @@ function caseCommandNormalizeActionTarget(blocker, groupKey, app) {
     target.target_section = 'section-b-identity-verification';
     target.scroll_anchor = 'individual-identity-verification';
     target.action_mode = 'focus_section';
+  }
+  if (actionKey === 'pricing.move_to_compliance_review') {
+    target.target_view = 'application_review';
+    target.target_tab = 'overview';
+    target.target_section = 'detail-company-name';
+    target.scroll_anchor = 'detail-company-name';
+    target.action_mode = 'move_to_compliance_review';
   }
   if (blocker.action && groupKey === 'edd_investigation') {
     if (String(blocker.action).indexOf('openEDDCaseFromApplication') === 0) {
@@ -22953,16 +22965,22 @@ function getCaseCommandBlockers(app) {
       70
     );
   } else if (['draft', 'prescreening_submitted', 'pricing_review', 'pricing_accepted', 'pre_approved', 'kyc_documents'].indexOf(status) >= 0) {
+    var pricingReviewMoveTarget = status === 'pricing_review'
+      ? caseCommandActionTarget('pricing.move_to_compliance_review')
+      : null;
     addBlocker(
       'case-stage',
       'Case Stage',
       'This case is not yet in compliance review.',
       'Move the application into the compliance review stage before attempting final approval.',
-      'Review case stage',
+      status === 'pricing_review' ? 'Move to Compliance Review' : 'Review case stage',
       'overview',
       'detail-company-name',
       true,
-      80
+      80,
+      '',
+      status === 'pricing_review' ? 'pricing.move_to_compliance_review' : '',
+      pricingReviewMoveTarget
     );
   }
 
@@ -25047,6 +25065,41 @@ async function escalateCase() {
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
   renderDecisionReadiness('EDD');
   document.getElementById('modal-decision-reason').classList.add('open');
+}
+
+function canMovePricingToComplianceReview(app) {
+  app = app || currentApp;
+  var role = String(currentUserRole() || '').toLowerCase();
+  var status = String((app && (app.statusRaw || app.status_raw || app.status)) || '').toLowerCase();
+  return ['admin', 'sco', 'co'].indexOf(role) >= 0 && status === 'pricing_review';
+}
+
+async function movePricingToComplianceReview() {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected.', 'warn');
+    return;
+  }
+  if (!canMovePricingToComplianceReview(currentApp)) {
+    showToast('Move to Compliance Review is only available to Admin, SCO, or Onboarding Officer while the case is in Pricing Review.', 'warn');
+    return;
+  }
+  var confirmed = window.confirm('Move this application from Pricing Under Review to Compliance Review? Approval will remain blocked until the remaining controls are resolved.');
+  if (!confirmed) return;
+  try {
+    await boApiCall('POST', '/applications/' + encodeURIComponent(currentApp.id) + '/move-to-compliance-review', {
+      transition_note: 'Confirmed from back-office Application Review'
+    });
+    showToast('Application moved to Compliance Review.');
+    await refreshCurrentAppDetail();
+  } catch (err) {
+    var message = (err && err.message) ? err.message : 'Unknown error';
+    if (/only available from pricing_review/i.test(message)) {
+      message = 'This application is no longer in Pricing Review. Refresh and check the current status.';
+    } else if (/Insufficient permissions|Unauthorized|Authentication required/i.test(message)) {
+      message = 'Your role is not allowed to move this application to Compliance Review.';
+    }
+    showToast('Move to Compliance Review failed: ' + message, 'error');
+  }
 }
 
 // PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: hand a case to senior compliance review.
