@@ -392,6 +392,40 @@
     font-weight: 500;
   }
   .btn-add:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-dim); }
+  .draft-documents-section {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    margin: 14px 0 18px; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg); position: relative;
+  }
+  .draft-documents-title { font-size: 13px; font-weight: 700; color: var(--text1); margin-bottom: 4px; }
+  .draft-documents-helper { font-size: 12px; color: var(--text3); line-height: 1.5; max-width: 740px; }
+  .draft-documents-warning { font-size: 11px; color: var(--amber); margin-top: 6px; line-height: 1.4; }
+  .draft-documents-actions { position: relative; flex: 0 0 auto; }
+  .draft-documents-trigger {
+    border: 1px solid var(--border2); background: var(--bg2); color: var(--text2);
+    border-radius: var(--radius-sm); padding: 8px 11px;
+    font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+    transition: var(--transition); white-space: nowrap;
+  }
+  .draft-documents-trigger:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-dim); }
+  .draft-documents-menu {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+    min-width: 230px; background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); box-shadow: 0 14px 32px rgba(15,23,42,0.16);
+    padding: 6px;
+  }
+  .draft-documents-menu button {
+    display: block; width: 100%; border: 0; background: transparent; color: var(--text2);
+    text-align: left; padding: 8px 9px; border-radius: 6px;
+    font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
+  }
+  .draft-documents-menu button:hover { background: var(--brand-dim); color: var(--brand); }
+  @media(max-width:640px) {
+    .draft-documents-section { flex-direction: column; }
+    .draft-documents-actions, .draft-documents-trigger { width: 100%; }
+    .draft-documents-menu { left: 0; right: auto; width: 100%; }
+  }
 
   /* ── Activity Estimates ── */
   .activity-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 8px; }
@@ -3151,6 +3185,23 @@
             <div class="form-group">
               <label>Referrer Name (if applicable)</label>
               <input type="text" id="f-referrer-name" placeholder="Name of person or company who referred you" />
+            </div>
+          </div>
+
+          <div class="draft-documents-section" id="draft-company-documents-section">
+            <div>
+              <div class="draft-documents-title">Draft company documents</div>
+              <div class="draft-documents-helper">Generate draft company documents from the information entered in this application. Review, sign where required, and upload signed copies later in KYC &amp; Documents.</div>
+              <div class="draft-documents-warning" id="draft-company-documents-warning" style="display:none;">Some fields are incomplete. The draft may contain blank fields.</div>
+            </div>
+            <div class="draft-documents-actions">
+              <button type="button" class="draft-documents-trigger" id="draft-documents-trigger" aria-expanded="false" onclick="toggleDraftDocumentsMenu(event)">Generate drafts ▾</button>
+              <div class="draft-documents-menu hidden" id="draft-documents-menu">
+                <button type="button" onclick="generateDraftCompanyDocument('directors')">Register of Directors</button>
+                <button type="button" onclick="generateDraftCompanyDocument('members')">Register of Members / Shareholders</button>
+                <button type="button" onclick="generateDraftCompanyDocument('structure')">Ownership Structure Chart</button>
+                <button type="button" onclick="generateDraftCompanyDocument('all')">Download all drafts</button>
+              </div>
             </div>
           </div>
 
@@ -8430,6 +8481,288 @@ function collectFormData() {
   });
 
   return data;
+}
+
+function toggleDraftDocumentsMenu(event) {
+  if (event) event.stopPropagation();
+  var menu = document.getElementById('draft-documents-menu');
+  var trigger = document.getElementById('draft-documents-trigger');
+  if (!menu) return;
+  var shouldOpen = menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !shouldOpen);
+  if (trigger) trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+}
+
+function closeDraftDocumentsMenu() {
+  var menu = document.getElementById('draft-documents-menu');
+  var trigger = document.getElementById('draft-documents-trigger');
+  if (menu) menu.classList.add('hidden');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+document.addEventListener('click', function(event) {
+  var section = document.getElementById('draft-company-documents-section');
+  if (section && section.contains(event.target)) return;
+  closeDraftDocumentsMenu();
+});
+
+function draftCompanyDocumentValue(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function draftCompanyDocumentEsc(value) {
+  return escapeHtml(draftCompanyDocumentValue(value));
+}
+
+function draftCompanyDocumentFullName(person) {
+  return [person && person.first_name, person && person.last_name].map(draftCompanyDocumentValue).filter(Boolean).join(' ');
+}
+
+function draftCompanyDocumentHasAny(row, fields) {
+  return fields.some(function(field) { return !!draftCompanyDocumentValue(row && row[field]); });
+}
+
+function draftCompanyDocumentVisibleRows(rows, fields) {
+  return (Array.isArray(rows) ? rows : []).filter(function(row) {
+    return draftCompanyDocumentHasAny(row, fields);
+  });
+}
+
+function collectDraftCompanyDocumentData() {
+  var formData = typeof collectFormData === 'function' ? collectFormData() : {};
+  var ps = formData.prescreening || {};
+  return {
+    appRef: draftCompanyDocumentValue(formData.appRef || currentApplicationId),
+    generatedAt: new Date(),
+    company: {
+      name: ps['f-reg-name'] || '',
+      number: ps['f-brn'] || '',
+      registered_address: ps['f-reg-address'] || '',
+      country: ps['f-inc-country'] || '',
+      entity_type: ps['f-entity-type'] || '',
+      incorporation_date: ps['f-inc-date'] || ''
+    },
+    directors: draftCompanyDocumentVisibleRows(formData.directors, [
+      'first_name',
+      'last_name',
+      'date_of_birth',
+      'nationality',
+      'country_of_residence',
+      'residential_address',
+      'date_of_appointment'
+    ]),
+    intermediaries: draftCompanyDocumentVisibleRows(formData.intermediaries, [
+      'entity_name',
+      'jurisdiction',
+      'registration_number',
+      'registered_address',
+      'ownership_pct',
+      'owned_or_controlled_by'
+    ]),
+    ubos: draftCompanyDocumentVisibleRows(formData.ubos, [
+      'first_name',
+      'last_name',
+      'date_of_birth',
+      'nationality',
+      'country_of_residence',
+      'residential_address',
+      'ownership_pct'
+    ])
+  };
+}
+
+function draftCompanyDocumentRowsHaveMissing(rows, fields) {
+  return (rows || []).some(function(row) {
+    return fields.some(function(field) { return !draftCompanyDocumentValue(row && row[field]); });
+  });
+}
+
+function draftCompanyDocumentsHasMissingData(data, type) {
+  if (!data) return true;
+  var directorsMissing = data.directors.length === 0 || draftCompanyDocumentRowsHaveMissing(data.directors, [
+    'first_name',
+    'last_name',
+    'date_of_birth',
+    'nationality',
+    'country_of_residence',
+    'residential_address',
+    'date_of_appointment'
+  ]);
+  var membersMissing = (data.intermediaries.length + data.ubos.length) === 0 ||
+    draftCompanyDocumentRowsHaveMissing(data.intermediaries, ['entity_name', 'jurisdiction', 'registration_number', 'registered_address', 'ownership_pct']) ||
+    draftCompanyDocumentRowsHaveMissing(data.ubos, ['first_name', 'last_name', 'date_of_birth', 'nationality', 'residential_address', 'ownership_pct']);
+  var structureMissing = (data.intermediaries.length + data.ubos.length) === 0 ||
+    draftCompanyDocumentRowsHaveMissing(data.intermediaries, ['entity_name', 'ownership_pct']) ||
+    draftCompanyDocumentRowsHaveMissing(data.ubos, ['first_name', 'last_name', 'ownership_pct']);
+  if (type === 'directors') return directorsMissing;
+  if (type === 'members') return membersMissing;
+  if (type === 'structure') return structureMissing;
+  return directorsMissing || membersMissing || structureMissing;
+}
+
+function updateDraftCompanyDocumentsWarning(show) {
+  var warning = document.getElementById('draft-company-documents-warning');
+  if (warning) warning.style.display = show ? 'block' : 'none';
+}
+
+function draftCompanyDocumentTable(headers, rows) {
+  var headerHtml = headers.map(function(header) {
+    return '<th>' + draftCompanyDocumentEsc(header) + '</th>';
+  }).join('');
+  var rowsHtml = rows.length ? rows.map(function(cells) {
+    return '<tr>' + cells.map(function(cell) {
+      return '<td>' + draftCompanyDocumentEsc(cell) + '</td>';
+    }).join('') + '</tr>';
+  }).join('') : '<tr><td colspan="' + headers.length + '">&nbsp;</td></tr>';
+  return '<table><thead><tr>' + headerHtml + '</tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+}
+
+function buildDraftRegisterOfDirectorsSection(data) {
+  var rows = data.directors.map(function(director) {
+    return [
+      draftCompanyDocumentFullName(director),
+      director.date_of_birth,
+      director.nationality,
+      director.country_of_residence,
+      director.residential_address,
+      director.date_of_appointment
+    ];
+  });
+  return '<section><h2>Draft Register of Directors</h2>' +
+    draftCompanyDocumentTable([
+      'Director full name',
+      'Date of birth',
+      'Nationality',
+      'Country of residence',
+      'Residential address',
+      'Date of appointment'
+    ], rows) +
+    '</section>';
+}
+
+function buildDraftMembersRegisterSection(data) {
+  var rows = [];
+  data.intermediaries.forEach(function(member) {
+    rows.push([
+      member.entity_name,
+      'Corporate',
+      '',
+      '',
+      member.registered_address,
+      member.ownership_pct,
+      member.registration_number,
+      member.jurisdiction
+    ]);
+  });
+  data.ubos.forEach(function(owner) {
+    rows.push([
+      draftCompanyDocumentFullName(owner),
+      'Individual',
+      owner.date_of_birth,
+      owner.nationality,
+      owner.residential_address,
+      owner.ownership_pct,
+      '',
+      ''
+    ]);
+  });
+  return '<section><h2>Draft Register of Members / Shareholders</h2>' +
+    '<p class="draft-note">Draft only. Individual beneficial-owner rows are included where ownership or shareholding data has been captured and should be reviewed before use as a legal register.</p>' +
+    draftCompanyDocumentTable([
+      'Member / shareholder name',
+      'Type',
+      'Individual date of birth',
+      'Nationality',
+      'Address',
+      'Ownership / shareholding %',
+      'Company registration number',
+      'Country of incorporation'
+    ], rows) +
+    '</section>';
+}
+
+function buildDraftOwnershipStructureSection(data) {
+  var companyName = data.company.name || 'Applicant company';
+  var companyNumber = data.company.number ? ' (' + data.company.number + ')' : '';
+  var nodes = [
+    '<div class="structure-node"><strong>Applicant company</strong><br>' + draftCompanyDocumentEsc(companyName + companyNumber) + '</div>'
+  ];
+  data.intermediaries.forEach(function(member) {
+    var pct = member.ownership_pct ? ' - ' + member.ownership_pct + '%' : '';
+    var controlledBy = member.owned_or_controlled_by ? '<br><span>Owned / controlled by: ' + draftCompanyDocumentEsc(member.owned_or_controlled_by) + '</span>' : '';
+    nodes.push('<div class="structure-arrow">&rarr;</div><div class="structure-node"><strong>Intermediary shareholder</strong><br>' + draftCompanyDocumentEsc(member.entity_name + pct) + controlledBy + '</div>');
+  });
+  data.ubos.forEach(function(owner) {
+    var pct = owner.ownership_pct ? ' - ' + owner.ownership_pct + '%' : '';
+    nodes.push('<div class="structure-arrow">&rarr;</div><div class="structure-node"><strong>Individual UBO</strong><br>' + draftCompanyDocumentEsc(draftCompanyDocumentFullName(owner) + pct) + '</div>');
+  });
+  return '<section><h2>Draft Ownership Structure Chart</h2><div class="structure-chart">' + nodes.join('') + '</div></section>';
+}
+
+function buildDraftCompanyDocumentHtml(type, data) {
+  var generatedAt = data.generatedAt.toLocaleString();
+  var titleMap = {
+    directors: 'Draft Register of Directors',
+    members: 'Draft Register of Members / Shareholders',
+    structure: 'Draft Ownership Structure Chart',
+    all: 'Draft Company Documents'
+  };
+  var sections = '';
+  if (type === 'directors' || type === 'all') sections += buildDraftRegisterOfDirectorsSection(data);
+  if (type === 'members' || type === 'all') sections += buildDraftMembersRegisterSection(data);
+  if (type === 'structure' || type === 'all') sections += buildDraftOwnershipStructureSection(data);
+  var companyRows = draftCompanyDocumentTable(['Company field', 'Value'], [
+    ['Company name', data.company.name],
+    ['Company number / registration number', data.company.number],
+    ['Registered office address', data.company.registered_address],
+    ['Country of incorporation', data.company.country],
+    ['Entity type', data.company.entity_type],
+    ['Incorporation date', data.company.incorporation_date]
+  ]);
+  var appRef = data.appRef ? '<div><strong>Application reference:</strong> ' + draftCompanyDocumentEsc(data.appRef) + '</div>' : '';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + draftCompanyDocumentEsc(titleMap[type] || titleMap.all) + '</title>' +
+    '<style>body{font-family:Inter,Arial,sans-serif;color:#111827;margin:32px;line-height:1.45;} .draft-banner{display:inline-block;border:2px solid #111827;padding:4px 10px;font-weight:800;letter-spacing:.12em;margin-bottom:12px;} h1{font-size:24px;margin:0 0 8px;} h2{font-size:17px;margin:24px 0 10px;} .meta{font-size:12px;color:#4b5563;margin-bottom:18px;} .draft-note{font-size:12px;color:#4b5563;} table{border-collapse:collapse;width:100%;margin:8px 0 18px;} th,td{border:1px solid #d1d5db;padding:7px 8px;text-align:left;vertical-align:top;font-size:12px;} th{background:#f3f4f6;font-weight:700;} .structure-chart{border:1px solid #d1d5db;padding:12px;background:#fafafa;} .structure-node{padding:8px 10px;border:1px solid #d1d5db;background:#fff;margin:6px 0;font-size:13px;} .structure-arrow{font-size:18px;margin:2px 12px;color:#4b5563;} @media print{body{margin:18mm;} .draft-banner{border-color:#000;}}</style></head><body>' +
+    '<div class="draft-banner">DRAFT</div><h1>' + draftCompanyDocumentEsc(titleMap[type] || titleMap.all) + '</h1>' +
+    '<div class="meta"><div><strong>Generated on:</strong> ' + draftCompanyDocumentEsc(generatedAt) + '</div>' + appRef + '</div>' +
+    '<p class="draft-note">Draft documents are generated from the information entered in this application. Please review, sign where required, and upload signed copies later in KYC &amp; Documents.</p>' +
+    '<section><h2>Applicant company</h2>' + companyRows + '</section>' +
+    sections +
+    '</body></html>';
+}
+
+function draftCompanyDocumentFilename(type, data) {
+  var suffixMap = {
+    directors: 'register-of-directors',
+    members: 'register-of-members-shareholders',
+    structure: 'ownership-structure-chart',
+    all: 'company-documents'
+  };
+  var company = draftCompanyDocumentValue(data.company.number || data.company.name || 'application').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return 'draft-' + (suffixMap[type] || suffixMap.all) + '-' + (company || 'application') + '.html';
+}
+
+function downloadDraftCompanyDocument(filename, html) {
+  var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
+
+function generateDraftCompanyDocument(type) {
+  closeDraftDocumentsMenu();
+  var data = collectDraftCompanyDocumentData();
+  updateDraftCompanyDocumentsWarning(draftCompanyDocumentsHasMissingData(data, type));
+  var html = buildDraftCompanyDocumentHtml(type, data);
+  downloadDraftCompanyDocument(draftCompanyDocumentFilename(type, data), html);
+  if (typeof showToast === 'function' && document.getElementById('toast')) {
+    showToast('success', 'Draft Generated', 'Your draft company document has been downloaded.');
+  }
 }
 
 function isDraftValueMeaningful(value) {
