@@ -499,6 +499,14 @@ class TestLegacyNormalization:
         assert ints_out[0]["registered_address"] == "3 Corporate Avenue"
         assert ints_out[0]["owned_or_controlled_by"] == "Charlie Brown"
         assert ints_out[0]["ownership_pct"] == 40
+        raw_intermediary = db.execute(
+            "SELECT owned_or_controlled_by FROM intermediaries WHERE application_id=?",
+            (app_id,),
+        ).fetchone()
+        from party_utils import extract_fernet_token
+
+        assert raw_intermediary["owned_or_controlled_by"] != "Charlie Brown"
+        assert extract_fernet_token(raw_intermediary["owned_or_controlled_by"])
 
         db.close()
 

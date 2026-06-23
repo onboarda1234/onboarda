@@ -385,6 +385,33 @@ class TestCompaniesHouseProvider:
         assert owner["registration_number"] == "99999999"
         assert owner["registered_address"]["full_address"] == "1 Holdco Street, London"
 
+    @patch("company_registry.requests.get")
+    def test_corporate_psc_normalization_skips_blank_identification_fallbacks(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "Fallback HoldCo Ltd",
+                "kind": "corporate-entity-person-with-significant-control",
+                "identification": {
+                    "country_registered": "   ",
+                    "place_registered": "",
+                    "registration_number": " ",
+                },
+                "country_of_incorporation": "Ireland",
+                "registration_number": "IE-12345",
+                "registered_office_address": {},
+                "principal_office_address": {"address_line_1": "7 Fallback Street", "locality": "Dublin"},
+            }],
+        })
+
+        result = company_registry.get_companies_house_pscs("12345678")
+
+        owner = result["beneficial_owners"][0]
+        assert owner["country_of_incorporation"] == "Ireland"
+        assert owner["registration_number"] == "IE-12345"
+        assert owner["registered_address"]["full_address"] == "7 Fallback Street, Dublin"
+
     @pytest.mark.parametrize(
         "status_code,error_code",
         [

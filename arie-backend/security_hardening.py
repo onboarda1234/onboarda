@@ -2249,6 +2249,7 @@ class PIIEncryptor:
         'residential_address',
     ]
     PII_FIELDS_UBOS = ['passport_number', 'nationality', 'country_of_residence', 'residential_address']
+    PII_FIELDS_INTERMEDIARIES = ['owned_or_controlled_by']
     PII_FIELDS_APPLICATIONS = ['pep_flags']
 
     def __init__(self, key: Optional[str] = None):

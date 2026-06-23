@@ -227,6 +227,7 @@ def test_db_ensure_creates_registry_tables_and_thin_session(monkeypatch, tmp_pat
     assert {
         "registration_number",
         "registered_address",
+        "ownership_pct",
         "owned_or_controlled_by",
         "source",
         "registry_lookup_id",
@@ -394,6 +395,15 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
             timeout=5,
         )
         assert resp.status_code == 200
+        body = resp.json()
+
+    director_payload = json.dumps(body["directors"], sort_keys=True, default=str)
+    assert "Active Director" in director_payload
+    assert "officer_role" in director_payload
+    assert "registry_lookup_id" not in director_payload
+    assert "response_hash" not in director_payload
+    assert "source_metadata_json" not in director_payload
+    assert "imported_by" not in director_payload
 
     directors = _db_rows("SELECT * FROM directors WHERE application_id = ? ORDER BY full_name", (started["application"]["id"],))
     assert len(directors) == 2
@@ -530,6 +540,11 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
     assert body["ubos"][0]["country_of_residence"] == "United Kingdom"
     assert body["ubos"][0]["date_of_birth"] == "1980-05-15"
     assert body["intermediaries"] == []
+    ubo_payload = json.dumps(body["ubos"], sort_keys=True, default=str)
+    assert "registry_lookup_id" not in ubo_payload
+    assert "response_hash" not in ubo_payload
+    assert "source_metadata_json" not in ubo_payload
+    assert "imported_by" not in ubo_payload
 
 
 @pytest.mark.parametrize(
@@ -556,6 +571,8 @@ def test_psc_state_metadata_branches(intake_api, psc_state, statement_key, expec
                 "country_of_incorporation": "United Kingdom",
                 "registration_number": "99999999",
                 "registered_address": {"address_line_1": "1 Holdco Street", "locality": "London"},
+                "ownership_pct": "not-exact",
+                "owned_or_controlled_by": "Dana Owner",
                 "is_candidate_beneficial_owner": True,
             }
         ],
@@ -570,6 +587,7 @@ def test_psc_state_metadata_branches(intake_api, psc_state, statement_key, expec
     )
 
     assert resp.status_code == 200
+    body = resp.json()
     app = _db_one("SELECT prescreening_data FROM applications WHERE id = ?", (started["application"]["id"],))
     prescreening = json.loads(app["prescreening_data"])
     review = prescreening[expected_prescreening_key]
@@ -586,8 +604,28 @@ def test_psc_state_metadata_branches(intake_api, psc_state, statement_key, expec
         assert intermediaries[0]["entity_name"] == "Corporate PSC Ltd"
         assert intermediaries[0]["registration_number"] == "99999999"
         assert intermediaries[0]["registered_address"] == "1 Holdco Street, London"
+        assert intermediaries[0]["ownership_pct"] is None
         assert intermediaries[0]["source"] == "companies_house"
         assert intermediaries[0]["response_hash"] == f"hash-{psc_state}"
+        assert intermediaries[0]["owned_or_controlled_by"] != "Dana Owner"
+        from db import get_db
+        from party_utils import extract_fernet_token, get_application_parties
+
+        assert extract_fernet_token(intermediaries[0]["owned_or_controlled_by"])
+        conn = get_db()
+        try:
+            directors_out, ubos_out, intermediaries_out = get_application_parties(conn, started["application"]["id"])
+        finally:
+            conn.close()
+        assert directors_out == []
+        assert ubos_out == []
+        assert intermediaries_out[0]["owned_or_controlled_by"] == "Dana Owner"
+        assert body["intermediaries"][0]["owned_or_controlled_by"] == "Dana Owner"
+        intermediary_payload = json.dumps(body["intermediaries"], sort_keys=True, default=str)
+        assert "registry_lookup_id" not in intermediary_payload
+        assert "response_hash" not in intermediary_payload
+        assert "source_metadata_json" not in intermediary_payload
+        assert "imported_by" not in intermediary_payload
 
 
 def test_cross_client_cannot_access_or_confirm_session(intake_api):

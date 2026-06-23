@@ -3320,6 +3320,7 @@ def _ensure_company_registry_schema(db: DBConnection) -> None:
     intermediary_columns = {
         "registration_number": "TEXT",
         "registered_address": "TEXT",
+        "ownership_pct": "REAL",
         "owned_or_controlled_by": "TEXT",
         "source": "TEXT",
         "psc_state": "TEXT",

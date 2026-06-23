@@ -79,6 +79,7 @@ PII_FIELDS_DIRECTORS = [
     "residential_address",
 ]
 PII_FIELDS_UBOS = ["passport_number", "nationality", "country_of_residence", "residential_address"]
+PII_FIELDS_INTERMEDIARIES = ["owned_or_controlled_by"]
 PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
 
@@ -236,7 +237,7 @@ def get_application_parties(db, application_id):
     ]
     intermediaries = []
     for row in db.execute("SELECT * FROM intermediaries WHERE application_id = ?", (application_id,)).fetchall():
-        item = dict(row)
+        item = decrypt_pii_fields(dict(row), PII_FIELDS_INTERMEDIARIES, source="intermediaries")
         item["full_name"] = item.get("entity_name", "")
         intermediaries.append(item)
     return directors, ubos, intermediaries
@@ -286,7 +287,7 @@ def get_application_parties_batch(db, application_ids):
         id_list,
     ).fetchall():
         app_id = row["application_id"]
-        item = dict(row)
+        item = decrypt_pii_fields(dict(row), PII_FIELDS_INTERMEDIARIES, source="intermediaries")
         item["full_name"] = item.get("entity_name", "")
         intermediaries_by_app.setdefault(app_id, []).append(item)
 
