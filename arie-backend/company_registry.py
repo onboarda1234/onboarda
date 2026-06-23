@@ -351,6 +351,17 @@ def _normalize_psc_candidate(raw: dict[str, Any], state: str) -> dict[str, Any]:
     kind = "corporate" if is_corporate else "individual"
     if "legal" in _psc_text(raw) and not is_corporate:
         kind = "legal_person"
+    identification = raw.get("identification") if isinstance(raw.get("identification"), dict) else {}
+    registered_address = _registered_address(
+        raw.get("registered_office_address")
+        or raw.get("principal_office_address")
+        or raw.get("address")
+    )
+    country_of_incorporation = _clean_text(
+        identification.get("country_registered")
+        or identification.get("place_registered")
+        or raw.get("country_of_incorporation")
+    )
     return {
         "provider": COMPANIES_HOUSE_PROVIDER,
         "name": _clean_text(raw.get("name")),
@@ -364,6 +375,9 @@ def _normalize_psc_candidate(raw: dict[str, Any], state: str) -> dict[str, Any]:
         "notified_on": _clean_text(raw.get("notified_on")),
         "ceased_on": _clean_text(raw.get("ceased_on")),
         "country_of_residence": _clean_text(raw.get("country_of_residence")),
+        "country_of_incorporation": country_of_incorporation,
+        "registration_number": _clean_text(identification.get("registration_number") or raw.get("registration_number")),
+        "registered_address": registered_address,
         "nationality": _clean_text(raw.get("nationality")),
         "date_of_birth": _normalize_date_of_birth(raw.get("date_of_birth")),
         "is_candidate_beneficial_owner": True,

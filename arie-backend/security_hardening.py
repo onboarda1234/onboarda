@@ -2241,8 +2241,14 @@ class PIIEncryptor:
     """
 
     # PII fields that must be encrypted in different data structures
-    PII_FIELDS_DIRECTORS = ['passport_number', 'nationality', 'id_number']
-    PII_FIELDS_UBOS = ['passport_number', 'nationality']
+    PII_FIELDS_DIRECTORS = [
+        'passport_number',
+        'nationality',
+        'id_number',
+        'country_of_residence',
+        'residential_address',
+    ]
+    PII_FIELDS_UBOS = ['passport_number', 'nationality', 'country_of_residence', 'residential_address']
     PII_FIELDS_APPLICATIONS = ['pep_flags']
 
     def __init__(self, key: Optional[str] = None):

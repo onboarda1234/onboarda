@@ -71,8 +71,14 @@ if _pii_encryptor is not None:
 
 
 # ── PII Field Constants ────────────────────────────────────────
-PII_FIELDS_DIRECTORS = ["passport_number", "nationality", "id_number"]
-PII_FIELDS_UBOS = ["passport_number", "nationality"]
+PII_FIELDS_DIRECTORS = [
+    "passport_number",
+    "nationality",
+    "id_number",
+    "country_of_residence",
+    "residential_address",
+]
+PII_FIELDS_UBOS = ["passport_number", "nationality", "country_of_residence", "residential_address"]
 PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
 

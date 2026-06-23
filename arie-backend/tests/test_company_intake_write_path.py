@@ -198,6 +198,7 @@ def test_db_ensure_creates_registry_tables_and_thin_session(monkeypatch, tmp_pat
         session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(company_intake_sessions)").fetchall()}
         director_cols = {row["name"] for row in conn.execute("PRAGMA table_info(directors)").fetchall()}
         ubo_cols = {row["name"] for row in conn.execute("PRAGMA table_info(ubos)").fetchall()}
+        intermediary_cols = {row["name"] for row in conn.execute("PRAGMA table_info(intermediaries)").fetchall()}
     finally:
         conn.close()
 
@@ -220,7 +221,17 @@ def test_db_ensure_creates_registry_tables_and_thin_session(monkeypatch, tmp_pat
     assert "confirmed_officers_json" not in session_cols
     assert "confirmed_pscs_json" not in session_cols
     assert {"officer_entity_type", "requires_individual_kyc", "registry_lookup_id", "response_hash"}.issubset(director_cols)
+    assert {"country_of_residence", "residential_address", "date_of_appointment"}.issubset(director_cols)
     assert {"psc_state", "registry_statement_type", "psc_status_reason", "registry_lookup_id", "response_hash"}.issubset(ubo_cols)
+    assert {"country_of_residence", "residential_address"}.issubset(ubo_cols)
+    assert {
+        "registration_number",
+        "registered_address",
+        "owned_or_controlled_by",
+        "source",
+        "registry_lookup_id",
+        "response_hash",
+    }.issubset(intermediary_cols)
 
 
 def test_start_intake_refetches_profile_creates_draft_session_and_persists_evidence(intake_api):
@@ -359,6 +370,8 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
             "requires_individual_kyc": True,
             "requires_corporate_structure_review": False,
             "status": "active",
+            "appointed_on": "2020-01-01",
+            "date_of_birth": {"month": 9, "year": 1949},
             "source_metadata": {"endpoint": "/company/12345678/officers", "response_hash": "officer-hash"},
         },
         {
@@ -387,6 +400,8 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
     corporate = next(row for row in directors if row["full_name"] == "Corporate Director Ltd")
     individual = next(row for row in directors if row["full_name"] == "Active Director")
     assert individual["officer_entity_type"] == "individual"
+    assert individual["date_of_appointment"] == "2020-01-01"
+    assert individual["date_of_birth"] in ("", None)
     assert bool(individual["requires_individual_kyc"]) is True
     assert corporate["officer_entity_type"] == "corporate"
     assert bool(corporate["requires_individual_kyc"]) is False
@@ -484,6 +499,9 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
                 "provider": "companies_house",
                 "name": "Beneficial Owner",
                 "kind": "individual",
+                "nationality": "British",
+                "country_of_residence": "United Kingdom",
+                "date_of_birth": "1980-05-15",
                 "natures_of_control": ["ownership-of-shares-75-to-100-percent"],
                 "is_candidate_beneficial_owner": True,
                 "candidate_type": "beneficial_owner_candidate",
@@ -499,6 +517,7 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
             timeout=5,
         )
         assert resp.status_code == 200
+        body = resp.json()
 
     ubos = _db_rows("SELECT * FROM ubos WHERE application_id = ?", (started["application"]["id"],))
     assert len(ubos) == 1
@@ -508,6 +527,9 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
     assert ubos[0]["registry_statement_type"] == "active_individual_psc"
     assert bool(ubos[0]["is_candidate_ubo"]) is True
     assert ubos[0]["response_hash"] == "psc-hash"
+    assert body["ubos"][0]["country_of_residence"] == "United Kingdom"
+    assert body["ubos"][0]["date_of_birth"] == "1980-05-15"
+    assert body["intermediaries"] == []
 
 
 @pytest.mark.parametrize(
@@ -528,7 +550,14 @@ def test_psc_state_metadata_branches(intake_api, psc_state, statement_key, expec
         "registry_statement_type": statement_key,
         "psc_status_reason": f"Reason for {psc_state}",
         "beneficial_owners": [] if psc_state != "corporate_psc" else [
-            {"name": "Corporate PSC Ltd", "kind": "corporate", "is_candidate_beneficial_owner": True}
+            {
+                "name": "Corporate PSC Ltd",
+                "kind": "corporate",
+                "country_of_incorporation": "United Kingdom",
+                "registration_number": "99999999",
+                "registered_address": {"address_line_1": "1 Holdco Street", "locality": "London"},
+                "is_candidate_beneficial_owner": True,
+            }
         ],
         "source_metadata": {"endpoint": "/psc", "response_hash": f"hash-{psc_state}"},
     }
@@ -551,8 +580,14 @@ def test_psc_state_metadata_branches(intake_api, psc_state, statement_key, expec
         assert _db_rows("SELECT * FROM ubos WHERE application_id = ?", (started["application"]["id"],)) == []
     if psc_state == "corporate_psc":
         ubos = _db_rows("SELECT * FROM ubos WHERE application_id = ?", (started["application"]["id"],))
-        assert len(ubos) == 1
-        assert ubos[0]["psc_kind"] == "corporate"
+        intermediaries = _db_rows("SELECT * FROM intermediaries WHERE application_id = ?", (started["application"]["id"],))
+        assert ubos == []
+        assert len(intermediaries) == 1
+        assert intermediaries[0]["entity_name"] == "Corporate PSC Ltd"
+        assert intermediaries[0]["registration_number"] == "99999999"
+        assert intermediaries[0]["registered_address"] == "1 Holdco Street, London"
+        assert intermediaries[0]["source"] == "companies_house"
+        assert intermediaries[0]["response_hash"] == f"hash-{psc_state}"
 
 
 def test_cross_client_cannot_access_or_confirm_session(intake_api):

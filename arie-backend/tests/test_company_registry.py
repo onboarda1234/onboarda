@@ -363,6 +363,14 @@ class TestCompaniesHouseProvider:
             "items": [{
                 "name": "HoldCo Ltd",
                 "kind": "corporate-entity-person-with-significant-control",
+                "identification": {
+                    "country_registered": "United Kingdom",
+                    "registration_number": "99999999",
+                },
+                "address": {
+                    "address_line_1": "1 Holdco Street",
+                    "locality": "London",
+                },
             }],
         })
 
@@ -371,6 +379,11 @@ class TestCompaniesHouseProvider:
         assert result["psc_state"] == "corporate_psc"
         assert result["registry_statement_type"] == "corporate-entity-person-with-significant-control"
         assert "requires corporate structure review" in result["psc_status_reason"]
+        owner = result["beneficial_owners"][0]
+        assert owner["kind"] == "corporate"
+        assert owner["country_of_incorporation"] == "United Kingdom"
+        assert owner["registration_number"] == "99999999"
+        assert owner["registered_address"]["full_address"] == "1 Holdco Street, London"
 
     @pytest.mark.parametrize(
         "status_code,error_code",

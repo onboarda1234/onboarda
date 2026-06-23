@@ -1900,14 +1900,44 @@ def _pep_declaration_audit_subjects(directors=None, ubos=None):
     return subjects
 
 
+def _existing_parties_by_person_key(db, table_name, application_id):
+    rows = db.execute(f"SELECT * FROM {table_name} WHERE application_id = ?", (application_id,)).fetchall()
+    return {row.get("person_key"): row for row in rows if row.get("person_key")}
+
+
+def _preserved_party_value(incoming, existing, key, default=""):
+    if isinstance(incoming, dict) and incoming.get(key) not in (None, ""):
+        return incoming.get(key)
+    if isinstance(existing, dict) and existing.get(key) not in (None, ""):
+        return existing.get(key)
+    return default
+
+
+def _preserved_party_bool(incoming, existing, key, default=False):
+    if isinstance(incoming, dict) and incoming.get(key) not in (None, ""):
+        value = incoming.get(key)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y"}
+        return bool(value)
+    if isinstance(existing, dict) and existing.get(key) not in (None, ""):
+        value = existing.get(key)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y"}
+        return bool(value)
+    return default
+
+
 def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
     """Store party records with validation of DOB and ownership_pct."""
     if directors is not None:
+        existing_directors = _existing_parties_by_person_key(db, "directors", application_id)
         db.execute("DELETE FROM directors WHERE application_id = ?", (application_id,))
         for director in directors:
             full_name = build_full_name(director)
             if not full_name:
                 continue
+            person_key = director.get("person_key")
+            existing = existing_directors.get(person_key) if person_key else {}
             # Validate DOB if provided
             dob = director.get("date_of_birth", "")
             if dob:
@@ -1931,11 +1961,15 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             db.execute("""
                 INSERT INTO directors (
                     application_id, person_key, first_name, last_name, full_name,
-                    nationality, is_pep, pep_declaration, date_of_birth
-                ) VALUES (?,?,?,?,?,?,?,?,?)
+                    nationality, is_pep, pep_declaration, date_of_birth,
+                    country_of_residence, residential_address, date_of_appointment,
+                    source, officer_role, officer_entity_type, requires_individual_kyc,
+                    requires_corporate_structure_review, registry_lookup_id, response_hash,
+                    source_metadata_json, imported_at, imported_by
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 application_id,
-                director.get("person_key"),
+                person_key,
                 director.get("first_name", ""),
                 director.get("last_name", ""),
                 full_name,
@@ -1943,25 +1977,45 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 normalized_pep,
                 json.dumps(pep_declaration, default=str, sort_keys=True),
                 dob,
+                encrypted.get("country_of_residence", ""),
+                encrypted.get("residential_address", ""),
+                director.get("date_of_appointment", ""),
+                _preserved_party_value(director, existing, "source"),
+                _preserved_party_value(director, existing, "officer_role"),
+                _preserved_party_value(director, existing, "officer_entity_type"),
+                _preserved_party_bool(director, existing, "requires_individual_kyc"),
+                _preserved_party_bool(director, existing, "requires_corporate_structure_review"),
+                _preserved_party_value(director, existing, "registry_lookup_id"),
+                _preserved_party_value(director, existing, "response_hash"),
+                _preserved_party_value(director, existing, "source_metadata_json", "{}"),
+                _preserved_party_value(director, existing, "imported_at"),
+                _preserved_party_value(director, existing, "imported_by"),
             ))
     if ubos is not None:
+        existing_ubos = _existing_parties_by_person_key(db, "ubos", application_id)
         db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
         for ubo in ubos:
             full_name = build_full_name(ubo)
             if not full_name:
                 continue
+            person_key = ubo.get("person_key")
+            existing = existing_ubos.get(person_key) if person_key else {}
             # Validate DOB if provided
             dob = ubo.get("date_of_birth", "")
             if dob:
                 _check_dob_not_future(dob)
                 dob = _validate_date_of_birth(dob)
             # Validate ownership_pct range (0–100)
-            raw_pct = ubo.get("ownership_pct", 0)
-            try:
-                pct_val = float(raw_pct) if raw_pct else 0.0
-            except (ValueError, TypeError):
-                pct_val = 0.0
-            pct_val = max(0.0, min(100.0, pct_val))
+            raw_pct = ubo.get("ownership_pct")
+            if raw_pct in (None, ""):
+                pct_val = None
+            else:
+                try:
+                    pct_val = float(raw_pct)
+                except (ValueError, TypeError):
+                    pct_val = None
+                if pct_val is not None:
+                    pct_val = max(0.0, min(100.0, pct_val))
             # W2-6: Normalize nationality if canonical lookup is available
             raw_nat = ubo.get("nationality", "")
             if raw_nat and _canonicalise_country:
@@ -1980,11 +2034,14 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             db.execute("""
                 INSERT INTO ubos (
                     application_id, person_key, first_name, last_name, full_name,
-                    nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    nationality, ownership_pct, is_pep, pep_declaration, date_of_birth,
+                    country_of_residence, residential_address, source, psc_state,
+                    registry_statement_type, psc_status_reason, psc_kind, is_candidate_ubo,
+                    registry_lookup_id, response_hash, source_metadata_json, imported_at, imported_by
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 application_id,
-                ubo.get("person_key"),
+                person_key,
                 ubo.get("first_name", ""),
                 ubo.get("last_name", ""),
                 full_name,
@@ -1993,24 +2050,67 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 normalized_pep,
                 json.dumps(pep_declaration, default=str, sort_keys=True),
                 dob,
+                encrypted.get("country_of_residence", ""),
+                encrypted.get("residential_address", ""),
+                _preserved_party_value(ubo, existing, "source"),
+                _preserved_party_value(ubo, existing, "psc_state"),
+                _preserved_party_value(ubo, existing, "registry_statement_type"),
+                _preserved_party_value(ubo, existing, "psc_status_reason"),
+                _preserved_party_value(ubo, existing, "psc_kind"),
+                _preserved_party_bool(ubo, existing, "is_candidate_ubo"),
+                _preserved_party_value(ubo, existing, "registry_lookup_id"),
+                _preserved_party_value(ubo, existing, "response_hash"),
+                _preserved_party_value(ubo, existing, "source_metadata_json", "{}"),
+                _preserved_party_value(ubo, existing, "imported_at"),
+                _preserved_party_value(ubo, existing, "imported_by"),
             ))
     if intermediaries is not None:
+        existing_intermediaries = _existing_parties_by_person_key(db, "intermediaries", application_id)
         db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
         for intermediary in intermediaries:
             entity_name = first_non_empty(intermediary.get("entity_name"), intermediary.get("full_name"))
             if not entity_name:
                 continue
             intermediary_id = first_non_empty(intermediary.get("id"), secrets.token_hex(8))
+            person_key = intermediary.get("person_key")
+            existing = existing_intermediaries.get(person_key) if person_key else {}
+            raw_pct = intermediary.get("ownership_pct")
+            if raw_pct in (None, ""):
+                intermediary_pct = None
+            else:
+                try:
+                    intermediary_pct = max(0.0, min(100.0, float(raw_pct)))
+                except (ValueError, TypeError):
+                    intermediary_pct = None
             db.execute("""
-                INSERT INTO intermediaries (id, application_id, person_key, entity_name, jurisdiction, ownership_pct)
-                VALUES (?,?,?,?,?,?)
+                INSERT INTO intermediaries (
+                    id, application_id, person_key, entity_name, jurisdiction,
+                    registration_number, registered_address, ownership_pct,
+                    owned_or_controlled_by, source, psc_state, psc_kind,
+                    is_candidate_intermediary, requires_corporate_structure_review,
+                    registry_lookup_id, response_hash, source_metadata_json, imported_at, imported_by
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 intermediary_id,
                 application_id,
-                intermediary.get("person_key"),
+                person_key,
                 entity_name,
                 intermediary.get("jurisdiction", ""),
-                intermediary.get("ownership_pct", 0),
+                intermediary.get("registration_number", ""),
+                intermediary.get("registered_address", ""),
+                intermediary_pct,
+                intermediary.get("owned_or_controlled_by", ""),
+                _preserved_party_value(intermediary, existing, "source"),
+                _preserved_party_value(intermediary, existing, "psc_state"),
+                _preserved_party_value(intermediary, existing, "psc_kind"),
+                _preserved_party_bool(intermediary, existing, "is_candidate_intermediary"),
+                _preserved_party_bool(intermediary, existing, "requires_corporate_structure_review"),
+                _preserved_party_value(intermediary, existing, "registry_lookup_id"),
+                _preserved_party_value(intermediary, existing, "response_hash"),
+                _preserved_party_value(intermediary, existing, "source_metadata_json", "{}"),
+                _preserved_party_value(intermediary, existing, "imported_at"),
+                _preserved_party_value(intermediary, existing, "imported_by"),
             ))
 
 
@@ -2042,7 +2142,9 @@ def _resolve_application_person_by_type(db, application_id, person_ref, person_t
     person_type = normalize_person_type(person_type)
     if person_type == "director":
         director = db.execute("""
-            SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth
+            SELECT id, person_key, first_name, last_name, full_name, nationality,
+                   is_pep, pep_declaration, date_of_birth, country_of_residence,
+                   residential_address, date_of_appointment
             FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
             LIMIT 1
         """, (application_id, person_ref, person_ref)).fetchone()
@@ -2053,7 +2155,9 @@ def _resolve_application_person_by_type(db, application_id, person_ref, person_t
             return result
     elif person_type == "ubo":
         ubo = db.execute("""
-            SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
+            SELECT id, person_key, first_name, last_name, full_name, nationality,
+                   ownership_pct, is_pep, pep_declaration, date_of_birth,
+                   country_of_residence, residential_address
             FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
             LIMIT 1
         """, (application_id, person_ref, person_ref)).fetchone()
@@ -2064,7 +2168,8 @@ def _resolve_application_person_by_type(db, application_id, person_ref, person_t
             return result
     elif person_type == "intermediary":
         intermediary = db.execute("""
-            SELECT id, person_key, entity_name, jurisdiction, ownership_pct
+            SELECT id, person_key, entity_name, jurisdiction, ownership_pct,
+                   registration_number, registered_address, owned_or_controlled_by
             FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?)
             LIMIT 1
         """, (application_id, person_ref, person_ref)).fetchone()
@@ -4002,15 +4107,21 @@ OFFICER_CORRECTION_DIRECTOR_FIELDS = frozenset({
     "full_name",
     "nationality",
     "date_of_birth",
+    "country_of_residence",
+    "residential_address",
+    "date_of_appointment",
     "is_pep",
 })
 OFFICER_CORRECTION_UBO_FIELDS = frozenset(
-    set(OFFICER_CORRECTION_DIRECTOR_FIELDS) | {"ownership_pct"}
+    (set(OFFICER_CORRECTION_DIRECTOR_FIELDS) - {"date_of_appointment"}) | {"ownership_pct"}
 )
 OFFICER_CORRECTION_INTERMEDIARY_FIELDS = frozenset({
     "entity_name",
     "jurisdiction",
+    "registration_number",
+    "registered_address",
     "ownership_pct",
+    "owned_or_controlled_by",
 })
 OFFICER_CORRECTION_PEP_VERIFICATION_FIELDS = frozenset({
     "verified_pep",
@@ -22109,16 +22220,38 @@ def _company_intake_is_importable_officer_candidate(officer):
 
 
 def _company_intake_dob_from_month_year(value):
+    if isinstance(value, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+        return value
     if not isinstance(value, dict):
         return ""
     year = value.get("year")
     month = value.get("month")
-    if year and month:
+    day = value.get("day") or value.get("date")
+    if year and month and day:
         try:
-            return f"{int(year):04d}-{int(month):02d}-01"
+            return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
         except Exception:
             return ""
     return ""
+
+
+def _company_intake_address_text(value):
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    if value.get("full_address"):
+        return str(value.get("full_address") or "").strip()
+    parts = [
+        value.get("premises"),
+        value.get("address_line_1"),
+        value.get("address_line_2"),
+        value.get("locality"),
+        value.get("region"),
+        value.get("postal_code"),
+        value.get("country"),
+    ]
+    return ", ".join(str(part).strip() for part in parts if str(part or "").strip())
 
 
 def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response_hash, imported_by, company_number):
@@ -22142,12 +22275,22 @@ def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response
             (app_id, person_key),
         ).fetchone()
         source_metadata = officer.get("source_metadata") if isinstance(officer.get("source_metadata"), dict) else {}
-        encrypted = encrypt_pii_fields({"nationality": officer.get("nationality") or ""}, PII_FIELDS_DIRECTORS)
+        encrypted = encrypt_pii_fields(
+            {
+                "nationality": officer.get("nationality") or "",
+                "country_of_residence": officer.get("country_of_residence") or "",
+                "residential_address": officer.get("residential_address") or "",
+            },
+            PII_FIELDS_DIRECTORS,
+        )
         values = (
             person_key,
             name,
             encrypted.get("nationality", ""),
             _company_intake_dob_from_month_year(officer.get("date_of_birth")),
+            encrypted.get("country_of_residence", ""),
+            encrypted.get("residential_address", ""),
+            officer.get("date_of_appointment") or officer.get("appointed_on") or "",
             "companies_house",
             officer.get("officer_role"),
             officer.get("officer_entity_type") or "unknown",
@@ -22163,7 +22306,9 @@ def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response
             db.execute(
                 """
                 UPDATE directors
-                SET full_name = ?, nationality = ?, date_of_birth = ?, source = ?,
+                SET full_name = ?, nationality = ?, date_of_birth = ?,
+                    country_of_residence = ?, residential_address = ?, date_of_appointment = ?,
+                    source = ?,
                     officer_role = ?, officer_entity_type = ?,
                     requires_individual_kyc = ?, requires_corporate_structure_review = ?,
                     registry_lookup_id = ?, response_hash = ?, source_metadata_json = ?,
@@ -22176,24 +22321,28 @@ def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response
             continue
         db.execute(
             """
-            INSERT INTO directors (
-                application_id, person_key, full_name, nationality, is_pep,
-                pep_declaration, date_of_birth, source, officer_role,
-                officer_entity_type, requires_individual_kyc,
-                requires_corporate_structure_review, registry_lookup_id,
-                response_hash, source_metadata_json, imported_at, imported_by
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                app_id,
+                INSERT INTO directors (
+                    application_id, person_key, full_name, nationality, is_pep,
+                    pep_declaration, date_of_birth, country_of_residence,
+                    residential_address, date_of_appointment, source, officer_role,
+                    officer_entity_type, requires_individual_kyc,
+                    requires_corporate_structure_review, registry_lookup_id,
+                    response_hash, source_metadata_json, imported_at, imported_by
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    app_id,
                 person_key,
                 name,
                 encrypted.get("nationality", ""),
-                "No",
-                "{}",
-                _company_intake_dob_from_month_year(officer.get("date_of_birth")),
-                "companies_house",
-                officer.get("officer_role"),
+                    "No",
+                    "{}",
+                    _company_intake_dob_from_month_year(officer.get("date_of_birth")),
+                    encrypted.get("country_of_residence", ""),
+                    encrypted.get("residential_address", ""),
+                    officer.get("date_of_appointment") or officer.get("appointed_on") or "",
+                    "companies_house",
+                    officer.get("officer_role"),
                 officer.get("officer_entity_type") or "unknown",
                 bool(officer.get("requires_individual_kyc")),
                 bool(officer.get("requires_corporate_structure_review")),
@@ -22234,6 +22383,11 @@ def _company_intake_store_psc_review_metadata(db, *, app_id, psc_result, lookup_
     )
 
 
+def _company_intake_is_corporate_psc_owner(owner):
+    kind = str((owner or {}).get("kind") or "").strip().lower()
+    return kind in {"corporate", "legal_person", "corporate_entity"} or "corporate" in kind or "legal" in kind
+
+
 def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_hash, imported_by, company_number):
     state = psc_result.get("psc_state")
     owners = psc_result.get("beneficial_owners") if isinstance(psc_result, dict) else []
@@ -22248,17 +22402,101 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
         if not name:
             skipped += 1
             continue
+        metadata = _company_intake_registry_metadata(psc_result)
+        if _company_intake_is_corporate_psc_owner(owner):
+            person_key = _company_intake_person_key("ch-corp-psc", company_number, name, state, owner.get("kind"))
+            existing = db.execute(
+                "SELECT id FROM intermediaries WHERE application_id = ? AND person_key = ? LIMIT 1",
+                (app_id, person_key),
+            ).fetchone()
+            common_values = (
+                name,
+                first_non_empty(owner.get("country_of_incorporation"), owner.get("jurisdiction")),
+                owner.get("registration_number") or "",
+                _company_intake_address_text(owner.get("registered_address")),
+                None,
+                owner.get("owned_or_controlled_by") or "",
+                "companies_house",
+                state,
+                owner.get("kind"),
+                True,
+                True,
+                lookup_id,
+                response_hash,
+                json.dumps(metadata, default=str, sort_keys=True),
+                _company_intake_now_iso(),
+                imported_by,
+            )
+            if existing:
+                db.execute(
+                    """
+                    UPDATE intermediaries
+                    SET entity_name = ?, jurisdiction = ?, registration_number = ?,
+                        registered_address = ?, ownership_pct = ?, owned_or_controlled_by = ?,
+                        source = ?, psc_state = ?, psc_kind = ?,
+                        is_candidate_intermediary = ?, requires_corporate_structure_review = ?,
+                        registry_lookup_id = ?, response_hash = ?, source_metadata_json = ?,
+                        imported_at = ?, imported_by = ?
+                    WHERE application_id = ? AND person_key = ?
+                    """,
+                    common_values + (app_id, person_key),
+                )
+                skipped += 1
+                continue
+            db.execute(
+                """
+                INSERT INTO intermediaries (
+                    application_id, person_key, entity_name, jurisdiction,
+                    registration_number, registered_address, ownership_pct,
+                    owned_or_controlled_by, source, psc_state, psc_kind,
+                    is_candidate_intermediary, requires_corporate_structure_review,
+                    registry_lookup_id, response_hash, source_metadata_json,
+                    imported_at, imported_by
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    app_id,
+                    person_key,
+                    name,
+                    first_non_empty(owner.get("country_of_incorporation"), owner.get("jurisdiction")),
+                    owner.get("registration_number") or "",
+                    _company_intake_address_text(owner.get("registered_address")),
+                    None,
+                    owner.get("owned_or_controlled_by") or "",
+                    "companies_house",
+                    state,
+                    owner.get("kind"),
+                    True,
+                    True,
+                    lookup_id,
+                    response_hash,
+                    json.dumps(metadata, default=str, sort_keys=True),
+                    _company_intake_now_iso(),
+                    imported_by,
+                ),
+            )
+            imported += 1
+            continue
+
         person_key = _company_intake_person_key("ch-psc", company_number, name, state, owner.get("kind"))
         existing = db.execute(
             "SELECT id FROM ubos WHERE application_id = ? AND person_key = ? LIMIT 1",
             (app_id, person_key),
         ).fetchone()
-        encrypted = encrypt_pii_fields({"nationality": owner.get("nationality") or ""}, PII_FIELDS_UBOS)
-        metadata = _company_intake_registry_metadata(psc_result)
+        encrypted = encrypt_pii_fields(
+            {
+                "nationality": owner.get("nationality") or "",
+                "country_of_residence": owner.get("country_of_residence") or "",
+                "residential_address": owner.get("residential_address") or "",
+            },
+            PII_FIELDS_UBOS,
+        )
         common_values = (
             name,
             encrypted.get("nationality", ""),
             _company_intake_dob_from_month_year(owner.get("date_of_birth")),
+            encrypted.get("country_of_residence", ""),
+            encrypted.get("residential_address", ""),
             "companies_house",
             state,
             psc_result.get("registry_statement_type"),
@@ -22275,7 +22513,8 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
             db.execute(
                 """
                 UPDATE ubos
-                SET full_name = ?, nationality = ?, date_of_birth = ?, source = ?,
+                SET full_name = ?, nationality = ?, date_of_birth = ?,
+                    country_of_residence = ?, residential_address = ?, source = ?,
                     psc_state = ?, registry_statement_type = ?, psc_status_reason = ?,
                     psc_kind = ?, is_candidate_ubo = ?, registry_lookup_id = ?,
                     response_hash = ?, source_metadata_json = ?, imported_at = ?, imported_by = ?
@@ -22289,11 +22528,11 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
             """
             INSERT INTO ubos (
                 application_id, person_key, full_name, nationality, ownership_pct,
-                is_pep, pep_declaration, date_of_birth, source, psc_state,
-                registry_statement_type, psc_status_reason, psc_kind,
-                is_candidate_ubo, registry_lookup_id, response_hash,
-                source_metadata_json, imported_at, imported_by
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                is_pep, pep_declaration, date_of_birth, country_of_residence,
+                residential_address, source, psc_state, registry_statement_type,
+                psc_status_reason, psc_kind, is_candidate_ubo, registry_lookup_id,
+                response_hash, source_metadata_json, imported_at, imported_by
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 app_id,
@@ -22304,6 +22543,8 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
                 "No",
                 "{}",
                 _company_intake_dob_from_month_year(owner.get("date_of_birth")),
+                encrypted.get("country_of_residence", ""),
+                encrypted.get("residential_address", ""),
                 "companies_house",
                 state,
                 psc_result.get("registry_statement_type"),
@@ -22803,6 +23044,7 @@ class CompanyIntakeConfirmOfficersHandler(BaseHandler):
                 company_number=session.get("company_number"),
             )
             _company_intake_update_session(db, session_id, stage="officers_confirmed", completion_score=0.65)
+            directors, _ubos, _intermediaries = get_application_parties(db, session["application_id"])
             self.log_audit(
                 user,
                 "Company Intake Confirm Officers",
@@ -22830,6 +23072,7 @@ class CompanyIntakeConfirmOfficersHandler(BaseHandler):
             "registry_lookup_id": lookup_id,
             "imported_count": imported,
             "skipped_count": skipped,
+            "directors": directors,
         })
 
 
@@ -22906,6 +23149,7 @@ class CompanyIntakeConfirmPSCsHandler(BaseHandler):
                 imported_by=_company_intake_user_id(user),
             )
             _company_intake_update_session(db, session_id, stage="pscs_confirmed", completion_score=0.8)
+            _directors, ubos, intermediaries = get_application_parties(db, session["application_id"])
             self.log_audit(
                 user,
                 "Company Intake Confirm PSCs",
@@ -22935,6 +23179,8 @@ class CompanyIntakeConfirmPSCsHandler(BaseHandler):
             "psc_state": state,
             "imported_count": imported,
             "skipped_count": skipped,
+            "ubos": ubos,
+            "intermediaries": intermediaries,
         })
 
 
