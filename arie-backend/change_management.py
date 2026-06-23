@@ -138,14 +138,27 @@ MATERIALITY_TIERS = ("tier1", "tier2", "tier3")
 MATERIALITY_DEFAULTS = {
     # Tier 1 — High-impact structural changes
     "legal_name_change": "tier1",
+    "registration_number_change": "tier1",
     "director_change": "tier1",
+    "director_add": "tier1",
+    "director_remove": "tier1",
     "ubo_change": "tier1",
+    "ubo_add": "tier1",
+    "ubo_remove": "tier1",
+    "shareholder_add": "tier1",
+    "shareholder_remove": "tier1",
+    "shareholder_change": "tier1",
+    "shareholder_update": "tier1",
     "shareholding_change": "tier1",
     "control_change": "tier1",
     "registered_address_country_change": "tier1",
     "business_activity_change": "tier1",
     "countries_of_operation_change": "tier1",
     "licensing_status_change": "tier1",
+    "licensing_change": "tier1",
+    "regulated_activity_change": "tier1",
+    "source_of_funds_change": "tier1",
+    "source_of_wealth_change": "tier1",
     # Tier 2 — Moderate operational changes
     "same_country_address_change": "tier2",
     "signatory_change": "tier2",
@@ -161,22 +174,45 @@ MATERIALITY_DEFAULTS = {
 VALID_CHANGE_TYPES = frozenset({
     # Entity-level field changes
     "company_details",
+    "legal_name_change",
+    "registration_number_change",
     "address_change",
+    "same_country_address_change",
+    "registered_address_country_change",
     "business_activity_change",
+    "licensing_change",
+    "licensing_status_change",
+    "regulated_activity_change",
+    "source_of_funds_change",
+    "source_of_wealth_change",
     "contact_detail_update",
+    "contact_update",
     "other",
     # Director changes
     "director_add",
     "director_remove",
     "director_change",
+    "director_update",
+    # Shareholder changes
+    "shareholder_add",
+    "shareholder_remove",
+    "shareholder_change",
+    "shareholder_update",
+    "shareholding_change",
     # UBO changes
     "ubo_add",
     "ubo_remove",
     "ubo_change",
+    "ubo_update",
     # Intermediary changes
     "intermediary_add",
     "intermediary_remove",
     "intermediary_change",
+    # Signatory changes
+    "signatory_add",
+    "signatory_remove",
+    "signatory_change",
+    "signatory_update",
 })
 
 
@@ -300,6 +336,171 @@ _PERSON_SAFE_FIELDS = {
     "ubos": {"full_name", "first_name", "last_name", "nationality",
              "date_of_birth", "is_pep", "pep_declaration", "ownership_pct"},
 }
+
+# --- CM Evidence / Agent 1 approval gates ---
+# The keys below are stable canonical change keys. They deliberately avoid DB
+# schema changes: evidence is satisfied by rows linked to the CR through
+# change_request_documents, with Agent 1 status read from an app-scoped
+# documents row when available.
+CM_EVIDENCE_BLOCKER_PREFIX = "cm_"
+
+CM_EVIDENCE_REQUIREMENT_MATRIX = {
+    "legal_name_change": {
+        "label": "Company legal name change",
+        "portal_field": "Registered Entity Name",
+        "mapping_target": "company.legal_name / applications.company_name",
+        "doc_types": {
+            "certificate_name_change", "cert_name_change", "change_of_name_certificate",
+            "updated_certificate_of_incorporation", "cert_inc", "certificate_of_incorporation",
+            "registry_extract",
+        },
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "registration_number_change": {
+        "label": "Company registration number / BRN change",
+        "portal_field": "Registration / BRN",
+        "mapping_target": "company.registration_number / applications.registration_number / applications.brn",
+        "doc_types": {"registry_extract", "updated_certificate", "cert_inc", "certificate_of_incorporation"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "registered_address_change": {
+        "label": "Registered address change",
+        "portal_field": "Registered Address",
+        "mapping_target": "company.registered_address / applications.registered_address",
+        "doc_types": {"proof_of_address", "poa", "registry_extract", "registered_office_extract"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "director_added": {
+        "label": "Director added",
+        "portal_field": "Directors",
+        "mapping_target": "directors[] / application_parties role=director",
+        "doc_types": {"register_of_directors", "reg_dir", "passport", "id_document", "proof_of_address", "poa"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "director_removed": {
+        "label": "Director removed",
+        "portal_field": "Directors",
+        "mapping_target": "directors[] / application_parties role=director",
+        "doc_types": {"register_of_directors", "reg_dir", "director_resignation", "director_removal_evidence"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "director_details_changed": {
+        "label": "Director details changed",
+        "portal_field": "Directors",
+        "mapping_target": "director identity-critical fields",
+        "doc_types": {"passport", "id_document", "proof_of_address", "poa", "registry_extract", "reg_dir"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "shareholder_added": {
+        "label": "Shareholder added",
+        "portal_field": "Shareholders",
+        "mapping_target": "shareholders[] / application_parties role=shareholder",
+        "doc_types": {"shareholder_register", "register_of_shareholders", "registry_extract"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "shareholder_removed": {
+        "label": "Shareholder removed",
+        "portal_field": "Shareholders",
+        "mapping_target": "shareholders[] / application_parties role=shareholder",
+        "doc_types": {"shareholder_register", "register_of_shareholders", "registry_extract"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "shareholding_percentage_changed": {
+        "label": "Shareholding percentage changed",
+        "portal_field": "Shareholding Percentage",
+        "mapping_target": "shareholders[].ownership_percentage",
+        "doc_types": {"shareholder_register", "register_of_shareholders", "ownership_table", "ownership_chart"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "ubo_added": {
+        "label": "UBO added",
+        "portal_field": "Beneficial Owners / UBOs",
+        "mapping_target": "ubos[] / application_parties role=ubo",
+        "doc_types": {"passport", "id_document", "proof_of_address", "poa", "ownership_chart", "source_of_funds", "source_of_wealth"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "ubo_removed": {
+        "label": "UBO removed",
+        "portal_field": "Beneficial Owners / UBOs",
+        "mapping_target": "ubos[] / application_parties role=ubo",
+        "doc_types": {"ownership_chart", "shareholder_register", "register_of_shareholders", "registry_extract"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "business_activity_changed": {
+        "label": "Business activity changed",
+        "portal_field": "Business Activity",
+        "mapping_target": "company.business_activity / applications.business_activity / applications.sector",
+        "doc_types": {"business_description", "website_evidence", "contract", "invoice", "licence", "registry_extract"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "regulated_activity_changed": {
+        "label": "Regulated activity / licence changed",
+        "portal_field": "Regulatory Licence / Regulated Activity",
+        "mapping_target": "company.licence_status / applications.regulatory_status",
+        "doc_types": {"licence", "regulatory_licence", "regulator_extract", "approval_letter", "variation_letter"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "source_of_funds_changed": {
+        "label": "Source of funds changed",
+        "portal_field": "Source of Funds",
+        "mapping_target": "company.source_of_funds / applications.source_of_funds",
+        "doc_types": {"source_of_funds", "bank_statement", "funding_agreement", "sale_agreement", "loan_agreement", "audited_accounts", "investor_document"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "source_of_wealth_changed": {
+        "label": "Source of wealth changed",
+        "portal_field": "Source of Wealth",
+        "mapping_target": "ubos[].source_of_wealth / beneficial_owners.source_of_wealth",
+        "doc_types": {"source_of_wealth", "salary_evidence", "dividend_evidence", "sale_agreement", "inheritance_evidence", "investment_evidence"},
+        "agent1_required": True,
+        "officer_note_required": False,
+        "non_waivable": True,
+    },
+    "contact_details_changed": {
+        "label": "Contact details changed",
+        "portal_field": "Contact Details",
+        "mapping_target": "company.email / company.phone / applications.contact_email / applications.contact_phone",
+        "doc_types": {"authorised_instruction", "signed_update_form"},
+        "agent1_required": False,
+        "officer_note_required": True,
+        "non_waivable": False,
+    },
+}
+
+_CM_ANY_EVIDENCE_DOC_TYPES = frozenset({"supporting_document", "other", "cm_evidence"})
+_CM_VERIFICATION_PASSED = frozenset({"verified", "pass", "passed", "approved"})
+_CM_VERIFICATION_PENDING = frozenset({"", "pending", "in_progress", "not_started", "queued"})
+_CM_VERIFICATION_FAILED = frozenset({"failed", "fail", "rejected", "error"})
+_CM_REVIEW_ACCEPTED = frozenset({"accepted", "approved"})
+_CM_REVIEW_FAILED = frozenset({"rejected"})
 
 
 # ============================================================================
@@ -1290,6 +1491,333 @@ def _blocker(code, label, next_action, waivable):
     return {"code": code, "label": label, "next_action": next_action, "waivable": waivable}
 
 
+def _norm_token(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _json_obj(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _item_snapshot(item: Dict[str, Any]) -> Dict[str, Any]:
+    return _json_obj(item.get("person_snapshot"))
+
+
+def _cm_item_note(item: Dict[str, Any]) -> str:
+    snapshot = _item_snapshot(item)
+    for key in (
+        "officer_review_note", "officer_note", "callback_note",
+        "verification_note", "review_note",
+    ):
+        raw = item.get(key) if item.get(key) is not None else snapshot.get(key)
+        if str(raw or "").strip():
+            return str(raw).strip()
+    return ""
+
+
+def _canonical_change_key(item: Dict[str, Any]) -> Optional[str]:
+    change_type = _norm_token(item.get("change_type"))
+    field_name = _norm_token(item.get("field_name"))
+    person_action = _norm_token(item.get("person_action"))
+
+    if change_type in {"legal_name_change"}:
+        return "legal_name_change"
+    if field_name in {"company_name", "legal_name", "registered_entity_name", "registered_name"}:
+        return "legal_name_change"
+    if change_type in {"registration_number_change"} or field_name in {
+        "brn", "registration_number", "company_registration_number", "business_registration_number",
+    }:
+        return "registration_number_change"
+    if change_type in {"address_change", "same_country_address_change", "registered_address_country_change"}:
+        return "registered_address_change"
+    if field_name in {"registered_address", "registered_office", "registered_office_address"}:
+        return "registered_address_change"
+
+    if change_type == "director_add" or (change_type == "director_change" and person_action == "add"):
+        return "director_added"
+    if change_type == "director_remove" or (change_type == "director_change" and person_action == "remove"):
+        return "director_removed"
+    if change_type in {"director_change", "director_update"}:
+        return "director_details_changed"
+
+    if change_type == "shareholder_add":
+        return "shareholder_added"
+    if change_type == "shareholder_remove":
+        return "shareholder_removed"
+    if change_type in {"shareholding_change", "shareholder_change", "shareholder_update"}:
+        return "shareholding_percentage_changed"
+    if field_name in {"ownership_percentage", "ownership_pct", "shareholding_percentage", "shareholding_pct"}:
+        return "shareholding_percentage_changed"
+
+    if change_type == "ubo_add" or (change_type == "ubo_change" and person_action == "add"):
+        return "ubo_added"
+    if change_type == "ubo_remove" or (change_type == "ubo_change" and person_action == "remove"):
+        return "ubo_removed"
+    if change_type in {"ubo_change", "ubo_update"}:
+        if field_name in {"source_of_wealth", "sow"}:
+            return "source_of_wealth_changed"
+        return "ubo_added"
+
+    if change_type == "business_activity_change" or field_name in {
+        "business_activity", "sector", "business_sector", "activity",
+    }:
+        return "business_activity_changed"
+    if change_type in {"licensing_change", "licensing_status_change", "regulated_activity_change"}:
+        return "regulated_activity_changed"
+    if field_name in {
+        "licence", "license", "licence_status", "license_status",
+        "licence_number", "license_number", "regulatory_status", "regulated_activity",
+    }:
+        return "regulated_activity_changed"
+    if change_type == "source_of_funds_change" or field_name in {"source_of_funds", "sof"}:
+        return "source_of_funds_changed"
+    if change_type == "source_of_wealth_change" or field_name in {"source_of_wealth", "sow"}:
+        return "source_of_wealth_changed"
+    if change_type in {"contact_detail_update", "contact_update"} or field_name in {
+        "contact_email", "contact_phone", "email", "phone", "primary_contact_email",
+        "primary_contact_phone", "security_contact_email", "security_contact_phone",
+        "company_email", "company_phone",
+    }:
+        return "contact_details_changed"
+    return None
+
+
+def _cm_doc_type_matches(doc_type: str, required_types) -> bool:
+    normalized = _norm_token(doc_type)
+    if not normalized:
+        return False
+    required = {_norm_token(t) for t in (required_types or set())}
+    return normalized in required or normalized in _CM_ANY_EVIDENCE_DOC_TYPES
+
+
+def _extract_linked_document_id(doc: Dict[str, Any]) -> Optional[str]:
+    for key in ("linked_document_id", "document_id"):
+        value = str(doc.get(key) or "").strip()
+        if value:
+            return value
+    for key in ("s3_key", "file_path"):
+        value = str(doc.get(key) or "").strip()
+        for prefix in ("document:", "documents:", "linked_document:"):
+            if value.startswith(prefix):
+                return value.split(":", 1)[1].strip() or None
+    return None
+
+
+def _load_cr_items(db, request_id: str) -> List[Dict[str, Any]]:
+    rows = db.execute(
+        "SELECT * FROM change_request_items WHERE request_id = ? ORDER BY id",
+        (request_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _load_cr_documents(db, request_id: str) -> List[Dict[str, Any]]:
+    try:
+        rows = db.execute(
+            "SELECT * FROM change_request_documents WHERE request_id = ? ORDER BY uploaded_at, id",
+            (request_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+
+def _load_app_documents(db, application_id: str) -> List[Dict[str, Any]]:
+    try:
+        rows = db.execute(
+            "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at, id",
+            (application_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+
+def _app_doc_by_id(app_docs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {str(doc.get("id")): doc for doc in app_docs if doc.get("id")}
+
+
+def _linked_agent1_doc(cr_doc: Dict[str, Any], app_doc_lookup: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    linked_id = _extract_linked_document_id(cr_doc)
+    if linked_id and linked_id in app_doc_lookup:
+        return app_doc_lookup[linked_id]
+    if str(cr_doc.get("id") or "") in app_doc_lookup:
+        return app_doc_lookup[str(cr_doc.get("id"))]
+    return None
+
+
+def _is_doc_stale(doc: Dict[str, Any], *, now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    for key in ("valid_until", "expiry_date"):
+        raw = doc.get(key)
+        if not raw:
+            continue
+        try:
+            if isinstance(raw, datetime):
+                dt = raw
+            else:
+                text = str(raw).strip().replace("Z", "+00:00")
+                dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt < now:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _verification_state(doc: Dict[str, Any]) -> Tuple[str, str]:
+    return _norm_token(doc.get("verification_status")), _norm_token(doc.get("review_status"))
+
+
+def _document_satisfies_agent1(doc: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    verification_status, review_status = _verification_state(doc)
+    if review_status in _CM_REVIEW_FAILED or verification_status in _CM_VERIFICATION_FAILED:
+        return False, "cm_evidence_verification_failed"
+    if _is_doc_stale(doc):
+        return False, "cm_evidence_verification_stale"
+    if verification_status in _CM_VERIFICATION_PASSED:
+        return True, None
+    if review_status in _CM_REVIEW_ACCEPTED and verification_status in {"flagged", "skipped"}:
+        return True, None
+    if verification_status in {"flagged", "skipped"}:
+        return False, "cm_evidence_verification_pending"
+    if verification_status in _CM_VERIFICATION_PENDING:
+        return False, "cm_evidence_verification_pending"
+    return False, "cm_evidence_verification_pending"
+
+
+def _candidate_cr_docs_for_item(
+    cr_docs: List[Dict[str, Any]],
+    item_id: str,
+    required_doc_types,
+) -> List[Dict[str, Any]]:
+    request_level = []
+    item_level = []
+    for doc in cr_docs:
+        if not _cm_doc_type_matches(str(doc.get("doc_type") or ""), required_doc_types):
+            continue
+        if doc.get("item_id") and item_id and doc.get("item_id") == item_id:
+            item_level.append(doc)
+        elif not doc.get("item_id"):
+            request_level.append(doc)
+    return item_level + request_level
+
+
+def _app_has_unlinked_matching_doc(app_docs: List[Dict[str, Any]], required_doc_types) -> bool:
+    return any(_cm_doc_type_matches(str(doc.get("doc_type") or ""), required_doc_types) for doc in app_docs)
+
+
+def _cm_evidence_blocker(code: str, requirement: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+    label = requirement.get("label", "Change Management evidence")
+    item_field = item.get("field_name") or item.get("change_type") or "change item"
+    next_actions = {
+        "cm_evidence_required_missing": "Upload and link the required evidence to this Change Request",
+        "cm_evidence_not_linked": "Link the existing evidence document to this Change Request",
+        "cm_agent1_required": "Link an Agent 1-verifiable document to this Change Request",
+        "cm_evidence_verification_pending": "Complete Agent 1 verification or governed document acceptance",
+        "cm_evidence_verification_failed": "Resolve failed/rejected evidence before approval",
+        "cm_evidence_verification_stale": "Upload or verify fresh evidence before approval",
+        "cm_officer_review_note_missing": "Record the officer review/callback note for this change",
+    }
+    labels = {
+        "cm_evidence_required_missing": f"Required evidence missing for {label}",
+        "cm_evidence_not_linked": f"Evidence for {label} is not linked to this Change Request",
+        "cm_agent1_required": f"Agent 1-verifiable evidence required for {label}",
+        "cm_evidence_verification_pending": f"Agent 1 verification pending for {label}",
+        "cm_evidence_verification_failed": f"Agent 1 verification failed for {label}",
+        "cm_evidence_verification_stale": f"Evidence is stale for {label}",
+        "cm_officer_review_note_missing": f"Officer review note missing for {label}",
+    }
+    return {
+        "code": code,
+        "label": labels.get(code, label),
+        "next_action": next_actions.get(code, "Resolve evidence blocker before approval"),
+        "waivable": code == "cm_officer_review_note_missing" and not requirement.get("non_waivable", True),
+        "change_key": next((k for k, v in CM_EVIDENCE_REQUIREMENT_MATRIX.items() if v is requirement), None),
+        "field_name": item.get("field_name"),
+        "change_type": item.get("change_type"),
+        "item_id": item.get("id"),
+        "portal_field": requirement.get("portal_field"),
+        "mapping_target": requirement.get("mapping_target"),
+        "item_label": item_field,
+    }
+
+
+def evidence_approval_blockers(db, request: Dict) -> List[Dict[str, Any]]:
+    """Return CM evidence/Agent 1 blockers for matrix-backed change items."""
+    request_id = request.get("id")
+    if not request_id:
+        return []
+    try:
+        items = request.get("items") if isinstance(request.get("items"), list) else _load_cr_items(db, request_id)
+    except Exception:
+        items = []
+    if not items:
+        return []
+
+    application_id = request.get("application_id")
+    cr_docs = _load_cr_documents(db, request_id)
+    app_docs = _load_app_documents(db, application_id) if application_id else []
+    app_lookup = _app_doc_by_id(app_docs)
+    blockers: List[Dict[str, Any]] = []
+
+    for item in items:
+        item = dict(item)
+        change_key = _canonical_change_key(item)
+        requirement = CM_EVIDENCE_REQUIREMENT_MATRIX.get(change_key or "")
+        if not requirement:
+            continue
+
+        if requirement.get("officer_note_required") and not _cm_item_note(item):
+            blockers.append(_cm_evidence_blocker("cm_officer_review_note_missing", requirement, item))
+            # Contact changes may be satisfied by officer callback note only.
+            if not requirement.get("agent1_required"):
+                continue
+        elif requirement.get("officer_note_required") and not requirement.get("agent1_required"):
+            continue
+
+        candidates = _candidate_cr_docs_for_item(
+            cr_docs, str(item.get("id") or ""), requirement.get("doc_types") or set(),
+        )
+        if not candidates:
+            code = (
+                "cm_evidence_not_linked"
+                if _app_has_unlinked_matching_doc(app_docs, requirement.get("doc_types") or set())
+                else "cm_evidence_required_missing"
+            )
+            blockers.append(_cm_evidence_blocker(code, requirement, item))
+            continue
+
+        if not requirement.get("agent1_required"):
+            continue
+
+        pending_or_failed = None
+        satisfied = False
+        for cr_doc in candidates:
+            agent_doc = _linked_agent1_doc(cr_doc, app_lookup)
+            if not agent_doc:
+                pending_or_failed = pending_or_failed or "cm_agent1_required"
+                continue
+            ok, code = _document_satisfies_agent1(agent_doc)
+            if ok:
+                satisfied = True
+                break
+            pending_or_failed = code or pending_or_failed
+        if not satisfied:
+            blockers.append(_cm_evidence_blocker(pending_or_failed or "cm_agent1_required", requirement, item))
+    return blockers
+
+
 def approval_blockers(db, request: Dict, approver_user: Optional[Dict] = None) -> List[Dict]:
     """Return structured blockers preventing approval of a change request."""
     blockers: List[Dict] = []
@@ -1306,6 +1834,8 @@ def approval_blockers(db, request: Dict, approver_user: Optional[Dict] = None) -
                 "A different officer (SCO/Admin) must approve",
                 False,
             ))
+
+    blockers.extend(evidence_approval_blockers(db, request))
 
     # Screening precondition.
     if _flag_true(request.get("screening_required")):
@@ -2241,6 +2771,7 @@ def attach_document_to_request(
     file_path: str,
     item_id: Optional[str] = None,
     uploaded_by: Optional[str] = None,
+    linked_document_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Attach a supporting document to a change request.
 
@@ -2253,13 +2784,17 @@ def attach_document_to_request(
     db.execute(
         """INSERT INTO change_request_documents
            (id, request_id, item_id, doc_name, doc_type, file_path,
-            uploaded_by, uploaded_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (doc_id, request_id, item_id, doc_name, doc_type, file_path, uploaded_by, now),
+            s3_key, uploaded_by, uploaded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            doc_id, request_id, item_id, doc_name, doc_type, file_path,
+            f"document:{linked_document_id}" if linked_document_id else None,
+            uploaded_by, now,
+        ),
     )
     db.commit()
 
-    return {
+    result = {
         "id": doc_id,
         "request_id": request_id,
         "item_id": item_id,
@@ -2269,6 +2804,9 @@ def attach_document_to_request(
         "uploaded_by": uploaded_by,
         "uploaded_at": now,
     }
+    if linked_document_id:
+        result["linked_document_id"] = linked_document_id
+    return result
 
 
 # ============================================================================

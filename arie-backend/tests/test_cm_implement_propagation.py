@@ -23,6 +23,8 @@ import pytest
 # Ensure backend is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from tests.cm_evidence_test_helpers import attach_verified_cm_evidence
+
 
 def _get_cm():
     import change_management as cm
@@ -97,6 +99,7 @@ def _approve_request(cm, wdb, req_id, user=None):
     cm.update_change_request_status(wdb, req_id, "triage_in_progress", u)
     cm.update_change_request_status(wdb, req_id, "ready_for_review", u)
     cm.update_change_request_status(wdb, req_id, "approval_pending", u)
+    attach_verified_cm_evidence(cm, wdb, req_id)
     cm.record_precondition_result(wdb, req_id, "screening", SCO_USER, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
     cm.record_precondition_result(wdb, req_id, "risk", SCO_USER, result={"risk_level": "MEDIUM"})
     cr = dict(wdb.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())

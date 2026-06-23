@@ -17,6 +17,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from tests.cm_evidence_test_helpers import attach_verified_cm_evidence
+
 
 def _get_cm():
     import change_management as cm
@@ -27,6 +29,7 @@ def _cm_clear_and_approve(cm, wrapper, req_id, log_audit_fn=None, decision_notes
     """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
     preconditions and approve with a checker distinct from the creator."""
     rec = {"sub": "precond-recorder", "name": "Recorder", "role": "sco"}
+    attach_verified_cm_evidence(cm, wrapper, req_id)
     cm.record_precondition_result(wrapper, req_id, "screening", rec, log_audit_fn=log_audit_fn, result={"screening_ref": "test-screen", "screened_at": "2026-01-01T00:00:00Z", "unresolved_match": False})
     cm.record_precondition_result(wrapper, req_id, "risk", rec, log_audit_fn=log_audit_fn, result={"risk_level": "MEDIUM"})
     cr = dict(wrapper.execute("SELECT created_by FROM change_requests WHERE id = ?", (req_id,)).fetchone())
