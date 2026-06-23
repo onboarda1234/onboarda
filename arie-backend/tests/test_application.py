@@ -341,6 +341,70 @@ class TestApplicationWorkflow:
             ).fetchone()
             assert row["imported_at"] == imported_at
 
+    def test_batch_b_imported_party_metadata_dict_is_serialized_on_completion(
+        self, db, sample_application, monkeypatch
+    ):
+        """PostgreSQL JSON columns can hydrate as dicts; reinserts must bind text."""
+        import server
+        from server import store_application_parties
+
+        metadata = {"provider": "companies_house", "lookup": {"id": "lookup-1"}}
+
+        def fake_existing_by_person_key(_db, table_name, _application_id):
+            keys = {
+                "directors": "dir-imported-json",
+                "ubos": "ubo-imported-json",
+                "intermediaries": "int-imported-json",
+            }
+            return {
+                keys[table_name]: {
+                    "person_key": keys[table_name],
+                    "source": "companies_house",
+                    "source_metadata_json": metadata,
+                    "imported_at": "2026-06-22T12:00:00+00:00",
+                }
+            }
+
+        monkeypatch.setattr(
+            server,
+            "_existing_parties_by_person_key",
+            fake_existing_by_person_key,
+        )
+
+        store_application_parties(
+            db,
+            sample_application,
+            directors=[{
+                "person_key": "dir-imported-json",
+                "first_name": "Imported",
+                "last_name": "Director",
+                "country_of_residence": "United Kingdom",
+                "is_pep": "No",
+            }],
+            ubos=[{
+                "person_key": "ubo-imported-json",
+                "first_name": "Imported",
+                "last_name": "Owner",
+                "country_of_residence": "United Kingdom",
+                "ownership_pct": 50,
+                "is_pep": "No",
+            }],
+            intermediaries=[{
+                "person_key": "int-imported-json",
+                "entity_name": "Imported Holdco Ltd",
+                "ownership_pct": 50,
+                "owned_or_controlled_by": "Imported Owner",
+            }],
+        )
+        db.commit()
+
+        for table_name in ("directors", "ubos", "intermediaries"):
+            row = db.execute(
+                f"SELECT source_metadata_json FROM {table_name} WHERE application_id=?",
+                (sample_application,),
+            ).fetchone()
+            assert json.loads(row["source_metadata_json"]) == metadata
+
     def test_batch_b_resolves_person_references_by_person_key(self, db, sample_application):
         """Document linkage helpers should resolve stored person keys without row-order fallbacks."""
         from server import resolve_application_person, store_application_parties
