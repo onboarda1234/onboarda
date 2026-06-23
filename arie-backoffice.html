@@ -224,11 +224,8 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .prescreen-collapsible-card #detail-prescreen-summary { max-height:min(68vh,960px); overflow:auto; padding-right:4px; }
 .ch-indicator-legend { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 8px; padding:6px 8px; border:1px solid var(--border1); border-radius:8px; background:var(--surface2); font-size:10px; line-height:1.2; color:var(--text2); }
 .ch-indicator-legend-title { font-weight:800; color:var(--text1); margin-right:1px; }
-.ch-indicator-legend-separator { color:var(--text3); font-weight:700; }
 .ch-registry-badge { display:inline-flex; align-items:center; gap:3px; width:max-content; max-width:100%; min-height:16px; padding:1px 5px; border-radius:999px; border:1px solid transparent; font-size:9px; line-height:1.15; font-weight:800; white-space:nowrap; vertical-align:middle; }
 .ch-registry-badge.verified { background:rgba(22,163,74,0.1); color:#166534; border-color:rgba(22,163,74,0.24); }
-.ch-registry-badge.review { background:rgba(245,158,11,0.12); color:#92400e; border-color:rgba(245,158,11,0.3); }
-.ch-registry-badge.issue { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
 .detail-collapsible-card { margin:0 0 16px; border:1px solid var(--border1); border-radius:14px; background:var(--surface); overflow:hidden; }
 .detail-collapsible-card details { background:inherit; }
 .detail-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:flex-start; gap:14px; padding:14px 16px; }
@@ -7927,9 +7924,7 @@ function registryCompanyStatusHasMaterialIssue(app) {
 
 function renderCompaniesHouseRegistryBadge(type, title) {
   var badges = {
-    verified: { label: '✓ Verified', cls: 'verified', title: 'Matched or imported from Companies House.' },
-    review: { label: 'Review', cls: 'review', title: 'Officer review required.' },
-    issue: { label: 'Issue', cls: 'issue', title: 'Material registry problem.' }
+    verified: { label: '✓ Verified', cls: 'verified', title: 'Supported by registry data.' }
   };
   var badge = badges[type];
   if (!badge) return '';
@@ -7950,32 +7945,40 @@ function partySourceIsCompaniesHouse(party) {
   return registryProviderIsCompaniesHouse(party.source || party.imported_source || party.provider || party.registry_provider);
 }
 
-function partyHasRegistryEvidence(party) {
+function partyHasVerifiedRegistryBadge(party, partyType) {
   party = party || {};
-  return partySourceIsCompaniesHouse(party) || !!party.psc_state;
+  if (!partySourceIsCompaniesHouse(party)) return false;
+  if (partyType === 'director') {
+    var entityType = String(party.officer_entity_type || '').trim().toLowerCase();
+    var role = String(party.officer_role || '').trim().toLowerCase();
+    var importedIndividualRole = role.indexOf('secretary') < 0 &&
+      (role.indexOf('director') >= 0 || role.indexOf('member') >= 0 || role.indexOf('officer') >= 0);
+    if (entityType === 'corporate' || registryTruthy(party.requires_corporate_structure_review)) return false;
+    return entityType === 'individual' || registryTruthy(party.requires_individual_kyc) || importedIndividualRole;
+  }
+  if (partyType === 'ubo') {
+    var state = String(party.psc_state || '').trim().toLowerCase();
+    if (state === 'corporate_psc') return false;
+    return state === 'psc_found' || registryTruthy(party.is_candidate_ubo);
+  }
+  return false;
 }
 
 function hasCompaniesHouseIndicators(app) {
   app = app || {};
   var psData = registryPrescreeningData(app);
-  if (isCompaniesHouseRegistryApp(app)) return true;
-  if ((app.directors || []).some(partyHasRegistryEvidence)) return true;
-  if ((app.ubos || []).some(partyHasRegistryEvidence)) return true;
-  if ((app.intermediaries || []).some(partyHasRegistryEvidence)) return true;
-  if (registryProviderIsCompaniesHouse((psData.psc_review || {}).source)) return true;
-  if (registryProviderIsCompaniesHouse((psData.corporate_ownership_review || {}).source)) return true;
+  var sourced = psData.registry_sourced_values || {};
+  if (isCompaniesHouseRegistryApp(app) && sourced && Object.keys(sourced).length > 0) return true;
+  if ((app.directors || []).some(function(party) { return partyHasVerifiedRegistryBadge(party, 'director'); })) return true;
+  if ((app.ubos || []).some(function(party) { return partyHasVerifiedRegistryBadge(party, 'ubo'); })) return true;
   return false;
 }
 
 function renderCompaniesHouseIndicatorLegend(app) {
   if (!hasCompaniesHouseIndicators(app)) return '';
   return '<div class="ch-indicator-legend" aria-label="Registry indicators">' +
-    '<span class="ch-indicator-legend-title">Registry indicators:</span>' +
-    renderCompaniesHouseRegistryBadge('verified', 'Matched or imported from Companies House.') +
-    '<span class="ch-indicator-legend-separator">·</span>' +
-    renderCompaniesHouseRegistryBadge('review', 'Client override or compliance review required.') +
-    '<span class="ch-indicator-legend-separator">·</span>' +
-    renderCompaniesHouseRegistryBadge('issue', 'Company status or registry mismatch issue.') +
+    '<span class="ch-indicator-legend-title">Registry indicator:</span>' +
+    renderCompaniesHouseRegistryBadge('verified', 'Supported by registry data.') +
   '</div>';
 }
 
@@ -7983,70 +7986,34 @@ function renderCompaniesHouseFieldBadges(app, field, currentRaw) {
   if (!isCompaniesHouseRegistryApp(app)) return '';
   var candidates = registryFieldCandidateKeys(field);
   if (candidates.indexOf('registered_entity_name') >= 0 && registryCompanyStatusHasMaterialIssue(app)) {
-    return renderCompaniesHouseRegistryBadge('issue', 'Company status on Companies House requires officer review.');
+    return '';
   }
   if (registryFieldOverride(app, field)) {
-    return renderCompaniesHouseRegistryBadge('review', 'Client override of a Companies House sourced value.');
+    return '';
   }
   var registryValue = registrySourcedValueForField(app, field);
   if (registryValue === undefined) return '';
   if (registryComparableValue(currentRaw) && registryComparableValue(currentRaw) === registryComparableValue(registryValue)) {
-    return renderCompaniesHouseRegistryBadge('verified', 'Field matches or was imported from Companies House.');
+    return renderCompaniesHouseRegistryBadge('verified', 'Field matches or was imported from registry data.');
   }
   return '';
 }
 
 function renderCompaniesHousePartyBadge(party, partyType) {
-  if (!partyHasRegistryEvidence(party)) return '';
+  if (!partyHasVerifiedRegistryBadge(party, partyType)) return '';
   var state = String((party && party.psc_state) || '').trim().toLowerCase();
   if (partyType === 'director') {
-    var entityType = String((party && party.officer_entity_type) || '').trim().toLowerCase();
-    var role = String((party && party.officer_role) || '').trim().toLowerCase();
-    if (entityType === 'corporate' || registryTruthy(party && party.requires_corporate_structure_review)) {
-      var corporateTitle = role.indexOf('member') >= 0
-        ? 'Corporate LLP member — corporate structure review required.'
-        : 'Corporate director — corporate structure review required.';
-      return renderCompaniesHouseRegistryBadge('review', corporateTitle);
-    }
-    var importedIndividualRole = partySourceIsCompaniesHouse(party) &&
-      role.indexOf('secretary') < 0 &&
-      (role.indexOf('director') >= 0 || role.indexOf('member') >= 0 || role.indexOf('officer') >= 0);
-    if (entityType === 'individual' || registryTruthy(party && party.requires_individual_kyc) || importedIndividualRole) {
-      return renderCompaniesHouseRegistryBadge('verified', 'Director, officer, or member imported from Companies House.');
-    }
-    return renderCompaniesHouseRegistryBadge('review', 'Registry-imported officer with unknown entity type.');
+    return renderCompaniesHouseRegistryBadge('verified', 'Director, officer, or member imported from registry data.');
   }
   if (partyType === 'ubo') {
-    if (state === 'corporate_psc') {
-      return renderCompaniesHouseRegistryBadge('review', 'Corporate PSC — ownership structure review required.');
-    }
     if (state === 'psc_found' || registryTruthy(party && party.is_candidate_ubo)) {
-      return renderCompaniesHouseRegistryBadge('verified', 'PSC candidate imported from Companies House.');
-    }
-    return renderCompaniesHouseRegistryBadge('review', 'PSC candidate imported from Companies House for officer review.');
-  }
-  if (partyType === 'intermediary') {
-    if (state === 'corporate_psc' || partySourceIsCompaniesHouse(party)) {
-      return renderCompaniesHouseRegistryBadge('review', 'Corporate PSC or intermediary ownership structure review required.');
+      return renderCompaniesHouseRegistryBadge('verified', 'PSC or beneficial-owner candidate imported from registry data.');
     }
   }
   return '';
 }
 
 function renderCompaniesHousePscSectionBadge(app, sectionType) {
-  var psData = registryPrescreeningData(app);
-  var pscReview = psData.psc_review || {};
-  var corporateReview = psData.corporate_ownership_review || {};
-  var state = String(pscReview.psc_state || corporateReview.psc_state || '').trim().toLowerCase();
-  if (sectionType === 'ubo' && state === 'no_psc') {
-    return renderCompaniesHouseRegistryBadge('review', 'No active PSC returned — ownership confirmation required.');
-  }
-  if (sectionType === 'ubo' && state === 'psc_exempt') {
-    return renderCompaniesHouseRegistryBadge('review', 'PSC information exempt or unavailable — officer review required.');
-  }
-  if (sectionType === 'intermediary' && state === 'corporate_psc') {
-    return renderCompaniesHouseRegistryBadge('review', 'Corporate PSC — ownership structure review required.');
-  }
   return '';
 }
 
