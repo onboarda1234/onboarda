@@ -158,9 +158,94 @@ class TestCompaniesHouseProvider:
         names = [officer["name"] for officer in officers]
         assert names == ["Active Director", "Corporate Director"]
         assert all(officer["is_candidate_director"] for officer in officers)
-        assert all(officer["candidate_type"] == "director" for officer in officers)
+        assert officers[0]["candidate_type"] == "director_candidate"
+        assert officers[1]["candidate_type"] == "corporate_structure_review"
         assert "Resigned Director" not in names
         assert "Company Secretary" not in names
+
+    @patch("company_registry.requests.get")
+    def test_officers_success_retains_active_llp_member_candidates(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [
+                {"name": "Active Member", "officer_role": "llp-member", "appointed_on": "2020-01-01"},
+                {"name": "Designated Member", "officer_role": "llp-designated-member", "appointed_on": "2020-01-02"},
+                {"name": "Equivalent Designated Member", "officer_role": "designated-llp-member", "appointed_on": "2020-01-03"},
+                {"name": "Resigned Member", "officer_role": "llp-member", "resigned_on": "2021-01-01"},
+                {"name": "Company Secretary", "officer_role": "secretary"},
+            ],
+        })
+
+        officers = company_registry.get_companies_house_officers("OC123456")
+
+        assert [officer["name"] for officer in officers] == [
+            "Active Member",
+            "Designated Member",
+            "Equivalent Designated Member",
+        ]
+        assert all(officer["candidate_type"] == "llp_member_candidate" for officer in officers)
+        assert all(officer["is_candidate_llp_member"] is True for officer in officers)
+        assert all(officer["is_candidate_director"] is False for officer in officers)
+        assert all(officer["officer_entity_type"] == "individual" for officer in officers)
+
+    @patch("company_registry.requests.get")
+    def test_officers_success_flags_corporate_llp_member_for_structure_review(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "Corporate LLP Member Ltd",
+                "officer_role": "corporate-llp-designated-member",
+                "appointed_on": "2020-01-01",
+            }],
+        })
+
+        officers = company_registry.get_companies_house_officers("OC123456")
+
+        assert len(officers) == 1
+        assert officers[0]["candidate_type"] == "corporate_structure_review"
+        assert officers[0]["officer_entity_type"] == "corporate"
+        assert officers[0]["is_candidate_llp_member"] is True
+        assert officers[0]["is_candidate_director"] is False
+        assert officers[0]["requires_individual_kyc"] is False
+        assert officers[0]["requires_corporate_structure_review"] is True
+
+    @patch("company_registry.requests.get")
+    def test_oc381818_llp_member_roles_are_retained_as_staging_smoke_fixture(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [
+                {
+                    "name": "MARGOLIS, Stephen Howard",
+                    "officer_role": "llp-designated-member",
+                    "appointed_on": "2013-09-26",
+                },
+                {
+                    "name": "TAURUS (DM) LIMITED",
+                    "officer_role": "corporate-llp-designated-member",
+                    "appointed_on": "2017-07-21",
+                },
+                {
+                    "name": "GARDINER, Thomas James",
+                    "officer_role": "llp-designated-member",
+                    "appointed_on": "2013-01-22",
+                    "resigned_on": "2013-11-04",
+                },
+            ],
+        })
+
+        officers = company_registry.get_companies_house_officers("OC381818")
+
+        assert [officer["name"] for officer in officers] == [
+            "MARGOLIS, Stephen Howard",
+            "TAURUS (DM) LIMITED",
+        ]
+        assert [officer["candidate_type"] for officer in officers] == [
+            "llp_member_candidate",
+            "corporate_structure_review",
+        ]
 
     @patch("company_registry.requests.get")
     def test_individual_director_classification_requires_individual_kyc(self, mock_get):

@@ -2162,7 +2162,7 @@
         <div class="company-intake-stepper" id="company-intake-stepper" aria-label="Company intake progress">
           <div class="company-intake-step active" data-company-intake-step="1"><span class="company-intake-step-number">1</span><span>Find company</span></div>
           <div class="company-intake-step" data-company-intake-step="2"><span class="company-intake-step-number">2</span><span>Confirm profile</span></div>
-          <div class="company-intake-step" data-company-intake-step="3"><span class="company-intake-step-number">3</span><span>Confirm directors</span></div>
+          <div class="company-intake-step" data-company-intake-step="3"><span class="company-intake-step-number">3</span><span>Confirm directors / officers / members</span></div>
           <div class="company-intake-step" data-company-intake-step="4"><span class="company-intake-step-number">4</span><span>Confirm ownership</span></div>
           <div class="company-intake-step" data-company-intake-step="5"><span class="company-intake-step-number">5</span><span>Complete application</span></div>
         </div>
@@ -2250,15 +2250,15 @@
         </div>
 
         <div id="company-intake-step-officers" class="company-intake-panel">
-          <div class="company-intake-muted">Confirm the active director candidates imported from Companies House. Corporate directors require structure review, not individual ID checks.</div>
+          <div class="company-intake-muted">Confirm active directors, officers, or LLP member candidates imported from Companies House. Corporate officials require structure review, not individual ID checks.</div>
           <div id="company-intake-officers-loading" class="company-intake-loading">
             <span class="company-intake-spinner" aria-hidden="true"></span>
-            <span>Loading director candidates...</span>
+            <span>Loading officer candidates...</span>
           </div>
           <div id="company-intake-officers-list" class="company-intake-review-list"></div>
           <div id="company-intake-officers-counts" class="company-intake-counts"></div>
           <div class="company-intake-actions">
-            <button type="button" class="btn-submit" id="company-intake-confirm-officers-btn" onclick="confirmCompanyIntakeOfficers()">Confirm directors</button>
+            <button type="button" class="btn-submit" id="company-intake-confirm-officers-btn" onclick="confirmCompanyIntakeOfficers()">Confirm directors / officers / members</button>
             <button type="button" class="company-intake-secondary" onclick="companyIntakeSetStep(2)">Back to profile</button>
             <button type="button" class="company-intake-secondary" onclick="proceedManually()">Continue manually</button>
           </div>
@@ -10821,7 +10821,7 @@ var COMPANY_INTAKE_STORAGE_KEY = 'arie_company_intake_state';
 var COMPANY_INTAKE_STEP_LABELS = {
   1: 'Find your company',
   2: 'Confirm profile',
-  3: 'Confirm directors',
+  3: 'Confirm directors / officers / members',
   4: 'Confirm ownership / PSCs',
   5: 'Complete application'
 };
@@ -11281,12 +11281,12 @@ function renderCompanyIntakeImportedDirectorsSummary() {
     el.classList.remove('active');
     return;
   }
-  var html = companyIntakeImportedSummaryHead('Imported directors from Companies House') +
-    '<div class="company-intake-import-note">These director candidates were saved to the draft from Companies House. The editable director table below is for any additional manual directors or client-supplied corrections.</div>';
+  var html = companyIntakeImportedSummaryHead('Imported directors / officers / members from Companies House') +
+    '<div class="company-intake-import-note">These director, officer, or member candidates were saved to the draft from Companies House. The editable management official table below is for any additional manual officials or client-supplied corrections.</div>';
   if (!officers.length) {
     var noOfficerMessage = Array.isArray(companyIntakeState.imported_officers)
-      ? 'No director candidates were selected for import during assisted intake.'
-      : 'Director candidates were imported during assisted intake and saved to the draft. Reopen the assistant review steps if you need to inspect the original candidate details.';
+      ? 'No director, officer, or member candidates were selected for import during assisted intake.'
+      : 'Officer candidates were imported during assisted intake and saved to the draft. Reopen the assistant review steps if you need to inspect the original candidate details.';
     html += '<div class="company-intake-import-note">' + escapeHtml(noOfficerMessage) + '</div>';
   } else {
     html += '<div class="company-intake-import-list">' + officers.map(function(officer) {
@@ -11300,7 +11300,7 @@ function renderCompanyIntakeImportedDirectorsSummary() {
         'Corporate structure review required: ' + (officer.requires_corporate_structure_review === true ? 'Yes' : 'No')
       ];
       return '<div class="company-intake-import-card">' +
-        '<div class="company-intake-import-card-title">' + escapeHtml(companyIntakeValue(officer.name, 'Unnamed director candidate')) + '</div>' +
+        '<div class="company-intake-import-card-title">' + escapeHtml(companyIntakeValue(officer.name, 'Unnamed officer candidate')) + '</div>' +
         '<div class="company-intake-import-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</div>' +
         '<div class="company-intake-import-missing"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(companyIntakeOfficerMissingFields(officer).join(', ')) + '</div>' +
       '</div>';
@@ -11471,7 +11471,7 @@ async function fetchCompanyIntakeOfficers() {
   } catch (err) {
     companyIntakeState.officers = [];
     renderCompanyIntakeOfficers();
-    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not load director candidates. You can continue manually.'), 'error');
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not load officer candidates. You can continue manually.'), 'error');
   } finally {
     companyIntakeSetLoading('company-intake-officers-loading', false);
   }
@@ -11482,7 +11482,7 @@ function renderCompanyIntakeOfficers() {
   if (!list) return;
   var officers = companyIntakeState.officers || [];
   if (!officers.length) {
-    list.innerHTML = '<div class="company-intake-alert info">Companies House did not return active director candidates for this company. You can continue and complete directors in the application form.</div>';
+    list.innerHTML = '<div class="company-intake-alert info">Companies House did not return active director, officer, or member candidates for this company. You can continue and complete management officials in the application form.</div>';
     return;
   }
   list.innerHTML = officers.map(function(officer, idx) {
@@ -11501,7 +11501,7 @@ function renderCompanyIntakeOfficers() {
       '<span class="company-intake-review-main">' +
         '<span class="company-intake-review-title">' + escapeHtml(companyIntakeValue(officer.name, 'Unnamed officer')) + '</span>' +
         '<span class="company-intake-review-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</span>' +
-        (entityType === 'corporate' ? '<span class="company-intake-review-note">Corporate structure review applies. This director is not treated as an ordinary individual KYC candidate.</span>' : '') +
+        (entityType === 'corporate' ? '<span class="company-intake-review-note">Corporate structure review applies. This officer or member is not treated as an ordinary individual KYC candidate.</span>' : '') +
       '</span>' +
     '</label>';
   }).join('');
@@ -11520,7 +11520,7 @@ function selectedCompanyIntakeOfficers() {
 
 async function confirmCompanyIntakeOfficers() {
   if (!companyIntakeState.session_id) {
-    companyIntakeSetAlert('Start an intake session before confirming directors.', 'warn');
+    companyIntakeSetAlert('Start an intake session before confirming officers.', 'warn');
     return;
   }
   companyIntakeSetButtonBusy('company-intake-confirm-officers-btn', true, 'Confirming...');
@@ -11535,13 +11535,13 @@ async function confirmCompanyIntakeOfficers() {
     var counts = document.getElementById('company-intake-officers-counts');
     if (counts) {
       counts.classList.add('active');
-      counts.textContent = 'Directors imported: ' + (resp.imported_count || 0) + '. Already on the draft or skipped: ' + (resp.skipped_count || 0) + '.';
+      counts.textContent = 'Officer candidates imported: ' + (resp.imported_count || 0) + '. Already on the draft or skipped: ' + (resp.skipped_count || 0) + '.';
     }
-    showToast('success', 'Directors Confirmed', 'Director candidates were saved to your draft application.');
+    showToast('success', 'Officers Confirmed', 'Officer candidates were saved to your draft application.');
     await fetchCompanyIntakePSCs();
     companyIntakeSetStep(4);
   } catch (err) {
-    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not confirm directors. Please try again or continue manually.'), 'error');
+    companyIntakeSetAlert(companyIntakeFriendlyError(err, 'Could not confirm officers. Please try again or continue manually.'), 'error');
   } finally {
     companyIntakeSetButtonBusy('company-intake-confirm-officers-btn', false);
     companyIntakePersistState();

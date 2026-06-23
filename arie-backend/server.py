@@ -2474,6 +2474,9 @@ from screening import (
 )
 from screening_routing import run_screening_for_active_provider
 from company_registry import (
+    _is_director_role as _company_registry_is_director_role,
+    _is_llp_member_role as _company_registry_is_llp_member_role,
+    _normalized_officer_role as _company_registry_normalized_officer_role,
     get_companies_house_officers,
     get_companies_house_profile,
     get_companies_house_profile_with_raw,
@@ -22098,6 +22101,13 @@ def _company_intake_person_key(prefix, company_number, *parts):
     return f"{prefix}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
+def _company_intake_is_importable_officer_candidate(officer):
+    role = _company_registry_normalized_officer_role((officer or {}).get("officer_role"))
+    if not role or (officer or {}).get("resigned_on") or "secretary" in role:
+        return False
+    return _company_registry_is_director_role(role) or _company_registry_is_llp_member_role(role)
+
+
 def _company_intake_dob_from_month_year(value):
     if not isinstance(value, dict):
         return ""
@@ -22121,11 +22131,12 @@ def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response
         if not name:
             skipped += 1
             continue
-        role = str(officer.get("officer_role") or "").strip().lower()
-        if officer.get("resigned_on") or "secretary" in role or "director" not in role:
+        role = _company_registry_normalized_officer_role(officer.get("officer_role"))
+        if not _company_intake_is_importable_officer_candidate(officer):
             skipped += 1
             continue
-        person_key = _company_intake_person_key("ch-dir", company_number, name, role)
+        person_key_prefix = "ch-llp-member" if _company_registry_is_llp_member_role(role) else "ch-dir"
+        person_key = _company_intake_person_key(person_key_prefix, company_number, name, role)
         existing = db.execute(
             "SELECT id FROM directors WHERE application_id = ? AND person_key = ? LIMIT 1",
             (app_id, person_key),
@@ -22742,7 +22753,7 @@ class CompanyIntakeConfirmProfileHandler(BaseHandler):
 
 
 class CompanyIntakeConfirmOfficersHandler(BaseHandler):
-    """POST /api/company-intake/confirm-officers — import director candidates."""
+    """POST /api/company-intake/confirm-officers — import officer candidates."""
 
     def post(self):
         user = self.require_auth()
