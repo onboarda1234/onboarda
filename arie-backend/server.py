@@ -1907,7 +1907,13 @@ def _existing_parties_by_person_key(db, table_name, application_id):
     if table_name not in _PARTY_TABLES:
         raise ValueError("Unsupported party table")
     rows = db.execute(f"SELECT * FROM {table_name} WHERE application_id = ?", (application_id,)).fetchall()
-    return {row.get("person_key"): row for row in rows if row.get("person_key")}
+    existing = {}
+    for row in rows:
+        record = dict(row)
+        person_key = record.get("person_key")
+        if person_key:
+            existing[person_key] = record
+    return existing
 
 
 def _normalize_iso_date(value):
@@ -1946,6 +1952,10 @@ def _preserved_party_value(incoming, existing, key, default=""):
     if isinstance(existing, dict) and existing.get(key) not in (None, ""):
         return existing.get(key)
     return default
+
+
+def _preserved_party_nullable_value(incoming, existing, key):
+    return _preserved_party_value(incoming, existing, key, default=None)
 
 
 def _preserved_party_bool(incoming, existing, key, default=False):
@@ -2024,7 +2034,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_value(director, existing, "registry_lookup_id"),
                 _preserved_party_value(director, existing, "response_hash"),
                 _preserved_party_value(director, existing, "source_metadata_json", "{}"),
-                _preserved_party_value(director, existing, "imported_at"),
+                _preserved_party_nullable_value(director, existing, "imported_at"),
                 _preserved_party_value(director, existing, "imported_by"),
             ))
     if ubos is not None:
@@ -2087,7 +2097,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_value(ubo, existing, "registry_lookup_id"),
                 _preserved_party_value(ubo, existing, "response_hash"),
                 _preserved_party_value(ubo, existing, "source_metadata_json", "{}"),
-                _preserved_party_value(ubo, existing, "imported_at"),
+                _preserved_party_nullable_value(ubo, existing, "imported_at"),
                 _preserved_party_value(ubo, existing, "imported_by"),
             ))
     if intermediaries is not None:
@@ -2129,7 +2139,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_value(intermediary, existing, "registry_lookup_id"),
                 _preserved_party_value(intermediary, existing, "response_hash"),
                 _preserved_party_value(intermediary, existing, "source_metadata_json", "{}"),
-                _preserved_party_value(intermediary, existing, "imported_at"),
+                _preserved_party_nullable_value(intermediary, existing, "imported_at"),
                 _preserved_party_value(intermediary, existing, "imported_by"),
             ))
 
