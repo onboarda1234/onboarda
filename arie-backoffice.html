@@ -222,6 +222,13 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .prescreen-collapsible-body { padding:14px 16px 16px; }
 .prescreen-collapsible-meta { font-size:11px; color:var(--text3); line-height:1.45; white-space:nowrap; }
 .prescreen-collapsible-card #detail-prescreen-summary { max-height:min(68vh,960px); overflow:auto; padding-right:4px; }
+.ch-indicator-legend { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 8px; padding:6px 8px; border:1px solid var(--border1); border-radius:8px; background:var(--surface2); font-size:10px; line-height:1.2; color:var(--text2); }
+.ch-indicator-legend-title { font-weight:800; color:var(--text1); margin-right:1px; }
+.ch-indicator-legend-separator { color:var(--text3); font-weight:700; }
+.ch-registry-badge { display:inline-flex; align-items:center; gap:3px; width:max-content; max-width:100%; min-height:16px; padding:1px 5px; border-radius:999px; border:1px solid transparent; font-size:9px; line-height:1.15; font-weight:800; white-space:nowrap; vertical-align:middle; }
+.ch-registry-badge.verified { background:rgba(22,163,74,0.1); color:#166534; border-color:rgba(22,163,74,0.24); }
+.ch-registry-badge.review { background:rgba(245,158,11,0.12); color:#92400e; border-color:rgba(245,158,11,0.3); }
+.ch-registry-badge.issue { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
 .detail-collapsible-card { margin:0 0 16px; border:1px solid var(--border1); border-radius:14px; background:var(--surface); overflow:hidden; }
 .detail-collapsible-card details { background:inherit; }
 .detail-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:flex-start; gap:14px; padding:14px 16px; }
@@ -7804,6 +7811,245 @@ function normalizeDetailValue(value) {
   return String(value);
 }
 
+var CH_REGISTRY_FIELD_ALIASES = {
+  registered_entity_name: ['registered_entity_name', 'company_name', 'entity_name'],
+  company_name: ['registered_entity_name', 'company_name', 'entity_name'],
+  entity_type: ['entity_type', 'company_type'],
+  registered_address: ['registered_address', 'registered_office_address'],
+  registered_office_address: ['registered_office_address', 'registered_address'],
+  incorporation_date: ['incorporation_date', 'date_of_creation'],
+  country_of_incorporation: ['country_of_incorporation', 'jurisdiction', 'country'],
+  registration_number: ['registration_number', 'company_number', 'brn', 'incorporation_number'],
+  brn: ['brn', 'registration_number', 'company_number', 'incorporation_number'],
+  company_number: ['company_number', 'registration_number', 'brn', 'incorporation_number']
+};
+
+function registryPrescreeningData(app) {
+  return (app && (app.prescreeningData || app.prescreening_data || app._raw_prescreening)) || {};
+}
+
+function registryTruthy(value) {
+  if (value === true || value === 1) return true;
+  return ['1', 'true', 'yes', 'y'].indexOf(String(value || '').trim().toLowerCase()) >= 0;
+}
+
+function registryProviderIsCompaniesHouse(value) {
+  return String(value || '').trim().toLowerCase() === 'companies_house';
+}
+
+function registryValueForKey(source, key) {
+  if (!source || !key) return undefined;
+  var aliases = CH_REGISTRY_FIELD_ALIASES[key] || [key];
+  for (var i = 0; i < aliases.length; i++) {
+    if (source[aliases[i]] != null && normalizeDetailValue(source[aliases[i]]) !== '—') {
+      return source[aliases[i]];
+    }
+  }
+  return undefined;
+}
+
+function registryFieldCandidateKeys(field) {
+  field = field || {};
+  var keys = [];
+  if (field.key) keys.push(field.key);
+  var label = String(field.label || '').trim().toLowerCase();
+  if (label === 'registered entity name') keys.push('registered_entity_name');
+  if (label === 'entity type') keys.push('entity_type');
+  if (label === 'registered address') keys.push('registered_address', 'registered_office_address');
+  if (label === 'incorporation date') keys.push('incorporation_date');
+  if (label === 'country of incorporation') keys.push('country_of_incorporation');
+  if (label === 'registration / brn') keys.push('registration_number', 'brn', 'company_number');
+  var expanded = [];
+  keys.forEach(function(key) {
+    if (!key || expanded.indexOf(key) >= 0) return;
+    expanded.push(key);
+    (CH_REGISTRY_FIELD_ALIASES[key] || []).forEach(function(alias) {
+      if (alias && expanded.indexOf(alias) < 0) expanded.push(alias);
+    });
+  });
+  return expanded;
+}
+
+function registryComparableValue(value) {
+  var normalized = normalizeDetailValue(value);
+  if (!normalized || normalized === '—') return '';
+  return String(normalized)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s,|:;._\-—]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function registryFieldOverride(app, field) {
+  var psData = registryPrescreeningData(app);
+  var overrides = psData.registry_field_overrides;
+  var candidates = registryFieldCandidateKeys(field);
+  if (!candidates.length || !overrides) return null;
+  if (Array.isArray(overrides)) {
+    for (var i = 0; i < overrides.length; i++) {
+      var item = overrides[i] || {};
+      if (candidates.indexOf(String(item.field_name || item.field || '')) >= 0) return item;
+    }
+    return null;
+  }
+  if (typeof overrides === 'object') {
+    for (var j = 0; j < candidates.length; j++) {
+      if (overrides[candidates[j]] != null) return overrides[candidates[j]];
+    }
+  }
+  return null;
+}
+
+function registrySourcedValueForField(app, field) {
+  var psData = registryPrescreeningData(app);
+  var sourced = psData.registry_sourced_values || {};
+  var candidates = registryFieldCandidateKeys(field);
+  for (var i = 0; i < candidates.length; i++) {
+    var value = registryValueForKey(sourced, candidates[i]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function registryCompanyStatus(app) {
+  var profile = registryPrescreeningData(app).registry_profile || {};
+  return String(profile.company_status || profile.status || '').trim().toLowerCase();
+}
+
+function registryCompanyStatusHasMaterialIssue(app) {
+  var status = registryCompanyStatus(app);
+  if (!status) return false;
+  return ['inactive', 'dissolved', 'liquidation', 'administration', 'receivership', 'insolvency', 'removed', 'closed', 'converted-closed'].some(function(term) {
+    return status.indexOf(term) >= 0;
+  });
+}
+
+function renderCompaniesHouseRegistryBadge(type, title) {
+  var badges = {
+    verified: { label: '✓ Verified', cls: 'verified', title: 'Matched or imported from Companies House.' },
+    review: { label: 'Review', cls: 'review', title: 'Officer review required.' },
+    issue: { label: 'Issue', cls: 'issue', title: 'Material registry problem.' }
+  };
+  var badge = badges[type];
+  if (!badge) return '';
+  return '<span class="ch-registry-badge ' + badge.cls + '" title="' + escapeHtml(title || badge.title) + '">' + badge.label + '</span>';
+}
+
+function isCompaniesHouseRegistryApp(app) {
+  var psData = registryPrescreeningData(app);
+  var provenance = psData.registry_provenance || {};
+  var profile = psData.registry_profile || {};
+  if (registryProviderIsCompaniesHouse(provenance.provider || provenance.source)) return true;
+  if (registryProviderIsCompaniesHouse(profile.provider || profile.source)) return true;
+  return false;
+}
+
+function partySourceIsCompaniesHouse(party) {
+  party = party || {};
+  return registryProviderIsCompaniesHouse(party.source || party.imported_source || party.provider || party.registry_provider);
+}
+
+function partyHasRegistryEvidence(party) {
+  party = party || {};
+  return partySourceIsCompaniesHouse(party) || !!party.psc_state;
+}
+
+function hasCompaniesHouseIndicators(app) {
+  app = app || {};
+  var psData = registryPrescreeningData(app);
+  if (isCompaniesHouseRegistryApp(app)) return true;
+  if ((app.directors || []).some(partyHasRegistryEvidence)) return true;
+  if ((app.ubos || []).some(partyHasRegistryEvidence)) return true;
+  if ((app.intermediaries || []).some(partyHasRegistryEvidence)) return true;
+  if (registryProviderIsCompaniesHouse((psData.psc_review || {}).source)) return true;
+  if (registryProviderIsCompaniesHouse((psData.corporate_ownership_review || {}).source)) return true;
+  return false;
+}
+
+function renderCompaniesHouseIndicatorLegend(app) {
+  if (!hasCompaniesHouseIndicators(app)) return '';
+  return '<div class="ch-indicator-legend" aria-label="Registry indicators">' +
+    '<span class="ch-indicator-legend-title">Registry indicators:</span>' +
+    renderCompaniesHouseRegistryBadge('verified', 'Matched or imported from Companies House.') +
+    '<span class="ch-indicator-legend-separator">·</span>' +
+    renderCompaniesHouseRegistryBadge('review', 'Client override or compliance review required.') +
+    '<span class="ch-indicator-legend-separator">·</span>' +
+    renderCompaniesHouseRegistryBadge('issue', 'Company status or registry mismatch issue.') +
+  '</div>';
+}
+
+function renderCompaniesHouseFieldBadges(app, field, currentRaw) {
+  if (!isCompaniesHouseRegistryApp(app)) return '';
+  var candidates = registryFieldCandidateKeys(field);
+  if (candidates.indexOf('registered_entity_name') >= 0 && registryCompanyStatusHasMaterialIssue(app)) {
+    return renderCompaniesHouseRegistryBadge('issue', 'Company status on Companies House requires officer review.');
+  }
+  if (registryFieldOverride(app, field)) {
+    return renderCompaniesHouseRegistryBadge('review', 'Client override of a Companies House sourced value.');
+  }
+  var registryValue = registrySourcedValueForField(app, field);
+  if (registryValue === undefined) return '';
+  if (registryComparableValue(currentRaw) && registryComparableValue(currentRaw) === registryComparableValue(registryValue)) {
+    return renderCompaniesHouseRegistryBadge('verified', 'Field matches or was imported from Companies House.');
+  }
+  return '';
+}
+
+function renderCompaniesHousePartyBadge(party, partyType) {
+  if (!partyHasRegistryEvidence(party)) return '';
+  var state = String((party && party.psc_state) || '').trim().toLowerCase();
+  if (partyType === 'director') {
+    var entityType = String((party && party.officer_entity_type) || '').trim().toLowerCase();
+    var role = String((party && party.officer_role) || '').trim().toLowerCase();
+    if (entityType === 'corporate' || registryTruthy(party && party.requires_corporate_structure_review)) {
+      var corporateTitle = role.indexOf('member') >= 0
+        ? 'Corporate LLP member — corporate structure review required.'
+        : 'Corporate director — corporate structure review required.';
+      return renderCompaniesHouseRegistryBadge('review', corporateTitle);
+    }
+    var importedIndividualRole = partySourceIsCompaniesHouse(party) &&
+      role.indexOf('secretary') < 0 &&
+      (role.indexOf('director') >= 0 || role.indexOf('member') >= 0 || role.indexOf('officer') >= 0);
+    if (entityType === 'individual' || registryTruthy(party && party.requires_individual_kyc) || importedIndividualRole) {
+      return renderCompaniesHouseRegistryBadge('verified', 'Director, officer, or member imported from Companies House.');
+    }
+    return renderCompaniesHouseRegistryBadge('review', 'Registry-imported officer with unknown entity type.');
+  }
+  if (partyType === 'ubo') {
+    if (state === 'corporate_psc') {
+      return renderCompaniesHouseRegistryBadge('review', 'Corporate PSC — ownership structure review required.');
+    }
+    if (state === 'psc_found' || registryTruthy(party && party.is_candidate_ubo)) {
+      return renderCompaniesHouseRegistryBadge('verified', 'PSC candidate imported from Companies House.');
+    }
+    return renderCompaniesHouseRegistryBadge('review', 'PSC candidate imported from Companies House for officer review.');
+  }
+  if (partyType === 'intermediary') {
+    if (state === 'corporate_psc' || partySourceIsCompaniesHouse(party)) {
+      return renderCompaniesHouseRegistryBadge('review', 'Corporate PSC or intermediary ownership structure review required.');
+    }
+  }
+  return '';
+}
+
+function renderCompaniesHousePscSectionBadge(app, sectionType) {
+  var psData = registryPrescreeningData(app);
+  var pscReview = psData.psc_review || {};
+  var corporateReview = psData.corporate_ownership_review || {};
+  var state = String(pscReview.psc_state || corporateReview.psc_state || '').trim().toLowerCase();
+  if (sectionType === 'ubo' && state === 'no_psc') {
+    return renderCompaniesHouseRegistryBadge('review', 'No active PSC returned — ownership confirmation required.');
+  }
+  if (sectionType === 'ubo' && state === 'psc_exempt') {
+    return renderCompaniesHouseRegistryBadge('review', 'PSC information exempt or unavailable — officer review required.');
+  }
+  if (sectionType === 'intermediary' && state === 'corporate_psc') {
+    return renderCompaniesHouseRegistryBadge('review', 'Corporate PSC — ownership structure review required.');
+  }
+  return '';
+}
+
 function formatNestedObject(obj) {
   // Flatten a nested object into a readable string for summary display
   var parts = [];
@@ -9610,7 +9856,16 @@ async function fetchApplicationDetail(ref) {
       pep_verification_source: d.pep_verification_source || 'not_verified',
       client_declared_pep_display: d.client_declared_pep_display || 'Not captured',
       officer_verified_pep_display: d.officer_verified_pep_display || 'Not verified yet',
-      pep_status_display: d.pep_status_display || 'Not verified yet'
+      pep_status_display: d.pep_status_display || 'Not verified yet',
+      source: d.source || '',
+      officer_role: d.officer_role || '',
+      officer_entity_type: d.officer_entity_type || '',
+      requires_individual_kyc: d.requires_individual_kyc,
+      requires_corporate_structure_review: d.requires_corporate_structure_review,
+      registry_lookup_id: d.registry_lookup_id || '',
+      response_hash: d.response_hash || '',
+      imported_at: d.imported_at || '',
+      imported_by: d.imported_by || ''
     };
   });
   var rawUbos = (detail.ubos && detail.ubos.length) ? detail.ubos : buildPrescreeningPartyFallback(psData.ubos || [], 'ubo');
@@ -9636,7 +9891,17 @@ async function fetchApplicationDetail(ref) {
       pep_verification_source: u.pep_verification_source || 'not_verified',
       client_declared_pep_display: u.client_declared_pep_display || 'Not captured',
       officer_verified_pep_display: u.officer_verified_pep_display || 'Not verified yet',
-      pep_status_display: u.pep_status_display || 'Not verified yet'
+      pep_status_display: u.pep_status_display || 'Not verified yet',
+      source: u.source || '',
+      psc_state: u.psc_state || '',
+      registry_statement_type: u.registry_statement_type || '',
+      psc_status_reason: u.psc_status_reason || '',
+      psc_kind: u.psc_kind || '',
+      is_candidate_ubo: u.is_candidate_ubo,
+      registry_lookup_id: u.registry_lookup_id || '',
+      response_hash: u.response_hash || '',
+      imported_at: u.imported_at || '',
+      imported_by: u.imported_by || ''
     };
   });
   var intermediaries = (detail.intermediaries || []).map(function(i) {
@@ -9645,11 +9910,24 @@ async function fetchApplicationDetail(ref) {
       person_key: i.person_key || '',
       name: i.entity_name || i.full_name || '',
       entity_name: i.entity_name || '',
-      jurisdiction: i.jurisdiction || '',
+      jurisdiction: i.jurisdiction || i.country_of_incorporation || '',
+      country_of_incorporation: i.country_of_incorporation || i.jurisdiction || '',
       registration_number: i.registration_number || '',
       registered_address: i.registered_address || '',
       owned_or_controlled_by: i.owned_or_controlled_by || '',
-      pct: i.ownership_pct == null || i.ownership_pct === '' ? '' : i.ownership_pct
+      pct: i.ownership_pct == null || i.ownership_pct === '' ? '' : i.ownership_pct,
+      source: i.source || '',
+      psc_state: i.psc_state || '',
+      registry_statement_type: i.registry_statement_type || '',
+      psc_status_reason: i.psc_status_reason || '',
+      psc_kind: i.psc_kind || '',
+      is_candidate_ubo: i.is_candidate_ubo,
+      officer_entity_type: i.officer_entity_type || '',
+      requires_corporate_structure_review: i.requires_corporate_structure_review,
+      registry_lookup_id: i.registry_lookup_id || '',
+      response_hash: i.response_hash || '',
+      imported_at: i.imported_at || '',
+      imported_by: i.imported_by || ''
     };
   });
   var riskState = buildRiskDisplayState(detail);
@@ -9895,7 +10173,11 @@ function renderPrescreenSummary(app, prescreenFields) {
       var isAllowed = !!(field.key && PRESCREEN_CORRECTION_ALLOWED_FIELDS[field.key]);
       var isLong = current.length > 60;
       var baseStyle = (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid ' + (isCorrected ? '#f59e0b' : 'var(--border1)') + ';';
-      var label = '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(field.label) + '</div>';
+      var registryBadges = renderCompaniesHouseFieldBadges(app, field, currentRaw);
+      var label = '<div style="display:flex;align-items:center;gap:6px;justify-content:space-between;flex-wrap:wrap;margin-bottom:2px;">' +
+        '<span style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">' + escapeHtml(field.label) + '</span>' +
+        registryBadges +
+      '</div>';
       if (mode && isAllowed) {
         return '<div style="' + baseStyle + '">' + label +
           renderPrescreenCorrectionControl(field, currentRaw) +
@@ -9914,7 +10196,7 @@ function renderPrescreenSummary(app, prescreenFields) {
       '</div>';
     }).join('') +
     '</div>';
-  container.innerHTML = header + body + footer;
+  container.innerHTML = header + renderCompaniesHouseIndicatorLegend(app) + body + footer;
 }
 
 function partyRecordId(party) {
@@ -10014,6 +10296,7 @@ function renderPartyCard(party, partyType, app) {
   var displayName = buildPartyDisplayName(party);
   var roleLabel = partyType === 'ubo' ? 'UBO' : partyType === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
   var correctionStatus = partyCorrectionStatus(app, party);
+  var registryBadge = renderCompaniesHousePartyBadge(party, partyType);
   var ownershipValue = partyType === 'director' ? 'N/A' : party.pct;
   var nationalityLabel = partyType === 'intermediary' ? 'Jurisdiction' : 'Nationality';
   var nationalityValue = partyType === 'intermediary' ? party.jurisdiction : party.nat;
@@ -10045,6 +10328,7 @@ function renderPartyCard(party, partyType, app) {
         '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(roleLabel) + '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+        registryBadge +
         '<span class="badge ' + (correctionStatus.label === 'Corrected' ? 'pending' : 'draft') + '" title="' + escapeHtml(correctionStatus.detail || correctionStatus.label) + '">' + escapeHtml(correctionStatus.label === 'Corrected' ? 'Corrected' : 'No correction') + '</span>' +
         '<button class="btn btn-outline btn-sm" onclick="openPartyCorrectionModal(\'' + escapeHtml(partyType) + '\',\'' + escapeHtml(partyRecordId(party)) + '\')">Correct party details</button>' +
         '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'screening\')">Review screening</button>' +
@@ -10058,15 +10342,19 @@ function renderPartySection(app) {
   var directors = (app && app.directors) || [];
   var ubos = (app && app.ubos) || [];
   var intermediaries = (app && app.intermediaries) || [];
-  function renderPartySubsection(title, items, partyType, emptyText) {
-    return '<div style="font-size:12px;font-weight:700;margin:12px 0 8px;">' + escapeHtml(title) + '</div>' +
+  function renderPartySubsection(title, items, partyType, emptyText, sectionBadge) {
+    sectionBadge = sectionBadge || '';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:700;margin:12px 0 8px;">' +
+        '<span>' + escapeHtml(title) + '</span>' +
+        sectionBadge +
+      '</div>' +
       (items.length ? items.map(function(item) {
         return renderPartyCard(item, partyType, app);
       }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' + escapeHtml(emptyText) + '</div>');
   }
   var html = renderPartySubsection('Directors', directors, 'director', 'No directors persisted.');
-  html += renderPartySubsection('Ultimate Beneficial Owners', ubos, 'ubo', 'No UBOs persisted.');
-  html += renderPartySubsection('Intermediary Shareholders', intermediaries, 'intermediary', 'No intermediary shareholders persisted.');
+  html += renderPartySubsection('Ultimate Beneficial Owners', ubos, 'ubo', 'No UBOs persisted.', renderCompaniesHousePscSectionBadge(app, 'ubo'));
+  html += renderPartySubsection('Intermediary Shareholders', intermediaries, 'intermediary', 'No intermediary shareholders persisted.', renderCompaniesHousePscSectionBadge(app, 'intermediary'));
   return '<div class="prescreen-collapsible-card party-review-accordion" id="party-review-accordion-card">' +
     '<details id="party-review-accordion" open>' +
       '<summary>' +
@@ -10418,12 +10706,12 @@ function renderAuthoritativeAppDetail(app, options) {
       )
     },
     // ── Address ──
-    { label: 'Registered Address', value: detailValueFromAliases(psData, ['registered_address', 'reg_address']) },
+    { key: 'registered_address', label: 'Registered Address', value: detailValueFromAliases(psData, ['registered_office_address', 'registered_address', 'reg_address']) },
     { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
     // ── Incorporation Details ──
-    { label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
+    { key: 'incorporation_date', label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
     { key: 'country_of_incorporation', label: 'Country of Incorporation', value: firstMeaningfulDetailValue(app.country, detailValueFromAliases(psData, ['country_of_incorporation', 'country'])), riskRelevant: true },
-    { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
+    { key: 'registration_number', label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'company_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
     { label: 'Authorised Share Capital', value: (function() {
         var v = detailValueFromAliases(psData, ['authorised_share_capital']);
