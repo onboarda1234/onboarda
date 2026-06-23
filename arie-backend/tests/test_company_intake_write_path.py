@@ -396,6 +396,79 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
     assert corporate["response_hash"] == "officer-hash"
 
 
+def test_confirm_officers_imports_llp_members_with_legal_role_and_review_flags(intake_api):
+    started = _start_intake(intake_api, company_number="OC381818")
+    session_id = started["session"]["id"]
+    officers = [
+        {
+            "provider": "companies_house",
+            "jurisdiction": "GB",
+            "name": "MARGOLIS, Stephen Howard",
+            "officer_role": "llp-designated-member",
+            "officer_entity_type": "individual",
+            "candidate_type": "llp_member_candidate",
+            "is_candidate_director": False,
+            "is_candidate_llp_member": True,
+            "requires_individual_kyc": True,
+            "requires_corporate_structure_review": False,
+            "status": "active",
+            "source_metadata": {"endpoint": "/company/OC381818/officers", "response_hash": "llp-officer-hash"},
+        },
+        {
+            "provider": "companies_house",
+            "jurisdiction": "GB",
+            "name": "TAURUS (DM) LIMITED",
+            "officer_role": "corporate-llp-designated-member",
+            "officer_entity_type": "corporate",
+            "candidate_type": "corporate_structure_review",
+            "is_candidate_director": False,
+            "is_candidate_llp_member": True,
+            "requires_individual_kyc": False,
+            "requires_corporate_structure_review": True,
+            "status": "active",
+            "source_metadata": {"endpoint": "/company/OC381818/officers", "response_hash": "llp-officer-hash"},
+        },
+        {
+            "provider": "companies_house",
+            "jurisdiction": "GB",
+            "name": "Resigned LLP Member",
+            "officer_role": "llp-designated-member",
+            "candidate_type": "llp_member_candidate",
+            "resigned_on": "2020-01-01",
+        },
+        {
+            "provider": "companies_house",
+            "jurisdiction": "GB",
+            "name": "Secretary",
+            "officer_role": "secretary",
+        },
+    ]
+
+    resp = requests.post(
+        f"{intake_api['base_url']}/api/company-intake/confirm-officers",
+        headers=_headers(intake_api["client1"]),
+        json={"session_id": session_id, "officers": officers},
+        timeout=5,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported_count"] == 2
+    assert body["skipped_count"] == 2
+    directors = _db_rows("SELECT * FROM directors WHERE application_id = ? ORDER BY full_name", (started["application"]["id"],))
+    assert [row["full_name"] for row in directors] == ["MARGOLIS, Stephen Howard", "TAURUS (DM) LIMITED"]
+    individual = directors[0]
+    corporate = directors[1]
+    assert individual["officer_role"] == "llp-designated-member"
+    assert individual["officer_entity_type"] == "individual"
+    assert bool(individual["requires_individual_kyc"]) is True
+    assert corporate["officer_role"] == "corporate-llp-designated-member"
+    assert corporate["officer_entity_type"] == "corporate"
+    assert bool(corporate["requires_individual_kyc"]) is False
+    assert bool(corporate["requires_corporate_structure_review"]) is True
+    assert corporate["response_hash"] == "llp-officer-hash"
+
+
 def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
     started = _start_intake(intake_api)
     session_id = started["session"]["id"]

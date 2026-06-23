@@ -58,7 +58,7 @@ def test_company_intake_assistant_appears_before_long_application_form():
     assert "I can’t find my company / enter manually" in lookup_view
     assert "Step 1 of 5 - Find your company" in lookup_view
     assert "Confirm profile" in lookup_view
-    assert "Confirm directors" in lookup_view
+    assert "Confirm directors / officers / members" in lookup_view
     assert "Confirm ownership" in lookup_view
     assert "Complete application" in lookup_view
 
@@ -144,6 +144,12 @@ def test_profile_confirmation_requires_override_reason_and_prefills_application_
 
 def test_officer_confirmation_displays_corporate_director_review_not_individual_kyc():
     html = _portal_html()
+    lookup_view = _extract_div_by_id(html, "view-company-lookup")
+    assert "Confirm active directors, officers, or LLP member candidates imported from Companies House." in lookup_view
+    assert "Loading officer candidates..." in lookup_view
+    assert "Companies House did not return active director, officer, or member candidates for this company." in html
+    assert "Companies House did not return active director candidates for this company." not in html
+
     render_body = _extract_js_function(html, "renderCompanyIntakeOfficers")
     assert "officer_entity_type" in render_body
     assert "requires_individual_kyc" in render_body
@@ -151,7 +157,7 @@ def test_officer_confirmation_displays_corporate_director_review_not_individual_
     assert "Individual KYC required: " in render_body
     assert "Corporate structure review required: " in render_body
     assert "Corporate structure review applies" in render_body
-    assert "not treated as an ordinary individual KYC candidate" in render_body
+    assert "This officer or member is not treated as an ordinary individual KYC candidate" in render_body
 
     confirm_body = _extract_js_function(html, "confirmCompanyIntakeOfficers")
     assert "apiCall('POST', '/company-intake/confirm-officers'" in confirm_body
@@ -229,7 +235,8 @@ def test_assisted_handoff_renders_read_only_imported_party_summaries_above_long_
     assert "Source: Companies House" in summary_head_body
 
     directors_summary_body = _extract_js_function(html, "renderCompanyIntakeImportedDirectorsSummary")
-    assert "Imported directors from Companies House" in directors_summary_body
+    assert "Imported directors / officers / members from Companies House" in directors_summary_body
+    assert "director, officer, or member candidates" in directors_summary_body
     assert "Missing fields requiring client completion" in directors_summary_body
     assert "Individual KYC required" in directors_summary_body
     assert "Corporate structure review required" in directors_summary_body

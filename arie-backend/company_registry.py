@@ -197,43 +197,70 @@ def _normalize_date_of_birth(raw: dict[str, Any] | None) -> dict[str, Any] | Non
     return dob or None
 
 
-def _is_active_director_type(officer: dict[str, Any]) -> bool:
-    role = str(officer.get("officer_role") or "").strip().lower()
+def _normalized_officer_role(officer_role: Any) -> str:
+    return str(officer_role or "").strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def _is_director_role(officer_role: Any) -> bool:
+    role = _normalized_officer_role(officer_role)
+    return bool(role) and "director" in role and "secretary" not in role
+
+
+def _is_llp_member_role(officer_role: Any) -> bool:
+    role = _normalized_officer_role(officer_role)
+    return bool(role) and "llp" in role and "member" in role and "secretary" not in role
+
+
+def _is_active_officer_candidate_type(officer: dict[str, Any]) -> bool:
+    role = _normalized_officer_role(officer.get("officer_role"))
     if not role:
         return False
     if officer.get("resigned_on"):
         return False
     if "secretary" in role:
         return False
-    return "director" in role
+    return _is_director_role(role) or _is_llp_member_role(role)
 
 
 def _officer_entity_type(officer_role: Any) -> str:
-    role = str(officer_role or "").strip().lower()
-    normalized_role = role.replace("_", "-")
-    if "corporate-director" in normalized_role or "corporate director" in role:
+    role = _normalized_officer_role(officer_role)
+    if "corporate" in role:
         return "corporate"
-    if "director" in role:
+    if _is_director_role(role) or _is_llp_member_role(role):
         return "individual"
     return "unknown"
 
 
+def _officer_candidate_type(officer_role: Any, officer_entity_type: str) -> str:
+    if officer_entity_type == "corporate":
+        return "corporate_structure_review"
+    if _is_llp_member_role(officer_role):
+        return "llp_member_candidate"
+    if _is_director_role(officer_role):
+        return "director_candidate"
+    return "officer_candidate"
+
+
 def _normalize_companies_house_officer(raw: dict[str, Any], source_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    officer_entity_type = _officer_entity_type(raw.get("officer_role"))
+    officer_role = raw.get("officer_role")
+    officer_entity_type = _officer_entity_type(officer_role)
+    is_director = _is_director_role(officer_role)
+    is_llp_member = _is_llp_member_role(officer_role)
     return {
         "provider": COMPANIES_HOUSE_PROVIDER,
         "jurisdiction": "GB",
         "name": _clean_text(raw.get("name")),
-        "officer_role": _clean_text(raw.get("officer_role")),
+        "officer_role": _clean_text(officer_role),
         "officer_entity_type": officer_entity_type,
         "appointed_on": _clean_text(raw.get("appointed_on")),
-        "resigned_on": None,
+        "resigned_on": _clean_text(raw.get("resigned_on")),
         "nationality": _clean_text(raw.get("nationality")),
         "occupation": _clean_text(raw.get("occupation")),
         "date_of_birth": _normalize_date_of_birth(raw.get("date_of_birth")),
-        "candidate_type": "director",
-        "is_candidate_director": True,
-        "requires_individual_kyc": officer_entity_type == "individual",
+        "candidate_type": _officer_candidate_type(officer_role, officer_entity_type),
+        "is_candidate_director": is_director,
+        "is_candidate_llp_member": is_llp_member,
+        "requires_individual_kyc": officer_entity_type == "individual" and (is_director or is_llp_member),
         "requires_corporate_structure_review": officer_entity_type == "corporate",
         "status": "active",
         "source_metadata": source_metadata or {},
@@ -245,7 +272,7 @@ def _normalize_officers(raw: dict[str, Any], endpoint: str | None = None) -> lis
     source_metadata = _metadata(raw, endpoint)
     officers = []
     for item in items:
-        if isinstance(item, dict) and _is_active_director_type(item):
+        if isinstance(item, dict) and _is_active_officer_candidate_type(item):
             officers.append(_normalize_companies_house_officer(item, source_metadata))
     return officers
 
