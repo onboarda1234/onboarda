@@ -419,7 +419,8 @@ def test_draft_company_document_output_is_marked_draft_and_sanitized():
     assert "Application reference:" in draft_region
     assert "Draft documents are generated from the information entered in this application." in draft_region
     assert "KYC &amp; Documents" in draft_region
-    assert "Draft only. Individual beneficial-owner rows are included where ownership or shareholding data has been captured" in draft_region
+    assert "Draft only. UBO data may not equal legal member/shareholder data." in draft_region
+    assert "Review shareholder and member status before using this draft as a legal register." in draft_region
 
     for forbidden in (
         "raw_response_json",
@@ -433,6 +434,30 @@ def test_draft_company_document_output_is_marked_draft_and_sanitized():
         "approved register",
     ):
         assert forbidden not in draft_region
+
+
+def test_draft_company_document_dynamic_values_are_escaped_before_html_output():
+    html = _portal_html()
+    esc_body = _extract_js_function(html, "draftCompanyDocumentEsc")
+    assert "escapeHtml(draftCompanyDocumentValue(value))" in esc_body
+
+    table_body = _extract_js_function(html, "draftCompanyDocumentTable")
+    assert "draftCompanyDocumentEsc(header)" in table_body
+    assert "draftCompanyDocumentEsc(cell)" in table_body
+    assert "'<td>' + cell" not in table_body
+    assert "'<th>' + header" not in table_body
+
+    shell_body = _extract_js_function(html, "buildDraftCompanyDocumentHtml")
+    assert "draftCompanyDocumentEsc(titleMap[type] || titleMap.all)" in shell_body
+    assert "draftCompanyDocumentEsc(data.appRef)" in shell_body
+    assert "draftCompanyDocumentEsc(generatedAt)" in shell_body
+    assert "draftCompanyDocumentTable(['Company field', 'Value']" in shell_body
+
+    structure_body = _extract_js_function(html, "buildDraftOwnershipStructureSection")
+    assert "draftCompanyDocumentEsc(companyName + companyNumber)" in structure_body
+    assert "draftCompanyDocumentEsc(member.owned_or_controlled_by)" in structure_body
+    assert "draftCompanyDocumentEsc(member.entity_name + pct)" in structure_body
+    assert "draftCompanyDocumentEsc(draftCompanyDocumentFullName(owner) + pct)" in structure_body
 
 
 def test_draft_company_documents_do_not_add_backoffice_or_registry_badge_surface():
