@@ -1122,6 +1122,22 @@
   .company-intake-edits.active { display:block; }
   .company-intake-counts { display:none; margin-top:12px; font-size:13px; color:var(--text2); }
   .company-intake-counts.active { display:block; }
+  .company-intake-import-summary {
+    display:none; margin:0 0 14px 0; border:1px solid rgba(43,47,143,0.18);
+    border-left:4px solid var(--brand); border-radius:var(--radius-sm); background:rgba(43,47,143,0.04); padding:14px;
+  }
+  .company-intake-import-summary.active { display:block; }
+  .company-intake-import-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px; }
+  .company-intake-import-title { font-size:13px; font-weight:800; color:var(--text); line-height:1.4; }
+  .company-intake-import-source { font-size:11px; font-weight:800; color:var(--brand); white-space:nowrap; }
+  .company-intake-import-note { font-size:12px; color:var(--text2); line-height:1.55; margin-bottom:10px; }
+  .company-intake-import-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+  .company-intake-import-card { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:11px 12px; }
+  .company-intake-import-card-title { font-size:13px; font-weight:800; margin-bottom:5px; color:var(--text); }
+  .company-intake-import-meta { display:flex; flex-wrap:wrap; gap:6px; font-size:11px; color:var(--text2); line-height:1.5; }
+  .company-intake-import-missing { margin-top:8px; font-size:11px; color:var(--text3); line-height:1.5; }
+  .company-intake-import-missing strong { color:var(--text2); }
+  @media(max-width:720px) { .company-intake-import-list { grid-template-columns:1fr; } .company-intake-import-head { display:block; } .company-intake-import-source { margin-top:4px; display:block; } }
 
   /* ── AI Search animation ── */
   .ai-search-overlay {
@@ -2644,6 +2660,7 @@
           <!-- 5. Directors -->
           <div class="section-title">Directors</div>
           <p style="font-size:12px;color:var(--text3);margin:-8px 0 12px 0;">PEP = Politically Exposed Person (includes family members and close associates)</p>
+          <div id="company-intake-imported-directors" class="company-intake-import-summary" aria-live="polite"></div>
           <div id="directors-container">
             <table class="dyn-table" id="directors-table">
               <thead>
@@ -2679,6 +2696,7 @@
 
           <!-- 6. UBOs -->
           <div class="section-title">Ultimate Beneficial Owners (≥ 20% ownership)</div>
+          <div id="company-intake-imported-pscs" class="company-intake-import-summary" aria-live="polite"></div>
           <div id="ubos-container">
             <table class="dyn-table" id="ubos-table">
               <thead>
@@ -10790,7 +10808,9 @@ function companyIntakeDefaultState() {
     selectedCompany: null,
     company: null,
     officers: [],
+    imported_officers: null,
     pscs: null,
+    imported_pscs: null,
     profileOverrides: {},
     session_id: '',
     application_id: '',
@@ -10975,9 +10995,12 @@ function resetCompanyIntakeWizard(options) {
   if (empty) empty.style.display = 'none';
   var source = document.getElementById('company-intake-profile-source');
   if (source) source.innerHTML = '';
-  ['company-intake-profile-summary', 'company-intake-officers-list', 'company-intake-pscs-summary'].forEach(function(id) {
+  ['company-intake-profile-summary', 'company-intake-officers-list', 'company-intake-pscs-summary', 'company-intake-imported-directors', 'company-intake-imported-pscs'].forEach(function(id) {
     var el = document.getElementById(id);
-    if (el) el.innerHTML = '';
+    if (el) {
+      el.innerHTML = '';
+      el.classList.remove('active');
+    }
   });
   ['company-intake-officers-counts', 'company-intake-pscs-counts'].forEach(function(id) {
     var el = document.getElementById(id);
@@ -11145,6 +11168,163 @@ function companyIntakeShouldPreserveImportedDirectors() {
 
 function companyIntakeShouldPreserveImportedUBOs() {
   return companyIntakeIsCurrentDraft() && companyIntakeState.pscs_confirmed === true;
+}
+
+function companyIntakeDateOfBirthLabel(dob) {
+  if (!dob) return 'Not available';
+  if (typeof dob === 'string') return dob || 'Not available';
+  if (typeof dob !== 'object') return 'Not available';
+  var day = dob.day || dob.date || '';
+  var month = dob.month || '';
+  var year = dob.year || '';
+  if (day && month && year) return String(year) + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+  if (month && year) return 'Month/year available: ' + String(month).padStart(2, '0') + '/' + String(year);
+  if (year) return 'Year available: ' + String(year);
+  return 'Not available';
+}
+
+function companyIntakeHasFullDob(dob) {
+  if (!dob) return false;
+  if (typeof dob === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(dob);
+  if (typeof dob === 'object') return !!(dob.day || dob.date) && !!dob.month && !!dob.year;
+  return false;
+}
+
+function companyIntakeNatureOfControlLabel(values) {
+  if (!Array.isArray(values) || !values.length) return 'Not available';
+  return values.map(function(value) {
+    return String(value || '').replace(/-/g, ' ');
+  }).join(', ');
+}
+
+function companyIntakeImportedOfficersForSummary() {
+  if (!companyIntakeShouldPreserveImportedDirectors()) return [];
+  if (Array.isArray(companyIntakeState.imported_officers)) return companyIntakeState.imported_officers;
+  if (Array.isArray(companyIntakeState.officers)) return companyIntakeState.officers;
+  return [];
+}
+
+function companyIntakePscResultForSummary() {
+  if (!companyIntakeShouldPreserveImportedUBOs()) return null;
+  return companyIntakeState.imported_pscs || companyIntakeState.pscs || {
+    psc_state: 'review',
+    psc_status_reason: 'Ownership candidates or review metadata were imported during assisted intake and saved to the draft.',
+    beneficial_owners: []
+  };
+}
+
+function companyIntakeOfficerMissingFields(officer) {
+  var entityType = officer && officer.officer_entity_type ? officer.officer_entity_type : 'unknown';
+  var missing = [];
+  if (!companyIntakeHasFullDob(officer && officer.date_of_birth)) missing.push('Full date of birth');
+  if (!(officer && officer.nationality)) missing.push('Nationality');
+  missing.push('PEP declaration');
+  if (entityType === 'corporate' || (officer && officer.requires_corporate_structure_review === true)) {
+    missing.push('Corporate structure review details');
+  } else if (officer && officer.requires_individual_kyc === true) {
+    missing.push('Individual KYC details');
+  }
+  return missing;
+}
+
+function companyIntakePscMissingFields(owner) {
+  var kind = String((owner && owner.kind) || '').toLowerCase();
+  var missing = ['PEP declaration'];
+  if (!companyIntakeHasFullDob(owner && owner.date_of_birth) && kind.indexOf('corporate') === -1) missing.unshift('Full date of birth');
+  if (!(owner && (owner.ownership_pct || owner.ownership_percentage))) missing.push('Exact ownership percentage');
+  if (kind.indexOf('corporate') >= 0 || kind.indexOf('legal-person') >= 0 || kind.indexOf('corporate-entity') >= 0) {
+    missing.push('Corporate ownership structure review');
+  }
+  return missing;
+}
+
+function companyIntakeImportedSummaryHead(title) {
+  return '<div class="company-intake-import-head">' +
+    '<div class="company-intake-import-title">' + escapeHtml(title) + '</div>' +
+    '<div class="company-intake-import-source">Source: Companies House</div>' +
+  '</div>';
+}
+
+function renderCompanyIntakeImportedDirectorsSummary() {
+  var el = document.getElementById('company-intake-imported-directors');
+  if (!el) return;
+  var officers = companyIntakeImportedOfficersForSummary();
+  if (!companyIntakeShouldPreserveImportedDirectors()) {
+    el.innerHTML = '';
+    el.classList.remove('active');
+    return;
+  }
+  var html = companyIntakeImportedSummaryHead('Imported directors from Companies House') +
+    '<div class="company-intake-import-note">These director candidates were saved to the draft from Companies House. The editable director table below is for any additional manual directors or client-supplied corrections.</div>';
+  if (!officers.length) {
+    var noOfficerMessage = Array.isArray(companyIntakeState.imported_officers)
+      ? 'No director candidates were selected for import during assisted intake.'
+      : 'Director candidates were imported during assisted intake and saved to the draft. Reopen the assistant review steps if you need to inspect the original candidate details.';
+    html += '<div class="company-intake-import-note">' + escapeHtml(noOfficerMessage) + '</div>';
+  } else {
+    html += '<div class="company-intake-import-list">' + officers.map(function(officer) {
+      var entityType = officer.officer_entity_type || 'unknown';
+      var meta = [
+        'Role: ' + companyIntakeValue(officer.officer_role),
+        'Officer entity type: ' + entityType,
+        'Appointed: ' + companyIntakeValue(officer.appointed_on),
+        'Date of birth: ' + companyIntakeDateOfBirthLabel(officer.date_of_birth),
+        'Individual KYC required: ' + (officer.requires_individual_kyc === true ? 'Yes' : 'No'),
+        'Corporate structure review required: ' + (officer.requires_corporate_structure_review === true ? 'Yes' : 'No')
+      ];
+      return '<div class="company-intake-import-card">' +
+        '<div class="company-intake-import-card-title">' + escapeHtml(companyIntakeValue(officer.name, 'Unnamed director candidate')) + '</div>' +
+        '<div class="company-intake-import-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</div>' +
+        '<div class="company-intake-import-missing"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(companyIntakeOfficerMissingFields(officer).join(', ')) + '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+  }
+  el.innerHTML = html;
+  el.classList.add('active');
+}
+
+function renderCompanyIntakeImportedPscSummary() {
+  var el = document.getElementById('company-intake-imported-pscs');
+  if (!el) return;
+  var pscs = companyIntakePscResultForSummary();
+  if (!pscs) {
+    el.innerHTML = '';
+    el.classList.remove('active');
+    return;
+  }
+  var state = pscs.psc_state || 'review';
+  var reason = pscs.psc_status_reason || pscs.registry_statement_type || '';
+  var owners = Array.isArray(pscs.beneficial_owners) ? pscs.beneficial_owners : [];
+  var html = companyIntakeImportedSummaryHead('Imported PSC / beneficial-owner candidates') +
+    '<div class="company-intake-import-note">These records are candidate beneficial owners for compliance review, not final approved UBOs. The editable UBO table below is for any additional manual owners or client-supplied corrections.</div>' +
+    '<div class="company-intake-import-note"><strong>Registry state:</strong> ' + escapeHtml(state) + (reason ? ' - ' + escapeHtml(reason) : '') + '</div>';
+  if (!owners.length) {
+    var missing = state === 'no_psc' || state === 'psc_exempt'
+      ? 'Ownership confirmation, exact ownership percentage where applicable, PEP declaration where individual owners are later identified'
+      : 'Ownership confirmation, exact ownership percentage where unavailable, PEP declaration';
+    html += '<div class="company-intake-import-note"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(missing) + '</div>';
+  } else {
+    html += '<div class="company-intake-import-list">' + owners.map(function(owner) {
+      var meta = [
+        'Kind: ' + companyIntakeValue(owner.kind),
+        'Nature of control: ' + companyIntakeNatureOfControlLabel(owner.natures_of_control),
+        'Notified: ' + companyIntakeValue(owner.notified_on),
+        'Date of birth: ' + companyIntakeDateOfBirthLabel(owner.date_of_birth)
+      ];
+      return '<div class="company-intake-import-card">' +
+        '<div class="company-intake-import-card-title">' + escapeHtml(companyIntakeValue(owner.name, 'Unnamed PSC candidate')) + '</div>' +
+        '<div class="company-intake-import-meta">' + meta.map(function(item) { return '<span>' + escapeHtml(item) + '</span>'; }).join('') + '</div>' +
+        '<div class="company-intake-import-missing"><strong>Missing fields requiring client completion:</strong> ' + escapeHtml(companyIntakePscMissingFields(owner).join(', ')) + '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+  }
+  el.innerHTML = html;
+  el.classList.add('active');
+}
+
+function renderCompanyIntakeImportedPartySummaries() {
+  renderCompanyIntakeImportedDirectorsSummary();
+  renderCompanyIntakeImportedPscSummary();
 }
 
 function renderCompanyIntakeProfile() {
@@ -11323,6 +11503,7 @@ async function confirmCompanyIntakeOfficers() {
       session_id: companyIntakeState.session_id,
       officers: selected
     }));
+    companyIntakeState.imported_officers = selected;
     companyIntakeState.officers_confirmed = true;
     var counts = document.getElementById('company-intake-officers-counts');
     if (counts) {
@@ -11428,6 +11609,7 @@ async function confirmCompanyIntakePSCs() {
       session_id: companyIntakeState.session_id,
       pscs: pscResult
     }));
+    companyIntakeState.imported_pscs = pscResult;
     companyIntakeState.pscs_confirmed = true;
     var counts = document.getElementById('company-intake-pscs-counts');
     if (counts) {
@@ -11483,6 +11665,7 @@ function applyCompanyIntakePrefillToForm() {
   }
   var notice = document.getElementById('prefill-notice');
   if (notice) notice.classList.remove('hidden');
+  renderCompanyIntakeImportedPartySummaries();
   syncConditionalFormState();
   syncJurisdictionRationaleState();
   updateProgress();
