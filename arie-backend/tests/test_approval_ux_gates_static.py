@@ -74,29 +74,71 @@ def test_co_blocked_on_submitted_to_compliance():
     assert "Submitted to Compliance — SCO review required." in fn
 
 
-def test_sync_hides_approve_and_gates_reject_override():
+def test_sync_keeps_terminal_actions_visible_but_disabled():
     html = _html()
     sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
-    # Approve is hidden when the backend would reject it.
-    assert "approveBackendBlockReason(app)" in sync
-    assert "setDetailActionVisibility('btn-approve', !approveBlock)" in sync
-    # Reject / Override gate strictly when the matrix is loaded, but fail OPEN when it
-    # is not (a matrix-load failure must never hide a senior officer's controls).
-    assert "setDetailActionVisibility('btn-reject', !rolePermissionsLoaded() || hasPermission('reject_applications'))" in sync
+    assert "buildApplicationActionState(app)" in sync
+    assert "setDetailActionState('btn-submit-compliance', actionState.submitToCompliance)" in sync
+    assert "setDetailActionState('btn-approve', actionState.approve)" in sync
+    assert "setDetailActionState('btn-reject', actionState.reject)" in sync
+    # Override remains a permissions-only visibility gate.
     assert "setDetailActionVisibility('btn-override', !rolePermissionsLoaded() || hasPermission('override_ai_risk_score'))" in sync
-    # Submit-to-Compliance offered, including from pre_approval_review and edd_required (mirrors backend).
-    assert "btn-submit-compliance" in sync
-    assert "'pre_approval_review'" in sync
-    assert "'edd_required'" in sync
-    # Role + raw status are normalized for the submit-visibility check (robustness).
-    assert "String(currentUserRole() || '').toLowerCase()" in sync
-    assert "indexOf(submitRole) >= 0" in sync
+    assert "disabled with clear reason text" in sync
+
+
+def test_action_state_covers_clean_low_medium_optional_submission():
+    html = _html()
+    fn = html.split("function buildApplicationActionState(", 1)[1].split("\nfunction ", 1)[0]
+    assert "approvalRouteName(app) === 'direct_low_medium'" in fn
+    assert "readiness.ready" in fn
+    assert "submitLabel = '📨 Submit to Compliance (Optional)'" in fn
+    assert "Optional discretionary escalation to Compliance." in fn
+    assert "approveBlock" in fn
+    assert "!readiness.ready" in fn
+
+
+def test_action_state_disables_terminal_and_submitted_states():
+    html = _html()
+    assert "Already approved — no further terminal action available." in html
+    assert "Already rejected — no further terminal action available." in html
+    assert "Already submitted to Compliance — awaiting compliance review." in html
+    fn = html.split("function buildApplicationActionState(", 1)[1].split("\nfunction ", 1)[0]
+    assert "if (terminalMessage)" in fn
+    assert "statusRaw === 'submitted_to_compliance'" in fn
+    assert "approveDisabled = true" in fn
+    assert "rejectDisabled = true" in fn
+    assert "submitDisabled = true" in fn
+    assert "visible: true" in fn
+
+
+def test_high_edd_and_material_concern_route_to_compliance_ui():
+    html = _html()
+    reason_fn = html.split("function complianceReviewReason(", 1)[1].split("\nfunction ", 1)[0]
+    assert "material_screening_concern" in reason_fn
+    assert "Material concern requires Compliance review." in reason_fn
+    assert "edd_required" in reason_fn
+    assert "Compliance review required before approval." in reason_fn
+    assert "high_or_very_high_risk" in reason_fn
+    assert "routeRequiresCompliance(app)" in reason_fn
+    sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
+    assert "standardCard.style.display = isPreApproval && canSubmitPreApproval ? 'none' : 'flex'" in sync
+
+
+def test_submit_to_compliance_states_mirror_backend_active_lanes():
+    html = _html()
+    fn = html.split("function buildApplicationActionState(", 1)[1].split("\nfunction ", 1)[0]
+    submit_states = re.search(r"var submitEligibleStates = \[(.*?)\];", fn).group(1)
+    assert "'pricing_review'" not in submit_states
+    assert "'pre_approval_review'" in submit_states
+    assert "'compliance_review'" in submit_states
+    assert "'edd_required'" in submit_states
+    assert "['admin', 'sco', 'co'].indexOf(role) >= 0" in fn
 
 
 def test_pricing_review_move_cta_does_not_broaden_submit_to_compliance():
     html = _html()
-    sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
-    submit_states = re.search(r"var submitEligibleStates = \[(.*?)\];", sync).group(1)
+    state_fn = html.split("function buildApplicationActionState(", 1)[1].split("\nfunction ", 1)[0]
+    submit_states = re.search(r"var submitEligibleStates = \[(.*?)\];", state_fn).group(1)
     assert "'pricing_review'" not in submit_states
     assert "'pre_approval_review'" in submit_states
     assert "'compliance_review'" in submit_states and "'edd_required'" in submit_states
@@ -113,8 +155,8 @@ def test_blocker_hint_element_and_messaging():
     html = _html()
     assert 'id="approval-authority-hint"' in html
     sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
-    # Short explanation that points the officer to the forward action.
-    assert "Use Submit to Compliance." in sync
+    assert "actionState.helper" in sync
+    assert "hintEl.textContent = actionState.helper" in sync
 
 
 def test_memo_approve_is_senior_only_in_ui():
@@ -130,17 +172,40 @@ def test_memo_approve_is_senior_only_in_ui():
 def test_approve_click_handler_has_defensive_guard():
     html = _html()
     handler = html.split("function approveApplication(", 1)[1].split("\nfunction ", 1)[0]
-    assert "approveBackendBlockReason(currentApp)" in handler
-    assert "Use Submit to Compliance." in handler
+    assert "buildApplicationActionState(currentApp)" in handler
+    assert "actionState.approve.disabled" in handler
+    assert "disabledActionReason(actionState.approve" in handler
+
+
+def test_reject_submit_and_confirm_handlers_respect_disabled_action_state():
+    html = _html()
+    reject_handler = html.split("function rejectApplication(", 1)[1].split("\nfunction ", 1)[0]
+    submit_handler = html.split("async function submitToCompliance(", 1)[1].split("\nfunction ", 1)[0]
+    confirm_handler = html.split("async function confirmDecision(", 1)[1].split("\nfunction ", 1)[0]
+    assert "actionState.reject.disabled" in reject_handler
+    assert "disabledActionReason(actionState.reject" in reject_handler
+    assert "actionState.submitToCompliance.disabled" in submit_handler
+    assert "disabledActionReason(actionState.submitToCompliance" in submit_handler
+    assert "String(currentUserRole() || '').toLowerCase()" in submit_handler
+    assert "decisionActionState.disabled" in confirm_handler
+    assert "renderDecisionReadiness(pendingDecision)" in confirm_handler
+
+
+def test_readiness_panel_does_not_reenable_approve():
+    html = _html()
+    panel_fn = html.split("function renderApprovalBlockersPanel(", 1)[1].split("\nfunction ", 1)[0]
+    assert "approveBtn.disabled = false" not in panel_fn
+    assert "syncApplicationActionPermissions(app)" in panel_fn
 
 
 def test_no_backend_or_status_scope_creep_in_this_change():
-    # PR3 is UI-only. The new authority-mirror logic must live in the back office,
+    # PR2 is UI-only. The new authority-mirror logic must live in the back office,
     # and must not redefine backend permission roles client-side (it reads
     # ROLE_PERMISSIONS via hasPermission).
     html = _html()
+    state_fn = html.split("function buildApplicationActionState(", 1)[1].split("\nfunction ", 1)[0]
     sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
-    assert "hasPermission('reject_applications')" in sync
+    assert "hasPermission('reject_applications')" in state_fn
     assert "hasPermission('override_ai_risk_score')" in sync
 
 

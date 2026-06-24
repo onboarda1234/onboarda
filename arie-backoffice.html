@@ -5976,7 +5976,7 @@ function canExportEvidencePack() {
 
 // PR-APPROVAL-UX-GATES-1: client-side authority mirrors (NOT a security boundary —
 // the backend can_decide gate + approval gate stack are the source of truth after
-// PR1/PR2). These exist only to hide misleading buttons and prevent failed clicks.
+// PR1/PR2). These exist only to disable misleading buttons and explain failed clicks.
 function canApproveMemo() {
   // Backend MemoApproveHandler is admin/SCO only.
   var role = String(currentUserRole() || '').toLowerCase();
@@ -6040,6 +6040,144 @@ function setDetailActionVisibility(id, visible) {
   el.style.display = visible ? '' : 'none';
 }
 
+function normalizeApplicationStatusRaw(app) {
+  app = app || currentApp || {};
+  return String(app.statusRaw || app.status_raw || app.status || '').trim().toLowerCase();
+}
+
+function terminalActionStateMessage(statusRaw) {
+  if (statusRaw === 'approved') return 'Already approved — no further terminal action available.';
+  if (statusRaw === 'rejected') return 'Already rejected — no further terminal action available.';
+  return '';
+}
+
+function routeRequiresCompliance(app) {
+  var routeName = approvalRouteName(app);
+  return routeName === 'compliance_required' || routeName === 'dual_control_required';
+}
+
+function complianceReviewReason(app) {
+  app = app || currentApp || {};
+  var statusRaw = normalizeApplicationStatusRaw(app);
+  var route = approvalRoutePolicy(app);
+  var reasons = Array.isArray(route.escalation_reasons) ? route.escalation_reasons : [];
+  if (statusRaw === 'submitted_to_compliance') return 'Already submitted to Compliance — awaiting compliance review.';
+  if (statusRaw === 'edd_required' || reasons.indexOf('edd_required') >= 0 || reasons.indexOf('edd_trigger') >= 0) {
+    return 'Compliance review required before approval.';
+  }
+  if (reasons.indexOf('material_screening_concern') >= 0) {
+    return 'Material concern requires Compliance review.';
+  }
+  if (reasons.indexOf('pep') >= 0) return 'PEP requires Compliance review.';
+  if (reasons.indexOf('adverse_media') >= 0) return 'Adverse media requires Compliance review.';
+  if (reasons.indexOf('high_or_very_high_risk') >= 0) return 'Compliance review required before approval.';
+  if (routeRequiresCompliance(app)) return 'Compliance review required before approval.';
+  return 'Submit to Compliance for discretionary senior review.';
+}
+
+function setDetailActionState(id, state) {
+  var el = document.getElementById(id);
+  if (!el || !state) return;
+  el.style.display = state.visible === false ? 'none' : '';
+  el.disabled = !!state.disabled;
+  el.title = state.reason || state.title || '';
+  el.setAttribute('aria-disabled', state.disabled ? 'true' : 'false');
+  el.setAttribute('data-action-state', state.disabled ? 'disabled' : 'enabled');
+  if (state.reason) el.setAttribute('data-disabled-reason', state.reason);
+  else el.removeAttribute('data-disabled-reason');
+  if (state.text) el.textContent = state.text;
+}
+
+function buildApplicationActionState(app) {
+  app = app || currentApp || {};
+  var role = String(currentUserRole() || '').toLowerCase();
+  var statusRaw = normalizeApplicationStatusRaw(app);
+  var terminalMessage = terminalActionStateMessage(statusRaw);
+  var readiness = getApprovalReadiness(app);
+  var approveBlock = approveBackendBlockReason(app);
+  var submitEligibleStates = ['pre_approval_review', 'compliance_review', 'in_review', 'under_review', 'kyc_submitted', 'edd_required'];
+  var submitRoleAllowed = ['admin', 'sco', 'co'].indexOf(role) >= 0;
+  var submitStateEligible = submitEligibleStates.indexOf(statusRaw) >= 0;
+  var submitLabel = '📨 Submit to Compliance';
+  var submitReason = '';
+  var submitDisabled = false;
+  var submitTitle = '';
+
+  if (terminalMessage) {
+    submitDisabled = true;
+    submitReason = terminalMessage;
+  } else if (statusRaw === 'submitted_to_compliance') {
+    submitDisabled = true;
+    submitReason = 'Already submitted to Compliance — awaiting compliance review.';
+  } else if (!submitRoleAllowed) {
+    submitDisabled = true;
+    submitReason = 'Your role cannot submit applications to Compliance.';
+  } else if (!submitStateEligible) {
+    submitDisabled = true;
+    submitReason = 'Submit to Compliance is only available from active review lanes.';
+  } else if (!approveBlock && readiness.ready && approvalRouteName(app) === 'direct_low_medium') {
+    submitLabel = '📨 Submit to Compliance (Optional)';
+    submitTitle = 'Optional discretionary escalation to Compliance.';
+  } else {
+    submitTitle = complianceReviewReason(app);
+  }
+
+  var approveDisabled = false;
+  var approveReason = '';
+  if (terminalMessage) {
+    approveDisabled = true;
+    approveReason = terminalMessage;
+  } else if (approveBlock) {
+    approveDisabled = true;
+    approveReason = approveBlock;
+  } else if (!readiness.ready) {
+    approveDisabled = true;
+    approveReason = readiness.blockers.length
+      ? readiness.blockers.slice(0, 3).join(' ')
+      : 'Approval blockers must be resolved before approval.';
+  }
+
+  var rejectDisabled = false;
+  var rejectReason = '';
+  if (terminalMessage) {
+    rejectDisabled = true;
+    rejectReason = terminalMessage;
+  } else if (rolePermissionsLoaded() && !hasPermission('reject_applications')) {
+    rejectDisabled = true;
+    rejectReason = 'Your role cannot reject applications.';
+  } else if (role && ['admin', 'sco', 'co'].indexOf(role) < 0) {
+    rejectDisabled = true;
+    rejectReason = 'Your role cannot reject applications.';
+  }
+
+  return {
+    approve: {
+      visible: true,
+      disabled: approveDisabled,
+      reason: approveReason,
+      title: approveReason || 'Open approval decision modal.'
+    },
+    reject: {
+      visible: true,
+      disabled: rejectDisabled,
+      reason: rejectReason,
+      title: rejectReason || 'Open rejection decision modal.'
+    },
+    submitToCompliance: {
+      visible: true,
+      disabled: submitDisabled,
+      reason: submitReason,
+      title: submitReason || submitTitle || 'Submit application to Compliance review.',
+      text: submitLabel
+    },
+    helper: terminalMessage || submitReason || submitTitle || approveReason || ''
+  };
+}
+
+function disabledActionReason(actionState, fallback) {
+  return (actionState && (actionState.reason || actionState.title)) || fallback || 'This action is not available for the current case.';
+}
+
 function syncApplicationActionPermissions(app) {
   app = app || currentApp;
   if (!app) return;
@@ -6058,33 +6196,20 @@ function syncApplicationActionPermissions(app) {
   setDetailActionVisibility('btn-reassign', canReassignCases);
   setDetailActionVisibility('btn-export-pack', canExportPacks);
 
-  // PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: Submit-to-Compliance is the forward action
-  // when an officer cannot finalize approval (e.g. CO on a HIGH/PEP/EDD/second-review
-  // case). Shown to Onboarding Officer / SCO / Admin from any active review lane.
-  // States mirror the backend SUBMIT_TO_COMPLIANCE_FROM_STATES (incl. pre-approval and edd_required).
-  var submitEligibleStates = ['pre_approval_review', 'compliance_review', 'in_review', 'under_review', 'kyc_submitted', 'edd_required'];
-  // Normalize role + raw status for the same robustness as approveBackendBlockReason.
-  // (app.status is the human label here, NOT a raw key, so it is deliberately not used.)
-  var submitRole = String(currentUserRole() || '').toLowerCase();
-  var submitStatusRaw = String(app.statusRaw || app.status_raw || '').trim().toLowerCase();
-  var canSubmitToCompliance = ['admin', 'sco', 'co'].indexOf(submitRole) >= 0
-    && submitEligibleStates.indexOf(submitStatusRaw) >= 0;
-  setDetailActionVisibility('btn-submit-compliance', canSubmitToCompliance);
-
-  // PR-APPROVAL-UX-GATES-1: align Approve/Reject/Override with backend authority so
-  // officers don't see buttons the backend will reject. Backend stays the source of
-  // truth (PR1 can_decide); this only reduces confusion and failed clicks.
-  var approveBlock = approveBackendBlockReason(app);
-  setDetailActionVisibility('btn-approve', !approveBlock);
+  // PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1 / PR-2: keep terminal actions visible, but
+  // disabled with clear reason text when state or authority blocks the action.
+  var actionState = buildApplicationActionState(app);
+  setDetailActionState('btn-submit-compliance', actionState.submitToCompliance);
+  setDetailActionState('btn-approve', actionState.approve);
   // Reject/Override gate strictly when the matrix is loaded; otherwise fail OPEN
   // (show — backend + click-time assertPermission still enforce) so a matrix-load
   // failure never wrongly hides a senior officer's controls.
-  setDetailActionVisibility('btn-reject', !rolePermissionsLoaded() || hasPermission('reject_applications'));
+  setDetailActionState('btn-reject', actionState.reject);
   setDetailActionVisibility('btn-override', !rolePermissionsLoaded() || hasPermission('override_ai_risk_score'));
   var hintEl = document.getElementById('approval-authority-hint');
   if (hintEl) {
-    if (approveBlock) {
-      hintEl.textContent = canSubmitToCompliance ? (approveBlock + ' Use Submit to Compliance.') : approveBlock;
+    if (actionState.helper) {
+      hintEl.textContent = actionState.helper;
       hintEl.style.display = '';
     } else {
       hintEl.style.display = 'none';
@@ -6093,7 +6218,7 @@ function syncApplicationActionPermissions(app) {
 
   if (preApprovalNotes) preApprovalNotes.style.display = canSubmitPreApproval ? '' : 'none';
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval && canSubmitPreApproval ? 'flex' : 'none';
-  if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
+  if (standardCard) standardCard.style.display = isPreApproval && canSubmitPreApproval ? 'none' : 'flex';
   if (caseManagementCard) caseManagementCard.style.display = 'none';
 }
 
@@ -23853,18 +23978,11 @@ function renderCaseCommandCentre(app) {
 
 function renderApprovalBlockersPanel(app) {
   var panel = document.getElementById('detail-approval-blockers');
-  var approveBtn = document.getElementById('btn-approve');
-  var readiness = getApprovalReadiness(app);
   if (panel) {
     panel.style.display = 'none';
     panel.innerHTML = '';
   }
-  if (approveBtn) {
-    approveBtn.disabled = false;
-    approveBtn.title = readiness.ready
-      ? 'Open approval decision modal.'
-      : 'Open approval decision modal to review blockers.';
-  }
+  if (app) syncApplicationActionPermissions(app);
 }
 
 function renderDecisionReadiness(decision) {
@@ -23874,6 +23992,21 @@ function renderDecisionReadiness(decision) {
   confirmBtn.disabled = false;
   panel.style.display = 'none';
   panel.innerHTML = '';
+
+  var actionState = buildApplicationActionState(currentApp);
+  var terminalState = decision === 'Approve'
+    ? actionState.approve
+    : (decision === 'Reject' ? actionState.reject : null);
+  if (terminalState && terminalState.disabled) {
+    confirmBtn.disabled = true;
+    panel.style.display = 'block';
+    panel.style.background = '#fef3c7';
+    panel.style.borderColor = '#fde68a';
+    panel.style.color = '#92400e';
+    panel.innerHTML = '<strong>' + escapeHtml(decision) + ' unavailable:</strong> ' +
+      escapeHtml(disabledActionReason(terminalState));
+    return;
+  }
 
   if (decision !== 'Approve') return;
 
@@ -23900,20 +24033,17 @@ function renderDecisionReadiness(decision) {
 function approveApplication() {
   if (!currentApp) return;
   if (!assertPermission('approve_low_medium')) return;
+  var actionState = buildApplicationActionState(currentApp);
+  if (actionState.approve.disabled) {
+    showToast(disabledActionReason(actionState.approve, 'Approval is not available for this application.'), 'warn');
+    return;
+  }
   pendingDecision = 'Approve';
   document.getElementById('decision-type-display').textContent = 'Approve';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
   setDecisionError('');
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
-  // PR-APPROVAL-UX-GATES-1: defence-in-depth — if the backend would reject this
-  // approval for the current role/case, steer the officer to Submit to Compliance
-  // instead of opening a modal that ends in a 403. (Backend remains authoritative.)
-  var approveBlock = approveBackendBlockReason(currentApp);
-  if (approveBlock) {
-    showToast(approveBlock + ' Use Submit to Compliance.', 'warn');
-    return;
-  }
   renderDecisionReadiness('Approve');
   document.getElementById('modal-decision-reason').classList.add('open');
 }
@@ -23921,6 +24051,11 @@ function approveApplication() {
 function rejectApplication() {
   if (!currentApp) return;
   if (!assertPermission('reject_applications')) return;
+  var actionState = buildApplicationActionState(currentApp);
+  if (actionState.reject.disabled) {
+    showToast(disabledActionReason(actionState.reject, 'Rejection is not available for this application.'), 'warn');
+    return;
+  }
   pendingDecision = 'Reject';
   document.getElementById('decision-type-display').textContent = 'Reject';
   document.getElementById('decision-reason').value = '';
@@ -24839,6 +24974,18 @@ async function confirmDecision() {
   var requiredPerm = permMap[pendingDecision];
   if (requiredPerm && !assertPermission(requiredPerm)) return;
 
+  if (pendingDecision === 'Approve' || pendingDecision === 'Reject') {
+    var actionState = buildApplicationActionState(currentApp);
+    var decisionActionState = pendingDecision === 'Approve' ? actionState.approve : actionState.reject;
+    if (decisionActionState.disabled) {
+      var actionReason = disabledActionReason(decisionActionState, pendingDecision + ' is not available for this application.');
+      renderDecisionReadiness(pendingDecision);
+      setDecisionError(actionReason);
+      showToast(actionReason, 'warn');
+      return;
+    }
+  }
+
   var reason = document.getElementById('decision-reason').value.trim();
   var notes = document.getElementById('decision-notes').value.trim();
 
@@ -25380,7 +25527,12 @@ async function movePricingToComplianceReview() {
 // blocker. Final approval stays fail-closed on the backend.
 async function submitToCompliance() {
   if (!currentApp || !currentApp.id) { showToast('No application selected.', 'warn'); return; }
-  if (['admin', 'sco', 'co'].indexOf(currentUserRole()) < 0) {
+  var actionState = buildApplicationActionState(currentApp);
+  if (actionState.submitToCompliance.disabled) {
+    showToast(disabledActionReason(actionState.submitToCompliance, 'Submit to Compliance is not available for this application.'), 'warn');
+    return;
+  }
+  if (['admin', 'sco', 'co'].indexOf(String(currentUserRole() || '').toLowerCase()) < 0) {
     showToast('Insufficient permissions to submit to compliance.', 'error');
     return;
   }
