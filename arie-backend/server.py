@@ -87,7 +87,7 @@ from security_hardening import (
     get_safe_health_response, determine_screening_mode,
     store_screening_mode, PIIEncryptor, collect_approval_gate_blockers,
     screening_second_review_pending_summary,
-    can_decide_application,
+    can_decide_application, classify_approval_route,
 )
 HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
@@ -6114,6 +6114,7 @@ class ApplicationDetailHandler(BaseHandler):
             result["officer_corrections"] = _list_application_corrections(db, result["id"])
             idv_payload = result.get("sumsub_idv_statuses") or {}
             result["idv_gate_summary"] = idv_payload.get("gate_summary") or build_idv_gate_summary(idv_payload)
+            result["approval_route"] = classify_approval_route(result, db)
             current_gate_blockers = collect_approval_gate_blockers(result, db)
             gate_presentation = _build_application_gate_presentation(db, result, current_gate_blockers)
             result["approval_gate_presentation"] = gate_presentation["approval_gate_presentation"]
@@ -27122,7 +27123,14 @@ class MemoSupervisorResultHandler(BaseHandler):
 # APPROVAL, never submission. edd_required is INCLUDED: a case escalated to EDD is
 # exactly where an Onboarding Officer (who cannot complete EDD or approve) needs the
 # forward action, so it must not be a dead-end.
-SUBMIT_TO_COMPLIANCE_FROM_STATES = ("compliance_review", "in_review", "under_review", "kyc_submitted", "edd_required")
+SUBMIT_TO_COMPLIANCE_FROM_STATES = (
+    "pre_approval_review",
+    "compliance_review",
+    "in_review",
+    "under_review",
+    "kyc_submitted",
+    "edd_required",
+)
 SUBMIT_TO_COMPLIANCE_ROLES = ("admin", "sco", "co")
 SUBMISSION_NOTE_MIN_LENGTH = 10
 
@@ -27343,8 +27351,9 @@ class SubmitToComplianceHandler(BaseHandler):
             blockers = []
         blocker_codes = sorted({str(b.get("code")) for b in blockers if isinstance(b, dict) and b.get("code")})
         second_review = _screening_second_review_summary_if_blocked(db, app)
+        approval_route = classify_approval_route(app_dict, db)
         authority_ok, _ac, _ar, _am = can_decide_application(
-            user, app, "approve", risk_level=risk_level)
+            user, app, "approve", risk_level=risk_level, approval_route=approval_route)
 
         basis = []
         if risk_level == "HIGH":
@@ -27357,6 +27366,9 @@ class SubmitToComplianceHandler(BaseHandler):
             basis.append("screening_second_review_pending")
         if not authority_ok:
             basis.append("authority_blocked")
+        for route_reason in approval_route.get("escalation_reasons") or []:
+            if route_reason in ("pep", "adverse_media", "material_screening_concern", "edd_required", "edd_trigger"):
+                basis.append(route_reason)
         # Material screening concern (live/stale screening gate) — surfaced for SCO clarity.
         if any(code in ("screening_truth", "screening_stale") for code in blocker_codes):
             basis.append("material_screening")
@@ -27639,6 +27651,7 @@ class ApplicationDecisionHandler(BaseHandler):
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
             approval_risk_level, approval_risk_score = _application_risk_snapshot(app)
+            approval_route = classify_approval_route(dict(app), db)
             # ── PR-APPROVAL-AUTHORITY-MATRIX-1: centralized authority gate ──
             # Single source of truth for terminal-decision authority (replaces the
             # inline H-1 CO/HIGH check — same rule, now shared with all callers).
@@ -27646,6 +27659,7 @@ class ApplicationDecisionHandler(BaseHandler):
                 user, app, "approve",
                 risk_level=approval_risk_level,
                 override_ai=override_ai,
+                approval_route=approval_route,
             )
             if not authority_ok:
                 self.log_governance_attempt(
@@ -27654,18 +27668,23 @@ class ApplicationDecisionHandler(BaseHandler):
                 db.close()
                 return self.error(authority_reason, authority_code)
 
-            # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
-            memo_exists = latest_compliance_memo_row(db, real_id)
-            if not memo_exists:
-                reason = (
-                    "Approval blocked: compliance memo must be generated before approval. "
-                    "Generate a memo via POST /api/applications/{id}/memo first."
-                )
-                self.log_governance_attempt(
-                    user, "application.decision", attempt_target, "rejected", 400,
-                    reason, attempt_summary, db=db)
-                db.close()
-                return self.error(reason, 400)
+            # Risk-conditional approval policy: clean LOW/MEDIUM files use the
+            # direct operational gate route and do not require the compliance memo
+            # package. Escalated routes preserve the memo freshness/supervisor stack.
+            if approval_route.get("requires_compliance_package"):
+                memo_exists = latest_compliance_memo_row(db, real_id)
+                if not memo_exists:
+                    reason = (
+                        "Approval blocked: compliance memo must be generated before approval. "
+                        "Generate a memo via POST /api/applications/{id}/memo first."
+                    )
+                    self.log_governance_attempt(
+                        user, "application.decision", attempt_target, "rejected", 400,
+                        reason, attempt_summary, db=db)
+                    db.close()
+                    return self.error(reason, 400)
+            else:
+                memo_exists = None
             second_review_summary = _screening_second_review_summary_if_blocked(db, app)
             if second_review_summary:
                 reason = "Approval blocked: screening_second_review_pending"
@@ -27696,27 +27715,32 @@ class ApplicationDecisionHandler(BaseHandler):
                     reason,
                     400,
                 )
-            stale = _ensure_memo_fresh_or_mark_stale(
-                db,
-                app,
-                memo_exists,
-                actor=user,
-                ip_address=self.get_client_ip(),
-                context="application_decision_approval",
-            )
-            if stale.get("is_stale"):
-                reason = (
-                    "Approval blocked: Compliance memo is stale: "
-                    + stale.get("reason", "Regenerate the memo before approval.")
+            if approval_route.get("requires_compliance_package"):
+                stale = _ensure_memo_fresh_or_mark_stale(
+                    db,
+                    app,
+                    memo_exists,
+                    actor=user,
+                    ip_address=self.get_client_ip(),
+                    context="application_decision_approval",
                 )
-                self.log_governance_attempt(
-                    user, "application.decision", attempt_target, "rejected", 400,
-                    reason, attempt_summary, db=db, commit=False)
-                db.commit()
-                db.close()
-                return self.error(reason, 400)
+                if stale.get("is_stale"):
+                    reason = (
+                        "Approval blocked: Compliance memo is stale: "
+                        + stale.get("reason", "Regenerate the memo before approval.")
+                    )
+                    self.log_governance_attempt(
+                        user, "application.decision", attempt_target, "rejected", 400,
+                        reason, attempt_summary, db=db, commit=False)
+                    db.commit()
+                    db.close()
+                    return self.error(reason, 400)
 
-            can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
+            can_approve, gate_error = ApprovalGateValidator.validate_approval(
+                dict(app),
+                db,
+                approval_route=approval_route,
+            )
             if not can_approve:
                 reason = f"Approval blocked: {gate_error}"
                 second_review_summary = _screening_second_review_summary_if_blocked(db, app)
@@ -27802,6 +27826,7 @@ class ApplicationDecisionHandler(BaseHandler):
                 "document_evidence_gate": document_gate,
                 "risk_level": approval_risk_level,
                 "risk_score": approval_risk_score,
+                "approval_route": approval_route,
             }
 
             # ── EX-06: Dual-approval for high-risk cases using structured fields ──

@@ -168,7 +168,7 @@ class TestRegistrationNumberNormalization:
 def _insert_app_and_memo(db, app_id=None,
                           app_updated_at=None, memo_created_at=None,
                           screening_report=None, submitted_at=None,
-                          status="in_review",
+                          status="submitted_to_compliance",
                           review_status="approved",
                           validation_status="pass",
                           supervisor_status="CONSISTENT",
@@ -378,7 +378,10 @@ class TestApprovalGateExistingChecks:
                 "company_registry": {"api_status": "live"},
                 "ip_geolocation": {"api_status": "live"},
                 "kyc": {"api_status": "live"},
-            }
+                "screened_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "screening_valid_until": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(),
+            "screening_validity_days": 90,
         })
         db.execute("""
             INSERT INTO applications
@@ -386,7 +389,7 @@ class TestApprovalGateExistingChecks:
              risk_level, risk_score, prescreening_data, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (app_id, f"ARF-{app_id}", "Test Corp", "Mauritius", "Technology", "SME",
-              "in_review", "MEDIUM", 50, prescreening, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
+              "submitted_to_compliance", "MEDIUM", 50, prescreening, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
         db.commit()
         app = dict(db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())
         from security_hardening import ApprovalGateValidator

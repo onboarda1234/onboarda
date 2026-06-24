@@ -5983,6 +5983,16 @@ function canApproveMemo() {
   return role === 'admin' || role === 'sco';
 }
 
+function approvalRoutePolicy(app) {
+  app = app || currentApp || {};
+  return app.approvalRoute || app.approval_route || {};
+}
+
+function approvalRouteName(app) {
+  var route = approvalRoutePolicy(app);
+  return String(route.route || '').trim().toLowerCase();
+}
+
 // Returns a short reason string if final approval would be rejected by the backend
 // for this role + case, or '' if approval is plausibly allowed. Conservative: only
 // flags conditions the backend is GUARANTEED to reject so we never hide a legitimate
@@ -6007,6 +6017,10 @@ function approveBackendBlockReason(app) {
   // Onboarding Officer cannot approve HIGH/VERY_HIGH (can_decide gate, PR1).
   if (role === 'co' && (risk === 'HIGH' || risk === 'VERY_HIGH')) {
     return 'Requires SCO review — high-risk approval is Admin/SCO only.';
+  }
+  var routeName = approvalRouteName(app);
+  if (role === 'co' && (routeName === 'compliance_required' || routeName === 'dual_control_required')) {
+    return 'Requires compliance review — this case is outside direct LOW/MEDIUM authority.';
   }
   // EDD completion is SCO/MLRO-owned; a CO cannot clear EDD to approve.
   if (role === 'co' && statusRaw === 'edd_required') {
@@ -6047,8 +6061,8 @@ function syncApplicationActionPermissions(app) {
   // PR-SUBMIT-TO-COMPLIANCE-WORKFLOW-1: Submit-to-Compliance is the forward action
   // when an officer cannot finalize approval (e.g. CO on a HIGH/PEP/EDD/second-review
   // case). Shown to Onboarding Officer / SCO / Admin from any active review lane.
-  // States mirror the backend SUBMIT_TO_COMPLIANCE_FROM_STATES (incl. edd_required).
-  var submitEligibleStates = ['compliance_review', 'in_review', 'under_review', 'kyc_submitted', 'edd_required'];
+  // States mirror the backend SUBMIT_TO_COMPLIANCE_FROM_STATES (incl. pre-approval and edd_required).
+  var submitEligibleStates = ['pre_approval_review', 'compliance_review', 'in_review', 'under_review', 'kyc_submitted', 'edd_required'];
   // Normalize role + raw status for the same robustness as approveBackendBlockReason.
   // (app.status is the human label here, NOT a raw key, so it is deliberately not used.)
   var submitRole = String(currentUserRole() || '').toLowerCase();
@@ -9915,6 +9929,8 @@ async function fetchApplicationDetail(ref) {
     lane: detail.onboarding_lane || 'Standard Review',
     status: formatStatus(detail.status),
     statusRaw: detail.status || '',
+    approvalRoute: detail.approval_route || detail.approvalRoute || {},
+    approval_route: detail.approval_route || detail.approvalRoute || {},
     assignedId: detail.assigned_to || '',
     assigned: detail.assigned_name || detail.assigned_to || 'Unassigned',
     date: formatDetailDate(detail.created_at || detail.submitted_at),
@@ -22649,9 +22665,11 @@ function getApplicationApprovalBlockers(app) {
     blockers.push('Move the application into compliance review before final approval.');
   }
 
-  if (!app.latestMemo) {
+  var routeName = approvalRouteName(app);
+  var compliancePackageRequired = routeName === 'compliance_required' || routeName === 'dual_control_required';
+  if (compliancePackageRequired && !app.latestMemo) {
     blockers.push('Compliance memo has not been generated.');
-  } else {
+  } else if (compliancePackageRequired) {
     var memoMeta = app.latestMemoMeta || {};
     var memoData = app.latestMemo || {};
     var memoReview = String(memoData.review_status || memoMeta.review_status || '').toLowerCase();
@@ -22672,7 +22690,7 @@ function getApplicationApprovalBlockers(app) {
       blockers.push('Compliance memo is blocked: ' + (memoData.metadata.block_reason || 'blocking memo controls failed.'));
     }
   }
-  if (app.memoIsStale) blockers.push('Compliance memo is stale after application changes.');
+  if (compliancePackageRequired && app.memoIsStale) blockers.push('Compliance memo is stale after application changes.');
   var screening = getApplicationScreeningSummary(app);
   if (!screening.screening_run_recorded) blockers.push('Screening has not been run.');
   var screeningTruth = screening.screening_truth_summary || null;

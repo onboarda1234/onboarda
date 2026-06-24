@@ -175,7 +175,16 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
             "SELECT action, user_role, detail FROM audit_log WHERE target=? ORDER BY id", (ref,),
         ).fetchall()
 
-    def _seed_approvable(self, risk_level="LOW", status="compliance_review"):
+    def _seed_approvable(
+        self,
+        risk_level="LOW",
+        status="compliance_review",
+        *,
+        with_memo=True,
+        documents_ready=True,
+        prescreening_data=None,
+        director_pep=False,
+    ):
         """Insert a fully-approvable application (all gates pass)."""
         from tests.conftest import insert_verified_required_documents
         suffix = uuid.uuid4().hex[:8]
@@ -195,22 +204,29 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
             VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME', ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)
             """,
             (app_id, app_ref, f"{app_id}_c", f"{app_ref} Ltd", status, risk_level, risk_level,
-             score, _live_clear_prescreening(), now, now, now, now),
+             score, prescreening_data or _live_clear_prescreening(), now, now, now, now),
         )
-        self.db.execute(
-            """
-            INSERT INTO compliance_memos
-                (application_id, memo_data, generated_by, ai_recommendation,
-                 review_status, quality_score, validation_status, supervisor_status, approval_reason)
-            VALUES (?, ?, 'system', 'APPROVE', 'approved', 9.0, 'pass', 'CONSISTENT', 'Fixture approval reason')
-            """,
-            (app_id, json.dumps({
-                "ai_source": "deterministic",
-                "metadata": {"ai_source": "deterministic", "edd_routing": {"route": "standard", "triggers": []}},
-                "supervisor": {"verdict": "CONSISTENT", "can_approve": True, "mandatory_escalation": False},
-            })),
-        )
-        insert_verified_required_documents(self.db, app_id)
+        if director_pep:
+            self.db.execute(
+                "INSERT INTO directors (id, application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?, ?)",
+                (f"{app_id}_pep_dir", app_id, "Jane PEP", "Mauritius", "Yes"),
+            )
+        if with_memo:
+            self.db.execute(
+                """
+                INSERT INTO compliance_memos
+                    (application_id, memo_data, generated_by, ai_recommendation,
+                     review_status, quality_score, validation_status, supervisor_status, approval_reason)
+                VALUES (?, ?, 'system', 'APPROVE', 'approved', 9.0, 'pass', 'CONSISTENT', 'Fixture approval reason')
+                """,
+                (app_id, json.dumps({
+                    "ai_source": "deterministic",
+                    "metadata": {"ai_source": "deterministic", "edd_routing": {"route": "standard", "triggers": []}},
+                    "supervisor": {"verdict": "CONSISTENT", "can_approve": True, "mandatory_escalation": False},
+                })),
+            )
+        if documents_ready:
+            insert_verified_required_documents(self.db, app_id)
         # HIGH/VERY_HIGH applications require generated + resolved enhanced-review
         # requirements before approval; seed one already-accepted requirement so the
         # gate passes (this suite tests authority, not enhanced-requirement triage).
@@ -255,6 +271,133 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         resp = self._approve(app_id, self.co_token)
         assert resp.code in (200, 201), resp.body.decode()
         assert self._status_of(app_id)["status"] == "approved"
+
+    def test_co_approves_clean_low_without_compliance_memo(self):
+        app_id, ref = self._seed_approvable("LOW", with_memo=False)
+        resp = self._approve(app_id, self.co_token, reason="Direct clean LOW approval")
+        assert resp.code in (200, 201), resp.body.decode()
+        row = self._status_of(app_id)
+        assert row["status"] == "approved"
+        assert row["decision_by"] == "co001"
+        assert self.db.execute(
+            "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?", (app_id,),
+        ).fetchone()["c"] == 0
+
+    def test_co_approves_clean_medium_without_compliance_memo(self):
+        app_id, ref = self._seed_approvable("MEDIUM", with_memo=False)
+        resp = self._approve(app_id, self.co_token, reason="Direct clean MEDIUM approval")
+        assert resp.code in (200, 201), resp.body.decode()
+        assert self._status_of(app_id)["status"] == "approved"
+        assert self.db.execute(
+            "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?", (app_id,),
+        ).fetchone()["c"] == 0
+
+    def test_senior_roles_approve_clean_low_medium_without_compliance_memo(self):
+        for risk_level, token in (("LOW", self.sco_token), ("MEDIUM", self.admin_token)):
+            app_id, _ref = self._seed_approvable(risk_level, with_memo=False)
+            resp = self._approve(app_id, token, reason=f"Direct clean {risk_level} senior approval")
+            assert resp.code in (200, 201), resp.body.decode()
+            assert self._status_of(app_id)["status"] == "approved"
+
+    def test_low_missing_documents_returns_document_blocker_not_memo(self):
+        app_id, _ref = self._seed_approvable("LOW", with_memo=False, documents_ready=False)
+        resp = self._approve(app_id, self.co_token)
+        assert resp.code in (400, 409), resp.body.decode()
+        error = self._json(resp)["error"].lower()
+        assert "document" in error
+        assert "compliance memo" not in error
+        assert self._status_of(app_id)["status"] == "compliance_review"
+
+    def test_low_incomplete_idv_returns_idv_blocker_not_memo(self):
+        app_id, _ref = self._seed_approvable("LOW", with_memo=False, director_pep=False)
+        self.db.execute(
+            "INSERT INTO directors (id, application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?, ?)",
+            (f"{app_id}_idv_dir", app_id, "Jane IDV", "Mauritius", "No"),
+        )
+        self.db.commit()
+        resp = self._approve(app_id, self.co_token)
+        assert resp.code == 400, resp.body.decode()
+        error = self._json(resp)["error"].lower()
+        assert "identity verification" in error
+        assert "memo" not in error
+        assert self._status_of(app_id)["status"] == "compliance_review"
+
+    def test_low_stale_screening_returns_screening_blocker_not_memo(self):
+        old = datetime.now(timezone.utc) - timedelta(days=120)
+        prescreening = json.dumps({
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": old.strftime("%Y-%m-%dT%H:%M:%S"),
+                "sanctions": {"api_status": "live", "matched": False, "results": []},
+                "company_registry": {"api_status": "live"},
+                "ip_geolocation": {"api_status": "live"},
+                "kyc": {"api_status": "live", "matched": False, "results": []},
+            },
+            "screening_valid_until": (old + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screening_validity_days": 90,
+        })
+        app_id, _ref = self._seed_approvable("LOW", with_memo=False, prescreening_data=prescreening)
+        resp = self._approve(app_id, self.co_token)
+        assert resp.code == 400, resp.body.decode()
+        error = self._json(resp)["error"].lower()
+        assert "screening" in error and ("expired" in error or "re-screen" in error)
+        assert "memo" not in error
+
+    def test_low_unresolved_screening_returns_screening_blocker_not_memo(self):
+        now = datetime.now(timezone.utc)
+        prescreening = json.dumps({
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+                "sanctions": {"api_status": "live", "matched": True, "results": [{"name": "Potential Match"}]},
+                "company_registry": {"api_status": "live"},
+                "ip_geolocation": {"api_status": "live"},
+                "kyc": {"api_status": "live", "matched": False, "results": []},
+            },
+            "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screening_validity_days": 90,
+        })
+        app_id, _ref = self._seed_approvable("LOW", with_memo=False, prescreening_data=prescreening)
+        resp = self._approve(app_id, self.co_token)
+        assert resp.code in (400, 403), resp.body.decode()
+        error = self._json(resp)["error"].lower()
+        assert "screening" in error or "compliance" in error
+        assert "memo" not in error
+
+    def test_low_material_screening_concern_cannot_be_direct_approved_by_co(self):
+        now = datetime.now(timezone.utc)
+        prescreening = json.dumps({
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+                "sanctions": {"api_status": "live", "matched": True, "results": [{"name": "Material Match"}]},
+                "company_registry": {"api_status": "live"},
+                "ip_geolocation": {"api_status": "live"},
+                "kyc": {"api_status": "live", "matched": False, "results": []},
+            },
+            "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screening_validity_days": 90,
+            "screening_concern": "material_screening_concern",
+        })
+        app_id, _ref = self._seed_approvable("LOW", with_memo=False, prescreening_data=prescreening)
+        resp = self._approve(app_id, self.co_token)
+        assert resp.code == 403, resp.body.decode()
+        assert "compliance" in self._json(resp)["error"].lower()
+        assert self._status_of(app_id)["status"] == "compliance_review"
+
+    def test_pep_case_cannot_be_direct_approved_by_co(self):
+        app_id, _ref = self._seed_approvable("MEDIUM", with_memo=False, director_pep=True)
+        resp = self._approve(app_id, self.co_token)
+        assert resp.code == 403, resp.body.decode()
+        assert "compliance" in self._json(resp)["error"].lower()
+        assert self._status_of(app_id)["status"] == "compliance_review"
+
+    def test_high_without_memo_still_requires_compliance_package_for_senior(self):
+        app_id, _ref = self._seed_approvable("HIGH", with_memo=False)
+        resp = self._approve(app_id, self.sco_token, reason="Senior high approval without memo")
+        assert resp.code == 400, resp.body.decode()
+        assert "memo" in self._json(resp)["error"].lower()
+        assert self._status_of(app_id)["status"] == "compliance_review"
 
     def test_high_risk_requires_dual_approval_and_flags_privileged_admin(self):
         app_id, ref = self._seed_approvable("HIGH")

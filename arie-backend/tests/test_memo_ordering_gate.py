@@ -45,7 +45,7 @@ def _insert_app(db):
             "Mauritius",
             "Technology",
             "SME",
-            "compliance_review",
+            "submitted_to_compliance",
             "MEDIUM",
             45,
             _make_prescreening(),

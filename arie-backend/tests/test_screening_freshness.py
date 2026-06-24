@@ -648,6 +648,7 @@ class TestExistingGatesNotWeakened:
             screening_report=_make_screening_report(
                 screened_at=now.strftime("%Y-%m-%dT%H:%M:%S")
             ),
+            status="submitted_to_compliance",
             prescreening_extras={
                 "screening_valid_until": (now + timedelta(days=89)).strftime("%Y-%m-%dT%H:%M:%S"),
                 "screening_validity_days": 90,

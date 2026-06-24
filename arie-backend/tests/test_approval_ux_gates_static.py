@@ -22,6 +22,8 @@ def _html():
 def test_authority_mirror_helpers_exist():
     html = _html()
     assert "function canApproveMemo(" in html
+    assert "function approvalRoutePolicy(" in html
+    assert "function approvalRouteName(" in html
     assert "function approveBackendBlockReason(" in html
     # Must be documented as a UX mirror, not a security boundary.
     assert "NOT a security boundary" in html
@@ -48,6 +50,8 @@ def test_co_high_and_edd_are_backend_block_reasons():
     assert "role === 'co'" in fn
     assert "'HIGH'" in fn and "'VERY_HIGH'" in fn
     assert "Requires SCO review" in fn
+    assert "routeName === 'compliance_required'" in fn
+    assert "routeName === 'dual_control_required'" in fn
     # Onboarding Officer blocked on EDD-required (EDD completion is senior-owned).
     assert "'edd_required'" in fn
     # Roles with no approval authority at all are blocked.
@@ -80,8 +84,9 @@ def test_sync_hides_approve_and_gates_reject_override():
     # is not (a matrix-load failure must never hide a senior officer's controls).
     assert "setDetailActionVisibility('btn-reject', !rolePermissionsLoaded() || hasPermission('reject_applications'))" in sync
     assert "setDetailActionVisibility('btn-override', !rolePermissionsLoaded() || hasPermission('override_ai_risk_score'))" in sync
-    # Submit-to-Compliance offered, including from edd_required (mirrors backend).
+    # Submit-to-Compliance offered, including from pre_approval_review and edd_required (mirrors backend).
     assert "btn-submit-compliance" in sync
+    assert "'pre_approval_review'" in sync
     assert "'edd_required'" in sync
     # Role + raw status are normalized for the submit-visibility check (robustness).
     assert "String(currentUserRole() || '').toLowerCase()" in sync
@@ -93,6 +98,7 @@ def test_pricing_review_move_cta_does_not_broaden_submit_to_compliance():
     sync = html.split("function syncApplicationActionPermissions(", 1)[1].split("\nfunction ", 1)[0]
     submit_states = re.search(r"var submitEligibleStates = \[(.*?)\];", sync).group(1)
     assert "'pricing_review'" not in submit_states
+    assert "'pre_approval_review'" in submit_states
     assert "'compliance_review'" in submit_states and "'edd_required'" in submit_states
     assert "pricing.move_to_compliance_review" in html
     assert "function movePricingToComplianceReview(" in html

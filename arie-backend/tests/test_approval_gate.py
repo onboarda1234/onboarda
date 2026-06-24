@@ -10,7 +10,7 @@ def _insert_application_and_memo(
     supervisor_status="CONSISTENT",
     review_status="approved",
     risk_level="MEDIUM",
-    status="compliance_review",
+    status="submitted_to_compliance",
     prescreening_data=None,
     onboarding_lane=None,
     final_risk_level=None,
