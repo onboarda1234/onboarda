@@ -189,6 +189,29 @@ class TestCompaniesHouseProvider:
         assert all(officer["is_candidate_director"] is False for officer in officers)
         assert all(officer["officer_entity_type"] == "individual" for officer in officers)
 
+    @pytest.mark.parametrize(
+        "officer_role",
+        ["director", "llp-designated-member", "llp-member"],
+    )
+    @patch("company_registry.requests.get")
+    def test_officers_success_retains_country_of_residence_for_individual_candidates(self, mock_get, officer_role):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "Resident Candidate",
+                "officer_role": officer_role,
+                "appointed_on": "2020-01-01",
+                "country_of_residence": "United Kingdom",
+            }],
+        })
+
+        officers = company_registry.get_companies_house_officers("12345678")
+
+        assert len(officers) == 1
+        assert officers[0]["officer_role"] == officer_role
+        assert officers[0]["country_of_residence"] == "United Kingdom"
+
     @patch("company_registry.requests.get")
     def test_officers_success_flags_corporate_llp_member_for_structure_review(self, mock_get):
         import company_registry
