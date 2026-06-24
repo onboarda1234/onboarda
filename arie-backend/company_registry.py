@@ -271,6 +271,7 @@ def _normalize_companies_house_officer(raw: dict[str, Any], source_metadata: dic
         "appointed_on": _clean_text(raw.get("appointed_on")),
         "resigned_on": _clean_text(raw.get("resigned_on")),
         "nationality": _clean_text(raw.get("nationality")),
+        "country_of_residence": _clean_text(raw.get("country_of_residence")),
         "occupation": _clean_text(raw.get("occupation")),
         "date_of_birth": _normalize_date_of_birth(raw.get("date_of_birth")),
         "candidate_type": _officer_candidate_type(officer_role, officer_entity_type),

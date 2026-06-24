@@ -186,6 +186,17 @@ def _db_one(query, params=()):
         conn.close()
 
 
+def _hydrated_parties(application_id):
+    from db import get_db
+    from party_utils import get_application_parties
+
+    conn = get_db()
+    try:
+        return get_application_parties(conn, application_id)
+    finally:
+        conn.close()
+
+
 def test_db_ensure_creates_registry_tables_and_thin_session(monkeypatch, tmp_path):
     import db as db_module
     from db import get_db, init_db
@@ -373,6 +384,7 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
             "status": "active",
             "appointed_on": "2020-01-01",
             "date_of_birth": {"month": 9, "year": 1949},
+            "country_of_residence": "United Kingdom",
             "source_metadata": {"endpoint": "/company/12345678/officers", "response_hash": "officer-hash"},
         },
         {
@@ -409,10 +421,15 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
     assert len(directors) == 2
     corporate = next(row for row in directors if row["full_name"] == "Corporate Director Ltd")
     individual = next(row for row in directors if row["full_name"] == "Active Director")
+    individual_response = next(row for row in body["directors"] if row["full_name"] == "Active Director")
+    assert individual_response["country_of_residence"] == "United Kingdom"
     assert individual["officer_entity_type"] == "individual"
     assert individual["date_of_appointment"] == "2020-01-01"
     assert individual["date_of_birth"] in ("", None)
     assert bool(individual["requires_individual_kyc"]) is True
+    hydrated_directors, _hydrated_ubos, _hydrated_intermediaries = _hydrated_parties(started["application"]["id"])
+    hydrated_individual = next(row for row in hydrated_directors if row["full_name"] == "Active Director")
+    assert hydrated_individual["country_of_residence"] == "United Kingdom"
     assert corporate["officer_entity_type"] == "corporate"
     assert bool(corporate["requires_individual_kyc"]) is False
     assert bool(corporate["requires_corporate_structure_review"]) is True
@@ -434,6 +451,7 @@ def test_confirm_officers_imports_llp_members_with_legal_role_and_review_flags(i
             "candidate_type": "llp_member_candidate",
             "is_candidate_director": False,
             "is_candidate_llp_member": True,
+            "country_of_residence": "United Kingdom",
             "requires_individual_kyc": True,
             "requires_corporate_structure_review": False,
             "status": "active",
@@ -484,9 +502,14 @@ def test_confirm_officers_imports_llp_members_with_legal_role_and_review_flags(i
     assert [row["full_name"] for row in directors] == ["MARGOLIS, Stephen Howard", "TAURUS (DM) LIMITED"]
     individual = directors[0]
     corporate = directors[1]
+    individual_response = next(row for row in body["directors"] if row["full_name"] == "MARGOLIS, Stephen Howard")
+    assert individual_response["country_of_residence"] == "United Kingdom"
     assert individual["officer_role"] == "llp-designated-member"
     assert individual["officer_entity_type"] == "individual"
     assert bool(individual["requires_individual_kyc"]) is True
+    hydrated_directors, _hydrated_ubos, _hydrated_intermediaries = _hydrated_parties(started["application"]["id"])
+    hydrated_individual = next(row for row in hydrated_directors if row["full_name"] == "MARGOLIS, Stephen Howard")
+    assert hydrated_individual["country_of_residence"] == "United Kingdom"
     assert corporate["officer_role"] == "corporate-llp-designated-member"
     assert corporate["officer_entity_type"] == "corporate"
     assert bool(corporate["requires_individual_kyc"]) is False
