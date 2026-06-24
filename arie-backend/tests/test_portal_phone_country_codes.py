@@ -58,7 +58,8 @@ def test_all_portal_phone_dropdowns_include_mauritius_option():
         mauritius = _option_by_value(selects[select_id], "+230")
         assert mauritius["attrs"].get("data-country-code") == "MU"
         assert mauritius["attrs"].get("data-country-name") == "Mauritius"
-        assert "Mauritius" in mauritius["text"]
+        assert "+230 (MU)" in mauritius["text"]
+        assert "+230 (Mauritius)" not in mauritius["text"]
 
 
 def test_prescreening_phone_dropdown_defaults_to_mauritius_not_uae():
