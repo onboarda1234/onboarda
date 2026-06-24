@@ -875,17 +875,18 @@ class TestDayThreeApprovalBlockerUX:
         assert "getApplicationApprovalBlockers(app)" in fn_region
         assert "ready: blockers.length === 0" in fn_region
 
-    def test_application_approve_button_opens_modal_when_blockers_exist(self):
+    def test_application_approve_button_uses_central_action_state_when_blockers_exist(self):
         html = self._read_backoffice()
         fn_start = html.index("function renderApprovalBlockersPanel(app)")
         fn_region = html[fn_start:fn_start + 900]
-        assert "approveBtn.disabled = false" in fn_region
-        assert "Open approval decision modal to review blockers" in fn_region
+        assert "approveBtn.disabled = false" not in fn_region
+        assert "syncApplicationActionPermissions(app)" in fn_region
 
         decision_start = html.index("function renderDecisionReadiness(decision)")
-        decision_region = html[decision_start:decision_start + 1800]
+        decision_region = html[decision_start:decision_start + 2600]
+        assert "buildApplicationActionState(currentApp)" in decision_region
         assert "confirmBtn.disabled = true" in decision_region
-        assert "Approval blocked:" in decision_region
+        assert "unavailable:</strong>" in decision_region
         assert "Compliance memo has not been approved" in html
         assert "Screening has not been run" in html
 

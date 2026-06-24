@@ -1025,8 +1025,8 @@ class TestCaseCommandCentreRuntime:
         html = _read_backoffice()
         assert "function getApprovalReadiness(app)" in html
         assert "getApplicationApprovalBlockers(app)" in html
+        assert "buildApplicationActionState(currentApp)" in html
         assert "confirmBtn.disabled = true" in html
-        assert "Open approval decision modal to review blockers." in html
         assert "Backend gates still perform final validation." in html
 
     def test_case_command_action_map_and_top_actions_are_wired(self):
