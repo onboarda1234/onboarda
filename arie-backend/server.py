@@ -33101,6 +33101,27 @@ class ChangeRequestDetailHandler(BaseHandler):
             db.close()
 
 
+class ChangeRequestAuditReconstructionHandler(BaseHandler):
+    """GET /api/change-management/requests/:id/audit-reconstruction — structured audit proof"""
+    def get(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            reconstruction = cm.get_change_request_audit_reconstruction(db, request_id)
+            if not reconstruction:
+                self.error("Request not found", 404)
+                return
+            self.success(reconstruction)
+        finally:
+            db.close()
+
+
 class ChangeRequestSubmitHandler(BaseHandler):
     """POST /api/change-management/requests/:id/submit — Submit a draft request"""
     def post(self, request_id):
@@ -34641,6 +34662,7 @@ def make_app():
         (r"/api/change-management/requests/([^/]+)/reject", ChangeRequestRejectHandler),
         (r"/api/change-management/requests/([^/]+)/implement", ChangeRequestImplementHandler),
         (r"/api/change-management/requests/([^/]+)/documents", ChangeRequestDocumentHandler),
+        (r"/api/change-management/requests/([^/]+)/audit-reconstruction", ChangeRequestAuditReconstructionHandler),
         (r"/api/change-management/requests/([^/]+)", ChangeRequestDetailHandler),
         (r"/api/change-management/requests", ChangeRequestsListHandler),
         (r"/api/change-management/stats", ChangeManagementStatsHandler),
