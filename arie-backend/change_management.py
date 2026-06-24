@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import secrets
+import inspect
 from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -594,6 +595,46 @@ def check_role_permission(user_role: str, action: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _log_audit_compat(
+    log_audit_fn,
+    user,
+    action,
+    target,
+    detail,
+    *,
+    db=None,
+    before_state=None,
+    after_state=None,
+):
+    """Call an audit writer while tolerating older test callbacks.
+
+    Production ``BaseHandler.log_audit`` accepts db/before_state/after_state.
+    Some service-layer tests pass minimal four-argument collectors; this helper
+    preserves those callbacks without dropping structured state in production.
+    """
+    if not log_audit_fn:
+        return
+    kwargs = {}
+    try:
+        sig = inspect.signature(log_audit_fn)
+        params = sig.parameters
+        accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        for key, value in (
+            ("db", db),
+            ("before_state", before_state),
+            ("after_state", after_state),
+        ):
+            if value is not None and (accepts_var_kw or key in params):
+                kwargs[key] = value
+    except (TypeError, ValueError):
+        kwargs = {
+            "db": db,
+            "before_state": before_state,
+            "after_state": after_state,
+        }
+    log_audit_fn(user, action, target, detail, **kwargs)
+
+
 # ============================================================================
 # Entity Profile Snapshot
 # ============================================================================
@@ -1059,10 +1100,36 @@ def create_change_request(
     db.commit()
 
     if log_audit_fn:
-        log_audit_fn(
+        _log_audit_compat(
+            log_audit_fn,
             user, "Change Request Created", request_id,
             f"Source={source}, materiality={overall_materiality}, items={len(items)}",
             db=db,
+            after_state={
+                "request_id": request_id,
+                "application_id": application_id,
+                "source": source,
+                "source_channel": source_channel,
+                "materiality": overall_materiality,
+                "status": "draft",
+                "reason": reason,
+                "created_by": user.get("sub"),
+                "items": [
+                    {
+                        "id": f"{request_id}-I{idx + 1:03d}",
+                        "change_type": item.get("change_type", "other"),
+                        "field_name": item.get("field_name"),
+                        "old_value": item.get("old_value"),
+                        "new_value": item.get("new_value"),
+                        "materiality": item.get(
+                            "materiality",
+                            classify_materiality(item.get("change_type", "other")),
+                        ),
+                        "person_action": item.get("person_action"),
+                    }
+                    for idx, item in enumerate(items)
+                ],
+            },
         )
 
     return {
@@ -1138,9 +1205,18 @@ def update_change_request_status(
         if blockers:
             codes = ", ".join(b["code"] for b in blockers)
             if log_audit_fn:
-                log_audit_fn(
+                _log_audit_compat(
+                    log_audit_fn,
                     user, "CM Approval Blocked", request_id,
                     f"Approval blocked by: {codes}", db=db,
+                    after_state={
+                        "request_id": request_id,
+                        "attempted_status": new_status,
+                        "current_status": current_status,
+                        "blockers": blockers,
+                        "approver_id": user.get("sub"),
+                        "approver_role": user.get("role"),
+                    },
                 )
             return False, f"Approval blocked by preconditions: {codes}"
 
@@ -1488,10 +1564,18 @@ def record_precondition_result(
     db.commit()
 
     if log_audit_fn:
-        log_audit_fn(
+        _log_audit_compat(
+            log_audit_fn,
             user, "CM Precondition Recorded", request_id,
             f"kind={kind}; recorded_by={user.get('name', user.get('sub'))}; note={entry.get('note') or 'n/a'}",
             db=db,
+            after_state={
+                "request_id": request_id,
+                "kind": kind,
+                "result": entry,
+                "recorded_by": user.get("sub"),
+                "recorded_by_role": user.get("role"),
+            },
         )
     return True, ""
 
@@ -2183,15 +2267,34 @@ def approve_change_request(
     if remaining:
         codes = ", ".join(b["code"] for b in remaining)
         if log_audit_fn:
-            log_audit_fn(
+            _log_audit_compat(
+                log_audit_fn,
                 user, "CM Approval Blocked", request_id,
                 f"Approval blocked by: {codes}", db=db,
+                after_state={
+                    "request_id": request_id,
+                    "attempted_status": "approved",
+                    "current_status": request.get("status"),
+                    "blockers": remaining,
+                    "all_blockers": blockers,
+                    "override_codes": list(override_codes or []),
+                    "approver_id": user.get("sub"),
+                    "approver_role": user.get("role"),
+                },
             )
         return False, f"Approval blocked by preconditions: {codes}"
     if applied and log_audit_fn:
-        log_audit_fn(
+        _log_audit_compat(
+            log_audit_fn,
             user, "CM Approval Override", request_id,
             f"Overrode {', '.join(applied)}; reason: {override_reason}", db=db,
+            after_state={
+                "request_id": request_id,
+                "override_codes": applied,
+                "override_reason": override_reason,
+                "override_actor": user.get("sub"),
+                "override_actor_role": user.get("role"),
+            },
         )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -2216,13 +2319,30 @@ def approve_change_request(
     db.commit()
 
     if log_audit_fn:
-        log_audit_fn(
+        _log_audit_compat(
+            log_audit_fn,
             user, "Change Request Approved", request_id,
             f"Approved by {user.get('name', user.get('sub'))}. "
             f"Materiality: {materiality}. Notes: {decision_notes or 'none'}",
             db=db,
             before_state={"status": row["status"]},
-            after_state={"status": "approved"},
+            after_state={
+                "status": "approved",
+                "request_id": request_id,
+                "approved_by": user.get("sub"),
+                "approved_by_role": user.get("role"),
+                "approved_at": now,
+                "decision_notes": decision_notes,
+                "maker_checker": {
+                    "required": materiality in MAKER_CHECKER_TIERS,
+                    "creator_id": request.get("created_by"),
+                    "approver_id": user.get("sub"),
+                    "passed": (
+                        materiality not in MAKER_CHECKER_TIERS
+                        or request.get("created_by") != user.get("sub")
+                    ),
+                },
+            },
         )
 
     return True, ""
@@ -2321,6 +2441,21 @@ def implement_change_request(
 
     request = dict(row)
     if request["status"] == "implemented":
+        if log_audit_fn:
+            _log_audit_compat(
+                log_audit_fn,
+                user, "CM Implementation Idempotent Reuse", request_id,
+                f"Already implemented. Profile version: {request.get('result_profile_version_id') or 'n/a'}",
+                db=db,
+                after_state={
+                    "request_id": request_id,
+                    "status": "implemented",
+                    "profile_version_id": request.get("result_profile_version_id"),
+                    "attempted_by": user.get("sub"),
+                    "attempted_by_role": user.get("role"),
+                    "idempotent": True,
+                },
+            )
         return True, "", request.get("result_profile_version_id")
 
     blockers = implementation_blockers(db, request)
@@ -2331,10 +2466,18 @@ def implement_change_request(
             for b in blockers
         )
         if log_audit_fn:
-            log_audit_fn(
+            _log_audit_compat(
+                log_audit_fn,
                 user, "CM Implementation Blocked", request_id,
                 f"Implementation blocked by: {codes}",
                 db=db,
+                after_state={
+                    "request_id": request_id,
+                    "status": request.get("status"),
+                    "blockers": blockers,
+                    "attempted_by": user.get("sub"),
+                    "attempted_by_role": user.get("role"),
+                },
             )
         return False, f"Implementation blocked: {summary}", None
 
@@ -2943,6 +3086,465 @@ def get_change_request_detail(db, request_id: str) -> Optional[Dict]:
     except Exception as e:
         logger.error("Failed to get change request detail: %s", e)
         return None
+
+
+def _safe_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _load_profile_version_snapshot(db, version_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not version_id:
+        return None
+    version = get_profile_version_detail(db, version_id)
+    if not version:
+        return None
+    snapshot = version.get("profile_snapshot")
+    return snapshot if isinstance(snapshot, dict) else _safe_json_object(snapshot)
+
+
+def _actor_lookup(db, actor_ids) -> Dict[str, Dict[str, Any]]:
+    ids = sorted({str(actor_id) for actor_id in actor_ids if actor_id})
+    if not ids:
+        return {}
+    placeholders = ",".join(["?"] * len(ids))
+    actors: Dict[str, Dict[str, Any]] = {}
+    try:
+        rows = db.execute(
+            f"SELECT id, email, full_name, role FROM users WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        for row in rows:
+            d = dict(row)
+            actors[str(d.get("id"))] = {
+                "id": d.get("id"),
+                "name": d.get("full_name"),
+                "email": d.get("email"),
+                "role": d.get("role"),
+                "type": "officer",
+            }
+    except Exception:
+        pass
+    try:
+        rows = db.execute(
+            f"SELECT id, email, company_name FROM clients WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        for row in rows:
+            d = dict(row)
+            actors.setdefault(str(d.get("id")), {
+                "id": d.get("id"),
+                "name": d.get("company_name"),
+                "email": d.get("email"),
+                "role": "client",
+                "type": "client",
+            })
+    except Exception:
+        pass
+    return actors
+
+
+def _actor_summary(actor_id: Any, actors: Dict[str, Dict[str, Any]], *, fallback_role=None) -> Optional[Dict[str, Any]]:
+    actor_id = str(actor_id or "").strip()
+    if not actor_id:
+        return None
+    actor = dict(actors.get(actor_id) or {"id": actor_id})
+    if fallback_role and not actor.get("role"):
+        actor["role"] = fallback_role
+    return actor
+
+
+def _audit_detail_payload(detail: Any) -> Dict[str, Any]:
+    payload = _safe_json_object(detail)
+    return _json_safe_precondition_payload(payload)
+
+
+def _audit_state_payload(value: Any) -> Any:
+    if isinstance(value, str) and value.strip():
+        try:
+            return _json_safe_precondition_value(json.loads(value))
+        except (TypeError, json.JSONDecodeError):
+            return value
+    return _json_safe_precondition_value(value)
+
+
+def _load_audit_rows(db, targets) -> List[Dict[str, Any]]:
+    target_values = sorted({str(target) for target in targets if str(target or "").strip()})
+    if not target_values:
+        return []
+    placeholders = ",".join(["?"] * len(target_values))
+    columns = "id, timestamp, user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state"
+    try:
+        rows = db.execute(
+            f"""SELECT {columns}
+                  FROM audit_log
+                 WHERE target IN ({placeholders})
+                 ORDER BY timestamp ASC, id ASC""",
+            tuple(target_values),
+        ).fetchall()
+    except Exception:
+        try:
+            rows = db.execute(
+                f"""SELECT id, timestamp, user_id, user_name, user_role, action, target, detail, ip_address
+                      FROM audit_log
+                     WHERE target IN ({placeholders})
+                     ORDER BY timestamp ASC, id ASC""",
+                tuple(target_values),
+            ).fetchall()
+        except Exception:
+            return []
+
+    timeline = []
+    for row in rows:
+        d = dict(row)
+        timeline.append({
+            "id": d.get("id"),
+            "timestamp": d.get("timestamp"),
+            "action": d.get("action"),
+            "target": d.get("target"),
+            "actor": {
+                "id": d.get("user_id"),
+                "name": d.get("user_name"),
+                "role": d.get("user_role"),
+            },
+            "detail": d.get("detail"),
+            "detail_payload": _audit_detail_payload(d.get("detail")),
+            "before_state": _audit_state_payload(d.get("before_state")),
+            "after_state": _audit_state_payload(d.get("after_state")),
+            "ip_address": d.get("ip_address"),
+        })
+    return _json_safe_precondition_value(timeline)
+
+
+def _matching_required_keys_for_doc(doc: Dict[str, Any], items: List[Dict[str, Any]]) -> List[str]:
+    keys = []
+    doc_type = str(doc.get("doc_type") or "")
+    for item in items:
+        if doc.get("item_id") and item.get("id") and doc.get("item_id") != item.get("id"):
+            continue
+        change_key = _canonical_change_key(item)
+        requirement = CM_EVIDENCE_REQUIREMENT_MATRIX.get(change_key or "")
+        if requirement and _cm_doc_type_matches(doc_type, requirement.get("doc_types") or set()):
+            keys.append(change_key)
+    return sorted({key for key in keys if key})
+
+
+def _evidence_requirement_for_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    change_key = _canonical_change_key(item)
+    requirement = CM_EVIDENCE_REQUIREMENT_MATRIX.get(change_key or "")
+    if not requirement:
+        return None
+    return {
+        "change_key": change_key,
+        "label": requirement.get("label"),
+        "portal_field": requirement.get("portal_field"),
+        "mapping_target": requirement.get("mapping_target"),
+        "required_doc_types": sorted(requirement.get("doc_types") or []),
+        "agent1_required": bool(requirement.get("agent1_required")),
+        "officer_note_required": bool(requirement.get("officer_note_required")),
+        "non_waivable": bool(requirement.get("non_waivable")),
+    }
+
+
+def _evidence_summary(
+    request: Dict[str, Any],
+    items: List[Dict[str, Any]],
+    cr_docs: List[Dict[str, Any]],
+    app_docs: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    app_lookup = _app_doc_by_id(app_docs)
+    evidence = []
+    verifications = []
+    for doc in cr_docs:
+        linked_doc_id = _extract_linked_document_id(doc)
+        agent_doc = _linked_agent1_doc(doc, app_lookup) or {}
+        ok, blocker_code = _document_satisfies_agent1(agent_doc) if agent_doc else (False, "cm_agent1_required")
+        verification = {
+            "document_id": agent_doc.get("id") or linked_doc_id,
+            "request_document_id": doc.get("id"),
+            "doc_name": agent_doc.get("doc_name") or doc.get("doc_name"),
+            "doc_type": agent_doc.get("doc_type") or doc.get("doc_type"),
+            "verification_status": agent_doc.get("verification_status"),
+            "review_status": agent_doc.get("review_status"),
+            "verified_at": agent_doc.get("verified_at"),
+            "reviewed_at": agent_doc.get("reviewed_at"),
+            "valid_until": agent_doc.get("valid_until"),
+            "file_sha256": agent_doc.get("file_sha256"),
+            "stale": bool(_is_doc_stale(agent_doc)) if agent_doc else None,
+            "agent1_satisfied": ok,
+            "blocker_code": None if ok else blocker_code,
+        }
+        evidence.append({
+            "id": doc.get("id"),
+            "request_id": doc.get("request_id"),
+            "item_id": doc.get("item_id"),
+            "doc_name": doc.get("doc_name"),
+            "doc_type": doc.get("doc_type"),
+            "uploaded_by": doc.get("uploaded_by"),
+            "uploaded_at": doc.get("uploaded_at"),
+            "linked_to_request": True,
+            "linked_document_id": linked_doc_id,
+            "linked_document": {
+                "id": agent_doc.get("id"),
+                "doc_name": agent_doc.get("doc_name"),
+                "doc_type": agent_doc.get("doc_type"),
+                "verification_status": agent_doc.get("verification_status"),
+                "review_status": agent_doc.get("review_status"),
+                "verified_at": agent_doc.get("verified_at"),
+                "reviewed_at": agent_doc.get("reviewed_at"),
+                "file_sha256": agent_doc.get("file_sha256"),
+                "upload_source": agent_doc.get("upload_source"),
+            } if agent_doc else None,
+            "required_by_change_keys": _matching_required_keys_for_doc(doc, items),
+            "agent1_verification": verification,
+        })
+        verifications.append(verification)
+    return (
+        _json_safe_precondition_value(evidence),
+        _json_safe_precondition_value(verifications),
+    )
+
+
+def _precondition_status(kind: str, required: bool, result: Dict[str, Any], current_sig: str) -> Dict[str, Any]:
+    if not result:
+        status = "missing" if required else "not_recorded"
+    elif result.get("result") != "recorded":
+        status = "indeterminate"
+    elif result.get("content_sig") != current_sig:
+        status = "stale"
+    elif kind == "screening":
+        if result.get("unresolved_match") is True:
+            status = "unresolved"
+        elif result.get("unresolved_match") is False:
+            status = "clean"
+        else:
+            status = "indeterminate"
+    else:
+        status = "recorded" if _normalize_risk_level(result.get("risk_level")) else "indeterminate"
+    return {
+        "required": bool(required),
+        "status": status,
+        "result": _json_safe_precondition_payload(result or {}),
+        "content_signature_current": result.get("content_sig") == current_sig if result else False,
+    }
+
+
+def _change_item_summary(item: Dict[str, Any], after_snapshot: Optional[Dict[str, Any]], evidence_ids: List[str]) -> Dict[str, Any]:
+    field_name = item.get("field_name")
+    person_snapshot = _item_snapshot(item)
+    final_value = None
+    if after_snapshot and field_name:
+        final_value = after_snapshot.get(field_name)
+    requirement = _evidence_requirement_for_item(item)
+    return {
+        "id": item.get("id"),
+        "change_type": item.get("change_type"),
+        "canonical_change_key": _canonical_change_key(item),
+        "field_name": field_name,
+        "old_value": item.get("old_value"),
+        "requested_new_value": item.get("new_value"),
+        "final_implemented_value": final_value,
+        "materiality": item.get("materiality"),
+        "person_action": item.get("person_action"),
+        "affected_party": {
+            "person_key": person_snapshot.get("person_key"),
+            "full_name": person_snapshot.get("full_name"),
+            "first_name": person_snapshot.get("first_name"),
+            "last_name": person_snapshot.get("last_name"),
+            "role_hint": item.get("change_type"),
+        } if person_snapshot else None,
+        "evidence_ids": evidence_ids,
+        "evidence_requirement": requirement,
+        "created_at": item.get("created_at"),
+    }
+
+
+def get_change_request_audit_reconstruction(db, request_id: str) -> Optional[Dict[str, Any]]:
+    """Build a regulator-grade reconstruction of a Change Management request.
+
+    The reconstruction is read-only and uses the existing CM/audit tables. It
+    never runs approval gates, screening, provider calls, risk recomputation, or
+    implementation side effects.
+    """
+    detail = get_change_request_detail(db, request_id)
+    if not detail:
+        return None
+
+    request = dict(detail)
+    items = [dict(item) for item in request.get("items") or []]
+    cr_docs = _load_cr_documents(db, request_id)
+    app_docs = _load_app_documents(db, request.get("application_id"))
+    evidence, agent1_verifications = _evidence_summary(request, items, cr_docs, app_docs)
+
+    doc_ids_by_item: Dict[str, List[str]] = {}
+    for doc in evidence:
+        if doc.get("item_id"):
+            doc_ids_by_item.setdefault(doc["item_id"], []).append(doc.get("id"))
+
+    before_snapshot = _load_profile_version_snapshot(db, request.get("base_profile_version_id"))
+    after_snapshot = _load_profile_version_snapshot(db, request.get("result_profile_version_id"))
+    change_items = [
+        _change_item_summary(item, after_snapshot, doc_ids_by_item.get(item.get("id"), []))
+        for item in items
+    ]
+
+    targets = {request_id, request.get("result_profile_version_id")}
+    for doc in cr_docs:
+        targets.add(doc.get("id"))
+        targets.add(_extract_linked_document_id(doc))
+    timeline = _load_audit_rows(db, targets)
+
+    audit_actor_ids = {
+        row.get("actor", {}).get("id")
+        for row in timeline
+        if isinstance(row.get("actor"), dict)
+    }
+    review_actor_ids = {review.get("reviewer_id") for review in request.get("reviews") or []}
+    actor_ids = {
+        request.get("created_by"),
+        request.get("approved_by"),
+        request.get("implemented_by"),
+        *(doc.get("uploaded_by") for doc in cr_docs),
+        *audit_actor_ids,
+        *review_actor_ids,
+    }
+    actors = _actor_lookup(db, actor_ids)
+
+    preconditions = _load_precondition_results(request)
+    content_sig = _request_content_signature(db, request_id)
+    approval_attempts = [row for row in timeline if row.get("action") == "CM Approval Blocked"]
+    implementation_attempts = [row for row in timeline if row.get("action") == "CM Implementation Blocked"]
+    override_events = [row for row in timeline if row.get("action") == "CM Approval Override"]
+    approval_events = [row for row in timeline if row.get("action") == "Change Request Approved"]
+    implementation_events = [
+        row for row in timeline
+        if row.get("action") in {"Change Request Implemented", "CM Implementation Idempotent Reuse"}
+    ]
+
+    latest_approval_review = None
+    approved_reviews = [
+        review for review in request.get("reviews") or []
+        if str(review.get("decision") or "").lower() == "approved"
+    ]
+    if approved_reviews:
+        latest_approval_review = approved_reviews[-1]
+
+    application = {
+        "id": request.get("application_id"),
+        "ref": request.get("application_ref"),
+        "company_name": request.get("company_name"),
+    }
+
+    reconstruction = {
+        "request": {
+            "id": request.get("id"),
+            "application_id": request.get("application_id"),
+            "status": request.get("status"),
+            "request_type": sorted({item.get("change_type") for item in items if item.get("change_type")}),
+            "materiality": request.get("materiality"),
+            "source": request.get("source"),
+            "source_channel": request.get("source_channel"),
+            "source_alert_id": request.get("source_alert_id"),
+            "reason": request.get("reason"),
+            "created_at": request.get("created_at"),
+            "created_by": _actor_summary(request.get("created_by"), actors),
+            "submitted_at": request.get("submitted_at"),
+        },
+        "application": application,
+        "change_summary": {
+            "item_count": len(change_items),
+            "items": change_items,
+            "before_profile_version_id": request.get("base_profile_version_id"),
+            "result_profile_version_id": request.get("result_profile_version_id"),
+            "before_snapshot": _safe_snapshot_summary(before_snapshot or {}),
+            "after_snapshot": _safe_snapshot_summary(after_snapshot or {}),
+        },
+        "evidence": evidence,
+        "agent1_verifications": agent1_verifications,
+        "screening": {
+            **_precondition_status(
+                "screening",
+                _implementation_requires_screening(db, request),
+                preconditions.get("screening") if isinstance(preconditions, dict) else {},
+                content_sig,
+            ),
+            "screening_ref": (preconditions.get("screening") or {}).get("screening_ref") if isinstance(preconditions, dict) else None,
+            "screened_at": (preconditions.get("screening") or {}).get("screened_at") if isinstance(preconditions, dict) else None,
+        },
+        "risk": {
+            **_precondition_status(
+                "risk",
+                _implementation_requires_risk(db, request),
+                preconditions.get("risk") if isinstance(preconditions, dict) else {},
+                content_sig,
+            ),
+            "risk_level_before": request.get("pre_change_risk_level"),
+            "risk_level_after": (
+                (preconditions.get("risk") or {}).get("risk_level")
+                if isinstance(preconditions, dict)
+                else request.get("post_change_risk_level")
+            ),
+            "risk_review_ref": (
+                (preconditions.get("risk") or {}).get("risk_ref")
+                or (preconditions.get("risk") or {}).get("risk_review_ref")
+                if isinstance(preconditions, dict)
+                else None
+            ),
+        },
+        "approval": {
+            "status": "approved" if request.get("approved_at") else None,
+            "approved_by": _actor_summary(
+                request.get("approved_by"),
+                actors,
+                fallback_role=(latest_approval_review or {}).get("reviewer_role"),
+            ),
+            "approved_at": request.get("approved_at"),
+            "decision_notes": request.get("decision_notes"),
+            "approver_role": (latest_approval_review or {}).get("reviewer_role"),
+            "maker_checker": {
+                "required": request.get("materiality") in MAKER_CHECKER_TIERS,
+                "creator_id": request.get("created_by"),
+                "approver_id": request.get("approved_by"),
+                "passed": (
+                    request.get("materiality") not in MAKER_CHECKER_TIERS
+                    or not request.get("approved_by")
+                    or request.get("created_by") != request.get("approved_by")
+                ),
+            },
+            "blocked_attempts": approval_attempts,
+            "override_events": override_events,
+            "approval_events": approval_events,
+            "reviews": _json_safe_precondition_value(request.get("reviews") or []),
+        },
+        "implementation": {
+            "status": "implemented" if request.get("status") == "implemented" else request.get("status"),
+            "implemented_by": _actor_summary(request.get("implemented_by"), actors),
+            "implemented_at": request.get("implemented_at"),
+            "profile_version_id": request.get("result_profile_version_id"),
+            "blocked_attempts": implementation_attempts,
+            "implementation_events": implementation_events,
+            "old_live_profile": _safe_snapshot_summary(before_snapshot or {}),
+            "new_live_profile": _safe_snapshot_summary(after_snapshot or {}),
+            "idempotency": {
+                "already_implemented": request.get("status") == "implemented",
+                "profile_version_id": request.get("result_profile_version_id"),
+                "repeated_attempts": [
+                    row for row in timeline
+                    if row.get("action") == "CM Implementation Idempotent Reuse"
+                ],
+            },
+        },
+        "blocked_attempts": approval_attempts + implementation_attempts,
+        "timeline": timeline,
+    }
+    return _json_safe_precondition_payload(reconstruction)
 
 
 def get_change_alert_detail(db, alert_id: str) -> Optional[Dict]:
