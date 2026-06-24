@@ -34299,6 +34299,20 @@ class PortalApplicationEnhancedRequirementResponseHandler(BaseHandler):
             db.close()
 
 
+PORTAL_CLIENT_VISIBLE_CHANGE_REQUEST_SOURCES = {"portal_client"}
+PORTAL_CLIENT_VISIBLE_CHANGE_REQUEST_CHANNELS = {"portal"}
+
+
+def portal_change_request_is_client_visible(request: dict) -> bool:
+    """Return True when a CM request should appear in the client portal list."""
+    source = str((request or {}).get("source") or "").strip().lower()
+    source_channel = str((request or {}).get("source_channel") or "").strip().lower()
+    return (
+        source in PORTAL_CLIENT_VISIBLE_CHANGE_REQUEST_SOURCES
+        or source_channel in PORTAL_CLIENT_VISIBLE_CHANGE_REQUEST_CHANNELS
+    )
+
+
 class PortalChangeRequestHandler(BaseHandler):
     """POST /api/portal/change-requests — Client creates a change request from portal"""
     def get(self):
@@ -34322,7 +34336,10 @@ class PortalChangeRequestHandler(BaseHandler):
             all_requests = []
             for app_id in app_ids:
                 reqs = cm.list_change_requests(db, application_id=app_id)
-                all_requests.extend(reqs)
+                all_requests.extend(
+                    r for r in reqs
+                    if portal_change_request_is_client_visible(r)
+                )
 
             self.success({"requests": all_requests, "total": len(all_requests)})
         finally:
