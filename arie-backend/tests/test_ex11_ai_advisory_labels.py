@@ -241,13 +241,13 @@ class TestPartC_OfficerSignoffGate:
 
     def test_signoff_reset_on_approve(self, backoffice_html):
         fn_start = backoffice_html.index('function approveApplication()')
-        fn_region = backoffice_html[fn_start:fn_start + 500]
+        fn_region = backoffice_html[fn_start:fn_start + 900]
         assert 'decision-officer-signoff' in fn_region, \
             "approveApplication must reset the sign-off checkbox"
 
     def test_signoff_reset_on_reject(self, backoffice_html):
         fn_start = backoffice_html.index('function rejectApplication()')
-        fn_region = backoffice_html[fn_start:fn_start + 500]
+        fn_region = backoffice_html[fn_start:fn_start + 900]
         assert 'decision-officer-signoff' in fn_region, \
             "rejectApplication must reset the sign-off checkbox"
 
@@ -394,7 +394,7 @@ class TestNonRegression:
 
     def test_decision_still_requires_reason(self, backoffice_html):
         fn_start = backoffice_html.index('async function confirmDecision()')
-        fn_region = backoffice_html[fn_start:fn_start + 1000]
+        fn_region = backoffice_html[fn_start:fn_start + 1600]
         assert 'Please provide a reason' in fn_region
 
     def test_override_still_requires_reason(self, backoffice_html):

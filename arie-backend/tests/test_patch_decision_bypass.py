@@ -147,6 +147,7 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
         self._seed_app("pdb_low", "PDB-LOW", "in_review", "LOW", 20)
         self._seed_app("pdb_high", "PDB-HIGH", "in_review", "HIGH", 80)
         self._seed_app("pdb_move", "PDB-MOVE", "compliance_review", "LOW", 20)
+        self._seed_app("pdb_approved", "PDB-APPROVED", "approved", "LOW", 20)
 
     def _status_of(self, app_id):
         row = self.db.execute("SELECT status FROM applications WHERE id = ?", (app_id,)).fetchone()
@@ -304,6 +305,25 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
         assert "screening" in error
         assert "memo" not in error
         assert self._status_of("pdb_low") == "in_review"
+
+    def test_decision_replay_on_approved_application_returns_409(self):
+        # UI buttons are disabled in PR-2, but the backend remains authoritative:
+        # repeat terminal decisions must still be rejected if called directly.
+        signoff = {"acknowledged": True, "scope": "decision", "source_context": "ai_advisory"}
+        resp = self.fetch(
+            "/api/applications/pdb_approved/decision", method="POST",
+            headers=self._headers(self.admin_token),
+            body=json.dumps({
+                "decision": "approve",
+                "decision_reason": "repeat approval attempt",
+                "officer_signoff": signoff,
+            }),
+        )
+        assert resp.code == 409, resp.body.decode()
+        error = self._json(resp)["error"]
+        assert "Decision replay blocked" in error
+        assert "already in terminal state" in error
+        assert self._status_of("pdb_approved") == "approved"
 
 
 # ── Pure unit tests for the centralized authority gate ──

@@ -532,7 +532,7 @@ class TestPartE_Regression:
 
     def test_decision_still_requires_reason(self, backoffice_html):
         fn_start = backoffice_html.index('async function confirmDecision()')
-        fn_region = backoffice_html[fn_start:fn_start + 1000]
+        fn_region = backoffice_html[fn_start:fn_start + 1600]
         assert 'Please provide a reason' in fn_region
 
     def test_override_still_requires_reason(self, backoffice_html):
