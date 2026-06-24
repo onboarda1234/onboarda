@@ -631,6 +631,196 @@ class TestHappyPathSubmit:
         assert app["onboarding_lane"] is None
         assert req_count == 0
 
+    def test_retry_after_committed_high_submit_returns_current_state_without_screening_or_duplicate_audit(self, temp_db):
+        """A retry after durable HIGH/EDD submit must be a current-state read, not a second submit."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        db = _get_project_db(temp_db)
+        app_id = _setup_test_app(db)
+        prescreening = {
+            "incorporation_date": "2020-01-01",
+            "pricing": {
+                "onboarding_fee": 3500,
+                "annual_monitoring_fee": 2000,
+                "currency": "USD",
+                "risk_level": "HIGH",
+                "final_risk_level": "HIGH",
+                "base_risk_level": "HIGH",
+                "elevation_reason_text": "",
+            },
+            "screening_report": {
+                "total_hits": 2,
+                "overall_flags": ["pep_match"],
+                "degraded_sources": [],
+                "company_screening": {"source": "cached_registry"},
+                "ip_geolocation": {"source": "cached_geo"},
+                "director_screenings": [{"screening": {"source": "cached_aml"}}],
+            },
+        }
+        db.execute(
+            """
+            UPDATE applications
+            SET status='pricing_review',
+                submitted_at=datetime('now'),
+                risk_score=?,
+                risk_level=?,
+                risk_dimensions=?,
+                onboarding_lane=?,
+                risk_escalations=?,
+                base_risk_level=?,
+                final_risk_level=?,
+                elevation_reason_text=?,
+                prescreening_data=?
+            WHERE id=?
+            """,
+            (
+                72,
+                "HIGH",
+                json.dumps({"D1": 4, "D2": 4}),
+                "EDD",
+                json.dumps(["edd_required"]),
+                "HIGH",
+                "HIGH",
+                "",
+                json.dumps(prescreening),
+                app_id,
+            ),
+        )
+        db.commit()
+        before_audit_count = db.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+
+        with patch.object(server, "run_full_screening", side_effect=AssertionError("screening must not rerun")):
+            handler._do_submit(
+                db,
+                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                app_id,
+            )
+
+        after_audit_count = db.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+        db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        data, status = success_calls[0]
+        assert status == 200
+        assert data["idempotent_recovery"] is True
+        assert data["status"] == "pricing_review"
+        assert data["risk_level"] == "HIGH"
+        assert data["onboarding_lane"] == "EDD"
+        assert data["requires_pre_approval"] is True
+        assert data["screening"]["total_hits"] == 2
+        assert handler.log_audit.call_count == 0
+        assert after_audit_count == before_audit_count
+
+    def test_sanctioned_prescreening_country_returns_403_before_screening_and_is_retry_safe(self, temp_db):
+        """Sanctioned jurisdiction aliases must fail deterministically before provider work."""
+        server = _get_server_module()
+
+        error_calls = []
+        handler = _make_handler(server, error_calls)
+
+        db = _get_project_db(temp_db)
+        app_id = _setup_test_app(db)
+        db.execute(
+            "UPDATE applications SET country=?, prescreening_data=? WHERE id=?",
+            (
+                "Mauritius",
+                json.dumps({
+                    "incorporation_date": "2020-01-01",
+                    "country_of_incorporation": "North Korea (DPRK)",
+                }),
+                app_id,
+            ),
+        )
+        db.commit()
+
+        with patch.object(server, "run_full_screening", side_effect=AssertionError("screening must not run")):
+            handler._do_submit(
+                db,
+                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                app_id,
+            )
+            handler._do_submit(
+                db,
+                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                app_id,
+            )
+
+        row = db.execute("SELECT status, risk_level, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
+        db.close()
+
+        assert len(error_calls) == 2
+        assert error_calls[0][1] == 403
+        assert error_calls[1][1] == 403
+        assert row["status"] == "draft"
+        assert row["risk_level"] is None
+        assert "screening_report" not in json.loads(row["prescreening_data"])
+
+    def test_post_commit_notification_scheduling_failure_does_not_convert_submit_to_500(self, temp_db):
+        """If the non-critical notifier cannot be scheduled, durable submit still returns success."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(
+                            server._POST_COMMIT_EXECUTOR,
+                            "submit",
+                            side_effect=RuntimeError("executor unavailable"),
+                        ):
+                            db = _get_project_db(temp_db)
+                            app_id = _setup_test_app(db)
+                            db.execute("PRAGMA foreign_keys = ON")
+
+                            handler._do_submit(
+                                db,
+                                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                app_id,
+                            )
+
+                            app = db.execute(
+                                "SELECT status, risk_level, onboarding_lane, submitted_at FROM applications WHERE id=?",
+                                (app_id,),
+                            ).fetchone()
+                            db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert app["submitted_at"]
+
 
 # ---------------------------------------------------------------------------
 # 5. Structured logging / expected status code behavior

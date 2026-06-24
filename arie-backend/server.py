@@ -150,6 +150,7 @@ from rule_engine import (
     RISK_WEIGHTS, RISK_RANK,
     classify_country, score_sector, compute_risk_score, classify_risk_level,
     apply_risk_floor,
+    normalize_country_key,
     validate_risk_config,
     recompute_risk, recompute_risk_for_active_apps,
 )
@@ -2507,6 +2508,263 @@ PRICING_TIERS = {
         "includes": ["Maximum EDD verification", "Real-time sanctions & PEP monitoring", "Periodic review every 6 months", "Full monitoring suite", "Dedicated compliance officer"]
     }
 }
+
+
+def _post_commit_worker_count() -> int:
+    try:
+        return max(1, int(os.getenv("POST_COMMIT_EXECUTOR_WORKERS", "2")))
+    except Exception:
+        return 2
+
+
+_POST_COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=_post_commit_worker_count())
+
+_SUBMIT_RECOVERY_STATUSES = {
+    "submitted",
+    "pricing_review",
+    "pricing_accepted",
+    "pre_approval_review",
+    "pre_approved",
+    "kyc_documents",
+    "documents_required",
+    "kyc_submitted",
+    "compliance_review",
+    "submitted_to_compliance",
+    "in_review",
+    "under_review",
+    "edd_required",
+    "rmi_sent",
+}
+
+
+def _row_value(row, key, default=None):
+    if row is None:
+        return default
+    try:
+        if hasattr(row, "get"):
+            return row.get(key, default)
+        if hasattr(row, "keys") and key not in row.keys():
+            return default
+        return row[key]
+    except Exception:
+        return default
+
+
+def _dict_or_empty(value):
+    parsed = safe_json_loads(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _list_or_empty(value):
+    parsed = safe_json_loads(value)
+    return parsed if isinstance(parsed, list) else []
+
+
+def _collect_submit_country_values(app, prescreening):
+    values = []
+
+    def add(value):
+        if value is None:
+            return
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                values.append(text)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                add(item)
+            return
+
+    for key in (
+        "country",
+        "country_of_incorporation",
+        "incorporation_country",
+        "registered_country",
+        "jurisdiction",
+    ):
+        add(_row_value(app, key))
+
+    if not isinstance(prescreening, dict):
+        return values
+
+    for key in (
+        "country",
+        "country_of_incorporation",
+        "incorporation_country",
+        "registered_country",
+        "registration_country",
+        "jurisdiction",
+        "entity_country",
+        "entity_jurisdiction",
+    ):
+        add(prescreening.get(key))
+
+    for parent_key in ("canonical", "entity", "company", "business", "applicant"):
+        parent = prescreening.get(parent_key)
+        if not isinstance(parent, dict):
+            continue
+        for key in (
+            "country",
+            "country_of_incorporation",
+            "incorporation_country",
+            "registered_country",
+            "registration_country",
+            "jurisdiction",
+        ):
+            add(parent.get(key))
+
+    canonical = prescreening.get("canonical")
+    if isinstance(canonical, dict):
+        entity = canonical.get("entity")
+        if isinstance(entity, dict):
+            for key in (
+                "country",
+                "country_of_incorporation",
+                "incorporation_country",
+                "registered_country",
+                "registration_country",
+                "jurisdiction",
+            ):
+                add(entity.get(key))
+
+    return values
+
+
+def _submit_prohibited_jurisdiction(app, prescreening):
+    for raw_country in _collect_submit_country_values(app, prescreening):
+        country_key = normalize_country_key(raw_country)
+        if country_key in SANCTIONED_COUNTRIES_FULL or country_key in SANCTIONED:
+            return raw_country, country_key
+    return None, None
+
+
+def _submit_recovery_available(app):
+    status = str(_row_value(app, "status", "") or "").strip().lower()
+    if status not in _SUBMIT_RECOVERY_STATUSES:
+        return False
+    risk_level = str(_row_value(app, "risk_level", "") or "").strip()
+    if not risk_level:
+        risk_level = str(_row_value(app, "final_risk_level", "") or "").strip()
+    if not risk_level:
+        return False
+    return _row_value(app, "risk_score") not in (None, "")
+
+
+def _submit_recovery_payload(app, prescreening):
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    risk_level = str(
+        _row_value(app, "risk_level")
+        or _row_value(app, "final_risk_level")
+        or "MEDIUM"
+    ).upper()
+    lane = str(_row_value(app, "onboarding_lane") or "").strip()
+    pricing = prescreening.get("pricing")
+    pricing = deepcopy(pricing) if isinstance(pricing, dict) else deepcopy(
+        PRICING_TIERS.get(risk_level, PRICING_TIERS["MEDIUM"])
+    )
+    pricing.setdefault("risk_level", risk_level)
+    pricing.setdefault("final_risk_level", _row_value(app, "final_risk_level") or risk_level)
+    pricing.setdefault("base_risk_level", _row_value(app, "base_risk_level") or risk_level)
+    pricing.setdefault("elevation_reason_text", _row_value(app, "elevation_reason_text") or "")
+
+    screening_report = prescreening.get("screening_report")
+    screening_report = screening_report if isinstance(screening_report, dict) else {}
+    company_screening = screening_report.get("company_screening")
+    company_screening = company_screening if isinstance(company_screening, dict) else {}
+    ip_geolocation = screening_report.get("ip_geolocation")
+    ip_geolocation = ip_geolocation if isinstance(ip_geolocation, dict) else {}
+    director_screenings = screening_report.get("director_screenings") or []
+    sanctions_source = "none"
+    if director_screenings and isinstance(director_screenings[0], dict):
+        screening = director_screenings[0].get("screening")
+        if isinstance(screening, dict):
+            sanctions_source = screening.get("source", "none")
+
+    return {
+        "ref": _row_value(app, "ref"),
+        "risk_score": _row_value(app, "risk_score"),
+        "risk_level": risk_level,
+        "base_risk_score": _row_value(app, "base_risk_score"),
+        "base_risk_level": _row_value(app, "base_risk_level") or risk_level,
+        "final_risk_level": _row_value(app, "final_risk_level") or risk_level,
+        "risk_escalations": _list_or_empty(_row_value(app, "risk_escalations")),
+        "elevation_reason_text": _row_value(app, "elevation_reason_text") or "",
+        "risk_dimensions": _dict_or_empty(_row_value(app, "risk_dimensions")),
+        "onboarding_lane": lane,
+        "status": _row_value(app, "status"),
+        "requires_pre_approval": risk_level in ("HIGH", "VERY_HIGH") or lane.upper() == "EDD",
+        "pricing": pricing,
+        "idempotent_recovery": True,
+        "message": "Application submit already completed; returning current persisted state.",
+        "screening": {
+            "total_hits": screening_report.get("total_hits", 0),
+            "flags": screening_report.get("overall_flags", []),
+            "degraded_sources": screening_report.get("degraded_sources", []),
+            "api_sources": {
+                "sanctions": sanctions_source,
+                "corporate_registry": company_screening.get("source", "none"),
+                "ip_geolocation": ip_geolocation.get("source", "none"),
+            },
+        },
+    }
+
+
+def _send_prescreening_compliance_notifications(app_id, app_ref, company_name, risk_level, risk_score, lane):
+    notify_db = get_db()
+    try:
+        compliance_users = notify_db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+        for cu in compliance_users:
+            notify_db.execute(
+                "INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                (
+                    cu["id"],
+                    f"PRE-APPROVAL REQUIRED: {risk_level}-Risk Application {app_ref}",
+                    f"Pre-screening {app_ref} ({company_name}) — Risk: {risk_level} (Score: {risk_score}), Lane: {lane}. "
+                    "This application requires pre-approval before the client can proceed to KYC. "
+                    "Review pre-screening data and screening results in the Pre-Approval Queue.",
+                ),
+            )
+        notify_db.commit()
+    except Exception as notify_exc:
+        try:
+            notify_db.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "Pre-screening compliance notification failed after durable submit: app_id=%s ref=%s error=%s",
+            app_id,
+            app_ref,
+            str(notify_exc)[:300],
+            exc_info=True,
+        )
+    finally:
+        try:
+            notify_db.close()
+        except Exception:
+            pass
+
+
+def _schedule_prescreening_compliance_notifications(app_id, app_ref, company_name, risk_level, risk_score, lane):
+    try:
+        _POST_COMMIT_EXECUTOR.submit(
+            _send_prescreening_compliance_notifications,
+            app_id,
+            app_ref,
+            company_name,
+            risk_level,
+            risk_score,
+            lane,
+        )
+    except Exception as submit_exc:
+        logger.warning(
+            "Pre-screening compliance notification scheduling failed after durable submit: app_id=%s ref=%s error=%s",
+            app_id,
+            app_ref,
+            str(submit_exc)[:300],
+            exc_info=True,
+        )
+
 
 # ══════════════════════════════════════════════════════════
 # DATABASE
@@ -7863,11 +8121,16 @@ class SubmitApplicationHandler(BaseHandler):
             }, default=str))
             return
 
-        # EX-05: Capture before-state for audit trail
-        _before = snapshot_app_state(app)
-
         # ── v2.2: Pre-screening validation ──────────────────────────
         prescreening_raw = safe_json_loads(app["prescreening_data"])
+        if not isinstance(prescreening_raw, dict):
+            prescreening_raw = {}
+
+        if _submit_recovery_available(app):
+            return self.success(_submit_recovery_payload(app, prescreening_raw), 200)
+
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
 
         # Validate incorporation date (no future dates)
         inc_date = prescreening_raw.get("incorporation_date", "")
@@ -7880,9 +8143,16 @@ class SubmitApplicationHandler(BaseHandler):
             except ValueError:
                 pass  # Non-standard date format, allow through
 
-        # Validate country is not sanctioned
-        country = (app.get("country") or "").lower().strip()
-        if country in SANCTIONED_COUNTRIES_FULL:
+        # Validate prohibited/sanctioned jurisdiction before any provider calls.
+        blocked_country, blocked_country_key = _submit_prohibited_jurisdiction(app, prescreening_raw)
+        if blocked_country_key:
+            logger.warning(
+                "Submit blocked for prohibited jurisdiction: app_id=%s ref=%s country=%s normalized=%s",
+                real_id,
+                app.get("ref", ""),
+                blocked_country,
+                blocked_country_key,
+            )
             return self.error(
                 f"{BRAND['portal_name']} cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
                 403
@@ -7918,7 +8188,7 @@ class SubmitApplicationHandler(BaseHandler):
         if not directors:
             return self.error("At least one director is required before submitting the application.", 400)
 
-        prescreening = safe_json_loads(app["prescreening_data"])
+        prescreening = prescreening_raw
         scoring_input = build_prescreening_risk_input(
             application=app,
             prescreening_data=prescreening,
@@ -8089,7 +8359,7 @@ class SubmitApplicationHandler(BaseHandler):
             db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
 
             # Get pricing for this risk level
-            pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
+            pricing = deepcopy(PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"]))
 
             # Store pricing in prescreening data
             prescreening["pricing"] = pricing
@@ -8262,29 +8532,17 @@ class SubmitApplicationHandler(BaseHandler):
             )
 
         # Notify compliance after durable state is committed. Notification
-        # failures must not turn a successfully committed submit into a 500.
+        # failures must not keep the request open or turn a committed submit
+        # into a client-visible ambiguous timeout.
         if requires_compliance_preapproval:
-            try:
-                compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
-                for cu in compliance_users:
-                    db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                              (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
-                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}), Lane: {risk['lane']}. "
-                               f"This application requires pre-approval before the client can proceed to KYC. "
-                               f"Review pre-screening data and screening results in the Pre-Approval Queue."))
-                db.commit()
-            except Exception as notify_exc:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-                logger.warning(
-                    "Pre-screening compliance notification failed after durable submit: app_id=%s ref=%s error=%s",
-                    real_id,
-                    app.get("ref", ""),
-                    str(notify_exc)[:300],
-                    exc_info=True,
-                )
+            _schedule_prescreening_compliance_notifications(
+                real_id,
+                app["ref"],
+                app["company_name"],
+                risk["level"],
+                risk["score"],
+                risk["lane"],
+            )
 
         result_status = "pricing_review"
         self.success({
