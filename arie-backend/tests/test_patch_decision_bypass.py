@@ -286,8 +286,8 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
 
     def test_decision_co_low_approve_is_not_role_blocked(self):
         # CO retains LOW/MEDIUM approval authority: the gate must NOT 403 a CO on a
-        # LOW file. It proceeds to the readiness gates (here: missing memo -> 400),
-        # proving authority != readiness.
+        # LOW file. It proceeds to the readiness gates (here: missing screening/docs
+        # -> 400), proving authority != readiness and LOW does not require memo first.
         signoff = {"acknowledged": True, "scope": "decision", "source_context": "ai_advisory"}
         resp = self.fetch(
             "/api/applications/pdb_low/decision", method="POST",
@@ -300,7 +300,9 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
         )
         assert resp.code != 403, resp.body.decode()
         assert resp.code == 400
-        assert "memo" in self._json(resp)["error"].lower()
+        error = self._json(resp)["error"].lower()
+        assert "screening" in error
+        assert "memo" not in error
         assert self._status_of("pdb_low") == "in_review"
 
 

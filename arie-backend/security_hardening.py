@@ -696,6 +696,284 @@ def _approval_gate_blocker(
     return blocker
 
 
+DIRECT_APPROVAL_RISK_LEVELS = {"LOW", "MEDIUM"}
+APPROVAL_ROUTE_DIRECT_LOW_MEDIUM = "direct_low_medium"
+APPROVAL_ROUTE_COMPLIANCE_REQUIRED = "compliance_required"
+APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED = "dual_control_required"
+APPROVAL_ROUTE_BLOCKED = "blocked"
+
+
+def _json_list_value(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _approval_route_risk_level(app: Mapping[str, Any]) -> Optional[str]:
+    return (
+        _canonical_approval_risk_level((app or {}).get("final_risk_level"))
+        or _canonical_approval_risk_level((app or {}).get("risk_level"))
+    )
+
+
+def _approval_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _approval_truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return _approval_text(value) in {
+        "1",
+        "true",
+        "t",
+        "yes",
+        "y",
+        "declared_yes",
+        "confirmed_pep",
+        "pep",
+        "hit",
+        "hits",
+        "match",
+        "matched",
+        "positive",
+        "found",
+        "red",
+        "failed",
+        "fail",
+        "adverse",
+        "material",
+        "concern",
+        "flagged",
+    }
+
+
+def _approval_row_has_declared_pep(row: Mapping[str, Any]) -> bool:
+    if _approval_truthy_flag((row or {}).get("is_pep")):
+        return True
+    pep_declaration = _json_object((row or {}).get("pep_declaration"))
+    for key in (
+        "declared_pep",
+        "client_declared_pep",
+        "officer_verified_pep",
+        "verified_pep",
+        "current_status",
+    ):
+        if _approval_truthy_flag(pep_declaration.get(key)):
+            return True
+    return _approval_truthy_flag(pep_declaration.get("pep_status"))
+
+
+def _approval_has_declared_pep(app: Mapping[str, Any], db) -> bool:
+    prescreening = _json_object((app or {}).get("prescreening_data"))
+    screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+    for payload in (prescreening, screening_report if isinstance(screening_report, dict) else {}):
+        if _approval_truthy_flag(payload.get("declared_pep")):
+            return True
+        if _approval_truthy_flag(payload.get("any_pep_hits")) or _approval_truthy_flag(payload.get("has_pep_hit")):
+            return True
+    if not db or not (app or {}).get("id"):
+        return False
+    try:
+        for table in ("directors", "ubos"):
+            rows = db.execute(
+                f"SELECT is_pep, pep_declaration FROM {table} WHERE application_id = ?",
+                (app.get("id"),),
+            ).fetchall()
+            if any(_approval_row_has_declared_pep(_row_to_dict(row)) for row in rows or []):
+                return True
+    except Exception:
+        logger.debug("Approval route PEP lookup skipped for application %s", (app or {}).get("id"), exc_info=True)
+    return False
+
+
+def _approval_adverse_media_flag(payload: Any) -> bool:
+    if isinstance(payload, Mapping):
+        for key in (
+            "adverse_media",
+            "adverse_media_status",
+            "adverse_media_match",
+            "has_adverse_media_hit",
+            "adverse_media_hit",
+        ):
+            if key in payload:
+                value = payload.get(key)
+                if isinstance(value, Mapping):
+                    if _approval_adverse_media_flag(value):
+                        return True
+                elif _approval_truthy_flag(value):
+                    return True
+        coverage = _approval_text(payload.get("adverse_media_coverage"))
+        if coverage and coverage not in {"none", "no", "false", "clear", "cleared", "negative"}:
+            return True
+        for key in ("screening_results", "screening_report"):
+            if _approval_adverse_media_flag(payload.get(key)):
+                return True
+    elif isinstance(payload, str):
+        text = payload.strip().lower()
+        return text in {
+            "adverse",
+            "adverse_media",
+            "hit",
+            "hits",
+            "match",
+            "matched",
+            "positive",
+            "material",
+            "red",
+        }
+    return False
+
+
+def _approval_escalation_reasons(app: Mapping[str, Any], db, screening_truth: Optional[Mapping[str, Any]] = None) -> List[str]:
+    reasons: List[str] = []
+    if not isinstance(app, Mapping):
+        return ["application_missing"]
+
+    status = _approval_text(app.get("status"))
+    lane = _approval_text(app.get("onboarding_lane")).replace("-", "_")
+    if status == "submitted_to_compliance":
+        reasons.append("officer_submitted_to_compliance")
+    if status == "edd_required" or lane == "edd":
+        reasons.append("edd_required")
+    if _approval_text(app.get("pre_approval_decision")) in {"pre_approve", "pre_approved", "approved"}:
+        reasons.append("pre_approval_route")
+
+    escalation_values = [
+        _approval_text(value)
+        for value in _json_list_value(app.get("risk_escalations"))
+        if _approval_text(value)
+    ]
+    escalation_text = " ".join(escalation_values + [_approval_text(app.get("elevation_reason_text"))])
+    if "edd" in escalation_text:
+        reasons.append("edd_trigger")
+    if "pep" in escalation_text:
+        reasons.append("pep")
+    if "adverse" in escalation_text:
+        reasons.append("adverse_media")
+    if "material_screening" in escalation_text or "screening_concern" in escalation_text:
+        reasons.append("material_screening_concern")
+
+    prescreening = _json_object(app.get("prescreening_data"))
+    if _approval_has_declared_pep(app, db):
+        reasons.append("pep")
+    if _approval_adverse_media_flag(prescreening):
+        reasons.append("adverse_media")
+    if _approval_truthy_flag(prescreening.get("screening_concern")):
+        reasons.append("material_screening_concern")
+
+    truth = screening_truth if isinstance(screening_truth, Mapping) else {}
+    blocked_reasons = " ".join(str(item or "").lower() for item in (truth.get("approval_blocked_reasons") or []))
+    blocking_reasons = " ".join(str(item or "").lower() for item in (truth.get("blocking_reasons") or []))
+    canonical_state = _approval_text(truth.get("canonical_state"))
+    truth_blob = " ".join([blocked_reasons, blocking_reasons, canonical_state])
+    if any(token in truth_blob for token in ("completed_match", "true_match", "terminal_match", "live_terminal_match")):
+        reasons.append("material_screening_concern")
+
+    deduped: List[str] = []
+    for reason in reasons:
+        if reason and reason not in deduped:
+            deduped.append(reason)
+    return deduped
+
+
+def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
+    """Classify the approval path without deciding actor authority or mutating state.
+
+    The route separates risk/escalation policy from operational readiness:
+    ``direct_low_medium`` may skip the compliance memo package; escalated routes keep
+    memo/supervisor/senior controls; ``blocked`` represents records that are not yet
+    in a decisionable state or do not have a trustworthy risk snapshot.
+    """
+    app = dict(app or {})
+    status = _approval_text(app.get("status"))
+    risk_level = _approval_route_risk_level(app)
+    route = APPROVAL_ROUTE_BLOCKED
+    reasons: List[str] = []
+
+    if not app:
+        reasons.append("application_missing")
+    if not risk_level:
+        reasons.append("risk_unavailable")
+
+    pre_decision_states = {
+        "draft",
+        "submitted",
+        "prescreening_submitted",
+        "pricing_review",
+        "pricing_accepted",
+        "pre_approval_review",
+        "pre_approved",
+        "kyc_documents",
+    }
+    terminal_states = {"approved", "rejected", "withdrawn"}
+    if status in terminal_states:
+        reasons.append("terminal_state")
+    elif status in pre_decision_states:
+        reasons.append("case_stage_not_decisionable")
+
+    prescreening = _json_object(app.get("prescreening_data"))
+    screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+    screening_truth = {}
+    if isinstance(screening_report, dict) and screening_report:
+        try:
+            screening_truth = build_screening_truth_summary(
+                screening_report,
+                {
+                    **prescreening,
+                    "screening_input_updated_at": (
+                        app.get("screening_input_updated_at")
+                        or app.get("risk_inputs_updated_at")
+                        or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
+                        or app.get("submitted_at")
+                    ),
+                },
+                [],
+            )
+        except Exception:
+            screening_truth = {}
+
+    escalation_reasons = _approval_escalation_reasons(app, db, screening_truth)
+    high_risk = risk_level in HIGH_RISK_DECISION_LEVELS
+    if high_risk:
+        escalation_reasons.append("high_or_very_high_risk")
+
+    if reasons:
+        route = APPROVAL_ROUTE_BLOCKED
+    elif high_risk:
+        route = APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED
+    elif escalation_reasons:
+        route = APPROVAL_ROUTE_COMPLIANCE_REQUIRED
+    elif risk_level in DIRECT_APPROVAL_RISK_LEVELS:
+        route = APPROVAL_ROUTE_DIRECT_LOW_MEDIUM
+    else:
+        route = APPROVAL_ROUTE_BLOCKED
+        reasons.append("unsupported_risk_level")
+
+    requires_compliance_package = route in {
+        APPROVAL_ROUTE_COMPLIANCE_REQUIRED,
+        APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED,
+    }
+    return {
+        "route": route,
+        "risk_level": risk_level,
+        "status": status,
+        "reasons": reasons,
+        "escalation_reasons": sorted(set(escalation_reasons)),
+        "requires_compliance_package": requires_compliance_package,
+        "requires_dual_control": route == APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED,
+        "direct_low_medium": route == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM,
+    }
+
+
 class ApprovalGateValidator:
     """
     Validates all preconditions before an application can be approved.
@@ -703,7 +981,231 @@ class ApprovalGateValidator:
     """
 
     @staticmethod
-    def validate_approval(app: Dict, db) -> Tuple[bool, str]:
+    def _validate_direct_low_medium_operational_tail(
+        app: Dict,
+        db,
+        screening_report: Dict,
+        prescreening_data: Dict,
+    ) -> Tuple[bool, str]:
+        """Validate operational gates that still apply to direct LOW/MEDIUM approval."""
+        app_id = app.get("id")
+        screening_evidence = _collect_screening_provider_evidence(screening_report)
+        if screening_evidence:
+            for item in screening_evidence:
+                api_status = (item.get("api_status") or "").lower()
+                source = (item.get("source") or "").lower()
+                is_simulated = api_status in ("simulated", "mocked") or source in ("simulated", "mocked")
+                is_error = api_status in ("error", "blocked")
+                is_pending = api_status == "pending"
+                is_not_configured = api_status == "not_configured"
+
+                if not item.get("is_required", True):
+                    if is_simulated:
+                        logger.warning(
+                            f"Enrichment screening '{item.get('name', 'unknown')}' used simulated data. "
+                            "This is non-blocking enrichment — approval proceeds."
+                        )
+                    continue
+
+                if is_not_configured and item.get("name") == "company_watchlist":
+                    logger.warning(
+                        "company_watchlist screening is not configured "
+                        "(no Sumsub company KYB level) — approval proceeds with warning."
+                    )
+                    continue
+
+                if is_simulated:
+                    return (
+                        False,
+                        f"Screening check '{item.get('name', 'unknown')}' used simulated data. "
+                        "Live screening results are required for approval.",
+                    )
+                if is_error:
+                    return (
+                        False,
+                        f"Screening check '{item.get('name', 'unknown')}' is not in a live usable state "
+                        f"(api_status={api_status or 'unknown'}).",
+                    )
+                if is_pending:
+                    return (
+                        False,
+                        f"Screening check '{item.get('name', 'unknown')}' is still pending "
+                        f"(api_status=pending). Wait for screening to complete before approval.",
+                    )
+        else:
+            for check_name in ("sanctions", "kyc"):
+                check_data = screening_report.get(check_name, {})
+                if isinstance(check_data, dict) and check_data.get("api_status") == "simulated":
+                    return (
+                        False,
+                        f"Screening check '{check_name}' used simulated data (api_status=simulated). "
+                        "Live screening results are required for approval.",
+                    )
+
+        submitted_at = app.get("submitted_at")
+        screening_input_updated_at = (
+            app.get("screening_input_updated_at")
+            or app.get("risk_inputs_updated_at")
+            or (app.get("inputs_updated_at") if submitted_at else None)
+            or submitted_at
+        )
+        screening_ts_str = screening_report.get("screened_at") or screening_report.get("timestamp")
+        if screening_input_updated_at and screening_ts_str:
+            try:
+                sub_ts = _parse_approval_timestamp(screening_input_updated_at)
+                scr_ts = _parse_approval_timestamp(screening_ts_str)
+                if sub_ts > scr_ts + timedelta(seconds=5):
+                    return (
+                        False,
+                        "Screening was run before the latest screening-relevant application update. "
+                        "Re-submit the application to trigger fresh screening.",
+                    )
+            except (ValueError, TypeError) as ts_err:
+                logger.warning(f"Could not compare screening timestamps: {ts_err}")
+                return (
+                    False,
+                    "Could not verify screening freshness due to timestamp format error. "
+                    "Re-submit the application to trigger fresh screening.",
+                )
+
+        validity_days = get_screening_validity_days()
+        _FUTURE_SKEW_SECONDS = 300
+        if screening_ts_str:
+            try:
+                _scr_ts_future = _parse_approval_timestamp(screening_ts_str)
+                _now_future = datetime.now(timezone.utc)
+                if _scr_ts_future > _now_future + timedelta(seconds=_FUTURE_SKEW_SECONDS):
+                    logger.warning(
+                        f"Future-dated screened_at rejected for application {app_id}: "
+                        f"screened_at={screening_ts_str}, now={_now_future.isoformat()}"
+                    )
+                    return (
+                        False,
+                        "Screening timestamp is in the future and cannot be trusted. "
+                        "A re-screen is required before approval can proceed.",
+                    )
+            except (ValueError, TypeError) as ts_err:
+                logger.debug(f"Could not parse screened_at for future-date check: {ts_err}")
+
+        screening_valid_until_str = prescreening_data.get("screening_valid_until")
+        if screening_valid_until_str:
+            try:
+                valid_until = _parse_approval_timestamp(screening_valid_until_str)
+                now = datetime.now(timezone.utc)
+                max_valid_until = now + timedelta(days=validity_days, seconds=_FUTURE_SKEW_SECONDS)
+                if valid_until > max_valid_until:
+                    logger.warning(
+                        f"Future-dated screening_valid_until rejected for application {app_id}: "
+                        f"valid_until={screening_valid_until_str}, max_allowed={max_valid_until.isoformat()}"
+                    )
+                    return (
+                        False,
+                        "Screening validity window is implausibly far in the future. "
+                        "A re-screen is required before approval can proceed.",
+                    )
+                if now > valid_until:
+                    age_days = (now - valid_until).days
+                    return (
+                        False,
+                        f"Screening results expired {age_days} day(s) ago "
+                        f"(validity period: {validity_days} days). "
+                        "A re-screen is required before approval can proceed.",
+                    )
+            except (ValueError, TypeError) as ts_err:
+                logger.warning(f"Could not parse screening_valid_until: {ts_err}")
+                return (
+                    False,
+                    "Could not verify screening expiry due to timestamp format error. "
+                    "Please re-run screening before approval.",
+                )
+        elif screening_ts_str:
+            try:
+                scr_ts_check = _parse_approval_timestamp(screening_ts_str)
+                computed_valid_until = scr_ts_check + timedelta(days=validity_days)
+                now = datetime.now(timezone.utc)
+                if now > computed_valid_until:
+                    age_days = (now - computed_valid_until).days
+                    return (
+                        False,
+                        f"Screening results expired {age_days} day(s) ago "
+                        f"(validity period: {validity_days} days). "
+                        "A re-screen is required before approval can proceed.",
+                    )
+            except (ValueError, TypeError) as ts_err:
+                logger.warning(f"Could not compute screening expiry from screened_at: {ts_err}")
+                return (
+                    False,
+                    "Could not verify screening freshness due to timestamp format error. "
+                    "Please re-run screening before approval.",
+                )
+        else:
+            return (
+                False,
+                "Screening timestamp is missing from the screening report. "
+                "A re-screen is required before approval can proceed.",
+            )
+
+        document_gate = evaluate_document_reliance_gate(
+            db,
+            app,
+            stage="application_approval",
+        )
+        if not document_gate.get("passed"):
+            return (
+                False,
+                "Document evidence gate failed: "
+                + format_document_reliance_blockers(document_gate),
+            )
+
+        try:
+            from enhanced_requirements import (
+                format_enhanced_requirements_approval_error,
+                validate_enhanced_requirements_for_approval,
+            )
+            enhanced_validation = validate_enhanced_requirements_for_approval(
+                db,
+                app_id,
+                app_row=app,
+            )
+            if not enhanced_validation.get("passed"):
+                return (
+                    False,
+                    format_enhanced_requirements_approval_error(enhanced_validation),
+                )
+        except Exception as _er:
+            logger.error("Failed to evaluate enhanced requirements approval gate: %s", _er, exc_info=True)
+            return (
+                False,
+                "Could not verify Enhanced Review requirements. "
+                "Resolve configuration/data issues and retry approval.",
+            )
+
+        _screening_age_days = None
+        _valid_until_log = screening_valid_until_str or None
+        try:
+            _now_log = datetime.now(timezone.utc)
+            if screening_ts_str:
+                _scr_log = _parse_approval_timestamp(screening_ts_str)
+                _screening_age_days = (_now_log - _scr_log).days
+        except (ValueError, TypeError) as age_err:
+            logger.debug(f"Could not compute screening age for audit log: {age_err}")
+            _screening_age_days = None
+
+        logger.info(
+            f"Screening freshness validated for application {app_id}: "
+            f"screening_age_days={_screening_age_days}, "
+            f"valid_until={_valid_until_log}, "
+            f"validity_days={validity_days}"
+        )
+
+        logger.info(
+            "Application %s passed direct LOW/MEDIUM operational approval gates",
+            app_id,
+        )
+        return (True, "")
+
+    @staticmethod
+    def validate_approval(app: Dict, db, approval_route: Optional[Mapping[str, Any]] = None) -> Tuple[bool, str]:
         """
         Validates that an application meets all approval prerequisites.
 
@@ -743,6 +1245,7 @@ class ApprovalGateValidator:
             risk_integrity_error = _approval_risk_integrity_error(app, "approve application")
             if risk_integrity_error:
                 return (False, risk_integrity_error)
+            route_policy = dict(approval_route) if isinstance(approval_route, Mapping) else classify_approval_route(app, db)
 
             # 2. Check screening exists in prescreening_data and mode is live
             prescreening_data = app.get('prescreening_data', '{}')
@@ -866,6 +1369,14 @@ class ApprovalGateValidator:
                     "Identity verification gate failed: "
                     f"{reason}. Identity verification must be verified, manually verified, "
                     "or senior exception-approved before final approval."
+                )
+
+            if route_policy.get("route") == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM:
+                return ApprovalGateValidator._validate_direct_low_medium_operational_tail(
+                    app,
+                    db,
+                    screening_report,
+                    prescreening_data,
                 )
 
             # 3. Check compliance memo exists and meets quality gates
@@ -1411,7 +1922,7 @@ HIGH_RISK_DECISION_LEVELS = ("HIGH", "VERY_HIGH")
 DECISION_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
 
 
-def can_decide_application(user, app, decision, *, risk_level=None, override_ai=False):
+def can_decide_application(user, app, decision, *, risk_level=None, override_ai=False, approval_route=None):
     """Single server-side authority gate for terminal application decisions.
 
     This is the ONLY sanctioned authority for moving an application to
@@ -1434,6 +1945,7 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
             (LOW/MEDIUM/HIGH/VERY_HIGH). Authority is evaluated against current
             risk, never a stored submission-time lane.
         override_ai: True when the actor is overriding the AI recommendation.
+        approval_route: Optional route dict from :func:`classify_approval_route`.
 
     Returns:
         Tuple ``(allowed, status_code, reason, meta)`` where ``meta`` carries
@@ -1450,6 +1962,20 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
         # extra-audited; it still passes the SAME gate as SCO (no shortcut).
         "is_privileged_admin_action": role == "admin" and decision == "approve" and is_high,
     }
+    if isinstance(approval_route, Mapping):
+        route_name = approval_route.get("route")
+        meta["approval_route"] = route_name
+        meta["approval_route_reasons"] = approval_route.get("reasons") or []
+        meta["approval_route_escalation_reasons"] = approval_route.get("escalation_reasons") or []
+        meta["requires_compliance_package"] = bool(approval_route.get("requires_compliance_package"))
+        meta["requires_dual_approval"] = bool(
+            decision == "approve"
+            and (
+                approval_route.get("requires_dual_control")
+                or route_name == APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED
+                or is_high
+            )
+        )
 
     if decision not in ("approve", "reject"):
         return (
@@ -1491,6 +2017,24 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
             meta,
         )
 
+    # 2b. Onboarding Officer direct authority is limited to clean LOW/MEDIUM.
+    # LOW/MEDIUM with PEP, adverse media, EDD, material screening concern, or an
+    # officer-submitted compliance handoff must route through compliance.
+    route_name = meta.get("approval_route")
+    if (
+        decision == "approve"
+        and role == "co"
+        and route_name in {APPROVAL_ROUTE_COMPLIANCE_REQUIRED, APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED}
+    ):
+        reasons = meta.get("approval_route_escalation_reasons") or ["compliance_review_required"]
+        return (
+            False,
+            403,
+            "Approval blocked: this application requires compliance/SCO review before approval "
+            f"(route={route_name}, reasons={', '.join(str(r) for r in reasons[:6])}).",
+            meta,
+        )
+
     # 3. Overriding the AI recommendation is senior-only.
     if override_ai and role not in ("sco", "admin"):
         return (
@@ -1517,6 +2061,7 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
 
     app_id = app.get("id")
     status = str(app.get("status") or "").strip().lower()
+    route_policy = classify_approval_route(app, db)
     pre_kyc_states = {
         "draft",
         "prescreening_submitted",
@@ -1699,43 +2244,44 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             action_key="documents.resolve",
         ))
 
-    memo_row = None
-    try:
-        memo_row = latest_compliance_memo_row(
-            db,
-            app_id,
-            columns=(
-                "id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
-                "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at"
-            ),
-        )
-        memo_row = _row_to_dict(memo_row) if memo_row else None
-    except Exception:
-        memo_row = None
-    if not memo_row:
+    if route_policy.get("route") in {APPROVAL_ROUTE_COMPLIANCE_REQUIRED, APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED}:
+        reasons = route_policy.get("escalation_reasons") or ["compliance_review_required"]
         blockers.append(_approval_gate_blocker(
-            "memo_missing",
-            "Compliance Memo",
-            "Compliance memo missing",
-            "Compliance memo must be generated before approval.",
-            cta_label="Open memo",
+            "risk_escalation_required",
+            "Risk Route",
+            "Compliance review is required",
+            "This case cannot use the direct LOW/MEDIUM approval route. "
+            + "Escalation reason(s): "
+            + ", ".join(str(reason) for reason in reasons[:6])
+            + ".",
+            cta_label="Submit to Compliance",
             tab="overview",
-            anchor_id="detail-memo",
-            blocker_group="memo_package",
-            blocker_group_label="Memo Package",
-            action_key="memo.open",
+            anchor_id="approval-authority-hint",
+            blocker_group="risk_route",
+            blocker_group_label="Risk Route",
+            action_key="submit_to_compliance.open",
         ))
-    else:
-        memo_review = str(memo_row.get("review_status") or "").lower()
-        memo_validation = str(memo_row.get("validation_status") or "").lower()
-        memo_supervisor = str(memo_row.get("supervisor_status") or "").upper()
-        memo_stale = _truthy_db_value(memo_row.get("is_stale"))
-        if memo_stale:
+
+    if route_policy.get("requires_compliance_package"):
+        memo_row = None
+        try:
+            memo_row = latest_compliance_memo_row(
+                db,
+                app_id,
+                columns=(
+                    "id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
+                    "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at"
+                ),
+            )
+            memo_row = _row_to_dict(memo_row) if memo_row else None
+        except Exception:
+            memo_row = None
+        if not memo_row:
             blockers.append(_approval_gate_blocker(
-                "memo_stale",
+                "memo_missing",
                 "Compliance Memo",
-                "Compliance memo is stale",
-                memo_row.get("stale_reason") or "Material facts changed after memo generation.",
+                "Compliance memo missing",
+                "Compliance memo must be generated before approval.",
                 cta_label="Open memo",
                 tab="overview",
                 anchor_id="detail-memo",
@@ -1743,75 +2289,93 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
                 blocker_group_label="Memo Package",
                 action_key="memo.open",
             ))
-        if _truthy_db_value(memo_row.get("blocked")):
-            blockers.append(_approval_gate_blocker(
-                "memo_blocked",
-                "Compliance Memo",
-                "Compliance memo is blocked",
-                memo_row.get("block_reason") or "Blocking memo controls failed.",
-                cta_label="Open memo",
-                tab="overview",
-                anchor_id="detail-memo",
-                blocker_group="memo_package",
-                blocker_group_label="Memo Package",
-                action_key="memo.open",
-            ))
-        if memo_review != "approved":
-            blockers.append(_approval_gate_blocker(
-                "memo_approval",
-                "Compliance Memo",
-                "Compliance memo is not approved",
-                "Memo approval has not been completed.",
-                cta_label="Open memo",
-                tab="overview",
-                anchor_id="detail-memo",
-                blocker_group="memo_package",
-                blocker_group_label="Memo Package",
-                action_key="memo.open",
-            ))
-        elif not str(memo_row.get("approval_reason") or "").strip():
-            blockers.append(_approval_gate_blocker(
-                "memo_approval_reason_missing",
-                "Compliance Memo",
-                "Memo approval reason is missing",
-                "Approve the canonical memo with documented officer rationale before final application approval.",
-                cta_label="Open memo",
-                tab="overview",
-                anchor_id="memo-approval-reason",
-                blocker_group="memo_package",
-                blocker_group_label="Memo Package",
-                action_key="memo.open",
-            ))
-        if memo_validation not in {"pass", "pass_with_fixes"}:
-            blockers.append(_approval_gate_blocker(
-                "memo_validation",
-                "Compliance Memo",
-                "Compliance memo validation failed or is pending",
-                "Memo validation has not been completed." if memo_validation in {"", "pending"} else "Memo validation needs officer review before approval.",
-                cta_label="Open memo",
-                tab="overview",
-                anchor_id="memo-validation-panel",
-                blocker_group="memo_package",
-                blocker_group_label="Memo Package",
-                action_key="memo.validate",
-            ))
-        if memo_supervisor and memo_supervisor not in {"CONSISTENT", "CONSISTENT_WITH_WARNINGS"}:
-            blockers.append(_approval_gate_blocker(
-                "supervisor_inconsistent",
-                "Supervisor Review",
-                "Supervisor review is inconsistent",
-                "Supervisor review has not been completed." if memo_supervisor == "PENDING" else "Supervisor review needs attention before approval.",
-                cta_label="Run supervisor",
-                tab="supervisor",
-                anchor_id="detail-tab-supervisor",
-                blocker_group="memo_package",
-                blocker_group_label="Memo Package",
-                action_key="supervisor.run",
-            ))
+        else:
+            memo_review = str(memo_row.get("review_status") or "").lower()
+            memo_validation = str(memo_row.get("validation_status") or "").lower()
+            memo_supervisor = str(memo_row.get("supervisor_status") or "").upper()
+            memo_stale = _truthy_db_value(memo_row.get("is_stale"))
+            if memo_stale:
+                blockers.append(_approval_gate_blocker(
+                    "memo_stale",
+                    "Compliance Memo",
+                    "Compliance memo is stale",
+                    memo_row.get("stale_reason") or "Material facts changed after memo generation.",
+                    cta_label="Open memo",
+                    tab="overview",
+                    anchor_id="detail-memo",
+                    blocker_group="memo_package",
+                    blocker_group_label="Memo Package",
+                    action_key="memo.open",
+                ))
+            if _truthy_db_value(memo_row.get("blocked")):
+                blockers.append(_approval_gate_blocker(
+                    "memo_blocked",
+                    "Compliance Memo",
+                    "Compliance memo is blocked",
+                    memo_row.get("block_reason") or "Blocking memo controls failed.",
+                    cta_label="Open memo",
+                    tab="overview",
+                    anchor_id="detail-memo",
+                    blocker_group="memo_package",
+                    blocker_group_label="Memo Package",
+                    action_key="memo.open",
+                ))
+            if memo_review != "approved":
+                blockers.append(_approval_gate_blocker(
+                    "memo_approval",
+                    "Compliance Memo",
+                    "Compliance memo is not approved",
+                    "Memo approval has not been completed.",
+                    cta_label="Open memo",
+                    tab="overview",
+                    anchor_id="detail-memo",
+                    blocker_group="memo_package",
+                    blocker_group_label="Memo Package",
+                    action_key="memo.open",
+                ))
+            elif not str(memo_row.get("approval_reason") or "").strip():
+                blockers.append(_approval_gate_blocker(
+                    "memo_approval_reason_missing",
+                    "Compliance Memo",
+                    "Memo approval reason is missing",
+                    "Approve the canonical memo with documented officer rationale before final application approval.",
+                    cta_label="Open memo",
+                    tab="overview",
+                    anchor_id="memo-approval-reason",
+                    blocker_group="memo_package",
+                    blocker_group_label="Memo Package",
+                    action_key="memo.open",
+                ))
+            if memo_validation not in {"pass", "pass_with_fixes"}:
+                blockers.append(_approval_gate_blocker(
+                    "memo_validation",
+                    "Compliance Memo",
+                    "Compliance memo validation failed or is pending",
+                    "Memo validation has not been completed." if memo_validation in {"", "pending"} else "Memo validation needs officer review before approval.",
+                    cta_label="Open memo",
+                    tab="overview",
+                    anchor_id="memo-validation-panel",
+                    blocker_group="memo_package",
+                    blocker_group_label="Memo Package",
+                    action_key="memo.validate",
+                ))
+            if memo_supervisor and memo_supervisor not in {"CONSISTENT", "CONSISTENT_WITH_WARNINGS"}:
+                blockers.append(_approval_gate_blocker(
+                    "supervisor_inconsistent",
+                    "Supervisor Review",
+                    "Supervisor review is inconsistent",
+                    "Supervisor review has not been completed." if memo_supervisor == "PENDING" else "Supervisor review needs attention before approval.",
+                    cta_label="Run supervisor",
+                    tab="supervisor",
+                    anchor_id="detail-tab-supervisor",
+                    blocker_group="memo_package",
+                    blocker_group_label="Memo Package",
+                    action_key="supervisor.run",
+                ))
 
     if not blockers:
         try:
-            can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+            can_approve, message = ApprovalGateValidator.validate_approval(app, db, approval_route=route_policy)
             if not can_approve:
                 blockers.append(_approval_gate_blocker(
                     "approval_gate_validator",
