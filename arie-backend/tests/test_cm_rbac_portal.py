@@ -856,6 +856,49 @@ class TestPortalOwnership:
         req_ids = [r["id"] for r in all_reqs]
         assert req["id"] in req_ids
 
+    def test_portal_list_excludes_internal_only_change_requests(self, db):
+        """Client history should not expose back-office or alert-origin CM records."""
+        from server import portal_change_request_is_client_visible
+
+        cm = _get_cm()
+        client_a, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        portal_actor = _make_user("admin", sub=client_a)
+        officer = _make_user("admin", sub="admin-officer")
+
+        portal_req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="portal_client",
+            source_channel="portal", reason="Portal visible request",
+            items=[{"change_type": "other"}],
+            user=portal_actor, log_audit_fn=_noop_audit,
+        )
+        internal_req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Internal officer-only request",
+            items=[{"change_type": "other"}],
+            user=officer, log_audit_fn=_noop_audit,
+        )
+        alert_req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="external_alert_conversion",
+            source_channel="monitoring", reason="Converted alert request",
+            items=[{"change_type": "other"}],
+            user=officer, log_audit_fn=_noop_audit,
+        )
+
+        backoffice_ids = {
+            r["id"] for r in cm.list_change_requests(wrapped, application_id=app_a)
+        }
+        assert {portal_req["id"], internal_req["id"], alert_req["id"]} <= backoffice_ids
+
+        portal_visible_ids = {
+            r["id"]
+            for r in cm.list_change_requests(wrapped, application_id=app_a)
+            if portal_change_request_is_client_visible(r)
+        }
+        assert portal_req["id"] in portal_visible_ids
+        assert internal_req["id"] not in portal_visible_ids
+        assert alert_req["id"] not in portal_visible_ids
+
     def test_portal_empty_state_no_apps(self, db):
         """Client with no applications gets empty list."""
         orphan_client = f"orphan-{secrets.token_hex(4)}"
