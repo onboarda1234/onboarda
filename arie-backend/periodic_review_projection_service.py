@@ -4,6 +4,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 from periodic_review_blockers import (
+    NON_OVERRIDABLE_VERIFICATION_STATES,
+    SENIOR_DOCUMENT_REVIEW_ROLES,
     decode_required_items,
     evaluate_review_readiness,
     load_evidence_links,
@@ -349,8 +351,27 @@ def _periodic_review_doc_request_ready(requirement: Dict[str, Any]) -> bool:
     review_status = str(
         linked.get("review_status") or requirement.get("document_review_status") or ""
     ).strip().lower()
-    return verification_status == "verified" or (
-        verification_status == "flagged" and review_status in {"accepted", "approved"}
+    reviewer_role = str(
+        linked.get("reviewer_role") or requirement.get("document_reviewer_role") or ""
+    ).strip().lower()
+    review_comment = str(
+        linked.get("review_comment") or requirement.get("document_review_comment") or ""
+    ).strip()
+    if verification_status == "verified":
+        return True
+    reliance_state = str(
+        linked.get("document_reliance_state") or requirement.get("document_reliance_state") or ""
+    ).strip().lower()
+    reliance_status = str(
+        linked.get("document_reliance_status") or requirement.get("document_reliance_status") or ""
+    ).strip().lower()
+    if reliance_state in {"verified", "manual_accepted"} or reliance_status in {"ready", "verified"}:
+        return True
+    return (
+        review_status in {"accepted", "approved"}
+        and reviewer_role in SENIOR_DOCUMENT_REVIEW_ROLES
+        and bool(review_comment)
+        and verification_status not in NON_OVERRIDABLE_VERIFICATION_STATES
     )
 
 
@@ -371,7 +392,9 @@ def _periodic_review_document_request_status(db, review_id: int) -> Dict[str, in
                aer.linked_document_id,
                {requirement_display_select} AS requirement_display_type,
                d.verification_status AS document_verification_status,
-               d.review_status AS document_review_status
+               d.review_status AS document_review_status,
+               d.reviewer_role AS document_reviewer_role,
+               d.review_comment AS document_review_comment
         FROM application_enhanced_requirements aer
         LEFT JOIN documents d ON d.id = aer.linked_document_id
         WHERE aer.linked_periodic_review_id = ?

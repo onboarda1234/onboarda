@@ -215,6 +215,10 @@ def test_manual_accepted_required_document_passes_with_governance(db):
     assert accepted["reliance_state"] == "manual_accepted"
     assert accepted["manual_acceptance"]["reason"]
 
+    from document_reliance_gate import document_reliance_blockers_for_approval
+
+    assert document_reliance_blockers_for_approval(gate) == []
+
 
 def test_manual_accepted_without_reason_or_role_is_rejected(db):
     app = _insert_app(db)

@@ -8530,6 +8530,8 @@ function kycDocumentNeedsAttention(doc) {
     var result = String((check && (check.result || check.status)) || '').toLowerCase();
     return result === 'fail' || result === 'warn' || result === 'failed' || result === 'warning';
   });
+  if (['rejected', 'info_requested'].indexOf(reviewStatus) >= 0) return true;
+  if (documentReadyDisplayState(doc)) return false;
   if (['accepted', 'approved'].indexOf(reviewStatus) < 0) return true;
   if (['verified', 'passed'].indexOf(verificationStatus) < 0) return true;
   return ['failed', 'flagged', 'warning', 'warn'].indexOf(overall) >= 0 || warnings.length > 0 || redFlags.length > 0 || issues.length > 0 || failedOrWarningCheck;
@@ -8577,6 +8579,19 @@ function relianceBadgeClass(label) {
   return normalized || 'review-required';
 }
 
+function documentReadyDisplayState(doc) {
+  if (!doc) return null;
+  var reviewStatus = String(doc.review_status || '').toLowerCase();
+  var relianceState = String(doc.document_reliance_state || '').toLowerCase();
+  var relianceStatus = String(doc.document_reliance_status || '').toLowerCase();
+  var verificationState = String(doc.verification_state || doc.verification_status || '').toLowerCase();
+  if (relianceState === 'manual_accepted') return { label: 'Manual accepted', tone: 'manual-accepted' };
+  if (relianceState === 'verified' || verificationState === 'verified' || doc.verification_success === true) return { label: 'Verified', tone: 'verified' };
+  if (['accepted', 'approved'].indexOf(reviewStatus) >= 0) return { label: 'Manual accepted', tone: 'manual-accepted' };
+  if (['ready', 'verified'].indexOf(relianceStatus) >= 0) return { label: 'Verified', tone: 'verified' };
+  return null;
+}
+
 function documentRelianceDisplayState(doc, policy) {
   var reviewStatus = String((doc && doc.review_status) || '').toLowerCase();
   var relianceState = String((doc && (doc.document_reliance_state || doc.document_reliance_status)) || '').toLowerCase();
@@ -8599,14 +8614,14 @@ function documentRelianceDisplayState(doc, policy) {
   if (systemWarning === 'file_not_accessible') return { label: 'System issue', tone: 'system-issue' };
   if (reviewStatus === 'rejected') return { label: 'Rejected', tone: 'rejected' };
   if (reviewStatus === 'info_requested') return { label: 'Request replacement', tone: 'request-info' };
-  if (!policy) return { label: 'Review required', tone: 'review-required' };
-  if (relianceState === 'manual_accepted') return { label: 'Manual accepted', tone: 'manual-accepted' };
+  var readyState = documentReadyDisplayState(doc);
+  if (readyState) return readyState;
   if (verificationState === 'expired' || relianceState === 'expired' || (doc && (doc.is_expired === true || doc.expired === true))) return { label: 'Expired', tone: 'failed' };
   if (relianceState === 'stale' || verificationState === 'stale' || (doc && doc.is_current === false)) return { label: 'Stale', tone: 'stale' };
-  if (['pending', 'uploaded'].indexOf(relianceState) >= 0 || ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0) return { label: 'Pending verification', tone: 'pending' };
   if (['failed', 'flagged', 'skipped', 'blocked'].indexOf(relianceState) >= 0 || ['failed', 'flagged', 'skipped'].indexOf(verificationState) >= 0 || ['failed', 'flagged'].indexOf(overall) >= 0 || redFlags.length > 0 || hasFailedCheck) return { label: 'Failed', tone: 'failed' };
+  if (['pending', 'uploaded'].indexOf(relianceState) >= 0 || ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0) return { label: 'Pending verification', tone: 'pending' };
+  if (!policy) return { label: 'Review required', tone: 'review-required' };
   if (overall.indexOf('review') >= 0 || overall.indexOf('warn') >= 0 || warnings.length > 0 || issues.length > 0 || hasWarningCheck) return { label: 'Review required', tone: 'review-required' };
-  if (relianceState === 'verified' || doc && doc.verification_success === true) return { label: 'Verified', tone: 'verified' };
   return { label: 'Review required', tone: 'review-required' };
 }
 
@@ -8618,15 +8633,15 @@ function documentRequiredAction(doc, policy, state) {
   var label = (state && state.label) || 'Review required';
   var blockers = Array.isArray(doc && doc.document_reliance_blockers) ? doc.document_reliance_blockers : [];
   if (label === 'System issue') return 'Re-verify or escalate the file-access issue before relying on this document.';
-  if (!policy) return 'Document type required before this evidence can support approval.';
   if (label === 'Verified') return 'No officer action required unless case context changes or the document becomes stale.';
+  if (label === 'Manual accepted') return 'Manual acceptance is recorded; retain rationale and audit evidence for decision review.';
+  if (!policy) return 'Document type required before this evidence can support approval.';
   if (label === 'Pending verification') return 'Wait for Agent 1 verification or re-run verification before using this document as compliance evidence.';
   if (label === 'Failed') return 'Reject, request corrected evidence, or manually accept only with the required senior-approved rationale where policy allows.';
   if (label === 'Expired') return 'Request a current replacement document before relying on this evidence.';
   if (label === 'Stale') return 'Request a refreshed document or re-verify the current evidence before relying on it.';
   if (label === 'Rejected') return 'Rejected evidence cannot support memo, approval, or closure decisions.';
   if (label === 'Request replacement') return 'Client remediation or officer follow-up is required before reliance.';
-  if (label === 'Manual accepted') return 'Manual acceptance is recorded; retain rationale and audit evidence for decision review.';
   if (blockers.length) return 'Resolve document reliance blockers before this evidence supports a decision.';
   return 'Officer review required before this document supports approval.';
 }
@@ -8873,7 +8888,13 @@ function buildDocumentVerificationCoverage(doc, policy) {
   var missingExpectedChecks = expectedChecks.filter(function(label) { return !matchedExpected[label]; });
   var runState = 'completed';
   var summaryText = 'Verification complete — persisted checks cover the expected policy checks.';
-  if (!policy) {
+  var readyState = documentReadyDisplayState(doc);
+  if (!policy && readyState) {
+    runState = readyState.label === 'Manual accepted' ? 'manual' : 'completed';
+    summaryText = readyState.label === 'Manual accepted'
+      ? 'Manual acceptance is recorded; automated policy coverage is not required for this accepted document.'
+      : 'Document is reliance-ready; automated policy coverage is not required for this ready document.';
+  } else if (!policy) {
     runState = 'incomplete';
     summaryText = 'Verification incomplete — verification policy missing for this document.';
   } else if (!runtimeExpected) {
@@ -11136,6 +11157,15 @@ function enhancedRequirementVerificationBadge(req) {
   if (enhancedRequirementPresentationType(req) !== 'evidence') return '';
   var doc = enhancedRequirementLinkedDocument(req);
   if (!doc) return '';
+  var reviewStatus = String(doc.review_status || '').toLowerCase();
+  if (reviewStatus === 'rejected') return enhancedRequirementDetailBadge('Rejected evidence', 'red');
+  if (reviewStatus === 'info_requested') return enhancedRequirementDetailBadge('Update requested', 'amber');
+  var readyState = documentReadyDisplayState(doc);
+  if (readyState) return enhancedRequirementDetailBadge(readyState.label, 'green');
+  var requirementStatus = String(req.status || '').toLowerCase();
+  if (['accepted', 'completed'].indexOf(requirementStatus) >= 0) {
+    return enhancedRequirementDetailBadge('Accepted evidence', 'green');
+  }
   var raw = String(doc.verification_status || doc.verification_state || 'pending').toLowerCase();
   var label = doc.verification_status_label || ({
     verified: 'Verified',
@@ -16294,6 +16324,25 @@ function cmStatusBadge(s) {
   return '<span style="background:' + (colors[s]||'#6c757d') + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + label + '</span>';
 }
 
+function cmEvidenceStatusMeta(verification) {
+  verification = verification || {};
+  var verificationStatus = String(verification.verification_status || '').toLowerCase();
+  var reviewStatus = String(verification.review_status || '').toLowerCase();
+  var blockerCode = String(verification.blocker_code || '').toLowerCase();
+  if (verification.agent1_satisfied === true) return { label: 'Accepted / ready', color: '#198754' };
+  if (reviewStatus === 'rejected' || blockerCode.indexOf('failed') >= 0 || verificationStatus === 'failed' || verificationStatus === 'rejected') {
+    return { label: 'Rejected / failed', color: '#dc3545' };
+  }
+  if (blockerCode === 'cm_agent1_required' || !verification.document_id) return { label: 'Missing evidence', color: '#b45309' };
+  if (blockerCode.indexOf('stale') >= 0) return { label: 'Stale evidence', color: '#b45309' };
+  return { label: 'Review required', color: '#b45309' };
+}
+
+function cmEvidenceStatusBadge(verification) {
+  var meta = cmEvidenceStatusMeta(verification);
+  return '<span style="background:' + meta.color + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + escapeHtml(meta.label) + '</span>';
+}
+
 function loadChangeAlerts() {
   var status = document.getElementById('cm-alert-status-filter').value;
   var url = '/api/change-management/alerts';
@@ -16475,9 +16524,32 @@ function viewRequestDetail(reqId) {
 
     // Documents
     if (r.documents && r.documents.length > 0) {
-      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Supporting Documents (' + r.documents.length + ')</span><ul style="margin-top:8px;">';
-      r.documents.forEach(function(d) { html += '<li style="font-size:12px;">' + d.doc_name + ' <span style="color:var(--text3);">(' + (d.doc_type||'') + ')</span></li>'; });
-      html += '</ul></div>';
+      var evidenceByRequestDoc = {};
+      (r.evidence_summary || []).forEach(function(evidence) {
+        if (evidence && evidence.id) evidenceByRequestDoc[String(evidence.id)] = evidence;
+      });
+      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+        '<span style="font-size:11px;color:var(--text3);font-weight:600;">Supporting Documents (' + r.documents.length + ')</span>' +
+        '<div style="margin-top:10px;display:grid;gap:8px;">';
+      r.documents.forEach(function(d) {
+        var evidence = evidenceByRequestDoc[String(d.id || '')] || {};
+        var verification = evidence.agent1_verification || {};
+        var linked = evidence.linked_document || {};
+        var linkedName = linked.doc_name || verification.doc_name || '';
+        html += '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+          '<div>' +
+            '<div style="font-size:12px;font-weight:700;color:var(--text1);">' + escapeHtml(d.doc_name || linkedName || 'Supporting document') + '</div>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:3px;">' +
+              escapeHtml(d.doc_type || verification.doc_type || 'evidence') +
+              (linkedName && linkedName !== d.doc_name ? ' · Linked KYC document: ' + escapeHtml(linkedName) : '') +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+            cmEvidenceStatusBadge(verification) +
+          '</div>' +
+        '</div>';
+      });
+      html += '</div></div>';
     }
 
     // Reviews
@@ -17904,10 +17976,16 @@ function lifecycleEvidenceLinkReady(entry) {
   if (isCurrent !== undefined && isCurrent !== null && String(isCurrent).toLowerCase() !== 'true' && String(isCurrent) !== '1') return false;
   var verification = String(link.document_verification_status || doc.verification_status || '').toLowerCase();
   if (verification === 'verified') return true;
+  var relianceState = String(link.document_reliance_state || doc.document_reliance_state || '').toLowerCase();
+  var relianceStatus = String(link.document_reliance_status || doc.document_reliance_status || '').toLowerCase();
+  if (['verified', 'manual_accepted'].indexOf(relianceState) >= 0 || ['ready', 'verified'].indexOf(relianceStatus) >= 0) return true;
   var reviewStatus = String(link.document_review_status || doc.review_status || '').toLowerCase();
   var reviewerRole = String(link.document_reviewer_role || doc.reviewer_role || '').toLowerCase();
   var reviewComment = String(link.document_review_comment || doc.review_comment || '').trim();
-  return verification === 'flagged' && reviewStatus === 'accepted' && ['admin', 'sco'].indexOf(reviewerRole) >= 0 && !!reviewComment;
+  return ['accepted', 'approved'].indexOf(reviewStatus) >= 0 &&
+    ['admin', 'sco'].indexOf(reviewerRole) >= 0 &&
+    !!reviewComment &&
+    ['failed', 'pending', 'running', 'processing', 'queued', 'rejected', 'expired'].indexOf(verification) < 0;
 }
 
 function lifecycleEvidenceLinkStatusBadge(entry) {
@@ -17916,8 +17994,9 @@ function lifecycleEvidenceLinkStatusBadge(entry) {
   var verification = String(link.document_verification_status || doc.verification_status || 'pending').toLowerCase();
   var reviewStatus = String(link.document_review_status || doc.review_status || '').toLowerCase();
   if (lifecycleEvidenceLinkReady(entry)) {
-    return verification === 'flagged'
-      ? lifecycleDetailBadge('Senior accepted flagged evidence', 'green')
+    var relianceState = String(link.document_reliance_state || doc.document_reliance_state || '').toLowerCase();
+    return relianceState === 'manual_accepted' || ['accepted', 'approved'].indexOf(reviewStatus) >= 0
+      ? lifecycleDetailBadge('Manual accepted evidence', 'green')
       : lifecycleDetailBadge('Verified evidence', 'green');
   }
   if (verification === 'flagged') return lifecycleDetailBadge(reviewStatus === 'accepted' ? 'Acceptance incomplete' : 'Flagged - review required', 'amber');

@@ -183,6 +183,25 @@ class TestCompanyEvidenceGate:
         ok, err = _approve_after_preconditions(cm, wdb, req["id"])
         assert ok, err
 
+    def test_legal_name_with_accepted_manual_agent1_evidence_allows_approval_and_displays_ready(self, db):
+        cm = _get_cm(); wdb = _DBWrapper(db); app_id = _setup_app(db)
+        req = _create_request(cm, wdb, app_id, _legal_name_item())
+        _add_linked_doc(
+            db,
+            app_id,
+            req["id"],
+            doc_type="certificate_name_change",
+            status="skipped",
+            review_status="accepted",
+        )
+        ok, err = _approve_after_preconditions(cm, wdb, req["id"])
+        assert ok, err
+
+        detail = cm.get_change_request_detail(wdb, req["id"])
+        assert detail["agent1_verifications"][0]["agent1_satisfied"] is True
+        assert detail["agent1_verifications"][0]["verification_status"] == "skipped"
+        assert detail["agent1_verifications"][0]["review_status"] == "accepted"
+
     def test_application_document_not_linked_to_request_does_not_satisfy_gate(self, db):
         cm = _get_cm(); wdb = _DBWrapper(db); app_id = _setup_app(db)
         req = _create_request(cm, wdb, app_id, _legal_name_item())
