@@ -153,6 +153,7 @@ class TestMemoStalenessInputsUpdatedAt:
         input_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                status="submitted_to_compliance",
                                 inputs_updated_at=input_time)
         _insert_memo(db, app_id, created_at=memo_time)
         app = _get_app(db, app_id)
@@ -171,6 +172,7 @@ class TestMemoStalenessInputsUpdatedAt:
         rerun_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                status="submitted_to_compliance",
                                 inputs_updated_at=rerun_time)
         _insert_memo(db, app_id, created_at=memo_time)
         app = _get_app(db, app_id)
@@ -196,6 +198,7 @@ class TestMemoStalenessInputsUpdatedAt:
         row_updated_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                status="submitted_to_compliance",
                                 app_updated_at=row_updated_time,
                                 inputs_updated_at=input_time)
         _insert_memo(db, app_id, created_at=memo_time)
@@ -218,6 +221,7 @@ class TestMemoStalenessInputsUpdatedAt:
         memo_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                status="submitted_to_compliance",
                                 inputs_updated_at=input_time)
         _insert_memo(db, app_id, created_at=memo_time)
         app = _get_app(db, app_id)
@@ -235,6 +239,7 @@ class TestMemoStalenessInputsUpdatedAt:
         row_updated_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                status="submitted_to_compliance",
                                 app_updated_at=row_updated_time,
                                 inputs_updated_at=row_updated_time)
         _insert_memo(db, app_id, created_at=memo_time)
@@ -260,6 +265,7 @@ class TestMemoStalenessInputsUpdatedAt:
         row_updated_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                status="submitted_to_compliance",
                                 app_updated_at=row_updated_time,
                                 inputs_updated_at=row_updated_time)
         _insert_memo(db, app_id, created_at=memo_time)

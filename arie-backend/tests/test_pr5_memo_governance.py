@@ -25,6 +25,8 @@ def _live_prescreening():
 
 
 def _insert_app(db):
+    from tests.conftest import insert_verified_required_documents
+
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-pr5-{suffix}"
     app_ref = f"ARF-PR5-{suffix}"
@@ -43,12 +45,13 @@ def _insert_app(db):
             "Mauritius",
             "Technology",
             "SME",
-            "compliance_review",
+            "submitted_to_compliance",
             "MEDIUM",
             42,
             _live_prescreening(),
         ),
     )
+    insert_verified_required_documents(db, app_id)
     db.commit()
     return app_id, app_ref
 

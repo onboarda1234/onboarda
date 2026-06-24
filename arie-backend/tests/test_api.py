@@ -4280,7 +4280,7 @@ class TestGovernanceAttemptAudit:
             "Mauritius",
             "Technology",
             "SME",
-            "in_review",
+            "submitted_to_compliance",
             "LOW",
             20,
             self._live_prescreening(),
@@ -4746,6 +4746,7 @@ class TestGovernanceAttemptAudit:
         """Enhanced requirement approval blockers must emit their focused audit event."""
         from auth import create_token
         from db import get_db
+        from tests.conftest import insert_verified_required_documents
 
         app_id = "app_step7_enhanced_block"
         app_ref = "ARF-2026-STEP7-BLOCK"
@@ -4767,12 +4768,13 @@ class TestGovernanceAttemptAudit:
             "Mauritius",
             "Technology",
             "SME",
-            "in_review",
+            "submitted_to_compliance",
             "MEDIUM",
             45,
             self._live_prescreening(),
         ))
         self._insert_approved_memo(conn, app_id)
+        insert_verified_required_documents(conn, app_id)
         self._insert_enhanced_requirement(conn, app_id, status="generated", mandatory=1, blocking_approval=1)
         conn.commit()
         conn.close()

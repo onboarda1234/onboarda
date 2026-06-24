@@ -50,7 +50,7 @@ def _insert_gate_ready_app(db):
             "Mauritius",
             "Technology",
             "Limited Company",
-            "in_review",
+            "submitted_to_compliance",
             "MEDIUM",
             "MEDIUM",
             42,
