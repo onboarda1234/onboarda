@@ -1780,7 +1780,10 @@ def _document_satisfies_agent1(doc: Dict[str, Any]) -> Tuple[bool, Optional[str]
         return False, "cm_evidence_verification_stale"
     if verification_status in _CM_VERIFICATION_PASSED:
         return True, None
-    if review_status in _CM_REVIEW_ACCEPTED and verification_status in {"flagged", "skipped"}:
+    if (
+        review_status in _CM_REVIEW_ACCEPTED
+        and verification_status not in (_CM_VERIFICATION_FAILED | _CM_VERIFICATION_PENDING | {"running", "processing", "expired"})
+    ):
         return True, None
     if verification_status in {"flagged", "skipped"}:
         return False, "cm_evidence_verification_pending"
@@ -3081,6 +3084,20 @@ def get_change_request_detail(db, request_id: str) -> Optional[Dict]:
             result["approval"] = evaluate_approval(db, result)
         except Exception:
             result["approval"] = {"can_approve": None, "blockers": [], "approval_notes": []}
+
+        try:
+            app_docs = _load_app_documents(db, result.get("application_id"))
+            evidence, agent1_verifications = _evidence_summary(
+                result,
+                result.get("items") or [],
+                result.get("documents") or [],
+                app_docs,
+            )
+            result["evidence_summary"] = evidence
+            result["agent1_verifications"] = agent1_verifications
+        except Exception:
+            result["evidence_summary"] = []
+            result["agent1_verifications"] = []
 
         return result
     except Exception as e:

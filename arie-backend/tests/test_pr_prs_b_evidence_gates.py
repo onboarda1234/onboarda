@@ -9,9 +9,12 @@ Covers:
   non-failed/non-pending document, satisfies completion; stale documents do not.
 """
 
+from pathlib import Path
+
 from enhanced_requirements import enhanced_requirement_document_policy
 from periodic_review_document_requests import _coerce_subject_scope
-from periodic_review_blockers import _document_request_ready
+from periodic_review_blockers import _document_request_ready, evidence_link_satisfies_requirement
+from periodic_review_projection_service import _periodic_review_doc_request_ready as _projection_doc_request_ready
 
 
 # --- P0-A1 / P1-EV2: canonical policy mapping ---------------------------------
@@ -91,6 +94,13 @@ def test_accepted_with_no_linked_document_blocks():
     assert _document_request_ready(row) is False
 
 
+def test_optional_missing_periodic_evidence_is_not_approval_blocking_in_blocker_loop():
+    source = (Path(__file__).resolve().parents[1] / "periodic_review_blockers.py").read_text()
+    mandatory_guard = source.index('if not _truthy(row.get("mandatory")):')
+    label_lookup = source.index("label = row.get", mandatory_guard)
+    assert "continue" in source[mandatory_guard:label_lookup]
+
+
 def test_verified_document_satisfies_completion():
     row = _row(document_verification_status="verified")
     assert _document_request_ready(row) is True
@@ -102,6 +112,39 @@ def test_senior_accept_with_reason_on_manual_doc_satisfies():
                document_review_status="accepted", document_reviewer_role="sco",
                document_review_comment="Verified manually against source register")
     assert _document_request_ready(row) is True
+
+
+def test_manual_accepted_reliance_state_satisfies_periodic_document_request():
+    row = _row(
+        document_verification_status="not_run",
+        document_review_status="accepted",
+        document_reliance_state="manual_accepted",
+    )
+    assert _document_request_ready(row) is True
+
+
+def test_periodic_projection_counts_senior_accepted_manual_evidence_ready():
+    row = {
+        "linked_document_id": "doc-1",
+        "document_verification_status": "not_run",
+        "document_review_status": "accepted",
+        "document_reviewer_role": "sco",
+        "document_review_comment": "Manual source check completed",
+    }
+    assert _projection_doc_request_ready(row) is True
+
+
+def test_periodic_uploaded_evidence_link_accepts_senior_manual_not_run_document():
+    link = {
+        "requirement_id": "req-1",
+        "document_id": "doc-1",
+        "document_verification_status": "not_run",
+        "document_review_status": "accepted",
+        "document_reviewer_role": "sco",
+        "document_review_comment": "Checked source register manually",
+        "document_is_current": 1,
+    }
+    assert evidence_link_satisfies_requirement(link) is True
 
 
 def test_co_accept_with_reason_does_not_satisfy():

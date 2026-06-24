@@ -45,6 +45,8 @@ DOCUMENT_REQUEST_WAIVED_STATUSES = {"waived", "cancelled"}
 # completion -- a hard failure, or still in progress.
 NON_OVERRIDABLE_VERIFICATION_STATES = {
     "failed",
+    "rejected",
+    "expired",
     "pending",
     "running",
     "processing",
@@ -115,14 +117,18 @@ def evidence_link_satisfies_requirement(link: Dict[str, Any]) -> bool:
     verification_status = str(link.get("document_verification_status") or "").strip().lower()
     if verification_status == "verified":
         return True
+    reliance_state = str(link.get("document_reliance_state") or "").strip().lower()
+    reliance_status = str(link.get("document_reliance_status") or "").strip().lower()
+    if reliance_state in {"verified", "manual_accepted"} or reliance_status in {"ready", "verified"}:
+        return True
     review_status = str(link.get("document_review_status") or "").strip().lower()
     reviewer_role = str(link.get("document_reviewer_role") or "").strip().lower()
     review_comment = str(link.get("document_review_comment") or "").strip()
     return (
-        verification_status == "flagged"
-        and review_status == "accepted"
+        review_status in {"accepted", "approved"}
         and reviewer_role in SENIOR_DOCUMENT_REVIEW_ROLES
         and bool(review_comment)
+        and verification_status not in NON_OVERRIDABLE_VERIFICATION_STATES
     )
 
 
@@ -149,6 +155,10 @@ def _document_request_ready(row: Dict[str, Any]) -> bool:
         return False
     verification_status = str(row.get("document_verification_status") or "").strip().lower()
     if verification_status == "verified":
+        return True
+    reliance_state = str(row.get("document_reliance_state") or "").strip().lower()
+    reliance_status = str(row.get("document_reliance_status") or "").strip().lower()
+    if reliance_state in {"verified", "manual_accepted"} or reliance_status in {"ready", "verified"}:
         return True
     # PR-PRS-B (P1-A2): controlled senior/manual exception. A senior reviewer
     # (admin/sco) must have accepted the document WITH a comment, and the document

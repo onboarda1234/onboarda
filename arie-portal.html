@@ -10406,6 +10406,7 @@ function portalEnhancedRequirementTone(status) {
   if (s === 'uploaded') s = 'submitted';
   if (s === 'requested') s = 'required';
   if (s === 'rejected') s = 'additional_information_needed';
+  if (s === 'accepted' || s === 'completed' || s === 'waived') return { cls: 'uploaded', text: 'Accepted' };
   if (s === 'submitted') return { cls: 'uploaded', text: 'Submitted' };
   if (s === 'under_review') return { cls: 'warning', text: 'Under review' };
   if (s === 'additional_information_needed') return { cls: 'missing', text: 'Additional information needed' };
