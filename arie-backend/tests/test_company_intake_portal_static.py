@@ -64,6 +64,23 @@ def _extract_table_headers(html: str, table_id: str) -> list[str]:
     ]
 
 
+def _extract_select_restore_aliases(html: str, alias_key: str) -> dict[str, str]:
+    marker = f"'{alias_key}': {{"
+    start = html.index(marker)
+    brace = html.index("{", start)
+    depth = 0
+    for pos in range(brace, len(html)):
+        char = html[pos]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                body = html[brace + 1:pos]
+                return dict(re.findall(r"'([^']+)': '([^']+)'", body))
+    raise AssertionError(f"Could not extract aliases for {alias_key}")
+
+
 def test_company_intake_assistant_appears_before_long_application_form():
     html = _portal_html()
     lookup_view = _extract_div_by_id(html, "view-company-lookup")
@@ -329,6 +346,37 @@ def test_assisted_handoff_prefills_editable_tables_without_bulky_client_cards():
         "owned_or_controlled_by",
     ):
         assert field in collect_body
+
+
+def test_country_of_residence_restore_aliases_cover_uk_constituent_countries():
+    html = _portal_html()
+    aliases = _extract_select_restore_aliases(html, "nat-select")
+
+    for value in (
+        "england",
+        "wales",
+        "scotland",
+        "northern ireland",
+        "northern-ireland",
+        "gb",
+        "gbr",
+        "uk",
+        "british",
+    ):
+        assert aliases[value] == "United Kingdom"
+
+    assert "_normalizeSelectToken(raw)" in _extract_js_function(html, "_restoreSelectValue")
+    assert "restoreSelectAlias || 'nat-select'" in _extract_js_function(html, "setPartyRowValue")
+
+    restore_body = _extract_js_function(html, "restorePartyRows")
+    assert "setPartyRowValue(lastRow, 'country_of_residence', rowData.country_of_residence || '')" in restore_body
+
+    for table_id in ("directors-table", "ubos-table"):
+        marker = f'id="{table_id}"'
+        table_start = html.rfind("<table", 0, html.index(marker))
+        table_end = html.index("</table>", html.index(marker))
+        table_html = html[table_start:table_end]
+        assert 'class="nat-select" data-field="country_of_residence"' in table_html
 
 
 def test_no_secret_or_raw_provider_surface_added_to_portal():
