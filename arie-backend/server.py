@@ -2639,16 +2639,25 @@ def _submit_prohibited_jurisdiction(app, prescreening):
     return None, None
 
 
-def _submit_recovery_available(app):
+def _submit_recovery_available(app, prescreening=None):
     status = str(_row_value(app, "status", "") or "").strip().lower()
     if status not in _SUBMIT_RECOVERY_STATUSES:
+        return False
+    if status == "submitted" or not _row_value(app, "submitted_at"):
         return False
     risk_level = str(_row_value(app, "risk_level", "") or "").strip()
     if not risk_level:
         risk_level = str(_row_value(app, "final_risk_level", "") or "").strip()
     if not risk_level:
         return False
-    return _row_value(app, "risk_score") not in (None, "")
+    if _row_value(app, "risk_score") in (None, ""):
+        return False
+    if not str(_row_value(app, "onboarding_lane", "") or "").strip():
+        return False
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    if not isinstance(prescreening.get("pricing"), dict):
+        return False
+    return True
 
 
 def _submit_recovery_payload(app, prescreening):
@@ -2729,8 +2738,13 @@ def _send_prescreening_compliance_notifications(app_id, app_ref, company_name, r
     except Exception as notify_exc:
         try:
             notify_db.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            logger.debug(
+                "Notification DB rollback failed: app_id=%s ref=%s error=%s",
+                app_id,
+                app_ref,
+                rollback_exc,
+            )
         logger.warning(
             "Pre-screening compliance notification failed after durable submit: app_id=%s ref=%s error=%s",
             app_id,
@@ -2741,8 +2755,13 @@ def _send_prescreening_compliance_notifications(app_id, app_ref, company_name, r
     finally:
         try:
             notify_db.close()
-        except Exception:
-            pass
+        except Exception as close_exc:
+            logger.debug(
+                "Notification DB close failed: app_id=%s ref=%s error=%s",
+                app_id,
+                app_ref,
+                close_exc,
+            )
 
 
 def _schedule_prescreening_compliance_notifications(app_id, app_ref, company_name, risk_level, risk_score, lane):
@@ -8126,7 +8145,7 @@ class SubmitApplicationHandler(BaseHandler):
         if not isinstance(prescreening_raw, dict):
             prescreening_raw = {}
 
-        if _submit_recovery_available(app):
+        if _submit_recovery_available(app, prescreening_raw):
             return self.success(_submit_recovery_payload(app, prescreening_raw), 200)
 
         # EX-05: Capture before-state for audit trail

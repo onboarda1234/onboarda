@@ -716,6 +716,55 @@ class TestHappyPathSubmit:
         assert handler.log_audit.call_count == 0
         assert after_audit_count == before_audit_count
 
+    def test_incomplete_submitted_state_does_not_return_recovery(self, temp_db):
+        """Risk data alone is not enough for recovery; submit must have a completed pricing footprint."""
+        server = _get_server_module()
+        from screening import ScreeningProviderError
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        db = _get_project_db(temp_db)
+        app_id = _setup_test_app(db)
+        db.execute(
+            """
+            UPDATE applications
+            SET status='submitted',
+                submitted_at=datetime('now'),
+                risk_score=?,
+                risk_level=?,
+                onboarding_lane=?,
+                prescreening_data=?
+            WHERE id=?
+            """,
+            (
+                72,
+                "HIGH",
+                "EDD",
+                json.dumps({"incorporation_date": "2020-01-01"}),
+                app_id,
+            ),
+        )
+        db.commit()
+
+        with patch.object(
+            server,
+            "run_full_screening",
+            side_effect=ScreeningProviderError("provider unavailable"),
+        ) as screening_mock:
+            handler._do_submit(
+                db,
+                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                app_id,
+            )
+        db.close()
+
+        assert success_calls == []
+        assert len(error_calls) == 1
+        assert error_calls[0][1] == 503
+        assert screening_mock.call_count == 1
+
     def test_sanctioned_prescreening_country_returns_403_before_screening_and_is_retry_safe(self, temp_db):
         """Sanctioned jurisdiction aliases must fail deterministically before provider work."""
         server = _get_server_module()
@@ -796,7 +845,7 @@ class TestHappyPathSubmit:
                             server._POST_COMMIT_EXECUTOR,
                             "submit",
                             side_effect=RuntimeError("executor unavailable"),
-                        ):
+                        ) as submit_mock:
                             db = _get_project_db(temp_db)
                             app_id = _setup_test_app(db)
                             db.execute("PRAGMA foreign_keys = ON")
@@ -815,6 +864,7 @@ class TestHappyPathSubmit:
 
         assert error_calls == []
         assert len(success_calls) == 1
+        assert submit_mock.call_count == 1
         assert success_calls[0][0]["status"] == "pricing_review"
         assert app["status"] == "pricing_review"
         assert app["risk_level"] == "HIGH"
