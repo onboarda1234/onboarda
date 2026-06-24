@@ -775,9 +775,47 @@
     transition: var(--transition);
   }
   .phone-code:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(43,47,143,0.12); }
+  .phone-code.phone-code-native-hidden {
+    position: absolute; opacity: 0; pointer-events: none;
+    width: 1px; height: 1px; min-width: 0; padding: 0; border: 0;
+  }
+  .phone-code-combobox { position: relative; width: 160px; flex-shrink: 0; }
+  .phone-code-search {
+    width: 100%; height: 100%; min-height: 44px;
+    background: var(--bg); border: 1.5px solid var(--border2); border-right: none;
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    color: var(--text); padding: 12px 10px; font-size: 13px;
+    outline: none; transition: var(--transition); font-family: inherit;
+  }
+  .phone-code-combobox.open .phone-code-search,
+  .phone-code-search:focus {
+    border-color: var(--brand); box-shadow: 0 0 0 3px rgba(43,47,143,0.12);
+  }
+  .phone-code-options {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
+    max-height: 224px; overflow-y: auto;
+    background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); box-shadow: 0 14px 32px rgba(15,23,42,0.16);
+    padding: 6px;
+  }
+  .phone-code-option {
+    display: flex; flex-direction: column; gap: 2px; width: 100%;
+    border: 0; background: transparent; color: var(--text2);
+    text-align: left; border-radius: 6px; padding: 7px 8px;
+    font-family: inherit; cursor: pointer;
+  }
+  .phone-code-option:hover,
+  .phone-code-option.active { background: var(--brand-dim); color: var(--brand); }
+  .phone-code-option-main { font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .phone-code-option-name { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .phone-code-empty { padding: 8px; color: var(--text3); font-size: 12px; }
   .phone-input input[type=tel] {
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0 !important;
     border-left: none !important;
+  }
+  @media(max-width:480px) {
+    .phone-code-combobox { width: 136px; }
+    .phone-code-search { font-size: 12px; padding-left: 8px; padding-right: 8px; }
   }
   .phone-input input[type=tel]:focus { border-left: 1.5px solid var(--brand) !important; }
 
@@ -1823,16 +1861,16 @@
             <label>Mobile Number <span class="req">*</span></label>
             <div class="phone-input">
               <select id="r-phone-code" class="phone-code">
-                <option value="+230" data-country-code="MU" data-country-name="Mauritius" selected>🇲🇺 +230 (Mauritius)</option>
-                <option value="+44">🇬🇧 +44</option>
-                <option value="+1">🇺🇸 +1</option>
-                <option value="+27">🇿🇦 +27</option>
-                <option value="+971">🇦🇪 +971</option>
-                <option value="+33">🇫🇷 +33</option>
-                <option value="+91">🇮🇳 +91</option>
-                <option value="+65">🇸🇬 +65</option>
-                <option value="+254">🇰🇪 +254</option>
-                <option value="+234">🇳🇬 +234</option>
+                <option value="+230" data-country-code="MU" data-country-name="Mauritius" selected>🇲🇺 +230 (MU)</option>
+                <option value="+44" data-country-code="GB" data-country-name="United Kingdom">🇬🇧 +44 (GB)</option>
+                <option value="+1" data-country-code="US" data-country-name="United States">🇺🇸 +1 (US)</option>
+                <option value="+27" data-country-code="ZA" data-country-name="South Africa">🇿🇦 +27 (ZA)</option>
+                <option value="+971" data-country-code="AE" data-country-name="United Arab Emirates">🇦🇪 +971 (AE)</option>
+                <option value="+33" data-country-code="FR" data-country-name="France">🇫🇷 +33 (FR)</option>
+                <option value="+91" data-country-code="IN" data-country-name="India">🇮🇳 +91 (IN)</option>
+                <option value="+65" data-country-code="SG" data-country-name="Singapore">🇸🇬 +65 (SG)</option>
+                <option value="+254" data-country-code="KE" data-country-name="Kenya">🇰🇪 +254 (KE)</option>
+                <option value="+234" data-country-code="NG" data-country-name="Nigeria">🇳🇬 +234 (NG)</option>
               </select>
               <input type="tel" id="r-phone" placeholder="Mobile number" required/>
             </div>
@@ -2547,7 +2585,7 @@
                 <option value="+356">🇲🇹 +356 (MT)</option>
                 <option value="+692">🇲🇭 +692 (MH)</option>
                 <option value="+222">🇲🇷 +222 (MR)</option>
-                <option value="+230" data-country-code="MU" data-country-name="Mauritius" selected>🇲🇺 +230 (Mauritius)</option>
+                <option value="+230" data-country-code="MU" data-country-name="Mauritius" selected>🇲🇺 +230 (MU)</option>
                 <option value="+52">🇲🇽 +52 (MX)</option>
                 <option value="+691">🇫🇲 +691 (FM)</option>
                 <option value="+373">🇲🇩 +373 (MD)</option>
@@ -2621,8 +2659,8 @@
                 <option value="+688">🇹🇻 +688 (TV)</option>
                 <option value="+256">🇺🇬 +256 (UG)</option>
                 <option value="+380">🇺🇦 +380 (UA)</option>
-                <option value="+971">🇦🇪 +971 (UAE)</option>
-                <option value="+44">🇬🇧 +44 (UK)</option>
+                <option value="+971" data-country-code="AE" data-country-name="United Arab Emirates">🇦🇪 +971 (AE)</option>
+                <option value="+44" data-country-code="GB" data-country-name="United Kingdom">🇬🇧 +44 (GB)</option>
                 <option value="+1">🇺🇸 +1 (US)</option>
                 <option value="+598">🇺🇾 +598 (UY)</option>
                 <option value="+998">🇺🇿 +998 (UZ)</option>
@@ -8980,13 +9018,262 @@ function _normalizeSelectToken(val) {
     .trim();
 }
 
+var PHONE_CODE_SEARCH_ALIASES = {
+  GB: ['UK', 'United Kingdom', 'Great Britain', 'Britain', 'England', 'Scotland', 'Wales', 'Northern Ireland'],
+  MU: ['Mauritius'],
+  AE: ['United Arab Emirates', 'UAE', 'Emirates'],
+  US: ['United States', 'USA', 'America'],
+  FR: ['France'],
+  ZA: ['South Africa'],
+  IN: ['India'],
+  SG: ['Singapore'],
+  KE: ['Kenya'],
+  NG: ['Nigeria']
+};
+var phoneCodeDisplayNames = null;
+
+function phoneCodeRegionName(iso) {
+  var code = String(iso || '').trim().toUpperCase();
+  if (!code) return '';
+  if (!phoneCodeDisplayNames && window.Intl && Intl.DisplayNames) {
+    try {
+      phoneCodeDisplayNames = new Intl.DisplayNames(['en'], { type: 'region' });
+    } catch (e) {
+      phoneCodeDisplayNames = null;
+    }
+  }
+  if (phoneCodeDisplayNames) {
+    try {
+      return phoneCodeDisplayNames.of(code) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+  return '';
+}
+
+function phoneCodeOptionIso(option) {
+  if (!option) return '';
+  var existing = (option.dataset.countryCode || '').trim().toUpperCase();
+  if (existing) return existing;
+  var match = String(option.textContent || '').match(/\(([A-Z]{2})\)/);
+  return match ? match[1] : '';
+}
+
+function phoneCodeOptionFlag(option) {
+  var text = String((option && option.textContent) || '').trim();
+  var match = text.match(/^(\S+)/);
+  return match ? match[1] : '';
+}
+
+function phoneCodeOptionCountryName(option) {
+  if (!option) return '';
+  var existing = (option.dataset.countryName || '').trim();
+  if (existing) return existing;
+  return phoneCodeRegionName(phoneCodeOptionIso(option));
+}
+
+function phoneCodePrepareOption(option) {
+  if (!option || !option.value) return;
+  var iso = phoneCodeOptionIso(option);
+  if (iso) option.dataset.countryCode = iso;
+  var countryName = phoneCodeOptionCountryName(option);
+  if (countryName) option.dataset.countryName = countryName;
+  var flag = phoneCodeOptionFlag(option);
+  if (flag && iso) {
+    option.textContent = flag + ' ' + option.value + ' (' + iso + ')';
+  }
+}
+
+function phoneCodePrepareSelect(select) {
+  Array.from((select && select.options) || []).forEach(phoneCodePrepareOption);
+}
+
+function phoneCodeSearchTokensForOption(option) {
+  if (!option) return [];
+  phoneCodePrepareOption(option);
+  var iso = phoneCodeOptionIso(option);
+  var countryName = phoneCodeOptionCountryName(option);
+  var dial = String(option.value || '').trim();
+  var aliases = PHONE_CODE_SEARCH_ALIASES[iso] || [];
+  return [
+    iso,
+    countryName,
+    dial,
+    dial.replace('+', ''),
+    String(option.textContent || '')
+  ].concat(aliases).filter(Boolean);
+}
+
+function phoneCodeOptionMatches(option, query) {
+  var needle = _normalizeSelectToken(query).replace(/^\+/, '');
+  if (!needle) return true;
+  return phoneCodeSearchTokensForOption(option).some(function(token) {
+    var normalized = _normalizeSelectToken(token).replace(/^\+/, '');
+    return normalized && normalized.indexOf(needle) !== -1;
+  });
+}
+
+function phoneCodeOptionLabel(option) {
+  phoneCodePrepareOption(option);
+  return String((option && option.textContent) || '').trim();
+}
+
+function phoneCodeClose(select) {
+  var state = select && select._phoneCodeCombobox;
+  if (!state) return;
+  var option = select.options[select.selectedIndex];
+  state.input.value = option ? phoneCodeOptionLabel(option) : '';
+  renderPhoneCodeOptions(select, '');
+  state.wrap.classList.remove('open');
+  state.list.classList.add('hidden');
+  state.input.setAttribute('aria-expanded', 'false');
+}
+
+function phoneCodeCloseAll(exceptSelect) {
+  document.querySelectorAll('select.phone-code').forEach(function(select) {
+    if (select !== exceptSelect) phoneCodeClose(select);
+  });
+}
+
+function phoneCodeSelectOption(select, optionIndex) {
+  var option = select && select.options ? select.options[optionIndex] : null;
+  if (!option) return;
+  select.selectedIndex = optionIndex;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  syncPhoneCodeCombobox(select);
+  phoneCodeClose(select);
+}
+
+function renderPhoneCodeOptions(select, query) {
+  var state = select && select._phoneCodeCombobox;
+  if (!state) return;
+  phoneCodePrepareSelect(select);
+  state.list.innerHTML = '';
+  var matches = Array.from(select.options || []).filter(function(option) {
+    return option.value && phoneCodeOptionMatches(option, query);
+  });
+  if (!matches.length) {
+    var empty = document.createElement('div');
+    empty.className = 'phone-code-empty';
+    empty.textContent = 'No matches';
+    state.list.appendChild(empty);
+    return;
+  }
+  matches.forEach(function(option) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'phone-code-option' + (option.index === select.selectedIndex ? ' active' : '');
+    button.dataset.optionIndex = String(option.index);
+    var main = document.createElement('span');
+    main.className = 'phone-code-option-main';
+    main.textContent = phoneCodeOptionLabel(option);
+    var name = document.createElement('span');
+    name.className = 'phone-code-option-name';
+    name.textContent = phoneCodeOptionCountryName(option);
+    button.appendChild(main);
+    if (name.textContent) button.appendChild(name);
+    button.addEventListener('mousedown', function(event) { event.preventDefault(); });
+    button.addEventListener('click', function() {
+      phoneCodeSelectOption(select, Number(button.dataset.optionIndex));
+    });
+    state.list.appendChild(button);
+  });
+}
+
+function openPhoneCodeCombobox(select) {
+  var state = select && select._phoneCodeCombobox;
+  if (!state) return;
+  phoneCodeCloseAll(select);
+  state.wrap.classList.add('open');
+  state.list.classList.remove('hidden');
+  state.input.setAttribute('aria-expanded', 'true');
+  renderPhoneCodeOptions(select, state.input.value);
+}
+
+function syncPhoneCodeCombobox(select) {
+  var state = select && select._phoneCodeCombobox;
+  if (!state) return;
+  var option = select.options[select.selectedIndex];
+  state.input.value = option ? phoneCodeOptionLabel(option) : '';
+  renderPhoneCodeOptions(select, '');
+}
+
+function enhancePhoneCodeSelect(select) {
+  if (!select || select._phoneCodeCombobox) return;
+  phoneCodePrepareSelect(select);
+  var wrap = document.createElement('div');
+  wrap.className = 'phone-code-combobox';
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'phone-code-search';
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('autocomplete', 'off');
+  input.setAttribute('spellcheck', 'false');
+  input.setAttribute('aria-label', 'Search phone country code');
+  var list = document.createElement('div');
+  list.className = 'phone-code-options hidden';
+  list.setAttribute('role', 'listbox');
+  if (select.id) {
+    list.id = select.id + '-options';
+    input.setAttribute('aria-controls', list.id);
+  }
+  wrap.appendChild(input);
+  wrap.appendChild(list);
+  select.parentNode.insertBefore(wrap, select.nextSibling);
+  select.classList.add('phone-code-native-hidden');
+  select.setAttribute('aria-hidden', 'true');
+  select.tabIndex = -1;
+  select._phoneCodeCombobox = { wrap: wrap, input: input, list: list };
+  input.addEventListener('focus', function() {
+    openPhoneCodeCombobox(select);
+    input.select();
+  });
+  input.addEventListener('click', function() {
+    openPhoneCodeCombobox(select);
+    input.select();
+  });
+  input.addEventListener('input', function() {
+    openPhoneCodeCombobox(select);
+    renderPhoneCodeOptions(select, input.value);
+  });
+  input.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      syncPhoneCodeCombobox(select);
+      phoneCodeClose(select);
+    } else if (event.key === 'Enter') {
+      var first = list.querySelector('.phone-code-option');
+      if (first) {
+        event.preventDefault();
+        phoneCodeSelectOption(select, Number(first.dataset.optionIndex));
+      }
+    }
+  });
+  select.addEventListener('change', function() { syncPhoneCodeCombobox(select); });
+  syncPhoneCodeCombobox(select);
+}
+
+function initPhoneCodeSelectors() {
+  document.querySelectorAll('select.phone-code').forEach(enhancePhoneCodeSelect);
+  if (!document.body.dataset.phoneCodeOutsideClickBound) {
+    document.body.dataset.phoneCodeOutsideClickBound = '1';
+    document.addEventListener('click', function(event) {
+      if (event.target.closest && event.target.closest('.phone-code-combobox')) return;
+      phoneCodeCloseAll();
+    });
+  }
+}
+
 function _restoreSelectValue(selectEl, rawValue, aliasKey) {
   if (!selectEl) return;
   var raw = String(rawValue == null ? '' : rawValue).trim();
-  if (!raw) { selectEl.value = ''; return; }
+  if (!raw) { selectEl.value = ''; syncPhoneCodeCombobox(selectEl); return; }
   var options = Array.from(selectEl.options || []);
   if (options.some(function(opt) { return opt.value === raw; })) {
     selectEl.value = raw;
+    syncPhoneCodeCombobox(selectEl);
     return;
   }
   var normRaw = _normalizeSelectToken(raw);
@@ -8994,6 +9281,7 @@ function _restoreSelectValue(selectEl, rawValue, aliasKey) {
   var aliasTarget = aliasMap[normRaw] || '';
   if (aliasTarget && options.some(function(opt) { return opt.value === aliasTarget; })) {
     selectEl.value = aliasTarget;
+    syncPhoneCodeCombobox(selectEl);
     return;
   }
   var match = options.find(function(opt) {
@@ -9001,6 +9289,7 @@ function _restoreSelectValue(selectEl, rawValue, aliasKey) {
     return normOpt && (normOpt === normRaw || normOpt.indexOf(normRaw) !== -1 || normRaw.indexOf(normOpt) !== -1);
   });
   selectEl.value = match ? match.value : '';
+  syncPhoneCodeCombobox(selectEl);
 }
 
 async function saveDraft() {
@@ -10751,6 +11040,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setDobMaxToday();
   populateLookupCountry();
   populateIncCountry();
+  initPhoneCodeSelectors();
   restoreCompanyIntakeFromStorage();
   syncConditionalFormState();
   syncJurisdictionRationaleState();

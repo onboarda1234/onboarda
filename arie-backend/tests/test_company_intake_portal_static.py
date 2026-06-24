@@ -379,6 +379,52 @@ def test_country_of_residence_restore_aliases_cover_uk_constituent_countries():
         assert 'class="nat-select" data-field="country_of_residence"' in table_html
 
 
+def test_phone_country_code_selector_is_searchable_and_preserves_existing_field():
+    html = _portal_html()
+
+    assert 'id="r-phone-code" class="phone-code"' in html
+    assert 'id="f-phone-code" class="phone-code"' in html
+    assert '🇲🇺 +230 (MU)' in html
+    assert '+230 (Mauritius)' not in html
+    assert '🇬🇧 +44 (GB)' in html
+    assert '+44 (UK)' not in html
+    assert '🇦🇪 +971 (AE)' in html
+    assert '+971 (UAE)' not in html
+
+    assert "MU: ['Mauritius']" in html
+    assert "GB: ['UK', 'United Kingdom', 'Great Britain', 'Britain', 'England', 'Scotland', 'Wales', 'Northern Ireland']" in html
+    assert 'value="+230" data-country-code="MU" data-country-name="Mauritius"' in html
+    assert 'value="+44" data-country-code="GB" data-country-name="United Kingdom"' in html
+
+    tokens_body = _extract_js_function(html, "phoneCodeSearchTokensForOption")
+    assert "phoneCodeOptionIso(option)" in tokens_body
+    assert "phoneCodeOptionCountryName(option)" in tokens_body
+    assert "dial.replace('+', '')" in tokens_body
+    assert "PHONE_CODE_SEARCH_ALIASES[iso]" in tokens_body
+
+    match_body = _extract_js_function(html, "phoneCodeOptionMatches")
+    assert "_normalizeSelectToken(query).replace(/^\\+/, '')" in match_body
+    assert "phoneCodeSearchTokensForOption(option)" in match_body
+
+    init_body = _extract_js_function(html, "initPhoneCodeSelectors")
+    assert "document.querySelectorAll('select.phone-code').forEach(enhancePhoneCodeSelect)" in init_body
+    assert "initPhoneCodeSelectors();" in html
+
+    enhance_body = _extract_js_function(html, "enhancePhoneCodeSelect")
+    assert "input.select()" in enhance_body
+
+    select_body = _extract_js_function(html, "phoneCodeSelectOption")
+    assert "select.dispatchEvent(new Event('change', { bubbles: true }))" in select_body
+    assert "'f-phone-code': 'entity_contact_phone_code'" in html
+    assert "entity_contact_phone_code: getFieldValue('f-phone-code')" in html
+
+    close_body = _extract_js_function(html, "phoneCodeClose")
+    assert "state.input.value = option ? phoneCodeOptionLabel(option) : ''" in close_body
+
+    restore_body = _extract_js_function(html, "_restoreSelectValue")
+    assert "syncPhoneCodeCombobox(selectEl)" in restore_body
+
+
 def test_no_secret_or_raw_provider_surface_added_to_portal():
     html = _portal_html()
     lookup_view = _extract_div_by_id(html, "view-company-lookup")
