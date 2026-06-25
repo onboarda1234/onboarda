@@ -33,7 +33,7 @@ def _runtime_js(html, config):
     region = _extract_between(
         html,
         "function caseCommandOpenLifecycleItems(app) {",
-        "function renderApprovalBlockersPanel(app) {",
+        "function approveApplication() {",
     )
     return "\n".join(
         [
@@ -45,6 +45,7 @@ def _runtime_js(html, config):
                 const eddCalls = [];
                 const moveToComplianceCalls = [];
                 const toastCalls = [];
+                const closeModalCalls = [];
 
                 function makeElement(id) {{
                   return {{
@@ -82,6 +83,7 @@ def _runtime_js(html, config):
                 function openEDDQueueForApplication(applicationId, applicationRef) {{ eddCalls.push({{ type:'queue', applicationId, applicationRef }}); }}
                 function movePricingToComplianceReview() {{ moveToComplianceCalls.push({{ ref: app && app.ref, statusRaw: app && app.statusRaw }}); }}
                 function showToast(message, level) {{ toastCalls.push({{ message, level }}); }}
+                function closeModal(id) {{ closeModalCalls.push(id); }}
                 function screeningTruthBlockedReasons(screeningTruth) {{
                   if (!screeningTruth) return [];
                   if (Array.isArray(screeningTruth.approval_blocked_reasons)) return screeningTruth.approval_blocked_reasons;
@@ -104,6 +106,30 @@ def _runtime_js(html, config):
                   return (memoData && memoData.supervisor) || (memoMeta && memoMeta.supervisor) || {{}};
                 }}
                 function getApprovalReadiness() {{ return CONFIG.approvalReadiness || {{ ready:false, blockers:['Blocked'] }}; }}
+                function buildApplicationActionState() {{
+                  return CONFIG.actionState || {{
+                    approve: {{ disabled:false, reason:'', title:'' }},
+                    reject: {{ disabled:false, reason:'', title:'' }},
+                    submitToCompliance: {{ disabled:false, reason:'', title:'' }}
+                  }};
+                }}
+                function approvalRoutePolicy(app) {{
+                  app = app || CONFIG.app || {{}};
+                  return app.approvalRoute || app.approval_route || {{}};
+                }}
+                function approvalRouteName(app) {{
+                  const route = approvalRoutePolicy(app);
+                  return String(route.route || '').trim().toLowerCase();
+                }}
+                function routeRequiresCompliance(app) {{
+                  const route = approvalRoutePolicy(app);
+                  const routeName = approvalRouteName(app);
+                  return !!route.requires_compliance_package || routeName === 'compliance_required' || routeName === 'dual_control_required';
+                }}
+                function disabledActionReason(actionState, fallback) {{
+                  return (actionState && (actionState.reason || actionState.title)) || fallback || 'This action is not available for the current case.';
+                }}
+                function syncApplicationActionPermissions() {{}}
                 function isTerminalGatePresentation(app) {{
                   var presentation = app && (app.approvalGatePresentation || app.approval_gate_presentation);
                   return !!(presentation && presentation.mode === 'terminal_decision_context');
@@ -121,8 +147,12 @@ def _runtime_js(html, config):
 
                 var detailLifecycleSummaryOverview = CONFIG.lifecycleSummaryOverview || null;
                 var SCREENING_QUEUE = CONFIG.screeningQueue || {{ metrics:null, rows:[], generated_at:null, load_error:null }};
+                var APPROVAL_PENDING_ITEMS_MESSAGE = 'Approval not ready. Resolve the pending items in the Case Command Centre before approving.';
+                var currentApp = CONFIG.app;
 
                 document.getElementById('detail-case-command-centre');
+                document.getElementById('decision-readiness-panel');
+                document.getElementById('decision-confirm-btn');
                 document.getElementById('detail-activity').textContent = CONFIG.auditFailureMessage || '';
                 (CONFIG.targetIds || []).forEach(id => document.getElementById(id));
                 """
@@ -133,6 +163,9 @@ def _runtime_js(html, config):
                 const app = CONFIG.app;
                 const blockers = getCaseCommandBlockers(app);
                 renderCaseCommandCentre(app);
+                if (CONFIG.renderDecisionReadiness) {
+                  renderDecisionReadiness(CONFIG.renderDecisionReadiness);
+                }
                 let actionRunResult = null;
                 if (CONFIG.runActionKey) {
                   const actionId = Object.keys(CASE_COMMAND_RENDERED_ACTIONS).find(id => CASE_COMMAND_RENDERED_ACTIONS[id].action_key === CONFIG.runActionKey);
@@ -147,9 +180,14 @@ def _runtime_js(html, config):
                 if (CONFIG.resolveTarget) {
                   activateCaseCommandTarget(CONFIG.resolveTarget.tab, CONFIG.resolveTarget.anchorId);
                 }
+                if (CONFIG.focusPendingItems) {
+                  focusCaseCommandCentre();
+                }
                 console.log(JSON.stringify({
                   blockers,
                   html: document.getElementById('detail-case-command-centre').innerHTML,
+                  modalHtml: document.getElementById('decision-readiness-panel').innerHTML,
+                  confirmDisabled: !!document.getElementById('decision-confirm-btn').disabled,
                   actionTargets: CASE_COMMAND_RENDERED_ACTIONS,
                   actionRunResult,
                   visibleBlockerCardCount: (document.getElementById('detail-case-command-centre').innerHTML.match(/case-command-group-row/g) || []).length,
@@ -157,6 +195,8 @@ def _runtime_js(html, config):
                   eddCalls,
                   moveToComplianceCalls,
                   toastCalls,
+                  closeModalCalls,
+                  caseCommandCentreScrollCalls: document.getElementById('detail-case-command-centre').scrollCalls,
                   targetScrollCalls: CONFIG.resolveTarget ? document.getElementById(CONFIG.resolveTarget.anchorId).scrollCalls : 0
                 }));
                 """
@@ -327,11 +367,49 @@ class TestCaseCommandCentreRuntime:
                         "screening_freshness": {"status": "valid"},
                     },
                     "approvalReadiness": {"ready": False, "blockers": ["Case stage"]},
+                    "runActionKey": "case_stage.review",
                 },
             )
         )
         assert "Review case stage" in result["html"]
         assert "Move to Compliance Review" not in result["html"]
+        assert result["switchTabCalls"] == ["overview"]
+        stage_targets = [
+            target for target in result["actionTargets"].values()
+            if target.get("action_key") == "case_stage.review"
+        ]
+        assert stage_targets
+        assert stage_targets[0]["target_section"] == "standard-actions-topbar"
+
+    def test_pre_approval_stage_blocker_routes_to_pre_approval_actions(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        ref="ARF-PREAPP-CTA-001",
+                        status="Pre-Approval Review",
+                        statusRaw="pre_approval_review",
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Case stage"]},
+                    "runActionKey": "case_stage.pre_approval",
+                },
+            )
+        )
+        assert "Review pre-approval" in result["html"]
+        assert result["switchTabCalls"] == ["overview"]
+        stage_targets = [
+            target for target in result["actionTargets"].values()
+            if target.get("action_key") == "case_stage.pre_approval"
+        ]
+        assert stage_targets
+        assert stage_targets[0]["target_section"] == "pre-approval-actions-topbar"
 
     def test_terminal_record_renders_decision_context_not_approval_blockers(self):
         html = _read_backoffice()
@@ -535,7 +613,13 @@ class TestCaseCommandCentreRuntime:
 
     def test_memo_missing_blocker_is_shown(self):
         html = _read_backoffice()
-        app = _base_app(latestMemo=None)
+        app = _base_app(
+            latestMemo=None,
+            approvalRoute={
+                "route": "compliance_required",
+                "requires_compliance_package": True,
+            },
+        )
         result = _run_node(
             _runtime_js(
                 html,
@@ -554,9 +638,43 @@ class TestCaseCommandCentreRuntime:
         assert "memo-missing" in blocker_ids
         assert "Compliance memo has not been generated." in result["html"]
 
+    def test_clean_direct_low_medium_does_not_show_mandatory_memo_blocker(self):
+        html = _read_backoffice()
+        app = _base_app(
+            latestMemo=None,
+            risk="LOW",
+            finalRiskLevel="LOW",
+            approvalRoute={
+                "route": "direct_low_medium",
+                "requires_compliance_package": False,
+                "direct_low_medium": True,
+            },
+        )
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": app,
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                },
+            )
+        )
+        blocker_ids = [item["id"] for item in result["blockers"]]
+        assert "memo-missing" not in blocker_ids
+        assert "Compliance memo has not been generated." not in result["html"]
+
     def test_memo_blockers_are_grouped_into_single_memo_package_row(self):
         html = _read_backoffice()
         app = _base_app(
+            approvalRoute={
+                "route": "compliance_required",
+                "requires_compliance_package": True,
+            },
             latestMemo={
                 "sections": {"summary": {"content": "ok"}},
                 "validation_status": "pending",
@@ -590,6 +708,57 @@ class TestCaseCommandCentreRuntime:
         assert "validation_status" not in result["html"]
         assert "supervisor_status" not in result["html"]
         assert result["switchTabCalls"] == ["overview"]
+
+    def test_approval_modal_uses_short_case_command_centre_message(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(latestMemo=None),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {
+                        "ready": False,
+                        "blockers": [
+                            "Document evidence is not reliance-ready.",
+                            "Screening has not been run.",
+                        ],
+                    },
+                    "renderDecisionReadiness": "Approve",
+                },
+            )
+        )
+        assert result["confirmDisabled"] is True
+        assert "<strong>Approval not ready.</strong>" in result["modalHtml"]
+        assert "Resolve the pending items in the Case Command Centre before approving." in result["modalHtml"]
+        assert "View pending items" in result["modalHtml"]
+        assert "<ul" not in result["modalHtml"]
+        assert "Document evidence is not reliance-ready." not in result["modalHtml"]
+        assert "Screening has not been run." not in result["modalHtml"]
+
+    def test_view_pending_items_focuses_case_command_centre(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": False, "blockers": ["Blocked"]},
+                    "focusPendingItems": True,
+                },
+            )
+        )
+        assert result["switchTabCalls"] == ["overview"]
+        assert result["caseCommandCentreScrollCalls"] == 1
 
     def test_backend_idv_blockers_are_grouped_and_route_to_idv_panel(self):
         html = _read_backoffice()
@@ -649,6 +818,47 @@ class TestCaseCommandCentreRuntime:
         assert idv_targets
         assert idv_targets[0]["target_section"] == "section-b-identity-verification"
         assert idv_targets[0]["scroll_anchor"] == "individual-identity-verification"
+
+    def test_backend_document_resolve_action_routes_to_kyc_documents(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        gateBlockers=[
+                            {
+                                "id": "doc-rel-1",
+                                "category": "Document Evidence",
+                                "title": "Document evidence gate failed",
+                                "description": "One required document is not reliance-ready.",
+                                "ctaLabel": "Resolve document evidence",
+                                "tab": "kyc-docs",
+                                "anchorId": "detail-kyc-documents-details",
+                                "blocker_group": "document_evidence",
+                                "action_key": "documents.resolve",
+                            }
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                    "runActionKey": "documents.resolve",
+                },
+            )
+        )
+        assert "Resolve document evidence" in result["html"]
+        assert result["switchTabCalls"] == ["kyc-docs"]
+        document_targets = [
+            target for target in result["actionTargets"].values()
+            if target.get("action_key") == "documents.resolve"
+        ]
+        assert document_targets
+        assert document_targets[0]["target_section"] == "detail-kyc-documents-panel"
+        assert document_targets[0]["scroll_anchor"] == "detail-kyc-documents-panel"
 
     def test_backend_group_priority_keeps_screening_before_idv(self):
         html = _read_backoffice()
@@ -941,6 +1151,41 @@ class TestCaseCommandCentreRuntime:
         )
         assert result["switchTabCalls"] == ["screening"]
         assert result["targetScrollCalls"] == 1
+
+    def test_generic_approval_review_routes_to_case_command_centre(self):
+        html = _read_backoffice()
+        result = _run_node(
+            _runtime_js(
+                html,
+                {
+                    "app": _base_app(
+                        gateBlockers=[
+                            {
+                                "id": "generic-gate",
+                                "category": "Approval Gate",
+                                "title": "Backend approval gate would reject approval",
+                                "description": "Review pending items.",
+                            }
+                        ]
+                    ),
+                    "screeningSummary": {
+                        "screening_run_recorded": True,
+                        "screening_truth_summary": {"approval_ready": True},
+                        "screening_freshness": {"status": "valid"},
+                    },
+                    "approvalReadiness": {"ready": True, "blockers": []},
+                    "runActionKey": "approval.pending_items",
+                },
+            )
+        )
+        assert "View pending items" in result["html"]
+        assert result["switchTabCalls"] == ["overview"]
+        pending_targets = [
+            target for target in result["actionTargets"].values()
+            if target.get("action_key") == "approval.pending_items"
+        ]
+        assert pending_targets
+        assert pending_targets[0]["target_section"] == "detail-case-command-centre"
 
     def test_ready_state_only_shows_positive_message_when_safe(self):
         html = _read_backoffice()
