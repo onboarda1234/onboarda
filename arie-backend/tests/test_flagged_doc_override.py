@@ -27,6 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def _create_app_with_flagged_doc(db, *, doc_type="memarts", verification_status="flagged"):
     """Helper: create an application with a flagged document and valid memo."""
+    from tests.conftest import clean_ca_prescreening
+
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-flagdoc-{suffix}"
     app_ref = f"ARF-FLAGDOC-{suffix}"
@@ -43,18 +45,10 @@ def _create_app_with_flagged_doc(db, *, doc_type="memarts", verification_status=
             app_id, app_ref, f"client-flagdoc-{suffix}",
             "FlagDoc Test Ltd", "Mauritius", "Technology", "SME",
             "compliance_review", "MEDIUM", 45,
-            json.dumps({
-                "screening_report": {
-                    "screening_mode": "live",
-                    "screened_at": _now.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "sanctions": {"api_status": "live"},
-                    "company_registry": {"api_status": "live"},
-                    "ip_geolocation": {"api_status": "live"},
-                    "kyc": {"api_status": "live"},
-                },
-                "screening_valid_until": (_now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
-                "screening_validity_days": 90,
-            }),
+            json.dumps(clean_ca_prescreening(
+                company_name="FlagDoc Test Ltd",
+                screened_at=_now.strftime("%Y-%m-%dT%H:%M:%S"),
+            )),
         ),
     )
     db.execute(

@@ -17,6 +17,8 @@ REQUIRED_DOC_TYPES = (
 def _live_report():
     now = datetime.now(timezone.utc)
     return {
+        "provider": "complyadvantage",
+        "screening_provider": "complyadvantage",
         "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
         "company_screening": {
             "found": True,

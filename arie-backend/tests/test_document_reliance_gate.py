@@ -16,19 +16,8 @@ REQUIRED_DOC_TYPES = (
 
 
 def _screening_payload():
-    now = datetime.now(timezone.utc)
-    return {
-        "screening_report": {
-            "screening_mode": "live",
-            "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
-            "sanctions": {"api_status": "live"},
-            "company_registry": {"api_status": "live"},
-            "ip_geolocation": {"api_status": "live"},
-            "kyc": {"api_status": "live"},
-        },
-        "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
-        "screening_validity_days": 90,
-    }
+    from tests.conftest import clean_ca_prescreening
+    return clean_ca_prescreening(company_name="Document Reliance Ltd")
 
 
 def _insert_app(db):

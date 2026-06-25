@@ -320,8 +320,8 @@ def test_gate5_blocks_error_person_aml_409(db, temp_db):
 # ── 8. Gate 5 allows live GREEN person AML ──
 
 
-def test_gate5_allows_live_green_person_aml_409(db, temp_db):
-    """Gate 5 must allow when person AML (director) has api_status=live."""
+def test_gate5_blocks_live_green_person_aml_409_without_ca_truth(db, temp_db):
+    """Legacy screening live GREEN does not satisfy the CA screening truth gate."""
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(
@@ -330,7 +330,9 @@ def test_gate5_allows_live_green_person_aml_409(db, temp_db):
     )
     app = _insert_app_for_gate5(db, report)
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"Expected approval, got: {message}"
+    assert can_approve is False
+    assert "ComplyAdvantage Mesh screening/adverse-media truth" in message
+    assert "legacy_screening_non_authoritative" in message
 
 
 # ── 9. Company KYB not_configured blocks approval ──

@@ -359,7 +359,7 @@ def test_remove_targets_only_current_document_and_keeps_superseded_history(docum
 
 
 def test_evidence_pack_and_compliance_memo_use_only_current_documents(document_versioning_server, monkeypatch):
-    from tests.conftest import insert_verified_required_documents
+    from tests.conftest import clean_ca_prescreening, insert_verified_required_documents
     from db import get_db
 
     app_id = "docver_app_memo"
@@ -582,35 +582,18 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
     db_path = str(tmp_path / "approval_gate.db")
     _sync_db_path(db_path)
 
-    from tests.conftest import insert_verified_required_documents
+    from tests.conftest import clean_ca_prescreening, insert_verified_required_documents
     from db import get_db, init_db
     from security_hardening import ApprovalGateValidator
 
     init_db()
     app_id = "docver_approval_app"
     now = datetime.now(timezone.utc)
-    prescreening_data = {
-        "screening_report": {
-            "screening_mode": "live",
-            "screened_at": now.isoformat(),
-            "company_screening": {
-                "found": True,
-                "source": "opencorporates",
-                "sanctions": {"matched": False, "results": [], "source": "sumsub", "api_status": "live"},
-            },
-            "director_screenings": [
-                {
-                    "person_name": "Approval Director",
-                    "screening": {"matched": False, "results": [], "source": "sumsub", "api_status": "live"},
-                }
-            ],
-            "ubo_screenings": [],
-            "kyc_applicants": [
-                {"person_name": "Approval Director", "source": "sumsub", "api_status": "live", "review_answer": "GREEN"}
-            ],
-        },
-        "screening_valid_until": (now + timedelta(days=30)).isoformat(),
-    }
+    prescreening_data = clean_ca_prescreening(
+        screened_at=now.isoformat(),
+        valid_days=30,
+        company_name="Approval Ltd",
+    )
     memo_data = {
         "metadata": {},
         "supervisor": {},

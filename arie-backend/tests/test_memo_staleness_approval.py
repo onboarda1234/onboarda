@@ -33,14 +33,11 @@ def _make_user(user_id, name, role="sco"):
 
 
 def _valid_screening():
-    return {
-        "screening_mode": "live",
-        "sanctions": {"api_status": "live", "matched": False, "source": "sumsub"},
-        "company_registry": {"api_status": "live"},
-        "ip_geolocation": {"api_status": "live"},
-        "kyc": {"api_status": "live"},
-        "screened_at": datetime.now(timezone.utc).isoformat(),
-    }
+    from tests.conftest import clean_ca_screening_report
+    return clean_ca_screening_report(
+        screened_at=datetime.now(timezone.utc).isoformat(),
+        company_name="Staleness Test Ltd",
+    )
 
 
 def _insert_app(db, risk_level="HIGH", status="compliance_review",

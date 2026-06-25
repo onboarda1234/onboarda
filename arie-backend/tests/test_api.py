@@ -3966,18 +3966,11 @@ class TestPasswordRotationGuard:
 
 class TestGovernanceAttemptAudit:
     def _live_prescreening(self):
-        return json.dumps({
-            "screening_report": {
-                "screening_mode": "live",
-                "screened_at": "2026-04-30T10:00:00",
-                "sanctions": {"api_status": "live"},
-                "company_registry": {"api_status": "live"},
-                "ip_geolocation": {"api_status": "live"},
-                "kyc": {"api_status": "live"},
-            },
-            "screening_valid_until": "2026-07-29T10:00:00",
-            "screening_validity_days": 90,
-        })
+        from tests.conftest import clean_ca_prescreening
+        return json.dumps(clean_ca_prescreening(
+            screened_at="2026-04-30T10:00:00",
+            company_name="Phase 1B Screening Ltd",
+        ))
 
     def _insert_approved_memo(self, conn, app_id):
         conn.execute("""
@@ -6496,19 +6489,9 @@ class TestGovernanceAttemptAudit:
 
 class TestMonitoringEnrollmentActuation:
     def _live_clear_prescreening(self):
-        now = datetime.now(timezone.utc)
-        return json.dumps({
-            "screening_report": {
-                "screening_mode": "live",
-                "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
-                "sanctions": {"api_status": "live", "matched": False, "results": []},
-                "company_registry": {"api_status": "live"},
-                "ip_geolocation": {"api_status": "live"},
-                "kyc": {"api_status": "live", "matched": False, "results": []},
-            },
-            "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
-            "screening_validity_days": 90,
-        })
+        from tests.conftest import clean_ca_prescreening_json
+
+        return clean_ca_prescreening_json(company_name="Monitoring Approval Fixture Ltd")
 
     def _insert_approvable_application(self, risk_level="LOW"):
         from tests.conftest import insert_verified_required_documents

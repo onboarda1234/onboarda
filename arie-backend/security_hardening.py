@@ -43,6 +43,16 @@ from screening_state import (
     build_screening_truth_summary,
     derive_screening_truth,
 )
+from screening_adverse_truth import (
+    EFFECT_ALLOW as SCREENING_ADVERSE_EFFECT_ALLOW,
+    EFFECT_COMPLIANCE as SCREENING_ADVERSE_EFFECT_COMPLIANCE,
+    EFFECT_PROHIBITED as SCREENING_ADVERSE_EFFECT_PROHIBITED,
+    build_screening_adverse_truth_summary,
+    load_monitoring_truth_inputs,
+    screening_adverse_truth_blocker_message,
+    screening_adverse_truth_blocks_final_approval,
+    screening_adverse_truth_requires_compliance,
+)
 from sumsub_idv_status import build_idv_gate_summary, build_sumsub_idv_statuses
 from memo_governance import latest_compliance_memo_row
 from document_reliance_gate import (
@@ -280,6 +290,37 @@ def _load_screening_reviews_for_truth(db, app_id: str, app_ref: str = "") -> Lis
                 review["review_evidence_reference"] = evidence_reference
         reviews.append(review)
     return reviews
+
+
+def _screening_adverse_truth_for_app(
+    app: Mapping[str, Any],
+    db,
+    *,
+    prescreening: Optional[Mapping[str, Any]] = None,
+    screening_report: Optional[Mapping[str, Any]] = None,
+    screening_reviews: Optional[List[Dict]] = None,
+) -> Dict[str, Any]:
+    """Build the CA screening/adverse-media SOT projection for approval gates."""
+    app = app if isinstance(app, Mapping) else {}
+    app_id = app.get("id")
+    try:
+        monitoring_alerts, monitoring_evidence = load_monitoring_truth_inputs(db, app_id)
+    except Exception as exc:
+        logger.error(
+            "Approval monitoring evidence lookup failed for application %s: %s",
+            app_id,
+            exc,
+            exc_info=True,
+        )
+        monitoring_alerts, monitoring_evidence = [], []
+    return build_screening_adverse_truth_summary(
+        app,
+        prescreening=prescreening,
+        screening_report=screening_report,
+        screening_reviews=screening_reviews or [],
+        monitoring_alerts=monitoring_alerts,
+        monitoring_alert_evidence=monitoring_evidence,
+    )
 
 
 _SCREENING_SECOND_REVIEW_BLOCK_CODE = "screening_second_review_pending"
@@ -667,6 +708,7 @@ def _approval_gate_blocker(
     blocker_group: str = "",
     blocker_group_label: str = "",
     action_key: str = "",
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     blocker = {
         "id": blocker_id,
@@ -694,6 +736,8 @@ def _approval_gate_blocker(
             "scroll_anchor": anchor_id,
             "action_mode": "focus_section",
         }
+    if metadata:
+        blocker["metadata"] = dict(metadata)
     return blocker
 
 
@@ -834,7 +878,12 @@ def _approval_adverse_media_flag(payload: Any) -> bool:
     return False
 
 
-def _approval_escalation_reasons(app: Mapping[str, Any], db, screening_truth: Optional[Mapping[str, Any]] = None) -> List[str]:
+def _approval_escalation_reasons(
+    app: Mapping[str, Any],
+    db,
+    screening_truth: Optional[Mapping[str, Any]] = None,
+    screening_adverse_truth: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
     reasons: List[str] = []
     if not isinstance(app, Mapping):
         return ["application_missing"]
@@ -864,11 +913,15 @@ def _approval_escalation_reasons(app: Mapping[str, Any], db, screening_truth: Op
         reasons.append("material_screening_concern")
 
     prescreening = _json_object(app.get("prescreening_data"))
+    sot = screening_adverse_truth if isinstance(screening_adverse_truth, Mapping) else {}
+    sot_effect = _approval_text(sot.get("approval_effect"))
+    sot_states = " ".join(str(item or "").lower() for item in (sot.get("states") or []))
+    sot_allows_screening = sot_effect == SCREENING_ADVERSE_EFFECT_ALLOW
     if _approval_has_declared_pep(app, db):
         reasons.append("pep")
-    if _approval_adverse_media_flag(prescreening):
+    if not sot_allows_screening and _approval_adverse_media_flag(prescreening):
         reasons.append("adverse_media")
-    if _approval_truthy_flag(prescreening.get("screening_concern")):
+    if not sot_allows_screening and _approval_truthy_flag(prescreening.get("screening_concern")):
         reasons.append("material_screening_concern")
 
     truth = screening_truth if isinstance(screening_truth, Mapping) else {}
@@ -876,7 +929,21 @@ def _approval_escalation_reasons(app: Mapping[str, Any], db, screening_truth: Op
     blocking_reasons = " ".join(str(item or "").lower() for item in (truth.get("blocking_reasons") or []))
     canonical_state = _approval_text(truth.get("canonical_state"))
     truth_blob = " ".join([blocked_reasons, blocking_reasons, canonical_state])
-    if any(token in truth_blob for token in ("completed_match", "true_match", "terminal_match", "live_terminal_match")):
+    if (
+        not sot_allows_screening
+        and any(token in truth_blob for token in ("completed_match", "true_match", "terminal_match", "live_terminal_match"))
+    ):
+        reasons.append("material_screening_concern")
+
+    if sot_effect == SCREENING_ADVERSE_EFFECT_COMPLIANCE:
+        reasons.append("material_screening_concern")
+    if sot_effect == SCREENING_ADVERSE_EFFECT_PROHIBITED:
+        reasons.append("prohibited_screening_hit")
+    if "pep_detected" in sot_states:
+        reasons.append("pep")
+    if "adverse_media_hit" in sot_states:
+        reasons.append("adverse_media")
+    if "material_concern" in sot_states:
         reasons.append("material_screening_concern")
 
     deduped: List[str] = []
@@ -924,6 +991,13 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
     prescreening = _json_object(app.get("prescreening_data"))
     screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
     screening_truth = {}
+    screening_adverse_truth = {}
+    screening_reviews: List[Dict] = []
+    if db is not None and app.get("id"):
+        try:
+            screening_reviews = _load_screening_reviews_for_truth(db, app.get("id"), app.get("ref", ""))
+        except Exception:
+            screening_reviews = []
     if isinstance(screening_report, dict) and screening_report:
         try:
             screening_truth = build_screening_truth_summary(
@@ -937,12 +1011,31 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
                         or app.get("submitted_at")
                     ),
                 },
-                [],
+                screening_reviews,
             )
         except Exception:
             screening_truth = {}
+    try:
+        screening_adverse_truth = _screening_adverse_truth_for_app(
+            app,
+            db,
+            prescreening={
+                **prescreening,
+                "screening_input_updated_at": (
+                    app.get("screening_input_updated_at")
+                    or app.get("risk_inputs_updated_at")
+                    or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
+                    or app.get("submitted_at")
+                ),
+            },
+            screening_report=screening_report if isinstance(screening_report, Mapping) else {},
+            screening_reviews=screening_reviews,
+        )
+    except Exception:
+        logger.exception("Could not classify screening/adverse-media SOT route for application %s", app.get("id"))
+        screening_adverse_truth = {}
 
-    escalation_reasons = _approval_escalation_reasons(app, db, screening_truth)
+    escalation_reasons = _approval_escalation_reasons(app, db, screening_truth, screening_adverse_truth)
     high_risk = risk_level in HIGH_RISK_DECISION_LEVELS
     if high_risk:
         escalation_reasons.append("high_or_very_high_risk")
@@ -1301,9 +1394,40 @@ class ApprovalGateValidator:
             prescreening_for_truth["screening_input_updated_at"] = (
                 app.get("screening_input_updated_at")
                 or app.get("risk_inputs_updated_at")
+                or prescreening_for_truth.get("screening_input_updated_at")
+                or prescreening_for_truth.get("risk_inputs_updated_at")
+                or prescreening_for_truth.get("inputs_updated_at")
                 or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
                 or app.get("submitted_at")
             )
+            screening_adverse_truth = _screening_adverse_truth_for_app(
+                app,
+                db,
+                prescreening=prescreening_for_truth,
+                screening_report=screening_report,
+                screening_reviews=screening_reviews,
+            )
+            def _screening_adverse_route_block() -> Tuple[bool, str]:
+                if screening_adverse_truth_blocks_final_approval(screening_adverse_truth):
+                    return (
+                        True,
+                        screening_adverse_truth_blocker_message(screening_adverse_truth)
+                        or "ComplyAdvantage Mesh screening/adverse-media truth blocks approval.",
+                    )
+                if (
+                    screening_adverse_truth_requires_compliance(screening_adverse_truth)
+                    and route_policy.get("route") == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM
+                ):
+                    return (
+                        True,
+                        screening_adverse_truth_blocker_message(screening_adverse_truth)
+                        or "ComplyAdvantage Mesh screening/adverse-media truth requires Compliance review.",
+                    )
+                return (False, "")
+            if screening_adverse_truth.get("approval_effect") == "prohibited_fail_closed":
+                sot_blocked, sot_message = _screening_adverse_route_block()
+                if sot_blocked:
+                    return (False, sot_message)
             screening_truth = build_screening_truth_summary(
                 screening_report,
                 prescreening_for_truth,
@@ -1373,12 +1497,18 @@ class ApprovalGateValidator:
                 )
 
             if route_policy.get("route") == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM:
-                return ApprovalGateValidator._validate_direct_low_medium_operational_tail(
+                tail_ok, tail_message = ApprovalGateValidator._validate_direct_low_medium_operational_tail(
                     app,
                     db,
                     screening_report,
                     prescreening_data,
                 )
+                if not tail_ok:
+                    return (tail_ok, tail_message)
+                sot_blocked, sot_message = _screening_adverse_route_block()
+                if sot_blocked:
+                    return (False, sot_message)
+                return (True, "")
 
             # 3. Check compliance memo exists and meets quality gates
             memo_row = latest_compliance_memo_row(
@@ -1830,6 +1960,10 @@ class ApprovalGateValidator:
                     + format_document_reliance_blockers(document_gate)
                 )
 
+            sot_blocked, sot_message = _screening_adverse_route_block()
+            if sot_blocked:
+                return (False, sot_message)
+
             # EX-10 closeout: Audit log on successful freshness validation
             _screening_age_days = None
             _valid_until_log = screening_valid_until_str or None
@@ -2131,11 +2265,43 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
         prescreening_for_truth["screening_input_updated_at"] = (
             app.get("screening_input_updated_at")
             or app.get("risk_inputs_updated_at")
+            or prescreening_for_truth.get("screening_input_updated_at")
+            or prescreening_for_truth.get("risk_inputs_updated_at")
+            or prescreening_for_truth.get("inputs_updated_at")
             or (app.get("inputs_updated_at") if app.get("submitted_at") else None)
             or app.get("submitted_at")
         )
         screening_truth = build_screening_truth_summary(screening_report, prescreening_for_truth, screening_reviews)
-        if screening_truth.get("approval_blocking"):
+        screening_adverse_truth = _screening_adverse_truth_for_app(
+            app,
+            db,
+            prescreening=prescreening_for_truth,
+            screening_report=screening_report,
+            screening_reviews=screening_reviews,
+        )
+        added_screening_sot_blocker = False
+        if screening_adverse_truth.get("approval_effect") != "allow_direct_approval":
+            message = screening_adverse_truth_blocker_message(screening_adverse_truth)
+            blockers.append(_approval_gate_blocker(
+                "screening_adverse_truth",
+                "Screening",
+                "Screening/adverse-media gate is blocked",
+                message or "ComplyAdvantage Mesh screening/adverse-media truth is not direct-approval ready.",
+                cta_label="Resolve screening",
+                tab="screening",
+                anchor_id="detail-screening-review",
+                blocker_group="screening",
+                blocker_group_label="Screening",
+                action_key="screening.resolve",
+                metadata={
+                    "approval_effect": screening_adverse_truth.get("approval_effect"),
+                    "states": screening_adverse_truth.get("states") or [],
+                    "freshness": screening_adverse_truth.get("freshness"),
+                    "provider": screening_adverse_truth.get("provider"),
+                },
+            ))
+            added_screening_sot_blocker = True
+        if screening_truth.get("approval_blocking") and not added_screening_sot_blocker:
             blockers.append(_approval_gate_blocker(
                 "screening_truth",
                 "Screening",

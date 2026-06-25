@@ -369,14 +369,16 @@ def _insert_gate5_app(db, screening_report):
     return dict(app)
 
 
-def test_gate5_allows_live_green_person_aml_after_fix(db, temp_db):
-    """Gate 5 still allows live GREEN person AML results."""
+def test_gate5_blocks_live_green_person_aml_after_fix_without_ca_truth(db, temp_db):
+    """Legacy screening GREEN output does not satisfy the CA screening truth gate."""
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report_for_gate5(director_status="live")
     app = _insert_gate5_app(db, report)
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"Gate 5 should pass: {message}"
+    assert can_approve is False
+    assert "ComplyAdvantage Mesh screening/adverse-media truth" in message
+    assert "legacy_screening_non_authoritative" in message
 
 
 def test_gate5_blocks_error_person_aml_after_fix(db, temp_db):

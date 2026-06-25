@@ -3104,6 +3104,10 @@ from screening_state import (
     NOT_STARTED as _SCR_NOT_STARTED,
     TERMINAL_STATES as _SCR_TERMINAL_STATES,
 )
+from screening_adverse_truth import (
+    build_screening_adverse_truth_summary,
+    load_monitoring_truth_inputs,
+)
 
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
@@ -4247,6 +4251,35 @@ class ApplicationsHandler(BaseHandler):
                 )
                 screening_reviews_by_app.setdefault(review["application_id"], []).append(review)
 
+        screening_adverse_alerts_by_app = {}
+        screening_adverse_evidence_by_app = {}
+        if app_ids:
+            monitoring_placeholders = ",".join("?" for _ in app_ids)
+            alert_rows = db.execute(
+                f"""
+                SELECT *
+                  FROM monitoring_alerts
+                 WHERE application_id IN ({monitoring_placeholders})
+                 ORDER BY application_id ASC, id ASC
+                """,
+                app_ids,
+            ).fetchall()
+            for alert_row in alert_rows:
+                alert = dict(alert_row)
+                screening_adverse_alerts_by_app.setdefault(alert.get("application_id"), []).append(alert)
+            evidence_rows = db.execute(
+                f"""
+                SELECT *
+                  FROM monitoring_alert_evidence
+                 WHERE application_id IN ({monitoring_placeholders})
+                 ORDER BY application_id ASC, id ASC
+                """,
+                app_ids,
+            ).fetchall()
+            for evidence_row in evidence_rows:
+                evidence = dict(evidence_row)
+                screening_adverse_evidence_by_app.setdefault(evidence.get("application_id"), []).append(evidence)
+
         # Stitch results back into each application
         for app in apps:
             app["status_label"] = get_status_label(app.get("status"))
@@ -4309,6 +4342,14 @@ class ApplicationsHandler(BaseHandler):
                 screening_report_for_truth if isinstance(screening_report_for_truth, dict) else {},
                 prescreening_truth_context,
                 screening_reviews_by_app.get(app["id"], []),
+            )
+            app["screening_adverse_truth_summary"] = build_screening_adverse_truth_summary(
+                app,
+                prescreening=prescreening_truth_context,
+                screening_report=screening_report_for_truth if isinstance(screening_report_for_truth, dict) else {},
+                screening_reviews=screening_reviews_by_app.get(app["id"], []),
+                monitoring_alerts=screening_adverse_alerts_by_app.get(app["id"], []),
+                monitoring_alert_evidence=screening_adverse_evidence_by_app.get(app["id"], []),
             )
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
@@ -6425,6 +6466,22 @@ class ApplicationDetailHandler(BaseHandler):
                 ),
             },
             screening_reviews,
+        )
+        screening_adverse_prescreening = {
+            **(result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {}),
+            "screening_input_updated_at": (
+                result.get("screening_input_updated_at")
+                or result.get("risk_inputs_updated_at")
+                or (result.get("inputs_updated_at") if result.get("submitted_at") else None)
+                or result.get("submitted_at")
+            ),
+        }
+        result["screening_adverse_truth_summary"] = _application_screening_adverse_truth_summary(
+            db,
+            result,
+            prescreening=screening_adverse_prescreening,
+            screening_report=screening_report if isinstance(screening_report, dict) else {},
+            screening_reviews=screening_reviews,
         )
         if user["type"] != "client":
             result["sumsub_idv_statuses"] = _build_application_sumsub_idv_payload(
@@ -18646,6 +18703,29 @@ def _load_application_monitoring_alerts_batch(db, application_ids):
         alert["subject_scope"] = _monitoring_subject_scope(db, application_id, alert)
         alerts_by_app.setdefault(application_id, []).append(alert)
     return alerts_by_app
+
+
+def _application_screening_adverse_truth_summary(
+    db,
+    app,
+    *,
+    prescreening,
+    screening_report,
+    screening_reviews,
+):
+    try:
+        monitoring_alerts, monitoring_evidence = load_monitoring_truth_inputs(db, app.get("id"))
+    except Exception:
+        logger.exception("Failed to load monitoring evidence for screening/adverse truth summary")
+        monitoring_alerts, monitoring_evidence = [], []
+    return build_screening_adverse_truth_summary(
+        app,
+        prescreening=prescreening,
+        screening_report=screening_report,
+        screening_reviews=screening_reviews,
+        monitoring_alerts=monitoring_alerts,
+        monitoring_alert_evidence=monitoring_evidence,
+    )
 
 
 def _monitoring_company_media_facts(alerts):

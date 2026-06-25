@@ -30,10 +30,16 @@ def _make_screening_report(screened_at=None, screening_mode="live"):
     return {
         "screening_mode": screening_mode,
         "screened_at": screened_at,
-        "sanctions": {"api_status": "live", "matched": False, "source": "sumsub"},
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": False,
+            "results": [],
+            "provider_references": {"case_id": "ca-freshness-clean"},
+        },
         "company_registry": {"api_status": "live"},
         "ip_geolocation": {"api_status": "live"},
-        "kyc": {"api_status": "live"},
     }
 
 

@@ -47,10 +47,16 @@ def _insert_application_and_memo(
                 "screening_report": {
                     "screening_mode": "live",
                     "screened_at": screened_at,
-                    "sanctions": {"api_status": "live"},
+                    "company_screening": {
+                        "provider": "complyadvantage",
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "matched": False,
+                        "results": [],
+                        "provider_references": {"case_id": "ca-clean-approval-gate"},
+                    },
                     "company_registry": {"api_status": "live"},
                     "ip_geolocation": {"api_status": "live"},
-                    "kyc": {"api_status": "live"},
                 },
                 "screening_valid_until": valid_until,
                 "screening_validity_days": 90,
@@ -728,9 +734,16 @@ def _completed_match_prescreening():
             "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
             "company_screening": {
                 "found": True,
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": True,
+                "results": [{"name": "Potential Watchlist Match", "is_sanctioned": True}],
+                "provider_references": {"case_id": "ca-gate-001"},
                 "sanctions": {
                     "api_status": "live",
-                    "source": "sumsub",
+                    "source": "complyadvantage",
+                    "provider": "complyadvantage",
                     "matched": True,
                     "results": [{"name": "Potential Watchlist Match", "is_sanctioned": True}],
                 },
@@ -865,8 +878,8 @@ def test_completed_match_without_disposition_blocks_approval(db):
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
 
     assert can_approve is False
-    assert "Screening truth gate failed" in message
-    assert "completed_match" in message
+    assert "prohibited fail-closed" in message
+    assert "sanctions_or_watchlist_hit" in message
 
 
 def test_screening_second_review_pending_blocks_approval(db):
