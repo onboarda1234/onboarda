@@ -2841,19 +2841,37 @@ def _is_yes(value):
     return str(value or "").strip().lower() in ("yes", "true", "1", "y")
 
 
+def _party_row_declared_or_confirmed_pep(row):
+    row = row or {}
+    declaration = _loads_json(row.get("pep_declaration"), {}) or {}
+    if not isinstance(declaration, dict):
+        declaration = {}
+    status = str(declaration.get("pep_status") or "").strip().lower()
+    values = [declaration.get(key) for key in ("client_declared_pep", "declared_pep", "officer_verified_pep", "verified_pep")]
+    if any(_is_yes(value) for value in values):
+        return True
+    if status in ("declared_yes", "confirmed_pep"):
+        return True
+    if any(str(value).strip().lower() in ("no", "false", "0", "n") for value in values):
+        return False
+    if status in ("declared_no", "false_positive", "not_pep", "pending_review", "not_verified"):
+        return False
+    return not declaration and _is_yes(row.get("is_pep"))
+
+
 def _declared_pep_present(db, application_id):
     try:
         rows = db.execute(
             """
-            SELECT is_pep FROM directors WHERE application_id=?
+            SELECT is_pep, pep_declaration FROM directors WHERE application_id=?
             UNION ALL
-            SELECT is_pep FROM ubos WHERE application_id=?
+            SELECT is_pep, pep_declaration FROM ubos WHERE application_id=?
             """,
             (application_id, application_id),
         ).fetchall()
     except Exception:
         return False
-    return any(_is_yes(_row_dict(row).get("is_pep")) for row in rows)
+    return any(_party_row_declared_or_confirmed_pep(_row_dict(row)) for row in rows)
 
 
 def _prescreening_dict(app):

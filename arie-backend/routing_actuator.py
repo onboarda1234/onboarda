@@ -66,6 +66,7 @@ transaction.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, Mapping, Optional
 
@@ -102,6 +103,64 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return str(value or "").strip().lower() in {"yes", "true", "1", "y"}
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _optional_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"yes", "true", "1", "y"}:
+        return True
+    if text in {"no", "false", "0", "n"}:
+        return False
+    return None
+
+
+def _party_row_has_declared_or_confirmed_pep(row: Mapping[str, Any]) -> bool:
+    declaration = _json_object(row.get("pep_declaration"))
+    status = str(
+        row.get("pep_status") or declaration.get("pep_status") or ""
+    ).strip().lower()
+
+    declared = _optional_bool(
+        row.get("client_declared_pep", declaration.get("client_declared_pep"))
+    )
+    if declared is None:
+        declared = _optional_bool(row.get("declared_pep", declaration.get("declared_pep")))
+    officer_verified = _optional_bool(
+        row.get("officer_verified_pep", declaration.get("officer_verified_pep"))
+    )
+    if officer_verified is None:
+        officer_verified = _optional_bool(row.get("verified_pep", declaration.get("verified_pep")))
+
+    if declared is True or officer_verified is True:
+        return True
+    if status in {"declared_yes", "confirmed_pep"}:
+        return True
+    if declared is False or officer_verified is False:
+        return False
+    if status in {"declared_no", "false_positive", "not_pep", "pending_review", "not_verified"}:
+        return False
+
+    # Legacy rows with no declaration metadata can still represent a true
+    # declaration/verification; rows with explicit declaration metadata cannot.
+    return not declaration and _truthy(row.get("is_pep"))
 
 
 def _ownership_transparency_status(value: Any) -> str:
@@ -186,27 +245,40 @@ def _declared_pep_present_in_party_rows(db, application_id: Any) -> bool:
     try:
         rows = db.execute(
             """
-            SELECT is_pep FROM directors WHERE application_id=?
+            SELECT is_pep, pep_declaration FROM directors WHERE application_id=?
             UNION ALL
-            SELECT is_pep FROM ubos WHERE application_id=?
+            SELECT is_pep, pep_declaration FROM ubos WHERE application_id=?
             """,
             (application_id, application_id),
         ).fetchall()
     except Exception as exc:
-        logger.warning(
-            "Declared PEP routing fact lookup failed for app %s: %s",
-            application_id,
-            exc,
-        )
-        return False
+        try:
+            rows = db.execute(
+                """
+                SELECT is_pep FROM directors WHERE application_id=?
+                UNION ALL
+                SELECT is_pep FROM ubos WHERE application_id=?
+                """,
+                (application_id, application_id),
+            ).fetchall()
+        except Exception:
+            logger.warning(
+                "Declared PEP routing fact lookup failed for app %s: %s",
+                application_id,
+                exc,
+            )
+            return False
     for row in rows:
         if hasattr(row, "keys"):
-            value = dict(row).get("is_pep")
+            party = dict(row)
         elif isinstance(row, (tuple, list)) and row:
-            value = row[0]
+            party = {
+                "is_pep": row[0],
+                "pep_declaration": row[1] if len(row) > 1 else None,
+            }
         else:
-            value = None
-        if _truthy(value):
+            party = {}
+        if _party_row_has_declared_or_confirmed_pep(party):
             return True
     return False
 

@@ -5327,6 +5327,51 @@ def _decorate_party_pep_visibility(party):
     return item
 
 
+def _party_pep_basis_tags(party):
+    item = dict(party or {})
+    pep_decl = parse_json_field(item.get("pep_declaration"), {})
+    pep_visibility = _derive_party_pep_visibility(item, pep_decl)
+    tags = set()
+    if pep_visibility.get("client_declared_pep") is True or pep_visibility.get("pep_status") == "declared_yes":
+        tags.add("declared_pep_present")
+    if pep_visibility.get("officer_verified_pep") is True or pep_visibility.get("pep_status") == "confirmed_pep":
+        tags.add("officer_confirmed_pep")
+    return tags
+
+
+def _application_confirmed_pep_basis_tags(db, application_id):
+    if db is None or not application_id:
+        return set()
+    tags = set()
+    rows = db.execute(
+        """
+        SELECT is_pep, pep_declaration FROM directors WHERE application_id = ?
+        UNION ALL
+        SELECT is_pep, pep_declaration FROM ubos WHERE application_id = ?
+        """,
+        (application_id, application_id),
+    ).fetchall()
+    for row in rows or []:
+        tags.update(_party_pep_basis_tags(dict(row)))
+    return tags
+
+
+def _screening_report_has_unresolved_provider_pep(report):
+    if not isinstance(report, dict):
+        return False
+    for bucket in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
+        for item in report.get(bucket) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("undeclared_pep") or item.get("provider_detected_pep") or item.get("has_pep_hit"):
+                return True
+            screening = item.get("screening") if isinstance(item.get("screening"), dict) else {}
+            for result in screening.get("results") or []:
+                if isinstance(result, dict) and result.get("is_pep"):
+                    return True
+    return False
+
+
 def _list_application_corrections(db, application_id, limit=100):
     rows = db.execute(
         """
@@ -8611,19 +8656,8 @@ class SubmitApplicationHandler(BaseHandler):
                 except Exception:
                     pass  # Do not block onboarding flow
 
-            # Sync undeclared PEP detections back to director/UBO records
-            for ds in screening_report.get("director_screenings", []):
-                if ds.get("undeclared_pep"):
-                    db.execute(
-                        "UPDATE directors SET is_pep='Yes' WHERE application_id=? AND full_name=?",
-                        (real_id, ds.get("person_name", ""))
-                    )
-            for us in screening_report.get("ubo_screenings", []):
-                if us.get("undeclared_pep"):
-                    db.execute(
-                        "UPDATE ubos SET is_pep='Yes' WHERE application_id=? AND full_name=?",
-                        (real_id, us.get("person_name", ""))
-                    )
+            # Provider PEP detections are screening evidence. They must not
+            # mutate party-level declared/officer-confirmed PEP state.
 
             db.execute("""
                 UPDATE applications SET
@@ -15859,7 +15893,22 @@ def _directors_ubos_report_cte():
                 MAX(NULLIF(nationality, '')) AS nationality,
                 MAX(NULLIF(date_of_birth, '')) AS date_of_birth,
                 MAX(CASE WHEN source_role='ubo' THEN ownership_pct ELSE NULL END) AS ownership_pct,
-                MAX(CASE WHEN LOWER(CAST(is_pep AS TEXT)) IN ('yes','true','1','t','y') THEN 1 ELSE 0 END) AS declared_pep_bool,
+                MAX(CASE
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%confirmed_pep%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%declared_yes%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"officer_verified_pep": true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"officer_verified_pep":true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"verified_pep": true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"verified_pep":true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"client_declared_pep": true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"client_declared_pep":true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"declared_pep": true%%' THEN 1
+                    WHEN LOWER(COALESCE(pep_declaration_text, '')) LIKE '%%"declared_pep":true%%' THEN 1
+                    WHEN LOWER(CAST(is_pep AS TEXT)) IN ('yes','true','1','t','y')
+                     AND COALESCE(pep_declaration_text, '') IN ('', '{{}}', 'null')
+                    THEN 1
+                    ELSE 0
+                END) AS declared_pep_bool,
                 MAX(COALESCE(pep_declaration_text, '')) AS pep_declaration_text,
                 MIN(created_at) AS created_at
             FROM party_rows
@@ -27850,27 +27899,30 @@ class SubmitToComplianceHandler(BaseHandler):
         if not authority_ok:
             basis.append("authority_blocked")
         for route_reason in approval_route.get("escalation_reasons") or []:
-            if route_reason in ("pep", "adverse_media", "material_screening_concern", "edd_required", "edd_trigger"):
+            if route_reason in (
+                "adverse_media",
+                "material_screening_concern",
+                "edd_required",
+                "edd_trigger",
+                "provider_pep_match_unresolved",
+                "declared_pep_present",
+                "officer_confirmed_pep",
+            ):
                 basis.append(route_reason)
+            elif route_reason == "pep":
+                basis.append("provider_pep_match_unresolved")
         # Material screening concern (live/stale screening gate) — surfaced for SCO clarity.
         if any(code in ("screening_truth", "screening_stale") for code in blocker_codes):
             basis.append("material_screening")
-        # PEP exposure (any director/UBO flagged). Optional clarity tag; the blocker
-        # snapshot is authoritative. Best-effort and fail-open (never blocks submission).
+        # PEP exposure clarity tags. Declared/officer-confirmed PEP is distinct
+        # from unresolved provider screening evidence.
         try:
-            pep_row = db.execute(
-                "SELECT 1 FROM directors WHERE application_id = ? "
-                "AND LOWER(COALESCE(is_pep, '')) IN ('yes', 'true', '1', 'y') LIMIT 1",
-                (real_id,),
-            ).fetchone()
-            if not pep_row:
-                pep_row = db.execute(
-                    "SELECT 1 FROM ubos WHERE application_id = ? "
-                    "AND LOWER(COALESCE(is_pep, '')) IN ('yes', 'true', '1', 'y') LIMIT 1",
-                    (real_id,),
-                ).fetchone()
-            if pep_row:
-                basis.append("pep")
+            basis.extend(sorted(_application_confirmed_pep_basis_tags(db, real_id)))
+            prescreening = safe_json_loads(app.get("prescreening_data")) or {}
+            report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+            if _screening_report_has_unresolved_provider_pep(report):
+                basis.append("provider_pep_match_unresolved")
+                basis.append("screening_pep_review_required")
         except Exception:
             logger.debug("submit_to_compliance PEP basis lookup skipped for %s", real_id)
         basis = sorted(set(basis))
