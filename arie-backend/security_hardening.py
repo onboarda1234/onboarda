@@ -1407,21 +1407,27 @@ class ApprovalGateValidator:
                 screening_report=screening_report,
                 screening_reviews=screening_reviews,
             )
-            if screening_adverse_truth_blocks_final_approval(screening_adverse_truth):
-                return (
-                    False,
-                    screening_adverse_truth_blocker_message(screening_adverse_truth)
-                    or "ComplyAdvantage Mesh screening/adverse-media truth blocks approval.",
-                )
-            if (
-                screening_adverse_truth_requires_compliance(screening_adverse_truth)
-                and route_policy.get("route") == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM
-            ):
-                return (
-                    False,
-                    screening_adverse_truth_blocker_message(screening_adverse_truth)
-                    or "ComplyAdvantage Mesh screening/adverse-media truth requires Compliance review.",
-                )
+            def _screening_adverse_route_block() -> Tuple[bool, str]:
+                if screening_adverse_truth_blocks_final_approval(screening_adverse_truth):
+                    return (
+                        True,
+                        screening_adverse_truth_blocker_message(screening_adverse_truth)
+                        or "ComplyAdvantage Mesh screening/adverse-media truth blocks approval.",
+                    )
+                if (
+                    screening_adverse_truth_requires_compliance(screening_adverse_truth)
+                    and route_policy.get("route") == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM
+                ):
+                    return (
+                        True,
+                        screening_adverse_truth_blocker_message(screening_adverse_truth)
+                        or "ComplyAdvantage Mesh screening/adverse-media truth requires Compliance review.",
+                    )
+                return (False, "")
+            if screening_adverse_truth.get("approval_effect") == "prohibited_fail_closed":
+                sot_blocked, sot_message = _screening_adverse_route_block()
+                if sot_blocked:
+                    return (False, sot_message)
             screening_truth = build_screening_truth_summary(
                 screening_report,
                 prescreening_for_truth,
@@ -1491,12 +1497,18 @@ class ApprovalGateValidator:
                 )
 
             if route_policy.get("route") == APPROVAL_ROUTE_DIRECT_LOW_MEDIUM:
-                return ApprovalGateValidator._validate_direct_low_medium_operational_tail(
+                tail_ok, tail_message = ApprovalGateValidator._validate_direct_low_medium_operational_tail(
                     app,
                     db,
                     screening_report,
                     prescreening_data,
                 )
+                if not tail_ok:
+                    return (tail_ok, tail_message)
+                sot_blocked, sot_message = _screening_adverse_route_block()
+                if sot_blocked:
+                    return (False, sot_message)
+                return (True, "")
 
             # 3. Check compliance memo exists and meets quality gates
             memo_row = latest_compliance_memo_row(
@@ -1947,6 +1959,10 @@ class ApprovalGateValidator:
                     "Document evidence gate failed: "
                     + format_document_reliance_blockers(document_gate)
                 )
+
+            sot_blocked, sot_message = _screening_adverse_route_block()
+            if sot_blocked:
+                return (False, sot_message)
 
             # EX-10 closeout: Audit log on successful freshness validation
             _screening_age_days = None

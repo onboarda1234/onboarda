@@ -81,7 +81,7 @@ def _insert_resolved_enhanced_requirement(db, app_id):
 
 def _insert_app(db, *, app_id=None, ref=None):
     """Insert a minimal application and return its id."""
-    from tests.conftest import insert_verified_required_documents
+    from tests.conftest import clean_ca_prescreening, insert_verified_required_documents
 
     suffix = uuid.uuid4().hex[:8]
     app_id = app_id or f"app-swarn-{suffix}"
@@ -98,18 +98,10 @@ def _insert_app(db, *, app_id=None, ref=None):
             app_id, ref, f"client-swarn-{suffix}",
             "Supervisor Warnings Test Ltd", "Mauritius", "Technology", "SME",
             "compliance_review", "HIGH", 72,
-            json.dumps({
-                "screening_report": {
-                    "screening_mode": "live",
-                    "screened_at": _now.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "sanctions": {"api_status": "live"},
-                    "company_registry": {"api_status": "live"},
-                    "ip_geolocation": {"api_status": "live"},
-                    "kyc": {"api_status": "live"},
-                },
-                "screening_valid_until": (_now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
-                "screening_validity_days": 90,
-            }),
+            json.dumps(clean_ca_prescreening(
+                company_name="Supervisor Warnings Test Ltd",
+                screened_at=_now.strftime("%Y-%m-%dT%H:%M:%S"),
+            )),
         ),
     )
     _insert_resolved_enhanced_requirement(db, app_id)

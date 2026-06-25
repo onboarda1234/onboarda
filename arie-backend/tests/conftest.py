@@ -10,7 +10,7 @@ import sqlite3
 import pytest
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Add parent directory to path so we can import server modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +26,51 @@ _OFFICER_ROLES = {"admin", "sco", "co", "analyst"}
 
 
 _db_initialized = False
+
+
+def clean_ca_screening_report(*, screened_at=None, company_name="Clean Screening Ltd"):
+    """Return a deterministic ComplyAdvantage-clean screening report for approval fixtures."""
+    screened_at = screened_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return {
+        "provider": "complyadvantage",
+        "screening_provider": "complyadvantage",
+        "screening_mode": "live",
+        "screened_at": screened_at,
+        "company_screening": {
+            "company_name": company_name,
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": False,
+            "results": [],
+        },
+        "director_screenings": [],
+        "ubo_screenings": [],
+        "ip_geolocation": {"source": "ipapi", "api_status": "live", "risk_level": "LOW"},
+    }
+
+
+def clean_ca_prescreening(*, screened_at=None, valid_days=90, company_name="Clean Screening Ltd"):
+    now = datetime.now(timezone.utc)
+    report = clean_ca_screening_report(
+        screened_at=screened_at or now.strftime("%Y-%m-%dT%H:%M:%S"),
+        company_name=company_name,
+    )
+    return {
+        "screening_report": report,
+        "screening_valid_until": (now + timedelta(days=valid_days)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "screening_validity_days": valid_days,
+    }
+
+
+def clean_ca_prescreening_json(*, screened_at=None, valid_days=90, company_name="Clean Screening Ltd"):
+    return json.dumps(
+        clean_ca_prescreening(
+            screened_at=screened_at,
+            valid_days=valid_days,
+            company_name=company_name,
+        )
+    )
 
 
 def _sync_test_db_path(path):

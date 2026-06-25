@@ -12,16 +12,8 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
 
 
 def _valid_screening_payload():
-    now = datetime.now(timezone.utc)
-    return {
-        "screening_report": {
-            "screening_mode": "live",
-            "screened_at": now.isoformat(),
-            "sanctions": {"api_status": "live", "matched": False, "source": "sumsub"},
-            "kyc": {"api_status": "live", "source": "sumsub"},
-        },
-        "screening_valid_until": (now + timedelta(days=30)).isoformat(),
-    }
+    from tests.conftest import clean_ca_prescreening
+    return clean_ca_prescreening(valid_days=30, company_name="Memo Stale Ltd")
 
 
 def _insert_gate_ready_app(db):

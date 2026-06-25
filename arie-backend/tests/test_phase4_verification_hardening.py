@@ -174,7 +174,7 @@ def _insert_app_and_memo(db, app_id=None,
                           supervisor_status="CONSISTENT",
                           blocked=False, block_reason=None):
     """Helper: insert application + memo with configurable timestamps."""
-    from tests.conftest import insert_verified_required_documents
+    from tests.conftest import clean_ca_screening_report, insert_verified_required_documents
     import uuid
     suffix = uuid.uuid4().hex[:8]
     if app_id is None:
@@ -182,13 +182,17 @@ def _insert_app_and_memo(db, app_id=None,
     ref = f"ARF-P4-{suffix}"
 
     if screening_report is None:
+        screening_report = clean_ca_screening_report(company_name="Test Corp")
+    else:
+        supplied = dict(screening_report)
         screening_report = {
-            "screening_mode": "live",
-            "sanctions": {"api_status": "live", "matched": False, "source": "sumsub"},
-            "company_registry": {"api_status": "live"},
-            "ip_geolocation": {"api_status": "live"},
-            "kyc": {"api_status": "live"},
-            "screened_at": datetime.now(timezone.utc).isoformat()
+            **clean_ca_screening_report(
+                screened_at=supplied.get("screened_at"),
+                company_name="Test Corp",
+            ),
+            **supplied,
+            "provider": supplied.get("provider") or "complyadvantage",
+            "screening_provider": supplied.get("screening_provider") or "complyadvantage",
         }
     prescreening = json.dumps({"screening_report": screening_report})
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
