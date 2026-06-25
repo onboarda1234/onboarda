@@ -82,10 +82,16 @@ def _live_clear_prescreening():
         "screening_report": {
             "screening_mode": "live",
             "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
-            "sanctions": {"api_status": "live", "matched": False, "results": []},
+            "company_screening": {
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "provider_references": {"case_id": "ca-e2e-authority-clean"},
+            },
             "company_registry": {"api_status": "live"},
             "ip_geolocation": {"api_status": "live"},
-            "kyc": {"api_status": "live", "matched": False, "results": []},
         },
         "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
         "screening_validity_days": 90,

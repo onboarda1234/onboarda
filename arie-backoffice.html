@@ -10106,6 +10106,8 @@ async function fetchApplicationDetail(ref) {
     rmiRequests: detail.rmi_requests || [],
     monitoringAlerts: detail.monitoring_alerts || [],
     changeRequests: detail.change_requests || [],
+    screeningAdverseTruthSummary: detail.screening_adverse_truth_summary || null,
+    screening_adverse_truth_summary: detail.screening_adverse_truth_summary || null,
     sumsub_idv_statuses: detail.sumsub_idv_statuses || null,
     idvGateSummary: detail.idv_gate_summary || null,
 	    approvalGatePresentation: detail.approval_gate_presentation || null,
@@ -12497,6 +12499,7 @@ function getApplicationScreeningSummary(app) {
   var screeningData = getApplicationScreeningReport(app);
   var report = screeningData.report;
   var suppliedTruth = app && app.screening_truth_summary;
+  var suppliedAdverseTruth = app && (app.screening_adverse_truth_summary || app.screeningAdverseTruthSummary);
   if (!report) {
     return {
       screening_run_recorded: false,
@@ -12513,6 +12516,7 @@ function getApplicationScreeningSummary(app) {
       screening_valid_until: screeningData.meta.screening_valid_until || null,
       screening_validity_days: screeningData.meta.screening_validity_days || null,
       screening_freshness: null,
+      screening_adverse_truth_summary: suppliedAdverseTruth || null,
       screening_truth_summary: suppliedTruth || null
     };
   }
@@ -12560,6 +12564,7 @@ function getApplicationScreeningSummary(app) {
     screening_valid_until: screeningData.meta.screening_valid_until || null,
     screening_validity_days: screeningData.meta.screening_validity_days || null,
     screening_freshness: freshness,
+    screening_adverse_truth_summary: suppliedAdverseTruth || null,
     screening_truth_summary: suppliedTruth || report.screening_truth_summary || deriveScreeningTruthSummary(report)
   };
 }
@@ -22898,7 +22903,7 @@ function getApplicationApprovalBlockers(app) {
   if (compliancePackageRequired && app.memoIsStale) blockers.push('Compliance memo is stale after application changes.');
   var screening = getApplicationScreeningSummary(app);
   if (!screening.screening_run_recorded) blockers.push('Screening has not been run.');
-  var screeningTruth = screening.screening_truth_summary || null;
+  var screeningTruth = screening.screening_adverse_truth_summary || screening.screening_truth_summary || null;
   if (screeningTruth && screeningTruthBlocksApproval(screeningTruth)) {
     var screeningCopy = caseCommandScreeningTruthCopy(screeningTruth);
     blockers.push(screeningCopy.title + ' ' + screeningCopy.description);
@@ -23366,6 +23371,19 @@ function caseCommandPendingScreeningCopy(rows) {
 }
 
 function caseCommandScreeningTruthCopy(screeningTruth) {
+  var effect = String((screeningTruth && screeningTruth.approval_effect) || '').toLowerCase();
+  if (effect === 'prohibited_fail_closed') {
+    return {
+      title: 'Approval blocked: prohibited ComplyAdvantage Mesh screening hit.',
+      description: 'Sanctions or prohibited watchlist exposure is fail-closed and cannot be directly approved.'
+    };
+  }
+  if (effect === 'submit_to_compliance_required') {
+    return {
+      title: 'Approval blocked: Compliance review is required.',
+      description: 'ComplyAdvantage Mesh screening or adverse-media evidence requires Compliance review before approval.'
+    };
+  }
   var reasons = screeningTruthBlockedReasons(screeningTruth).join(' ').toLowerCase();
   if (/stale|expired/.test(reasons)) {
     return {
@@ -23409,7 +23427,7 @@ function getCaseCommandBlockers(app) {
 
   var status = String(app.statusRaw || app.status || '').toLowerCase();
   var screening = getApplicationScreeningSummary(app);
-  var screeningTruth = screening.screening_truth_summary || null;
+  var screeningTruth = screening.screening_adverse_truth_summary || screening.screening_truth_summary || null;
   var screeningReviews = Array.isArray(app.screeningReviews) ? app.screeningReviews : [];
   var screeningQueueRows = (SCREENING_QUEUE && Array.isArray(SCREENING_QUEUE.rows) ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row && row.application_ref === app.ref;

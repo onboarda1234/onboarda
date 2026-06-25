@@ -1,0 +1,384 @@
+{
+  "clean_no_hit": {
+    "input": {
+      "app": {"id": "sot-clean", "risk_level": "LOW"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": false,
+            "results": [],
+            "provider_references": {"case_id": "ca-clean"}
+          }
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "clear",
+      "ui_state": "Clean ComplyAdvantage Mesh screening, no officer action required",
+      "approval_effect": "allow_direct_approval",
+      "case_command_centre_item": false,
+      "audit_disposition": "none"
+    }
+  },
+  "possible_match_requiring_review": {
+    "input": {
+      "app": {"id": "sot-possible", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": true,
+            "results": [{"name": "Possible Profile", "match_category": "other"}],
+            "provider_references": {"case_id": "ca-possible"}
+          }
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "possible_match",
+      "ui_state": "Review required",
+      "approval_effect": "block_until_review",
+      "case_command_centre_item": true,
+      "audit_disposition": "required_before_clearance"
+    }
+  },
+  "true_match_material_concern": {
+    "input": {
+      "app": {"id": "sot-true-match", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": true,
+            "results": [{"name": "Confirmed Watchlist", "match_categories": ["watchlist"]}],
+            "provider_references": {"case_id": "ca-true-match"}
+          }
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [
+        {"subject_type": "entity", "subject_name": "SOT Ltd", "disposition": "escalated", "disposition_code": "true_match", "rationale": "Confirmed true match", "audit_confirmed": true}
+      ],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "true_match",
+      "ui_state": "Confirmed true match/material concern",
+      "approval_effect": "submit_to_compliance_required",
+      "case_command_centre_item": true,
+      "audit_disposition": "true_match"
+    }
+  },
+  "false_positive_cleared": {
+    "input": {
+      "app": {"id": "sot-fp", "risk_level": "LOW"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": true,
+            "results": [{"name": "False Positive", "is_sanctioned": true}],
+            "provider_references": {"case_id": "ca-fp"}
+          }
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [
+        {"subject_type": "entity", "subject_name": "SOT Ltd", "disposition": "cleared", "disposition_code": "false_positive_cleared", "rationale": "Identity mismatch", "reviewer_id": "co001", "created_at": "2026-06-02T00:00:00Z", "audit_confirmed": true}
+      ],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "false_positive",
+      "ui_state": "Cleared by officer",
+      "approval_effect": "allow_direct_approval",
+      "case_command_centre_item": false,
+      "audit_disposition": "false_positive_cleared"
+    }
+  },
+  "stale_screening": {
+    "input": {
+      "app": {"id": "sot-stale", "risk_level": "LOW"},
+      "prescreening": {
+        "screening_input_updated_at": "2026-06-15T00:00:00Z",
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "stale",
+      "ui_state": "Re-screen required",
+      "approval_effect": "block_until_review",
+      "case_command_centre_item": true,
+      "audit_disposition": "none"
+    }
+  },
+  "expired_screening": {
+    "input": {
+      "app": {"id": "sot-expired", "risk_level": "LOW"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-01-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-02-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "expired",
+      "ui_state": "Expired screening",
+      "approval_effect": "block_until_review",
+      "case_command_centre_item": true,
+      "audit_disposition": "none"
+    }
+  },
+  "provider_unavailable": {
+    "input": {
+      "app": {"id": "sot-provider-failed", "risk_level": "LOW"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "error", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "provider_failed",
+      "ui_state": "Provider unavailable",
+      "approval_effect": "block_until_review",
+      "case_command_centre_item": true,
+      "audit_disposition": "none"
+    }
+  },
+  "declared_pep": {
+    "input": {
+      "app": {"id": "sot-declared-pep", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "declared_pep_present": true,
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "pep_detected",
+      "ui_state": "Declared PEP",
+      "approval_effect": "submit_to_compliance_required",
+      "case_command_centre_item": true,
+      "audit_disposition": "pep_declaration"
+    }
+  },
+  "provider_detected_pep": {
+    "input": {
+      "app": {"id": "sot-provider-pep", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "any_pep_hits": true,
+          "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": true,
+            "results": [{"name": "PEP Profile", "is_pep": true}]
+          }
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "pep_detected",
+      "ui_state": "Provider-detected PEP",
+      "approval_effect": "submit_to_compliance_required",
+      "case_command_centre_item": true,
+      "audit_disposition": "required"
+    }
+  },
+  "sanctions_prohibited_hit": {
+    "input": {
+      "app": {"id": "sot-sanctions", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "any_sanctions_hits": true,
+          "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": true,
+            "results": [{"name": "Sanctioned Profile", "is_sanctioned": true}]
+          }
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "sanctions_hit",
+      "ui_state": "Sanctions/prohibited hit",
+      "approval_effect": "prohibited_fail_closed",
+      "case_command_centre_item": true,
+      "audit_disposition": "fail_closed"
+    }
+  },
+  "adverse_media_with_source_link": {
+    "input": {
+      "app": {"id": "sot-adverse-url", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [
+        {"id": 7001, "application_id": "sot-adverse-url", "provider": "complyadvantage", "alert_type": "adverse_media", "severity": "high", "status": "open", "summary": "Adverse media found"}
+      ],
+      "monitoring_alert_evidence": [
+        {"monitoring_alert_id": 7001, "application_id": "sot-adverse-url", "provider": "complyadvantage", "evidence_type": "adverse_media", "match_category": "Adverse Media", "source_title": "Regulatory article", "source_name": "Example News", "source_url": "https://evidence.example.test/article", "source_url_available": true}
+      ]
+    },
+    "expected": {
+      "stored_backend_state": "adverse_media_hit",
+      "ui_state": "Adverse media with source link",
+      "approval_effect": "submit_to_compliance_required",
+      "case_command_centre_item": true,
+      "audit_disposition": "required"
+    }
+  },
+  "adverse_media_unavailable_source_link": {
+    "input": {
+      "app": {"id": "sot-adverse-no-url", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [
+        {"id": 7002, "application_id": "sot-adverse-no-url", "provider": "complyadvantage", "alert_type": "adverse_media", "severity": "high", "status": "open", "summary": "Adverse media found"}
+      ],
+      "monitoring_alert_evidence": [
+        {"monitoring_alert_id": 7002, "application_id": "sot-adverse-no-url", "provider": "complyadvantage", "evidence_type": "adverse_media", "match_category": "Adverse Media", "source_title": "Provider media record", "source_url": "", "source_url_available": false, "source_url_unavailable_reason": "Source article link not available from ComplyAdvantage Mesh payload."}
+      ]
+    },
+    "expected": {
+      "stored_backend_state": "adverse_media_hit",
+      "ui_state": "Adverse media with unavailable source link",
+      "approval_effect": "submit_to_compliance_required",
+      "case_command_centre_item": true,
+      "audit_disposition": "required"
+    }
+  },
+  "adverse_media_false_positive": {
+    "input": {
+      "app": {"id": "sot-adverse-fp", "risk_level": "LOW"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [
+        {"id": 7003, "application_id": "sot-adverse-fp", "provider": "complyadvantage", "alert_type": "adverse_media", "severity": "medium", "status": "resolved", "officer_action": "false_positive", "summary": "Adverse media false positive"}
+      ],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "adverse_media_false_positive",
+      "ui_state": "Adverse media false positive cleared",
+      "approval_effect": "allow_direct_approval",
+      "case_command_centre_item": false,
+      "audit_disposition": "false_positive"
+    }
+  },
+  "material_adverse_media_submit_to_compliance": {
+    "input": {
+      "app": {"id": "sot-material-adverse", "risk_level": "MEDIUM"},
+      "prescreening": {
+        "screening_report": {
+          "screening_mode": "live",
+          "screened_at": "2026-06-01T00:00:00Z",
+          "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": false, "results": []}
+        },
+        "screening_valid_until": "2026-09-01T00:00:00Z"
+      },
+      "screening_reviews": [],
+      "monitoring_alerts": [
+        {"id": 7004, "application_id": "sot-material-adverse", "provider": "complyadvantage", "alert_type": "adverse_media", "severity": "critical", "status": "routed_to_edd", "officer_action": "route_to_edd", "summary": "Material adverse media escalated"}
+      ],
+      "monitoring_alert_evidence": []
+    },
+    "expected": {
+      "stored_backend_state": "escalated_to_compliance",
+      "ui_state": "Material adverse media routed to Compliance/EDD",
+      "approval_effect": "submit_to_compliance_required",
+      "case_command_centre_item": true,
+      "audit_disposition": "escalated_to_compliance"
+    }
+  }
+}
