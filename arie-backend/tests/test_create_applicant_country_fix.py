@@ -370,7 +370,7 @@ def _insert_gate5_app(db, screening_report):
 
 
 def test_gate5_blocks_live_green_person_aml_after_fix_without_ca_truth(db, temp_db):
-    """Legacy Sumsub AML GREEN output does not satisfy the CA screening truth gate."""
+    """Legacy screening GREEN output does not satisfy the CA screening truth gate."""
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report_for_gate5(director_status="live")

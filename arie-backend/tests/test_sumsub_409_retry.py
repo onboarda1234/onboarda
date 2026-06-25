@@ -321,7 +321,7 @@ def test_gate5_blocks_error_person_aml_409(db, temp_db):
 
 
 def test_gate5_blocks_live_green_person_aml_409_without_ca_truth(db, temp_db):
-    """Legacy Sumsub AML live GREEN does not satisfy the CA screening truth gate."""
+    """Legacy screening live GREEN does not satisfy the CA screening truth gate."""
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(

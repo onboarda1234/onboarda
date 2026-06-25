@@ -6489,19 +6489,9 @@ class TestGovernanceAttemptAudit:
 
 class TestMonitoringEnrollmentActuation:
     def _live_clear_prescreening(self):
-        now = datetime.now(timezone.utc)
-        return json.dumps({
-            "screening_report": {
-                "screening_mode": "live",
-                "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
-                "sanctions": {"api_status": "live", "matched": False, "results": []},
-                "company_registry": {"api_status": "live"},
-                "ip_geolocation": {"api_status": "live"},
-                "kyc": {"api_status": "live", "matched": False, "results": []},
-            },
-            "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
-            "screening_validity_days": 90,
-        })
+        from tests.conftest import clean_ca_prescreening_json
+
+        return clean_ca_prescreening_json(company_name="Monitoring Approval Fixture Ltd")
 
     def _insert_approvable_application(self, risk_level="LOW"):
         from tests.conftest import insert_verified_required_documents
