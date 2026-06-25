@@ -32,6 +32,7 @@ def run_screening_for_active_provider(
     client_ip=None,
     db=None,
     legacy_runner: Callable | None = None,
+    provider_options: dict | None = None,
 ):
     """Run full screening using the configured active provider.
 
@@ -61,7 +62,7 @@ def run_screening_for_active_provider(
             )
         return result
 
-    provider = _build_provider(provider_name, db=db)
+    provider = _build_provider(provider_name, db=db, provider_options=provider_options)
     logger.info("screening_routing active_provider=%s", provider_name)
     return provider.run_full_screening(
         application_data,
@@ -72,7 +73,7 @@ def run_screening_for_active_provider(
     )
 
 
-def _build_provider(provider_name: str, *, db=None):
+def _build_provider(provider_name: str, *, db=None, provider_options: dict | None = None):
     try:
         factory = get_provider(provider_name)
     except ProviderNotRegistered:
@@ -82,15 +83,21 @@ def _build_provider(provider_name: str, *, db=None):
         return factory
 
     kwargs = {}
+    provider_options = dict(provider_options or {})
     try:
         signature = inspect.signature(factory)
-        parameters = signature.parameters.values()
+        parameters = list(signature.parameters.values())
+        parameter_names = {parameter.name for parameter in parameters}
+        accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
         accepts_db = any(
             parameter.kind == inspect.Parameter.VAR_KEYWORD or parameter.name == "db"
             for parameter in parameters
         )
         if accepts_db:
             kwargs["db"] = db
+        for name, value in provider_options.items():
+            if accepts_kwargs or name in parameter_names:
+                kwargs[name] = value
     except (TypeError, ValueError):
         pass
 

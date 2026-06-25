@@ -123,6 +123,45 @@ def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):
     ]
 
 
+def test_complyadvantage_route_forwards_supported_provider_options(monkeypatch):
+    monkeypatch.setattr(screening_provider, "_factory_registry", {}, raising=False)
+    monkeypatch.setattr(
+        "screening_routing.get_active_provider_name",
+        lambda: COMPLYADVANTAGE_PROVIDER_NAME,
+    )
+    monkeypatch.setattr("screening_routing.is_abstraction_enabled", lambda: True)
+
+    class FakeCAProvider:
+        instances = []
+
+        def __init__(self, db=None, poll_timeout_seconds=None, allow_pending_on_timeout=False):
+            self.db = db
+            self.poll_timeout_seconds = poll_timeout_seconds
+            self.allow_pending_on_timeout = allow_pending_on_timeout
+            self.instances.append(self)
+
+        def run_full_screening(self, application_data, directors, ubos, intermediaries=None, client_ip=None):
+            return {"provider": "complyadvantage"}
+
+    register_provider(COMPLYADVANTAGE_PROVIDER_NAME, FakeCAProvider)
+
+    result = run_screening_for_active_provider(
+        {"application_id": "app-options"},
+        [],
+        [],
+        db=object(),
+        provider_options={
+            "poll_timeout_seconds": 8,
+            "allow_pending_on_timeout": True,
+            "unsupported_option": "ignored",
+        },
+    )
+
+    assert result["provider"] == "complyadvantage"
+    assert FakeCAProvider.instances[0].poll_timeout_seconds == 8
+    assert FakeCAProvider.instances[0].allow_pending_on_timeout is True
+
+
 def test_complyadvantage_provider_request_ignored_when_abstraction_disabled(monkeypatch):
     monkeypatch.setattr("screening_routing.get_active_provider_name", lambda: COMPLYADVANTAGE_PROVIDER_NAME)
     monkeypatch.setattr("screening_routing.is_abstraction_enabled", lambda: False)

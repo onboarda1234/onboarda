@@ -67,6 +67,7 @@ class _CreateAndScreenResult:
 class _WorkflowPollResult:
     workflow: CAWorkflowResponse
     raw: dict
+    timed_out: bool = False
 
 
 @dataclass
@@ -77,16 +78,25 @@ class _PassResult:
     customer_input: CACustomerInput
     customer_response: CACustomerResponse
     monitoring_enabled: bool
+    timed_out: bool = False
 
 
 class ComplyAdvantageScreeningOrchestrator:
     """Run CA create-and-screen workflows and normalize the result."""
 
-    def __init__(self, client, poll_timeout_seconds=_POLL_TOTAL_TIMEOUT, clock=None, sleep_fn=None):
+    def __init__(
+        self,
+        client,
+        poll_timeout_seconds=_POLL_TOTAL_TIMEOUT,
+        clock=None,
+        sleep_fn=None,
+        allow_pending_on_timeout=False,
+    ):
         self.client = client
         self.poll_timeout_seconds = poll_timeout_seconds
         self.clock = clock or time.monotonic
         self.sleep_fn = sleep_fn or time.sleep
+        self.allow_pending_on_timeout = bool(allow_pending_on_timeout)
 
     def screen_customer_two_pass(
         self,
@@ -131,6 +141,8 @@ class ComplyAdvantageScreeningOrchestrator:
             strict.customer_response,
             application_context,
         )
+        if strict.timed_out or relaxed.timed_out:
+            _mark_report_pending_after_timeout(report, strict=strict, relaxed=relaxed)
         self._seed_subscription_if_needed(strict, application_context, db)
         return report
 
@@ -165,6 +177,7 @@ class ComplyAdvantageScreeningOrchestrator:
             poll_timeout_seconds=self.poll_timeout_seconds,
             clock=self.clock,
             sleep_fn=self.sleep_fn,
+            allow_pending_on_timeout=self.allow_pending_on_timeout,
         )
 
     def fetch_risks_paginated_for_alert(self, alert_id):
@@ -191,8 +204,16 @@ class ComplyAdvantageScreeningOrchestrator:
         workflow = polled.workflow
         customer_identifier = _extract_customer_identifier(polled.raw)
         customer_response = CACustomerResponse.model_validate({"identifier": customer_identifier})
-        if self._case_creation_skipped(workflow):
-            return _PassResult(workflow, [], {}, initial.customer_input, customer_response, initial.monitoring_enabled)
+        if polled.timed_out or self._case_creation_skipped(workflow):
+            return _PassResult(
+                workflow,
+                [],
+                {},
+                initial.customer_input,
+                customer_response,
+                initial.monitoring_enabled,
+                timed_out=polled.timed_out,
+            )
         alerts, deep_risks = _fetch_alerts_and_deep_risks(self.client, polled.raw)
         return _PassResult(workflow, alerts, deep_risks, initial.customer_input, customer_response, initial.monitoring_enabled)
 
@@ -258,16 +279,28 @@ def _poll_workflow_until_complete(
     poll_timeout_seconds=_POLL_TOTAL_TIMEOUT,
     clock=None,
     sleep_fn=None,
+    allow_pending_on_timeout=False,
 ):
     clock = clock or time.monotonic
     sleep_fn = sleep_fn or time.sleep
     deadline = clock() + float(poll_timeout_seconds)
     delay = _POLL_INITIAL_DELAY
+    last_raw = None
     while True:
         if delay > 0:
-            sleep_fn(delay)
+            remaining = deadline - clock()
+            if remaining <= 0:
+                if allow_pending_on_timeout and last_raw:
+                    return _pending_timeout_poll_result(
+                        workflow_id=workflow_id,
+                        poll_timeout_seconds=poll_timeout_seconds,
+                        raw=last_raw,
+                    )
+                raise CATimeout("ComplyAdvantage workflow polling timed out")
+            sleep_fn(min(delay, remaining))
         poll_started = clock()
         raw = client.get(f"/v2/workflows/{workflow_id}")
+        last_raw = raw
         emit_metric(
             "workflow_poll_attempt",
             metric_name="WorkflowPollingAttempts",
@@ -288,8 +321,87 @@ def _poll_workflow_until_complete(
         if _workflow_complete(workflow):
             return _WorkflowPollResult(workflow=workflow, raw=raw)
         if clock() >= deadline:
+            if allow_pending_on_timeout and last_raw:
+                return _pending_timeout_poll_result(
+                    workflow_id,
+                    poll_timeout_seconds,
+                    last_raw,
+                    workflow=workflow,
+                )
             raise CATimeout("ComplyAdvantage workflow polling timed out")
         delay = 1.0 if delay <= 0 else min(delay * _POLL_MULTIPLIER, _POLL_INTERVAL_CAP)
+
+
+def _pending_timeout_poll_result(
+    workflow_id,
+    poll_timeout_seconds,
+    raw,
+    *,
+    workflow=None,
+):
+    if workflow is None:
+        workflow = CAWorkflowResponse.model_validate(raw)
+    logger.warning(
+        "ca_workflow_poll_pending_timeout workflow_id=%s timeout_seconds=%s status=%s",
+        workflow_id,
+        poll_timeout_seconds,
+        getattr(workflow.status, "value", workflow.status),
+    )
+    emit_metric(
+        "workflow_poll_pending_timeout",
+        metric_name="WorkflowPollingPendingTimeouts",
+        component="orchestrator",
+        outcome="timeout",
+        step="workflow_poll",
+    )
+    raw = dict(raw)
+    raw["_regmind_pending_timeout"] = True
+    return _WorkflowPollResult(workflow=workflow, raw=raw, timed_out=True)
+
+
+def _mark_report_pending_after_timeout(report, *, strict, relaxed):
+    provider = (report.get("provider_specific") or {}).get("complyadvantage")
+    if isinstance(provider, dict):
+        provider["pending_timeout"] = True
+        provider["pending_timeout_workflow_ids"] = [
+            workflow_id
+            for workflow_id in (
+                getattr(strict.workflow, "workflow_instance_identifier", None),
+                getattr(relaxed.workflow, "workflow_instance_identifier", None),
+            )
+            if workflow_id
+        ]
+    report["any_non_terminal_subject"] = True
+    report["degraded_sources"] = list(dict.fromkeys(
+        list(report.get("degraded_sources") or []) + ["complyadvantage_workflow_pending"]
+    ))
+    flags = list(report.get("overall_flags") or [])
+    pending_flag = "ComplyAdvantage screening is still processing; live terminal screening is required before approval."
+    if pending_flag not in flags:
+        flags.append(pending_flag)
+    report["overall_flags"] = flags
+    report["company_screening_state"] = "pending_provider"
+    company = report.get("company_screening")
+    if isinstance(company, dict):
+        company["api_status"] = "pending"
+        company["screening_state"] = "pending_provider"
+        company["matched"] = False
+        company.setdefault("results", [])
+        company["pending_reason"] = "workflow_poll_timeout"
+    for group_name in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
+        for subject in report.get(group_name) or []:
+            if not isinstance(subject, dict):
+                continue
+            subject["screening_state"] = "pending_provider"
+            subject["requires_review"] = True
+            screening = subject.get("screening")
+            if not isinstance(screening, dict):
+                screening = {}
+                subject["screening"] = screening
+            screening["api_status"] = "pending"
+            screening["source"] = "complyadvantage"
+            screening["provider"] = "complyadvantage"
+            screening["pending_reason"] = "workflow_poll_timeout"
 
 
 def _fetch_risks_paginated_for_alert(client, alert_id):
