@@ -128,6 +128,15 @@ def _flatten(memo):
     return "\n".join(chunks).lower()
 
 
+OWNERSHIP_TRANSPARENCY_DENIAL_PHRASES = (
+    "fully transparent ownership",
+    "complete ownership transparency",
+    "ownership is fully transparent",
+    "fully traceable beneficial ownership chain",
+    "clean ownership structure with full transparency",
+)
+
+
 # ════════════════════════════════════════════════════════════════════
 # A. Agent 5 narrative integrity
 # ════════════════════════════════════════════════════════════════════
@@ -389,10 +398,94 @@ class TestAgent5NarrativeContradictions:
              "is_pep": "No", "ownership_pct": 20}
             for i in range(5)
         ]
-        memo, _, _, _ = build_compliance_memo(app, directors, ubos, [])
+        memo, _, supervisor, _ = build_compliance_memo(app, directors, ubos, [])
         contract = memo["metadata"]["agent5_input_contract"]
         # Complex structure must surface as opaque/incomplete in the contract
         assert contract["ownership_transparency_status"] in ("opaque", "incomplete")
+        body = _flatten(memo)
+        for phrase in OWNERSHIP_TRANSPARENCY_DENIAL_PHRASES:
+            assert phrase not in body
+        assert "ownership transparency remains opaque" in body
+        rules = [v.get("rule") for v in memo["metadata"]["rule_engine"]["violations"]]
+        assert "AGENT5_NARRATIVE_CONTRADICTION_OWNERSHIP" not in rules
+        assert not any(
+            c.get("rule") == "AGENT5_NARRATIVE_CONTRADICTION_OWNERSHIP"
+            or c.get("category") == "rule_violation"
+            and c.get("description", "").find("AGENT5_NARRATIVE_CONTRADICTION_OWNERSHIP") >= 0
+            for c in supervisor.get("contradictions", [])
+        )
+
+    def test_accepted_structure_documents_do_not_wash_opaque_ownership_to_transparent(self):
+        app = _make_app(risk_level="HIGH", risk_score=82)
+        app["ownership_structure"] = "Layered nominee shareholding with structure chart supplied"
+        directors = [{"full_name": "D", "nationality": "Mauritius",
+                      "is_pep": "No", "ownership_pct": 0}]
+        ubos = [{"full_name": "Disclosed UBO", "nationality": "Mauritius",
+                 "is_pep": "No", "ownership_pct": 100}]
+        docs = _clean_documents() + [{
+            "doc_type": "Ownership Structure Chart",
+            "verification_status": "verified",
+            "ai_confidence": 95,
+            "filename": "structure-chart.pdf",
+        }]
+
+        memo, _, supervisor, _ = build_compliance_memo(app, directors, ubos, docs)
+        contract = memo["metadata"]["agent5_input_contract"]
+        body = _flatten(memo)
+
+        assert contract["ownership_transparency_status"] == "opaque"
+        for phrase in OWNERSHIP_TRANSPARENCY_DENIAL_PHRASES:
+            assert phrase not in body
+        assert "ownership transparency remains opaque" in body
+        assert "ownership_transparency=opaque" in supervisor["mandatory_escalation_reasons"]
+
+    def test_clean_transparent_ownership_can_still_be_narrated_as_transparent(self):
+        app = _make_app(country="United Kingdom")
+        directors = [{"full_name": "D", "nationality": "British",
+                      "is_pep": "No", "ownership_pct": 0,
+                      "date_of_birth": "1980-01-01"}]
+        ubos = [{"full_name": "Sole UBO", "nationality": "British",
+                 "is_pep": "No", "ownership_pct": 100,
+                 "date_of_birth": "1980-01-01"}]
+
+        memo, _, supervisor, _ = build_compliance_memo(app, directors, ubos, _clean_documents())
+        contract = memo["metadata"]["agent5_input_contract"]
+        body = _flatten(memo)
+
+        assert contract["ownership_transparency_status"] == "transparent"
+        assert "transparent beneficial ownership" in body or "transparent natural-person ubo assessment" in body
+        assert "ownership_transparency=opaque" not in supervisor["mandatory_escalation_reasons"]
+        assert "ownership_transparency=incomplete" not in supervisor["mandatory_escalation_reasons"]
+
+    def test_supervisor_still_blocks_when_ownership_contradiction_is_reported(self):
+        app = _make_app()
+        directors = [{"full_name": "D", "nationality": "Mauritius",
+                      "is_pep": "No", "ownership_pct": 0}]
+        ubos = [
+            {"full_name": f"UBO {i}", "nationality": "Mauritius",
+             "is_pep": "No", "ownership_pct": 20}
+            for i in range(5)
+        ]
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, [])
+        memo["metadata"]["rule_engine"]["violations"].append({
+            "rule": "AGENT5_NARRATIVE_CONTRADICTION_OWNERSHIP",
+            "severity": "high",
+            "detail": "test injection",
+            "action": "test",
+        })
+        memo["metadata"]["rule_engine"]["total_violations"] = len(
+            memo["metadata"]["rule_engine"]["violations"]
+        )
+
+        supervisor = run_memo_supervisor(memo)
+
+        assert supervisor["verdict"] == "INCONSISTENT"
+        assert supervisor["can_approve"] is False
+        assert any(c.get("category") == "rule_violation" for c in supervisor["contradictions"])
+        assert any(
+            str(c.get("description", "")).find("AGENT5_NARRATIVE_CONTRADICTION_OWNERSHIP") >= 0
+            for c in supervisor["contradictions"]
+        )
 
 
 # ════════════════════════════════════════════════════════════════════
