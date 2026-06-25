@@ -16469,6 +16469,68 @@ function cmEvidenceStatusBadge(verification) {
   return '<span style="background:' + meta.color + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + escapeHtml(meta.label) + '</span>';
 }
 
+function cmParseAlertDetectedChanges(value) {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try {
+      var parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  return (typeof value === 'object' && !Array.isArray(value)) ? value : {};
+}
+
+function cmAlertValueText(value) {
+  if (value === null || value === undefined || value === '') return 'Not provided';
+  if (typeof value === 'object') return cmHumanReadableValue(value) || JSON.stringify(value);
+  return String(value);
+}
+
+function cmAlertDetectedChangeRows(changes) {
+  var keys = Object.keys(changes || {});
+  if (!keys.length) {
+    return '<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--text3);font-size:12px;">No structured detected changes were provided with this alert.</td></tr>';
+  }
+  return keys.map(function(field) {
+    var delta = changes[field];
+    var oldValue = delta && typeof delta === 'object' && !Array.isArray(delta) && Object.prototype.hasOwnProperty.call(delta, 'old') ? delta.old : null;
+    var newValue = delta && typeof delta === 'object' && !Array.isArray(delta) && Object.prototype.hasOwnProperty.call(delta, 'new') ? delta.new : delta;
+    return '<tr style="border-top:1px solid var(--border1);vertical-align:top;">' +
+      '<td style="padding:10px 12px;font-weight:700;color:var(--text1);">' + escapeHtml(cmFieldLabel({ field_name: field })) + '</td>' +
+      '<td style="padding:10px 12px;color:var(--text2);">' + escapeHtml(cmAlertValueText(oldValue)) + '</td>' +
+      '<td style="padding:10px 12px;color:#0f766e;font-weight:700;">' + escapeHtml(cmAlertValueText(newValue)) + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function cmAlertIsTerminal(status) {
+  return ['converted_to_change_request', 'dismissed', 'resolved_no_change'].indexOf(String(status || '').toLowerCase()) >= 0;
+}
+
+function cmAlertRecommendedAction(alert) {
+  var status = String((alert && alert.status) || '').toLowerCase();
+  if (status === 'converted_to_change_request') return 'Open the linked Change Request for the controlled review workflow.';
+  if (status === 'dismissed') return 'No further triage action is required.';
+  if (status === 'escalated') return 'Review escalation notes or convert to a Change Request if the change must be controlled.';
+  return 'Create a Change Request if the detected change is valid, or dismiss/escalate the alert with a reason.';
+}
+
+function maybeStartAlertReview(alert) {
+  if (!alert || alert.status !== 'new' || alert._reviewStartRequested) return;
+  alert._reviewStartRequested = true;
+  apiFetch('/api/change-management/alerts/' + alert.id, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'under_review', notes: 'Review opened from alert detail' })
+  }).then(function() {
+    loadChangeAlerts();
+  }).catch(function() {
+    // Opening the alert must not block triage actions. Direct conversion from
+    // new is supported by the backend, so a background review-start race is safe.
+  });
+}
+
 function loadChangeAlerts() {
   var status = document.getElementById('cm-alert-status-filter').value;
   var url = '/api/change-management/alerts';
@@ -16500,42 +16562,75 @@ function loadChangeAlerts() {
 
 function viewAlertDetail(alertId) {
   apiFetch('/api/change-management/alerts/' + alertId).then(function(a) {
-    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">'
-      + '<div><span style="font-size:11px;color:var(--text3);">Alert ID</span><br><strong style="font-family:monospace;">' + a.id + '</strong></div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Status</span><br>' + cmStatusBadge(a.status) + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Type</span><br>' + (a.alert_type||'').replace(/_/g,' ') + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Materiality</span><br>' + cmMaterialityBadge(a.materiality) + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Source</span><br>' + (a.source_channel||'') + '</div>'
-      + '<div><span style="font-size:11px;color:var(--text3);">Confidence</span><br>' + (a.confidence ? (a.confidence*100).toFixed(0)+'%' : '—') + '</div>'
-      + '</div>'
-      + '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Summary</span><br><p style="font-size:13px;margin-top:4px;">' + (a.summary||'—') + '</p></div>';
-
-    if (a.detected_changes) {
-      try {
-        var changes = typeof a.detected_changes === 'string' ? JSON.parse(a.detected_changes) : a.detected_changes;
-        html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Detected Changes</span><pre style="background:var(--bg2);padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:200px;">' + JSON.stringify(changes, null, 2) + '</pre></div>';
-      } catch(e) {}
-    }
+    maybeStartAlertReview(a);
+    var changes = cmParseAlertDetectedChanges(a.detected_changes);
+    var technicalPayload = {
+      alert_id: a.id,
+      status: a.status,
+      detected_changes: changes,
+      source_payload: a.source_payload || null,
+      converted_request_id: a.converted_request_id || null
+    };
+    var html = '<div style="display:grid;gap:16px;">' +
+      '<div style="border:1px solid var(--border1);border-radius:14px;background:var(--surface2);padding:16px;">' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+          '<div>' +
+            '<div style="font-size:18px;font-weight:800;color:var(--text1);">Change Alert ' + escapeHtml(a.id || '') + '</div>' +
+            '<div style="font-size:12px;color:var(--text2);margin-top:6px;">' + escapeHtml(a.application_ref || a.application_id || 'Application') + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + cmMaterialityBadge(a.materiality, 'full') + cmStatusBadge(a.status) + '</div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:16px;">' +
+          '<div><span style="font-size:11px;color:var(--text3);">Type</span><br><strong style="font-size:13px;">' + escapeHtml(cmHumanizeSlug(a.alert_type || 'other')) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Source</span><br><strong style="font-size:13px;">' + escapeHtml(a.source_channel || 'unknown') + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Confidence</span><br><strong style="font-size:13px;">' + escapeHtml(a.confidence ? (a.confidence*100).toFixed(0)+'%' : 'Not provided') + '</strong></div>' +
+        '</div>' +
+        '<div style="margin-top:14px;font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">Recommended next action:</strong> ' + escapeHtml(cmAlertRecommendedAction(a)) + '</div>' +
+      '</div>' +
+      '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+        '<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:8px;">Alert reason</div>' +
+        '<div style="font-size:13px;color:var(--text2);line-height:1.6;">' + escapeHtml(a.summary || 'No summary was provided for this alert.') + '</div>' +
+      '</div>' +
+      '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
+          '<div>' +
+            '<div style="font-size:13px;font-weight:800;color:var(--text1);">Detected Change</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Review the detected old and new values before choosing the triage action.</div>' +
+          '</div>' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--border1);border-radius:10px;overflow:hidden;">' +
+          '<thead><tr style="background:var(--bg2);"><th style="padding:8px 12px;text-align:left;">Field</th><th style="padding:8px 12px;text-align:left;">Old value</th><th style="padding:8px 12px;text-align:left;">New value</th></tr></thead>' +
+          '<tbody>' + cmAlertDetectedChangeRows(changes) + '</tbody>' +
+        '</table>' +
+      '</div>';
 
     if (a.source_reference) {
-      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Source Reference</span><br><span style="font-size:12px;">' + a.source_reference + '</span></div>';
+      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+        '<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:8px;">Source reference</div>' +
+        '<div style="font-size:12px;color:var(--text2);word-break:break-word;">' + escapeHtml(a.source_reference) + '</div>' +
+      '</div>';
     }
 
-    // Actions
-    if (a.status !== 'dismissed' && a.status !== 'converted_to_change_request' && a.status !== 'resolved_no_change') {
-      html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">';
-      if (a.status === 'new') {
-        html += '<button class="btn" style="font-size:12px;" onclick="updateAlertStatus(\'' + a.id + '\',\'under_review\')">Begin Review</button>';
-        html += '<button class="btn btn-outline" style="font-size:12px;" onclick="updateAlertStatus(\'' + a.id + '\',\'dismissed\')">Dismiss</button>';
-      }
-      if (a.status === 'under_review' || a.status === 'awaiting_client_confirmation') {
-        html += '<button class="btn" style="font-size:12px;" onclick="convertAlertToRequest(\'' + a.id + '\')">Convert to Request</button>';
-        html += '<button class="btn btn-outline" style="font-size:12px;" onclick="updateAlertStatus(\'' + a.id + '\',\'dismissed\')">Dismiss</button>';
-        html += '<button class="btn btn-outline" style="font-size:12px;border-color:#dc3545;color:#dc3545;" onclick="updateAlertStatus(\'' + a.id + '\',\'escalated\')">Escalate</button>';
+    html += '<details style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:12px 16px;">' +
+      '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text2);">Technical details</summary>' +
+      '<pre style="margin-top:10px;background:var(--bg2);padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:220px;">' + escapeHtml(JSON.stringify(technicalPayload, null, 2)) + '</pre>' +
+    '</details>';
+
+    if (!cmAlertIsTerminal(a.status)) {
+      html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="btn" style="font-size:12px;" onclick="convertAlertToRequest(\'' + escapeHtml(a.id) + '\')">Create Change Request</button>' +
+        '<button class="btn btn-outline" style="font-size:12px;" onclick="updateAlertStatus(\'' + escapeHtml(a.id) + '\',\'dismissed\')">Dismiss Alert</button>';
+      if (a.status !== 'escalated') {
+        html += '<button class="btn btn-outline" style="font-size:12px;border-color:#dc3545;color:#dc3545;" onclick="updateAlertStatus(\'' + escapeHtml(a.id) + '\',\'escalated\')">Escalate</button>';
       }
       html += '</div>';
+    } else if (a.status === 'converted_to_change_request' && a.converted_request_id) {
+      html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="btn" style="font-size:12px;" onclick="openChangeRequestFromApplication(\'' + escapeHtml(a.converted_request_id) + '\')">Open Linked Change Request</button>' +
+      '</div>';
     }
 
+    html += '</div>';
     document.getElementById('cm-alert-detail-content').innerHTML = html;
     document.getElementById('cm-alert-detail-modal').style.display = '';
   }).catch(function(e) { showToast('Failed to load alert detail: ' + e.message, 'error'); });
@@ -16544,6 +16639,11 @@ function viewAlertDetail(alertId) {
 function updateAlertStatus(alertId, newStatus) {
   var notes = '';
   if (newStatus === 'dismissed') notes = prompt('Reason for dismissal:', '') || '';
+  if (newStatus === 'escalated') notes = prompt('Escalation reason:', '') || '';
+  if ((newStatus === 'dismissed' || newStatus === 'escalated') && !notes.trim()) {
+    showToast('A reason is required to ' + (newStatus === 'dismissed' ? 'dismiss this alert' : 'escalate this alert') + '.', 'error');
+    return;
+  }
   apiFetch('/api/change-management/alerts/' + alertId, {
     method: 'PATCH', body: JSON.stringify({ status: newStatus, notes: notes })
   }).then(function() {
@@ -16554,13 +16654,14 @@ function updateAlertStatus(alertId, newStatus) {
 }
 
 function convertAlertToRequest(alertId) {
-  if (!confirm('Convert this alert into a formal change request?')) return;
+  if (!confirm('Create a formal Change Request from this alert?')) return;
   apiFetch('/api/change-management/alerts/' + alertId + '/convert', {
     method: 'POST', body: JSON.stringify({})
   }).then(function(r) {
-    showToast('Alert converted to request ' + (r.id||''), 'success');
+    showToast(r.already_converted ? 'Opening existing change request ' + (r.id||'') : 'Alert converted to request ' + (r.id||''), 'success');
     document.getElementById('cm-alert-detail-modal').style.display = 'none';
     loadChangeAlerts();
+    if (r.id) openChangeRequestFromApplication(r.id);
   }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
 }
 

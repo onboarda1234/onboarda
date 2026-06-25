@@ -165,10 +165,11 @@ class TestAlertTransitions:
         assert cm.validate_alert_transition("new", "under_review") == (True, "")
         assert cm.validate_alert_transition("new", "dismissed") == (True, "")
 
-    def test_invalid_from_new(self):
+    def test_direct_conversion_valid_from_new(self):
         cm = _get_cm()
         v, e = cm.validate_alert_transition("new", "converted_to_change_request")
-        assert v is False
+        assert v is True
+        assert e == ""
 
     def test_terminal_blocks(self):
         cm = _get_cm()
@@ -354,7 +355,8 @@ class TestDBIntegration:
         user = {"sub": "u1", "name": "User", "role": "sco"}
 
         alert = cm.create_change_alert(wdb, app_id, "other", "backoffice", "T", {}, user=user)
-        cm.update_change_alert_status(wdb, alert["id"], "dismissed", user)
+        ok, err = cm.update_change_alert_status(wdb, alert["id"], "dismissed", user, notes="No actionable change")
+        assert ok, err
         req, err = cm.convert_alert_to_request(wdb, alert["id"], user)
         assert req is None
 

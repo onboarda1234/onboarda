@@ -43,7 +43,12 @@ CHANGE_ALERT_STATUSES = (
 
 # Valid transitions: from_status -> allowed_to_statuses
 CHANGE_ALERT_TRANSITIONS = {
-    "new": ("under_review", "dismissed", "escalated"),
+    "new": (
+        "under_review",
+        "converted_to_change_request",
+        "dismissed",
+        "escalated",
+    ),
     "under_review": (
         "awaiting_client_confirmation",
         "converted_to_change_request",
@@ -810,6 +815,9 @@ def update_change_alert_status(
         return False, f"Alert not found: {alert_id}"
 
     current_status = row["status"]
+    if new_status in {"dismissed", "escalated"} and not (notes or "").strip():
+        return False, f"Notes are required to mark an alert as {new_status}."
+
     valid, err = validate_alert_transition(current_status, new_status)
     if not valid:
         return False, err
@@ -825,8 +833,13 @@ def update_change_alert_status(
     db.commit()
 
     if log_audit_fn:
+        audit_action = (
+            "Change Alert Review Started"
+            if current_status == "new" and new_status == "under_review"
+            else "Change Alert Status Updated"
+        )
         log_audit_fn(
-            user, "Change Alert Status Updated", alert_id,
+            user, audit_action, alert_id,
             f"Status: {current_status} → {new_status}" + (f". Notes: {notes}" if notes else ""),
             db=db,
             before_state={"status": current_status},
@@ -858,6 +871,15 @@ def convert_alert_to_request(
 
     alert = dict(alert)
     current_status = alert["status"]
+
+    if current_status == "converted_to_change_request":
+        request_id = alert.get("converted_request_id")
+        if request_id:
+            existing = get_change_request_detail(db, request_id)
+            if existing:
+                existing["already_converted"] = True
+                return existing, ""
+        return None, "Alert has already been converted, but the linked change request could not be found."
 
     # Validate transition
     valid, err = validate_alert_transition(current_status, "converted_to_change_request")
