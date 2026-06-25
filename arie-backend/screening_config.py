@@ -4,8 +4,15 @@ Screening Abstraction Configuration — Feature Flags & Provider Settings
 Controls for screening-provider routing and runtime status reporting.
 
 SAFETY: Abstraction defaults OFF in every environment.
-SAFETY: Provider defaults to "sumsub" (existing provider).
+SAFETY: Provider defaults to "sumsub" for legacy routing compatibility.
 SAFETY: No imports from screening.py or sumsub_client.py.
+
+Provider responsibility model:
+- Sumsub is authoritative only for IDV, liveness, and identity document checks.
+- ComplyAdvantage Mesh is authoritative for sanctions, PEP, watchlists,
+  adverse media, and material screening concerns when screening is routed to CA.
+- Legacy Sumsub-hosted screening paths remain compatibility paths, not the
+  target screening/adverse-media source of truth.
 """
 
 import os
@@ -22,8 +29,51 @@ PROVIDER_DISPLAY_NAMES = {
     COMPLYADVANTAGE_MESH_PROVIDER: "ComplyAdvantage Mesh",
     "ca": "ComplyAdvantage Mesh",
     "mesh": "ComplyAdvantage Mesh",
-    SUMSUB_PROVIDER: "Sumsub",
+    SUMSUB_PROVIDER: "Sumsub IDV/KYC",
     OPENCORPORATES_PROVIDER: "OpenCorporates",
+}
+
+PROVIDER_RESPONSIBILITY_MODEL = {
+    SUMSUB_PROVIDER: {
+        "provider_label": "Sumsub IDV/KYC",
+        "authoritative_for": (
+            "idv_identity_verification",
+            "liveness_face_match",
+            "identity_document_checks",
+        ),
+        "not_authoritative_for": (
+            "sanctions_screening",
+            "pep_screening",
+            "watchlists",
+            "adverse_media",
+            "material_screening_concerns",
+        ),
+        "approval_gates": ("identity_verification",),
+        "legacy_guidance": (
+            "Legacy Sumsub-hosted AML/screening fields may exist for compatibility.",
+            "New screening/adverse-media approval logic must not treat them as authoritative.",
+        ),
+    },
+    COMPLYADVANTAGE_MESH_PROVIDER: {
+        "provider_label": "ComplyAdvantage Mesh",
+        "authoritative_for": (
+            "sanctions_screening",
+            "pep_screening",
+            "watchlists",
+            "adverse_media",
+            "material_screening_concerns",
+        ),
+        "not_authoritative_for": (
+            "idv_identity_verification",
+            "liveness_face_match",
+            "identity_document_checks",
+        ),
+        "approval_gates": ("screening_adverse_media",),
+        "legacy_guidance": (
+            "ComplyAdvantage Mesh provider truth should drive screening/adverse-media gates.",
+            "Runtime cutover still depends on SCREENING_PROVIDER and ENABLE_SCREENING_ABSTRACTION.",
+        ),
+    },
 }
 
 
@@ -100,10 +150,11 @@ def get_shadow_provider_name() -> str | None:
 
 
 # ── Source of Truth Rules ──
-# These dimensions are runtime-routed. Under the safe default they remain on
-# the legacy Sumsub path. When SCREENING_PROVIDER=complyadvantage and
-# ENABLE_SCREENING_ABSTRACTION=true, ComplyAdvantage Mesh becomes the AML
-# screening source of truth for these dimensions.
+# These dimensions are runtime-routed. Under the current safe default they
+# remain on the legacy compatibility path. Provider responsibility is stricter
+# than runtime cutover: Sumsub remains IDV-only, while ComplyAdvantage Mesh is
+# the target authority for sanctions, PEP, watchlists, adverse media, and
+# material screening concerns.
 
 SOURCE_OF_TRUTH_RULES = {
     "screening_report": "legacy",
@@ -124,6 +175,28 @@ def get_provider_display_name(provider_name: str | None, *, unknown_label: str =
         return unknown_label
     key = raw.lower().replace("_", "").replace("-", "").replace(" ", "")
     return PROVIDER_DISPLAY_NAMES.get(key, raw)
+
+
+def _copy_provider_responsibility(entry: dict) -> dict:
+    copied = {}
+    for key, value in entry.items():
+        copied[key] = list(value) if isinstance(value, tuple) else value
+    return copied
+
+
+def get_provider_responsibility_model() -> dict:
+    """Return the explicit provider responsibility matrix for UI/tests/docs."""
+    return {
+        provider: _copy_provider_responsibility(entry)
+        for provider, entry in PROVIDER_RESPONSIBILITY_MODEL.items()
+    }
+
+
+def get_provider_responsibility(provider_name: str | None) -> dict:
+    """Return one provider responsibility entry, or an empty dict for unknown providers."""
+    key = str(provider_name or "").strip().lower()
+    entry = PROVIDER_RESPONSIBILITY_MODEL.get(key)
+    return _copy_provider_responsibility(entry) if entry else {}
 
 
 def is_complyadvantage_active() -> bool:

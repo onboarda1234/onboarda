@@ -77,6 +77,10 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
     """
     Legacy screening adapter for sanctions, PEP, and watchlist checks.
 
+    Provider responsibility note: Sumsub is IDV-only for new authority
+    decisions. This function remains a legacy compatibility path and must not
+    be used as the authoritative source for new screening/adverse-media gates.
+
     **Person AML** (directors / UBOs):
         Uses the ``aml-screening`` level (``SUMSUB_AML_LEVEL_NAME``).
         1. Create applicant with fixedInfo (firstName, lastName, dob).

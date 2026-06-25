@@ -9,6 +9,8 @@ from screening_config import (
     is_abstraction_enabled,
     get_active_provider_name,
     get_provider_display_name,
+    get_provider_responsibility,
+    get_provider_responsibility_model,
     get_shadow_provider_name,
     is_complyadvantage_active,
     SOURCE_OF_TRUTH_RULES,
@@ -156,9 +158,31 @@ class TestSourceOfTruth:
     def test_ca_provider_display_name_is_mesh_and_unknown_stays_unknown(self):
         assert get_provider_display_name("complyadvantage") == "ComplyAdvantage Mesh"
         assert get_provider_display_name("ca") == "ComplyAdvantage Mesh"
+        assert get_provider_display_name("sumsub") == "Sumsub IDV/KYC"
         assert get_provider_display_name("") == "Unknown"
         assert get_provider_display_name(None) == "Unknown"
         assert get_provider_display_name("mystery_provider") == "mystery_provider"
+
+    def test_provider_responsibility_model_separates_idv_from_screening(self):
+        model = get_provider_responsibility_model()
+
+        sumsub = model["sumsub"]
+        complyadvantage = model["complyadvantage"]
+
+        assert "idv_identity_verification" in sumsub["authoritative_for"]
+        assert "adverse_media" in sumsub["not_authoritative_for"]
+        assert "sanctions_screening" in sumsub["not_authoritative_for"]
+        assert "identity_verification" in sumsub["approval_gates"]
+
+        assert "sanctions_screening" in complyadvantage["authoritative_for"]
+        assert "pep_screening" in complyadvantage["authoritative_for"]
+        assert "watchlists" in complyadvantage["authoritative_for"]
+        assert "adverse_media" in complyadvantage["authoritative_for"]
+        assert "idv_identity_verification" in complyadvantage["not_authoritative_for"]
+        assert "screening_adverse_media" in complyadvantage["approval_gates"]
+
+    def test_provider_responsibility_unknown_provider_is_empty(self):
+        assert get_provider_responsibility("missing-provider") == {}
 
     def test_unknown_dimension_raises(self):
         with pytest.raises(ValueError, match="Unknown source-of-truth dimension"):

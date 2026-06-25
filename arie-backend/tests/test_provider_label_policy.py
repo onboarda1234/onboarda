@@ -121,10 +121,10 @@ def test_screening_queue_filter_is_source_not_runtime_provider_selector():
 def test_provider_status_panel_uses_backend_runtime_truth():
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
     assert "screening-provider-status-panel" in html
-    assert "Active AML Screening Provider" in html
-    assert "ComplyAdvantage Mesh only when backend active=true" in html
+    assert "Screening Provider Readiness" in html
+    assert "ComplyAdvantage Mesh handles sanctions, PEP, watchlists, adverse media, and material screening concerns" in html
     assert "CA Mesh Active" in html
-    assert "Identity Verification Provider" in html
+    assert "IDV Provider" in html
     assert "IDV Status (Sumsub)" in html
     assert "AML Entitlement (Sumsub)" not in html
     assert "Screening Abstraction" in html
