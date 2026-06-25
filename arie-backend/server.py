@@ -33380,7 +33380,7 @@ class ChangeAlertConvertHandler(BaseHandler):
             if not request:
                 self.error(err, 400)
                 return
-            self.success(request, 201)
+            self.success(request, 200 if request.get("already_converted") else 201)
         except ValueError as ve:
             self.error(str(ve), 400)
             return
