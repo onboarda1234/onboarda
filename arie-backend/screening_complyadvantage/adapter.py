@@ -28,6 +28,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         config=None,
         orchestrator=None,
         poll_timeout_seconds=300,
+        allow_pending_on_timeout=False,
         db=None,
         monitoring_enabled=True,
     ):
@@ -35,6 +36,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         self._config = config
         self._orchestrator = orchestrator
         self._poll_timeout_seconds = poll_timeout_seconds
+        self._allow_pending_on_timeout = bool(allow_pending_on_timeout)
         self._db = db
         self._monitoring_enabled = bool(monitoring_enabled)
 
@@ -187,6 +189,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             self._orchestrator = ComplyAdvantageScreeningOrchestrator(
                 self._get_client(),
                 poll_timeout_seconds=self._poll_timeout_seconds,
+                allow_pending_on_timeout=self._allow_pending_on_timeout,
             )
         return self._orchestrator
 

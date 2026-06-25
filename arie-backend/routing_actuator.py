@@ -330,6 +330,7 @@ def apply_routing_decision(
     user: Optional[Mapping[str, Any]] = None,
     client_ip: str = "",
     source: str = SOURCE_PRESCREENING_SUBMIT,
+    defer_enhanced_requirements: bool = False,
 ) -> Dict[str, Any]:
     """Run the EDD routing policy and persist its consequences.
 
@@ -358,6 +359,7 @@ def apply_routing_decision(
         "lane_persisted": None,
         "actuation": None,
         "enhanced_requirements_generation": None,
+        "enhanced_requirements_deferred": False,
         "enhanced_requirement_triggers": [],
         "errors": [],
     }
@@ -511,7 +513,9 @@ def apply_routing_decision(
             or bool(detected_triggers)
         )
 
-        if should_generate:
+        if should_generate and defer_enhanced_requirements:
+            result["enhanced_requirements_deferred"] = True
+        elif should_generate:
             result["enhanced_requirements_generation"] = (
                 generate_application_enhanced_requirements(
                     db,

@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import logging
+import time
 import pytest
 from unittest.mock import patch, MagicMock
 from concurrent.futures import Future
@@ -255,7 +256,7 @@ class TestDBWriteFailureAfterScreening:
             "lane": "Fast Lane", "escalations": [], "requires_compliance_approval": False,
         }
 
-        with patch.object(server, "run_full_screening", return_value=mock_report):
+        with patch.object(server, "run_full_screening", return_value=mock_report) as screening_mock:
             with patch.object(server, "compute_risk_score", return_value=mock_risk):
                 with patch.object(server, "determine_screening_mode", return_value="simulated"):
                     with patch.object(server, "store_screening_mode", return_value=True):
@@ -322,7 +323,7 @@ class TestHappyPathSubmit:
             "lane": "Fast Lane", "escalations": [], "requires_compliance_approval": False,
         }
 
-        with patch.object(server, "run_full_screening", return_value=mock_report):
+        with patch.object(server, "run_full_screening", return_value=mock_report) as screening_mock:
             with patch.object(server, "compute_risk_score", return_value=mock_risk):
                 with patch.object(server, "determine_screening_mode", return_value="simulated"):
                     with patch.object(server, "store_screening_mode", return_value=True):
@@ -343,6 +344,7 @@ class TestHappyPathSubmit:
         assert data["risk_level"] == "LOW"
         assert "screening" in data
         assert "degraded_sources" in data["screening"]
+        assert screening_mock.call_args.kwargs["provider_options"] is None
 
     def test_edd_routed_low_risk_is_floored_before_persisting(self, temp_db):
         """A policy-routed EDD case must not persist or return final LOW risk."""
@@ -378,7 +380,7 @@ class TestHappyPathSubmit:
             "requires_compliance_approval": False,
         }
 
-        with patch.object(server, "run_full_screening", return_value=mock_report):
+        with patch.object(server, "run_full_screening", return_value=mock_report) as screening_mock:
             with patch.object(server, "compute_risk_score", return_value=mock_risk):
                 with patch.object(server, "determine_screening_mode", return_value="simulated"):
                     with patch.object(server, "store_screening_mode", return_value=True):
@@ -416,9 +418,81 @@ class TestHappyPathSubmit:
         audit_after = handler.log_audit.call_args.kwargs["after_state"]
         assert audit_after["final_risk_level"] == data["risk_level"]
         assert "EDD routing floor" in audit_after["elevation_reason_text"]
+        assert screening_mock.call_args.kwargs["provider_options"]["allow_pending_on_timeout"] is True
 
-    def test_edd_submit_persists_state_and_enhanced_requirements_for_client_actor(self, temp_db):
-        """EDD/high-risk success must not leave the durable app row in draft."""
+    def test_deferred_enhanced_requirements_schedule_without_preapproval(self, temp_db):
+        """Deferred enhanced triggers must still enqueue post-commit generation."""
+        server = _get_server_module()
+        import routing_actuator
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 30,
+            "level": "LOW",
+            "final_risk_level": "LOW",
+            "dimensions": {"D1": 1, "D2": 1, "D3": 1, "D4": 1, "D5": 1},
+            "lane": "Fast Lane",
+            "escalations": [],
+            "requires_compliance_approval": False,
+        }
+        scheduled = []
+
+        def capture_post_commit(fn, *args, **kwargs):
+            scheduled.append((fn, args, kwargs))
+            future = Future()
+            future.set_result(None)
+            return future
+
+        routing_result = {
+            "ran": True,
+            "route": "standard",
+            "triggers": [],
+            "enhanced_requirements_deferred": True,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(routing_actuator, "apply_routing_decision", return_value=routing_result):
+                            with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
+                                db = _get_project_db(temp_db)
+                                app_id = _setup_test_app(db)
+
+                                handler._do_submit(
+                                    db,
+                                    {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                    app_id,
+                                )
+                                app = db.execute(
+                                    "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                    (app_id,),
+                                ).fetchone()
+                                db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "LOW"
+        assert app["onboarding_lane"] == "Fast Lane"
+        scheduled_names = [item[0].__name__ for item in scheduled]
+        assert scheduled_names == ["_generate_prescreening_enhanced_requirements_async"]
+
+    def test_edd_submit_persists_state_and_schedules_enhanced_requirements_for_client_actor(self, temp_db):
+        """EDD/high-risk success must persist pricing_review before deferred setup runs."""
         server = _get_server_module()
 
         success_calls = []
@@ -445,37 +519,46 @@ class TestHappyPathSubmit:
             "requires_compliance_approval": True,
         }
 
-        with patch.object(server, "run_full_screening", return_value=mock_report):
+        scheduled = []
+
+        def capture_post_commit(fn, *args, **kwargs):
+            scheduled.append((fn, args, kwargs))
+            future = Future()
+            future.set_result(None)
+            return future
+
+        with patch.object(server, "run_full_screening", return_value=mock_report) as screening_mock:
             with patch.object(server, "compute_risk_score", return_value=mock_risk):
                 with patch.object(server, "determine_screening_mode", return_value="simulated"):
                     with patch.object(server, "store_screening_mode", return_value=True):
-                        db = _get_project_db(temp_db)
-                        app_id = _setup_test_app(db)
-                        db.execute("PRAGMA foreign_keys = ON")
+                        with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
+                            db = _get_project_db(temp_db)
+                            app_id = _setup_test_app(db)
+                            db.execute("PRAGMA foreign_keys = ON")
 
-                        handler._do_submit(
-                            db,
-                            {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
-                            app_id,
-                        )
+                            handler._do_submit(
+                                db,
+                                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                app_id,
+                            )
 
-                        app = db.execute(
-                            """
-                            SELECT status, risk_score, risk_level, onboarding_lane, submitted_at
-                            FROM applications
-                            WHERE id=?
-                            """,
-                            (app_id,),
-                        ).fetchone()
-                        reqs = db.execute(
-                            """
-                            SELECT created_by, updated_by
-                            FROM application_enhanced_requirements
-                            WHERE application_id=?
-                            """,
-                            (app_id,),
-                        ).fetchall()
-                        db.close()
+                            app = db.execute(
+                                """
+                                SELECT status, risk_score, risk_level, onboarding_lane, submitted_at
+                                FROM applications
+                                WHERE id=?
+                                """,
+                                (app_id,),
+                            ).fetchone()
+                            req_count = db.execute(
+                                """
+                                SELECT COUNT(*) AS c
+                                FROM application_enhanced_requirements
+                                WHERE application_id=?
+                                """,
+                                (app_id,),
+                            ).fetchone()["c"]
+                            db.close()
 
         assert error_calls == []
         assert len(success_calls) == 1
@@ -485,84 +568,14 @@ class TestHappyPathSubmit:
         assert app["onboarding_lane"] == "EDD"
         assert app["risk_score"] == 72
         assert app["submitted_at"]
-        assert reqs
-        assert all(row["created_by"] is None for row in reqs)
-        assert all(row["updated_by"] is None for row in reqs)
+        assert req_count == 0
+        assert screening_mock.call_args.kwargs["provider_options"]["allow_pending_on_timeout"] is True
+        scheduled_names = [item[0].__name__ for item in scheduled]
+        assert "_generate_prescreening_enhanced_requirements_async" in scheduled_names
+        assert "_send_prescreening_compliance_notifications" in scheduled_names
 
-    def test_post_commit_notification_failure_does_not_convert_submit_to_500(self, temp_db):
-        """Durable EDD submit success must survive non-critical notification failure."""
-        server = _get_server_module()
-
-        success_calls = []
-        error_calls = []
-        handler = _make_handler(server, error_calls, success_calls)
-
-        mock_report = {
-            "screened_at": "2026-01-01T00:00:00",
-            "company_screening": {"found": True, "source": "mocked"},
-            "director_screenings": [],
-            "ubo_screenings": [],
-            "ip_geolocation": {},
-            "overall_flags": [],
-            "total_hits": 0,
-            "degraded_sources": [],
-        }
-        mock_risk = {
-            "score": 72,
-            "level": "HIGH",
-            "final_risk_level": "HIGH",
-            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
-            "lane": "EDD",
-            "escalations": [],
-            "requires_compliance_approval": True,
-        }
-
-        with patch.object(server, "run_full_screening", return_value=mock_report):
-            with patch.object(server, "compute_risk_score", return_value=mock_risk):
-                with patch.object(server, "determine_screening_mode", return_value="simulated"):
-                    with patch.object(server, "store_screening_mode", return_value=True):
-                        db = _get_project_db(temp_db)
-                        app_id = _setup_test_app(db)
-                        db.execute(
-                            "INSERT OR IGNORE INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
-                            ("co-notify", "co-notify@example.com", "hash", "CO Notify", "co"),
-                        )
-                        db.commit()
-
-                        original_execute = db.execute
-
-                        def failing_notification_execute(sql, params=()):
-                            if "INSERT INTO notifications" in sql:
-                                raise sqlite3.OperationalError("notifications table temporarily locked")
-                            return original_execute(sql, params)
-
-                        db.execute = failing_notification_execute
-                        handler._do_submit(
-                            db,
-                            {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
-                            app_id,
-                        )
-                        app = db.execute(
-                            "SELECT status, risk_level, onboarding_lane, submitted_at FROM applications WHERE id=?",
-                            (app_id,),
-                        ).fetchone()
-                        req_count = db.execute(
-                            "SELECT COUNT(*) AS c FROM application_enhanced_requirements WHERE application_id=?",
-                            (app_id,),
-                        ).fetchone()["c"]
-                        db.close()
-
-        assert error_calls == []
-        assert len(success_calls) == 1
-        assert success_calls[0][0]["status"] == "pricing_review"
-        assert app["status"] == "pricing_review"
-        assert app["risk_level"] == "HIGH"
-        assert app["onboarding_lane"] == "EDD"
-        assert app["submitted_at"]
-        assert req_count > 0
-
-    def test_edd_submit_does_not_return_success_when_generation_fails(self, temp_db):
-        """A critical generation failure must not produce a false 200 response."""
+    def test_post_commit_scheduler_failure_does_not_convert_submit_to_500(self, temp_db):
+        """Durable EDD submit success must survive non-critical post-commit scheduler failure."""
         server = _get_server_module()
 
         success_calls = []
@@ -594,42 +607,253 @@ class TestHappyPathSubmit:
                 with patch.object(server, "determine_screening_mode", return_value="simulated"):
                     with patch.object(server, "store_screening_mode", return_value=True):
                         with patch.object(
-                            server,
-                            "generate_application_enhanced_requirements",
-                            side_effect=RuntimeError("simulated generation failure"),
-                        ):
+                            server._POST_COMMIT_EXECUTOR,
+                            "submit",
+                            side_effect=RuntimeError("executor unavailable"),
+                        ) as submit_mock:
                             db = _get_project_db(temp_db)
                             app_id = _setup_test_app(db)
-                            db.execute("PRAGMA foreign_keys = ON")
 
                             handler._do_submit(
                                 db,
                                 {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
                                 app_id,
                             )
-
                             app = db.execute(
-                                "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                "SELECT status, risk_level, onboarding_lane, submitted_at FROM applications WHERE id=?",
                                 (app_id,),
                             ).fetchone()
                             req_count = db.execute(
-                                """
-                                SELECT COUNT(*) AS c
-                                FROM application_enhanced_requirements
-                                WHERE application_id=?
-                                """,
+                                "SELECT COUNT(*) AS c FROM application_enhanced_requirements WHERE application_id=?",
                                 (app_id,),
                             ).fetchone()["c"]
                             db.close()
 
-        assert success_calls == []
-        assert error_calls
-        assert error_calls[-1][1] == 500
-        assert "enhanced review requirement generation failed" in error_calls[-1][0].lower()
-        assert app["status"] == "draft"
-        assert app["risk_level"] is None
-        assert app["onboarding_lane"] is None
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert app["submitted_at"]
         assert req_count == 0
+        assert submit_mock.call_count == 2
+
+    def test_edd_submit_returns_success_when_deferred_generation_fails(self, temp_db):
+        """Deferred enhanced generation failure must not make durable submit ambiguous."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        def run_post_commit_inline(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(
+                            server,
+                            "generate_application_enhanced_requirements",
+                            side_effect=RuntimeError("simulated generation failure"),
+                        ):
+                            with patch.object(
+                                server._POST_COMMIT_EXECUTOR,
+                                "submit",
+                                side_effect=run_post_commit_inline,
+                            ):
+                                db = _get_project_db(temp_db)
+                                app_id = _setup_test_app(db)
+                                db.execute("PRAGMA foreign_keys = ON")
+
+                                handler._do_submit(
+                                    db,
+                                    {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                    app_id,
+                                )
+
+                                app = db.execute(
+                                    "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                    (app_id,),
+                                ).fetchone()
+                                req_count = db.execute(
+                                    """
+                                    SELECT COUNT(*) AS c
+                                    FROM application_enhanced_requirements
+                                    WHERE application_id=?
+                                    """,
+                                    (app_id,),
+                                ).fetchone()["c"]
+                                db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert req_count == 0
+
+    def test_slow_enhanced_requirement_generation_is_not_inline(self, temp_db):
+        """A slow enhanced generator must not delay the first HIGH/EDD submit response."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        scheduled = []
+
+        def capture_post_commit(fn, *args, **kwargs):
+            scheduled.append((fn, args, kwargs))
+            future = Future()
+            future.set_result(None)
+            return future
+
+        def slow_generation(*_args, **_kwargs):
+            time.sleep(1.0)
+            raise AssertionError("enhanced generation must not run inline")
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(server, "generate_application_enhanced_requirements", side_effect=slow_generation) as gen_mock:
+                            with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
+                                db = _get_project_db(temp_db)
+                                app_id = _setup_test_app(db)
+                                handler._do_submit(
+                                    db,
+                                    {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                    app_id,
+                                )
+                                app = db.execute(
+                                    "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                    (app_id,),
+                                ).fetchone()
+                                db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert gen_mock.call_count == 0
+        assert any(item[0].__name__ == "_generate_prescreening_enhanced_requirements_async" for item in scheduled)
+
+    def test_slow_compliance_notification_is_not_inline(self, temp_db):
+        """A slow compliance notification sender must not delay the first HIGH/EDD submit response."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        scheduled = []
+
+        def capture_post_commit(fn, *args, **kwargs):
+            scheduled.append((fn, args, kwargs))
+            future = Future()
+            future.set_result(None)
+            return future
+
+        def slow_notification(*_args, **_kwargs):
+            time.sleep(1.0)
+            raise AssertionError("notification sender must not run inline")
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(server, "_send_prescreening_compliance_notifications", side_effect=slow_notification) as notify_mock:
+                            with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
+                                db = _get_project_db(temp_db)
+                                app_id = _setup_test_app(db)
+                                handler._do_submit(
+                                    db,
+                                    {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                    app_id,
+                                )
+                                app = db.execute(
+                                    "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                    (app_id,),
+                                ).fetchone()
+                                db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert notify_mock.call_count == 0
+        assert any(item[0] is notify_mock for item in scheduled)
 
     def test_retry_after_committed_high_submit_returns_current_state_without_screening_or_duplicate_audit(self, temp_db):
         """A retry after durable HIGH/EDD submit must be a current-state read, not a second submit."""
@@ -864,7 +1088,7 @@ class TestHappyPathSubmit:
 
         assert error_calls == []
         assert len(success_calls) == 1
-        assert submit_mock.call_count == 1
+        assert submit_mock.call_count == 2
         assert success_calls[0][0]["status"] == "pricing_review"
         assert app["status"] == "pricing_review"
         assert app["risk_level"] == "HIGH"

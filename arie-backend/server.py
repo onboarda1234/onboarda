@@ -2519,6 +2519,43 @@ def _post_commit_worker_count() -> int:
 
 _POST_COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=_post_commit_worker_count())
 
+
+def _submit_ca_poll_timeout_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("SUBMIT_CA_POLL_TIMEOUT_SECONDS", "4")))
+    except Exception:
+        return 4.0
+
+
+def _submit_timing_context(app_id, app_ref, user):
+    return {
+        "started": time.monotonic(),
+        "last": time.monotonic(),
+        "app_id": app_id,
+        "app_ref": app_ref or "",
+        "user_id": (user or {}).get("sub") or "",
+    }
+
+
+def _log_submit_timing(ctx, event, **extra):
+    if not isinstance(ctx, dict):
+        return
+    now = time.monotonic()
+    started = ctx.get("started") or now
+    last = ctx.get("last") or started
+    ctx["last"] = now
+    payload = {
+        "event": event,
+        "app_id": ctx.get("app_id"),
+        "app_ref": ctx.get("app_ref"),
+        "user_id": ctx.get("user_id"),
+        "elapsed_ms": int((now - started) * 1000),
+        "step_ms": int((now - last) * 1000),
+    }
+    payload.update({k: v for k, v in extra.items() if v is not None})
+    logger.info("submit_timing %s", json.dumps(payload, default=str, sort_keys=True))
+
+
 _SUBMIT_RECOVERY_STATUSES = {
     "submitted",
     "pricing_review",
@@ -2785,6 +2822,89 @@ def _schedule_prescreening_compliance_notifications(app_id, app_ref, company_nam
         )
 
 
+def _generate_prescreening_enhanced_requirements_async(app_id, app_ref, routing, actor):
+    gen_db = get_db()
+    try:
+        app_row = gen_db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+        if not app_row:
+            logger.warning(
+                "Prescreening enhanced requirement generation skipped: app_id=%s ref=%s reason=application_not_found",
+                app_id,
+                app_ref,
+            )
+            return
+        generation = generate_application_enhanced_requirements(
+            gen_db,
+            app_id,
+            app_row=app_row,
+            routing=routing or None,
+            actor=actor,
+            generation_source="prescreening_submit_post_commit",
+        )
+        gen_db.commit()
+        if generation and generation.get("config_ok") is False:
+            logger.error(
+                "Prescreening enhanced requirement generation completed with invalid config: app_id=%s ref=%s errors=%s",
+                app_id,
+                app_ref,
+                generation.get("errors"),
+            )
+        else:
+            logger.info(
+                "Prescreening enhanced requirement generation completed after durable submit: app_id=%s ref=%s generated=%s existing=%s",
+                app_id,
+                app_ref,
+                (generation or {}).get("generated_count"),
+                (generation or {}).get("existing_count"),
+            )
+    except Exception as gen_exc:
+        try:
+            gen_db.rollback()
+        except Exception as rollback_exc:
+            logger.debug(
+                "Enhanced requirement generation rollback failed: app_id=%s ref=%s error=%s",
+                app_id,
+                app_ref,
+                rollback_exc,
+            )
+        logger.error(
+            "Prescreening enhanced requirement generation failed after durable submit: app_id=%s ref=%s error=%s",
+            app_id,
+            app_ref,
+            str(gen_exc)[:300],
+            exc_info=True,
+        )
+    finally:
+        try:
+            gen_db.close()
+        except Exception as close_exc:
+            logger.debug(
+                "Enhanced requirement generation DB close failed: app_id=%s ref=%s error=%s",
+                app_id,
+                app_ref,
+                close_exc,
+            )
+
+
+def _schedule_prescreening_enhanced_requirements_generation(app_id, app_ref, routing, actor):
+    try:
+        _POST_COMMIT_EXECUTOR.submit(
+            _generate_prescreening_enhanced_requirements_async,
+            app_id,
+            app_ref,
+            deepcopy(routing or {}),
+            deepcopy(dict(actor or {})),
+        )
+    except Exception as submit_exc:
+        logger.warning(
+            "Prescreening enhanced requirement generation scheduling failed after durable submit: app_id=%s ref=%s error=%s",
+            app_id,
+            app_ref,
+            str(submit_exc)[:300],
+            exc_info=True,
+        )
+
+
 # ══════════════════════════════════════════════════════════
 # DATABASE
 # ══════════════════════════════════════════════════════════
@@ -2907,7 +3027,15 @@ from company_registry import (
 )
 
 
-def run_full_screening(application_data, directors, ubos, intermediaries=None, client_ip=None, db=None):
+def run_full_screening(
+    application_data,
+    directors,
+    ubos,
+    intermediaries=None,
+    client_ip=None,
+    db=None,
+    provider_options=None,
+):
     return run_screening_for_active_provider(
         application_data,
         directors,
@@ -2916,6 +3044,7 @@ def run_full_screening(application_data, directors, ubos, intermediaries=None, c
         client_ip=client_ip,
         db=db,
         legacy_runner=_legacy_run_full_screening,
+        provider_options=provider_options,
     )
 
 
@@ -8118,6 +8247,13 @@ class SubmitApplicationHandler(BaseHandler):
             return
 
         real_id = app["id"]
+        submit_timing = _submit_timing_context(real_id, app.get("ref", ""), user)
+        _log_submit_timing(
+            submit_timing,
+            "submit_start",
+            status=app.get("status"),
+            request_app_id=app_id,
+        )
 
         # ── PR-CM-LOCK-AND-AUTO-DRAFT-1: approved profiles cannot be re-submitted ──
         # Re-submitting would reset an approved record back into the pricing /
@@ -8146,7 +8282,10 @@ class SubmitApplicationHandler(BaseHandler):
             prescreening_raw = {}
 
         if _submit_recovery_available(app, prescreening_raw):
-            return self.success(_submit_recovery_payload(app, prescreening_raw), 200)
+            _log_submit_timing(submit_timing, "response_write_start", idempotent_recovery=True)
+            result = self.success(_submit_recovery_payload(app, prescreening_raw), 200)
+            _log_submit_timing(submit_timing, "response_write_end", idempotent_recovery=True)
+            return result
 
         # EX-05: Capture before-state for audit trail
         _before = snapshot_app_state(app)
@@ -8164,6 +8303,13 @@ class SubmitApplicationHandler(BaseHandler):
 
         # Validate prohibited/sanctioned jurisdiction before any provider calls.
         blocked_country, blocked_country_key = _submit_prohibited_jurisdiction(app, prescreening_raw)
+        _log_submit_timing(
+            submit_timing,
+            "prohibited_country_check",
+            blocked=bool(blocked_country_key),
+            blocked_country=blocked_country,
+            blocked_country_key=blocked_country_key,
+        )
         if blocked_country_key:
             logger.warning(
                 "Submit blocked for prohibited jurisdiction: app_id=%s ref=%s country=%s normalized=%s",
@@ -8216,11 +8362,88 @@ class SubmitApplicationHandler(BaseHandler):
             intermediaries=intermediaries,
         )
 
+        # Risk scoring is deterministic from submitted facts. Run it before
+        # provider polling so HIGH/EDD cases can use a submit-safe screening
+        # budget without waiting past the gateway timeout.
+        _log_submit_timing(submit_timing, "risk_scoring_start")
+        risk = compute_risk_score(scoring_input)
+
+        # EX-09: Capture risk config version at computation time
+        try:
+            from rule_engine import _get_risk_config_version
+            risk["_config_version"] = _get_risk_config_version(db) or ""
+        except Exception:
+            risk["_config_version"] = ""
+        pre_screening_route_requires_edd = False
+        pre_screening_route_triggers = []
+        try:
+            from routing_actuator import build_routing_facts
+            from edd_routing_policy import evaluate_edd_routing, ROUTE_EDD
+
+            pre_screening_routing = evaluate_edd_routing(
+                build_routing_facts(
+                    db=db,
+                    app_row=app,
+                    risk_dict=risk,
+                    screening_summary={},
+                )
+            )
+            pre_screening_route_requires_edd = pre_screening_routing.get("route") == ROUTE_EDD
+            pre_screening_route_triggers = list(pre_screening_routing.get("triggers") or [])
+        except Exception as route_probe_exc:
+            logger.warning(
+                "Pre-screening EDD route probe failed: app_id=%s ref=%s error=%s",
+                real_id,
+                app.get("ref", ""),
+                str(route_probe_exc)[:300],
+                exc_info=True,
+            )
+        preliminary_requires_preapproval = (
+            risk.get("level") in ("HIGH", "VERY_HIGH")
+            or str(risk.get("lane") or "").upper() == "EDD"
+            or pre_screening_route_requires_edd
+        )
+        _log_submit_timing(
+            submit_timing,
+            "risk_scoring_end",
+            risk_level=risk.get("level"),
+            risk_score=risk.get("score"),
+            onboarding_lane=risk.get("lane"),
+            preliminary_requires_preapproval=preliminary_requires_preapproval,
+            pre_screening_route_requires_edd=pre_screening_route_requires_edd,
+            pre_screening_route_triggers=pre_screening_route_triggers,
+        )
+
         # ── Run real screening (Agents 1, 2, 3, 5) ──
         client_ip = self.get_client_ip()
+        provider_options = None
+        if preliminary_requires_preapproval:
+            provider_options = {
+                "poll_timeout_seconds": _submit_ca_poll_timeout_seconds(),
+                "allow_pending_on_timeout": True,
+            }
+        _log_submit_timing(
+            submit_timing,
+            "screening_start",
+            submit_safe_pending=bool(provider_options),
+            ca_poll_timeout_seconds=(provider_options or {}).get("poll_timeout_seconds"),
+        )
         try:
             screening_report = run_full_screening(
-                scoring_input, directors, ubos, intermediaries, client_ip=client_ip, db=db
+                scoring_input,
+                directors,
+                ubos,
+                intermediaries,
+                client_ip=client_ip,
+                db=db,
+                provider_options=provider_options,
+            )
+            _log_submit_timing(
+                submit_timing,
+                "screening_end",
+                total_hits=(screening_report or {}).get("total_hits"),
+                degraded_sources=(screening_report or {}).get("degraded_sources"),
+                any_non_terminal_subject=(screening_report or {}).get("any_non_terminal_subject"),
             )
         except ScreeningProviderError as spe:
             logger.error(
@@ -8267,16 +8490,6 @@ class SubmitApplicationHandler(BaseHandler):
             prescreening,
         )
 
-        # Compute risk score
-        risk = compute_risk_score(scoring_input)
-
-        # EX-09: Capture risk config version at computation time
-        try:
-            from rule_engine import _get_risk_config_version
-            risk["_config_version"] = _get_risk_config_version(db) or ""
-        except Exception:
-            risk["_config_version"] = ""
-
         # Priority E: policy-driven EDD routing on prescreening submit.
         # Even when level=MEDIUM, sector/jurisdiction/PEP/ownership can
         # mandate EDD. Run the deterministic v1 policy now so the case
@@ -8296,6 +8509,7 @@ class SubmitApplicationHandler(BaseHandler):
                 user=user,
                 client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
                 source=SOURCE_PRESCREENING_SUBMIT,
+                defer_enhanced_requirements=True,
             )
             if str(_routing_outcome.get("route") or "").lower() == "edd":
                 risk['lane'] = 'EDD'
@@ -8310,6 +8524,7 @@ class SubmitApplicationHandler(BaseHandler):
 
         # ── DB write path: store screening results and update application ──
         try:
+            _log_submit_timing(submit_timing, "db_transaction_start")
             # Store screening report in prescreening_data
             prescreening["screening_report"] = screening_report
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
@@ -8389,124 +8604,19 @@ class SubmitApplicationHandler(BaseHandler):
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                        (json.dumps(prescreening, default=str), real_id))
 
-            # Post-persistence safety pass: the routing actuator also runs
-            # generation, but on PostgreSQL an earlier actuation failure can
-            # abort the transaction before requirements are written. Running
-            # idempotent generation after the durable application risk/lane
-            # fields are saved keeps HIGH/EDD/PEP cases from requiring a
-            # manual back-office generation step.
+            # HIGH/EDD enhanced requirements are generated after the durable
+            # submit commit. They are not needed to tell the client that the
+            # case is in pricing review, and final approval remains fail-closed
+            # if required enhanced rows are missing or unresolved.
             requires_compliance_preapproval = (
                 risk["level"] in ("HIGH", "VERY_HIGH")
                 or risk.get("lane") == "EDD"
                 or (_routing_outcome or {}).get("route") == "edd"
             )
-            requires_enhanced_generation = requires_compliance_preapproval
-            generation = None
-            generation_failure = None
-            if requires_enhanced_generation:
-                try:
-                    refreshed_app = db.execute(
-                        "SELECT * FROM applications WHERE id=?",
-                        (real_id,),
-                    ).fetchone()
-                    generation = generate_application_enhanced_requirements(
-                        db,
-                        real_id,
-                        app_row=refreshed_app,
-                        routing=_routing_outcome or None,
-                        actor=user,
-                        generation_source="prescreening_submit_post_persist",
-                    )
-                    if generation and generation.get("config_ok") is False:
-                        logger.error(
-                            "Enhanced requirement auto-generation config invalid: app_id=%s ref=%s errors=%s",
-                            real_id,
-                            app.get("ref", ""),
-                            generation.get("errors"),
-                        )
-                except Exception as generation_exc:
-                    generation_failure = generation_exc
-                    logger.error(
-                        "Enhanced requirement auto-generation failed after prescreening persistence: app_id=%s ref=%s error=%s",
-                        real_id,
-                        app.get("ref", ""),
-                        generation_exc,
-                        exc_info=True,
-                    )
-
-            if requires_enhanced_generation:
-                persisted_app = db.execute(
-                    """
-                    SELECT status, risk_score, risk_level, onboarding_lane, submitted_at
-                    FROM applications
-                    WHERE id=?
-                    """,
-                    (real_id,),
-                ).fetchone()
-                persisted = dict(persisted_app or {})
-                durable_state_missing = (
-                    not persisted
-                    or str(persisted.get("status") or "").strip().lower() == "draft"
-                    or persisted.get("risk_score") in (None, "")
-                    or not str(persisted.get("risk_level") or "").strip()
-                    or not str(persisted.get("onboarding_lane") or "").strip()
-                    or not persisted.get("submitted_at")
-                )
-                generated_or_existing = 0
-                if generation:
-                    try:
-                        generated_or_existing = (
-                            int(generation.get("generated_count") or 0)
-                            + int(generation.get("existing_count") or 0)
-                        )
-                    except Exception:
-                        generated_or_existing = 0
-                generation_invalid = (
-                    generation_failure is not None
-                    or not generation
-                    or generation.get("config_ok") is False
-                    or generated_or_existing <= 0
-                )
-                if durable_state_missing or generation_invalid:
-                    logger.error(
-                        "Enhanced requirement auto-generation critical failure: app_id=%s ref=%s durable_state_missing=%s generation_invalid=%s persisted_state=%s generation=%s error=%s",
-                        real_id,
-                        app.get("ref", ""),
-                        durable_state_missing,
-                        generation_invalid,
-                        persisted,
-                        generation,
-                        generation_failure,
-                    )
-                    try:
-                        db.rollback()
-                    except Exception as rollback_exc:
-                        try:
-                            from observability import log_error
-
-                            log_error(
-                                "prescreening_enhanced_generation_rollback_failed",
-                                handler="SubmitApplicationHandler._do_submit",
-                                application_id=real_id,
-                                application_ref=app.get("ref", ""),
-                                error=str(rollback_exc),
-                            )
-                        except Exception as obs_exc:
-                            logger.debug(
-                                "Observability logging failed for rollback failure: %s",
-                                obs_exc,
-                            )
-                        logger.error(
-                            "Rollback failed after enhanced requirement auto-generation critical failure: app_id=%s ref=%s error=%s",
-                            real_id,
-                            app.get("ref", ""),
-                            rollback_exc,
-                            exc_info=True,
-                        )
-                    return self.error(
-                        "Enhanced review requirement generation failed. Please retry your submission.",
-                        500,
-                    )
+            requires_enhanced_generation = (
+                requires_compliance_preapproval
+                or bool((_routing_outcome or {}).get("enhanced_requirements_deferred"))
+            )
 
             flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
             elevation_summary = (
@@ -8536,6 +8646,7 @@ class SubmitApplicationHandler(BaseHandler):
                 commit=False,
             )
             db.commit()
+            _log_submit_timing(submit_timing, "db_commit_end", requires_enhanced_generation=requires_enhanced_generation)
         except Exception as db_exc:
             logger.error(
                 "DB write failed after screening: app_id=%s ref=%s user=%s stage=post_screening_db_write error=%s",
@@ -8553,7 +8664,18 @@ class SubmitApplicationHandler(BaseHandler):
         # Notify compliance after durable state is committed. Notification
         # failures must not keep the request open or turn a committed submit
         # into a client-visible ambiguous timeout.
+        if requires_enhanced_generation:
+            _log_submit_timing(submit_timing, "enhanced_requirements_start", deferred=True)
+            _schedule_prescreening_enhanced_requirements_generation(
+                real_id,
+                app["ref"],
+                _routing_outcome or None,
+                user,
+            )
+            _log_submit_timing(submit_timing, "enhanced_requirements_end", deferred=True)
+
         if requires_compliance_preapproval:
+            _log_submit_timing(submit_timing, "notification_schedule_start")
             _schedule_prescreening_compliance_notifications(
                 real_id,
                 app["ref"],
@@ -8562,9 +8684,10 @@ class SubmitApplicationHandler(BaseHandler):
                 risk["score"],
                 risk["lane"],
             )
+            _log_submit_timing(submit_timing, "notification_schedule_end")
 
         result_status = "pricing_review"
-        self.success({
+        payload = {
             "ref": app["ref"],
             "risk_score": risk["score"],
             "risk_level": risk["level"],
@@ -8588,7 +8711,10 @@ class SubmitApplicationHandler(BaseHandler):
                     "ip_geolocation": screening_report["ip_geolocation"].get("source", "none") if screening_report.get("ip_geolocation") else "none",
                 }
             }
-        })
+        }
+        _log_submit_timing(submit_timing, "response_write_start")
+        self.success(payload)
+        _log_submit_timing(submit_timing, "response_write_end", status=result_status)
 
 
 class PricingAcceptHandler(BaseHandler):

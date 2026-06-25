@@ -9,7 +9,10 @@ import pytest
 
 from screening_complyadvantage.exceptions import CATimeout, CAUnexpectedResponse
 from screening_complyadvantage.normalizer import ScreeningApplicationContext
-from screening_complyadvantage.orchestrator import ComplyAdvantageScreeningOrchestrator
+from screening_complyadvantage.orchestrator import (
+    ComplyAdvantageScreeningOrchestrator,
+    _mark_report_pending_after_timeout,
+)
 
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "complyadvantage")
@@ -131,12 +134,20 @@ def _client_for_two_pass(data):
     return client
 
 
-def _orchestrator(client, *, clock=lambda: 0, sleep_fn=lambda _: None, poll_timeout_seconds=300):
+def _orchestrator(
+    client,
+    *,
+    clock=lambda: 0,
+    sleep_fn=lambda _: None,
+    poll_timeout_seconds=300,
+    allow_pending_on_timeout=False,
+):
     return ComplyAdvantageScreeningOrchestrator(
         client,
         poll_timeout_seconds=poll_timeout_seconds,
         clock=clock,
         sleep_fn=sleep_fn,
+        allow_pending_on_timeout=allow_pending_on_timeout,
     )
 
 
@@ -194,6 +205,79 @@ def test_polling_loop_uses_backoff_and_times_out_with_fake_clock():
         ComplyAdvantageScreeningOrchestrator(
             timeout_client, poll_timeout_seconds=1, clock=clock, sleep_fn=sleep_fn
         ).poll_workflow_until_complete("wf")
+
+
+def test_submit_safe_poll_timeout_returns_pending_non_terminal_report():
+    pending_workflow = {
+        "workflow_type": "screening",
+        "status": "IN-PROGRESS",
+        "steps": ["initial_screening"],
+        "step_details": {
+            "customer-creation": {
+                "status": "COMPLETED",
+                "step_output": {"customer_identifier": "cust-pending"},
+            },
+            "case-creation": {"status": "IN-PROGRESS"},
+        },
+    }
+    data = {
+        "strict_workflow": {
+            **pending_workflow,
+            "workflow_instance_identifier": "wf-pending-strict",
+        },
+        "relaxed_workflow": {
+            **pending_workflow,
+            "workflow_instance_identifier": "wf-pending-relaxed",
+        },
+        "strict_alerts_risks": {},
+        "relaxed_alerts_risks": {},
+        "strict_deep_risks": {},
+        "relaxed_deep_risks": {},
+    }
+    client = _client_for_two_pass(data)
+
+    report = _orchestrator(
+        client,
+        poll_timeout_seconds=0,
+        allow_pending_on_timeout=True,
+    ).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("relaxed"),
+        application_context=_context(),
+        monitoring_enabled=False,
+    )
+
+    assert report["any_non_terminal_subject"] is True
+    assert report["company_screening_state"] == "pending_provider"
+    assert "complyadvantage_workflow_pending" in report["degraded_sources"]
+    director = report["director_screenings"][0]
+    assert director["screening_state"] == "pending_provider"
+    assert director["screening"]["api_status"] == "pending"
+    assert report["provider_specific"]["complyadvantage"]["pending_timeout"] is True
+
+
+def test_pending_timeout_preserves_completed_company_match():
+    workflow = type("Workflow", (), {"workflow_instance_identifier": "wf-completed"})()
+    pass_result = type("PassResult", (), {"workflow": workflow})()
+    report = {
+        "company_screening": {
+            "matched": True,
+            "results": [{"name": "Known Match"}],
+        },
+        "provider_specific": {"complyadvantage": {}},
+        "degraded_sources": [],
+        "overall_flags": [],
+    }
+
+    _mark_report_pending_after_timeout(
+        report,
+        strict=pass_result,
+        relaxed=pass_result,
+    )
+
+    assert report["company_screening"]["matched"] is True
+    assert report["company_screening"]["results"] == [{"name": "Known Match"}]
+    assert report["company_screening"]["screening_state"] == "pending_provider"
 
 
 def test_polling_accepts_not_started_step_statuses_seen_in_ca_sandbox():
