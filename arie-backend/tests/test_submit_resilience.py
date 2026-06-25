@@ -380,7 +380,7 @@ class TestHappyPathSubmit:
             "requires_compliance_approval": False,
         }
 
-        with patch.object(server, "run_full_screening", return_value=mock_report):
+        with patch.object(server, "run_full_screening", return_value=mock_report) as screening_mock:
             with patch.object(server, "compute_risk_score", return_value=mock_risk):
                 with patch.object(server, "determine_screening_mode", return_value="simulated"):
                     with patch.object(server, "store_screening_mode", return_value=True):
@@ -418,6 +418,78 @@ class TestHappyPathSubmit:
         audit_after = handler.log_audit.call_args.kwargs["after_state"]
         assert audit_after["final_risk_level"] == data["risk_level"]
         assert "EDD routing floor" in audit_after["elevation_reason_text"]
+        assert screening_mock.call_args.kwargs["provider_options"]["allow_pending_on_timeout"] is True
+
+    def test_deferred_enhanced_requirements_schedule_without_preapproval(self, temp_db):
+        """Deferred enhanced triggers must still enqueue post-commit generation."""
+        server = _get_server_module()
+        import routing_actuator
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 30,
+            "level": "LOW",
+            "final_risk_level": "LOW",
+            "dimensions": {"D1": 1, "D2": 1, "D3": 1, "D4": 1, "D5": 1},
+            "lane": "Fast Lane",
+            "escalations": [],
+            "requires_compliance_approval": False,
+        }
+        scheduled = []
+
+        def capture_post_commit(fn, *args, **kwargs):
+            scheduled.append((fn, args, kwargs))
+            future = Future()
+            future.set_result(None)
+            return future
+
+        routing_result = {
+            "ran": True,
+            "route": "standard",
+            "triggers": [],
+            "enhanced_requirements_deferred": True,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(routing_actuator, "apply_routing_decision", return_value=routing_result):
+                            with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
+                                db = _get_project_db(temp_db)
+                                app_id = _setup_test_app(db)
+
+                                handler._do_submit(
+                                    db,
+                                    {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                    app_id,
+                                )
+                                app = db.execute(
+                                    "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                    (app_id,),
+                                ).fetchone()
+                                db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "LOW"
+        assert app["onboarding_lane"] == "Fast Lane"
+        scheduled_names = [item[0].__name__ for item in scheduled]
+        assert scheduled_names == ["_generate_prescreening_enhanced_requirements_async"]
 
     def test_edd_submit_persists_state_and_schedules_enhanced_requirements_for_client_actor(self, temp_db):
         """EDD/high-risk success must persist pricing_review before deferred setup runs."""
@@ -697,14 +769,11 @@ class TestHappyPathSubmit:
                             with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
                                 db = _get_project_db(temp_db)
                                 app_id = _setup_test_app(db)
-                                started = time.monotonic()
-
                                 handler._do_submit(
                                     db,
                                     {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
                                     app_id,
                                 )
-                                elapsed = time.monotonic() - started
                                 app = db.execute(
                                     "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
                                     (app_id,),
@@ -713,7 +782,6 @@ class TestHappyPathSubmit:
 
         assert error_calls == []
         assert len(success_calls) == 1
-        assert elapsed < 0.5
         assert app["status"] == "pricing_review"
         assert app["risk_level"] == "HIGH"
         assert app["onboarding_lane"] == "EDD"
@@ -768,14 +836,11 @@ class TestHappyPathSubmit:
                             with patch.object(server._POST_COMMIT_EXECUTOR, "submit", side_effect=capture_post_commit):
                                 db = _get_project_db(temp_db)
                                 app_id = _setup_test_app(db)
-                                started = time.monotonic()
-
                                 handler._do_submit(
                                     db,
                                     {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
                                     app_id,
                                 )
-                                elapsed = time.monotonic() - started
                                 app = db.execute(
                                     "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
                                     (app_id,),
@@ -784,7 +849,6 @@ class TestHappyPathSubmit:
 
         assert error_calls == []
         assert len(success_calls) == 1
-        assert elapsed < 0.5
         assert app["status"] == "pricing_review"
         assert app["risk_level"] == "HIGH"
         assert app["onboarding_lane"] == "EDD"

@@ -8374,9 +8374,34 @@ class SubmitApplicationHandler(BaseHandler):
             risk["_config_version"] = _get_risk_config_version(db) or ""
         except Exception:
             risk["_config_version"] = ""
+        pre_screening_route_requires_edd = False
+        pre_screening_route_triggers = []
+        try:
+            from routing_actuator import build_routing_facts
+            from edd_routing_policy import evaluate_edd_routing, ROUTE_EDD
+
+            pre_screening_routing = evaluate_edd_routing(
+                build_routing_facts(
+                    db=db,
+                    app_row=app,
+                    risk_dict=risk,
+                    screening_summary={},
+                )
+            )
+            pre_screening_route_requires_edd = pre_screening_routing.get("route") == ROUTE_EDD
+            pre_screening_route_triggers = list(pre_screening_routing.get("triggers") or [])
+        except Exception as route_probe_exc:
+            logger.warning(
+                "Pre-screening EDD route probe failed: app_id=%s ref=%s error=%s",
+                real_id,
+                app.get("ref", ""),
+                str(route_probe_exc)[:300],
+                exc_info=True,
+            )
         preliminary_requires_preapproval = (
             risk.get("level") in ("HIGH", "VERY_HIGH")
             or str(risk.get("lane") or "").upper() == "EDD"
+            or pre_screening_route_requires_edd
         )
         _log_submit_timing(
             submit_timing,
@@ -8385,6 +8410,8 @@ class SubmitApplicationHandler(BaseHandler):
             risk_score=risk.get("score"),
             onboarding_lane=risk.get("lane"),
             preliminary_requires_preapproval=preliminary_requires_preapproval,
+            pre_screening_route_requires_edd=pre_screening_route_requires_edd,
+            pre_screening_route_triggers=pre_screening_route_triggers,
         )
 
         # ── Run real screening (Agents 1, 2, 3, 5) ──
@@ -8586,7 +8613,10 @@ class SubmitApplicationHandler(BaseHandler):
                 or risk.get("lane") == "EDD"
                 or (_routing_outcome or {}).get("route") == "edd"
             )
-            requires_enhanced_generation = requires_compliance_preapproval
+            requires_enhanced_generation = (
+                requires_compliance_preapproval
+                or bool((_routing_outcome or {}).get("enhanced_requirements_deferred"))
+            )
 
             flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
             elevation_summary = (

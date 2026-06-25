@@ -96,6 +96,8 @@ def _build_provider(provider_name: str, *, db=None, provider_options: dict | Non
         if accepts_db:
             kwargs["db"] = db
         for name, value in provider_options.items():
+            if name == "db":
+                continue
             if accepts_kwargs or name in parameter_names:
                 kwargs[name] = value
     except (TypeError, ValueError):

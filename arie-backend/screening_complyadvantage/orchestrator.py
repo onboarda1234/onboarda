@@ -355,7 +355,7 @@ def _pending_timeout_poll_result(
         step="workflow_poll",
     )
     raw = dict(raw)
-    raw["_regmind_pending_timeout"] = True
+    raw["_complyadvantage_pending_timeout"] = True
     return _WorkflowPollResult(workflow=workflow, raw=raw, timed_out=True)
 
 
@@ -385,7 +385,8 @@ def _mark_report_pending_after_timeout(report, *, strict, relaxed):
     if isinstance(company, dict):
         company["api_status"] = "pending"
         company["screening_state"] = "pending_provider"
-        company["matched"] = False
+        if "matched" not in company:
+            company["matched"] = False
         company.setdefault("results", [])
         company["pending_reason"] = "workflow_poll_timeout"
     for group_name in ("director_screenings", "ubo_screenings", "intermediary_screenings"):

@@ -145,12 +145,14 @@ def test_complyadvantage_route_forwards_supported_provider_options(monkeypatch):
 
     register_provider(COMPLYADVANTAGE_PROVIDER_NAME, FakeCAProvider)
 
+    trusted_db = object()
     result = run_screening_for_active_provider(
         {"application_id": "app-options"},
         [],
         [],
-        db=object(),
+        db=trusted_db,
         provider_options={
+            "db": "untrusted-db-option",
             "poll_timeout_seconds": 8,
             "allow_pending_on_timeout": True,
             "unsupported_option": "ignored",
@@ -158,6 +160,7 @@ def test_complyadvantage_route_forwards_supported_provider_options(monkeypatch):
     )
 
     assert result["provider"] == "complyadvantage"
+    assert FakeCAProvider.instances[0].db is trusted_db
     assert FakeCAProvider.instances[0].poll_timeout_seconds == 8
     assert FakeCAProvider.instances[0].allow_pending_on_timeout is True
 

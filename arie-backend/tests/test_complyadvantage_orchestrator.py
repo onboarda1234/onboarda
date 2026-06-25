@@ -9,7 +9,10 @@ import pytest
 
 from screening_complyadvantage.exceptions import CATimeout, CAUnexpectedResponse
 from screening_complyadvantage.normalizer import ScreeningApplicationContext
-from screening_complyadvantage.orchestrator import ComplyAdvantageScreeningOrchestrator
+from screening_complyadvantage.orchestrator import (
+    ComplyAdvantageScreeningOrchestrator,
+    _mark_report_pending_after_timeout,
+)
 
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "complyadvantage")
@@ -251,6 +254,30 @@ def test_submit_safe_poll_timeout_returns_pending_non_terminal_report():
     assert director["screening_state"] == "pending_provider"
     assert director["screening"]["api_status"] == "pending"
     assert report["provider_specific"]["complyadvantage"]["pending_timeout"] is True
+
+
+def test_pending_timeout_preserves_completed_company_match():
+    workflow = type("Workflow", (), {"workflow_instance_identifier": "wf-completed"})()
+    pass_result = type("PassResult", (), {"workflow": workflow})()
+    report = {
+        "company_screening": {
+            "matched": True,
+            "results": [{"name": "Known Match"}],
+        },
+        "provider_specific": {"complyadvantage": {}},
+        "degraded_sources": [],
+        "overall_flags": [],
+    }
+
+    _mark_report_pending_after_timeout(
+        report,
+        strict=pass_result,
+        relaxed=pass_result,
+    )
+
+    assert report["company_screening"]["matched"] is True
+    assert report["company_screening"]["results"] == [{"name": "Known Match"}]
+    assert report["company_screening"]["screening_state"] == "pending_provider"
 
 
 def test_polling_accepts_not_started_step_statuses_seen_in_ca_sandbox():
