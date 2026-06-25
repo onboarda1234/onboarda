@@ -6052,9 +6052,12 @@ function terminalActionStateMessage(statusRaw) {
 }
 
 function routeRequiresCompliance(app) {
+  var route = approvalRoutePolicy(app);
   var routeName = approvalRouteName(app);
-  return routeName === 'compliance_required' || routeName === 'dual_control_required';
+  return !!route.requires_compliance_package || routeName === 'compliance_required' || routeName === 'dual_control_required';
 }
+
+var APPROVAL_PENDING_ITEMS_MESSAGE = 'Approval not ready. Resolve the pending items in the Case Command Centre before approving.';
 
 function complianceReviewReason(app) {
   app = app || currentApp || {};
@@ -6132,9 +6135,7 @@ function buildApplicationActionState(app) {
     approveReason = approveBlock;
   } else if (!readiness.ready) {
     approveDisabled = true;
-    approveReason = readiness.blockers.length
-      ? readiness.blockers.slice(0, 3).join(' ')
-      : 'Approval blockers must be resolved before approval.';
+    approveReason = APPROVAL_PENDING_ITEMS_MESSAGE;
   }
 
   var rejectDisabled = false;
@@ -23070,6 +23071,10 @@ function activateCaseCommandTarget(tab, anchorId) {
   }
 }
 
+function focusCaseCommandCentre() {
+  activateCaseCommandTarget('overview', 'detail-case-command-centre');
+}
+
 function getAuthoritativeGateBlockers(app) {
   if (!app) return [];
   if (Array.isArray(app.gateBlockers)) return app.gateBlockers;
@@ -23089,13 +23094,13 @@ function normalizeBackendGateBlocker(blocker, index) {
       category: 'Approval Gate',
       title: blocker,
       description: blocker,
-      ctaLabel: 'Review blockers',
+      ctaLabel: 'View pending items',
       tab: 'overview',
-      anchorId: 'detail-approval-blockers',
+      anchorId: 'detail-case-command-centre',
       blocking: true,
       priority: index,
-      actionKey: 'approval.review',
-      actionTarget: caseCommandActionTarget('approval.review', { target_tab: 'overview', target_section: 'detail-approval-blockers', scroll_anchor: 'detail-approval-blockers' })
+      actionKey: 'approval.pending_items',
+      actionTarget: caseCommandActionTarget('approval.pending_items')
     };
   }
   return {
@@ -23103,9 +23108,9 @@ function normalizeBackendGateBlocker(blocker, index) {
     category: blocker.category || 'Approval Gate',
     title: blocker.title || 'Backend approval blocker',
     description: blocker.description || blocker.reason || 'Review backend approval gate blocker.',
-    ctaLabel: blocker.ctaLabel || blocker.cta_label || 'Review blockers',
+    ctaLabel: blocker.ctaLabel || blocker.cta_label || 'View pending items',
     tab: blocker.tab || 'overview',
-    anchorId: blocker.anchorId || blocker.anchor_id || 'detail-approval-blockers',
+    anchorId: blocker.anchorId || blocker.anchor_id || 'detail-case-command-centre',
     blocking: blocker.blocking !== false,
     priority: blocker.priority == null ? index : blocker.priority,
     action: blocker.action || '',
@@ -23123,6 +23128,7 @@ var CASE_COMMAND_ACTION_TARGETS = {
   'screening.resolve': { target_view:'application_review', target_tab:'screening', target_section:'detail-screening-review', scroll_anchor:'detail-screening-review', action_mode:'focus_section' },
   'idv.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'section-b-identity-verification', scroll_anchor:'individual-identity-verification', action_mode:'focus_section' },
   'documents.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-kyc-documents-panel', scroll_anchor:'detail-kyc-documents-panel', action_mode:'focus_section' },
+  'documents.resolve': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-kyc-documents-panel', scroll_anchor:'detail-kyc-documents-panel', action_mode:'focus_section' },
   'evidence.review': { target_view:'application_review', target_tab:'kyc-docs', target_section:'detail-enhanced-requirements-section', scroll_anchor:'detail-enhanced-requirements-section', action_mode:'focus_section' },
   'edd.open': { target_view:'edd', target_section:'view-edd', scroll_anchor:'view-edd', action_mode:'open_edd_queue' },
   'memo.open': { target_view:'application_review', target_tab:'overview', target_section:'detail-memo', scroll_anchor:'detail-memo', action_mode:'focus_section' },
@@ -23133,7 +23139,11 @@ var CASE_COMMAND_ACTION_TARGETS = {
   'escalate.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'open_escalation' },
   'reassign.open': { target_view:'application_review', target_tab:'overview', target_section:'btn-reassign', scroll_anchor:'btn-reassign', action_mode:'open_reassign' },
   'pricing.move_to_compliance_review': { target_view:'application_review', target_tab:'overview', target_section:'detail-company-name', scroll_anchor:'detail-company-name', action_mode:'move_to_compliance_review' },
-  'approval.review': { target_view:'application_review', target_tab:'overview', target_section:'detail-approval-blockers', scroll_anchor:'detail-approval-blockers', action_mode:'focus_section' },
+  'case_stage.review': { target_view:'application_review', target_tab:'overview', target_section:'standard-actions-topbar', scroll_anchor:'standard-actions-topbar', action_mode:'focus_section' },
+  'case_stage.pre_approval': { target_view:'application_review', target_tab:'overview', target_section:'pre-approval-actions-topbar', scroll_anchor:'pre-approval-actions-topbar', action_mode:'focus_section' },
+  'submit_to_compliance.open': { target_view:'application_review', target_tab:'overview', target_section:'approval-authority-hint', scroll_anchor:'approval-authority-hint', action_mode:'focus_section' },
+  'approval.pending_items': { target_view:'application_review', target_tab:'overview', target_section:'detail-case-command-centre', scroll_anchor:'detail-case-command-centre', action_mode:'focus_section' },
+  'approval.review': { target_view:'application_review', target_tab:'overview', target_section:'detail-case-command-centre', scroll_anchor:'detail-case-command-centre', action_mode:'focus_section' },
   'alerts.review': { target_view:'application_review', target_tab:'alerts', target_section:'detail-tab-alerts', scroll_anchor:'detail-tab-alerts', action_mode:'focus_section' },
   'lifecycle.open': { target_view:'application_review', target_tab:'lifecycle', target_section:'detail-tab-lifecycle', scroll_anchor:'detail-tab-lifecycle', action_mode:'focus_section' }
 };
@@ -23224,6 +23234,8 @@ function caseCommandGroupKey(blocker) {
   if (actionKey.indexOf('edd.') === 0) return 'edd_investigation';
   if (actionKey.indexOf('memo.') === 0 || actionKey.indexOf('supervisor.') === 0) return 'memo_package';
   if (actionKey.indexOf('periodic_review.') === 0) return 'periodic_review';
+  if (actionKey.indexOf('submit_to_compliance.') === 0) return 'risk_route';
+  if (actionKey.indexOf('case_stage.') === 0) return 'case_stage';
   if (text.indexOf('screening') >= 0) return 'screening';
   if (text.indexOf('identity verification') >= 0 || text.indexOf('idv') >= 0) return 'identity_verification';
   if (text.indexOf('enhanced') >= 0 || text.indexOf('document') >= 0 || text.indexOf('pep declaration') >= 0) return 'documents_evidence';
@@ -23240,10 +23252,12 @@ function caseCommandGroupConfig(key) {
     identity_verification: { label:'Identity Verification', icon:'ID', priority:20, actionKey:'idv.review', actionLabel:'Review IDV' },
     documents_evidence: { label:'Documents & Evidence', icon:'D', priority:30, actionKey:'documents.review', actionLabel:'Review documents' },
     edd_investigation: { label:'EDD / Investigation', icon:'E', priority:40, actionKey:'edd.open', actionLabel:'Open EDD' },
+    risk_route: { label:'Risk Route', icon:'R', priority:45, actionKey:'submit_to_compliance.open', actionLabel:'Submit to Compliance' },
     memo_package: { label:'Memo Package', icon:'M', priority:50, actionKey:'memo.open', actionLabel:'Open memo' },
     periodic_review: { label:'Periodic Review', icon:'P', priority:85, actionKey:'periodic_review.open', actionLabel:'Open review' },
     secondary_guidance: { label:'Secondary Guidance', icon:'G', priority:90, actionKey:'alerts.review', actionLabel:'View alerts' },
-    case_readiness: { label:'Case Readiness', icon:'C', priority:70, actionKey:'approval.review', actionLabel:'Review blockers' }
+    case_stage: { label:'Case Stage', icon:'S', priority:70, actionKey:'case_stage.review', actionLabel:'Review case stage' },
+    case_readiness: { label:'Case Readiness', icon:'C', priority:70, actionKey:'approval.pending_items', actionLabel:'View pending items' }
   };
   return configs[key] || configs.case_readiness;
 }
@@ -23271,6 +23285,20 @@ function caseCommandNormalizeActionTarget(blocker, groupKey, app) {
     target.target_section = 'detail-company-name';
     target.scroll_anchor = 'detail-company-name';
     target.action_mode = 'move_to_compliance_review';
+  }
+  if (actionKey === 'documents.resolve') {
+    target.target_view = 'application_review';
+    target.target_tab = 'kyc-docs';
+    target.target_section = 'detail-kyc-documents-panel';
+    target.scroll_anchor = 'detail-kyc-documents-panel';
+    target.action_mode = 'focus_section';
+  }
+  if (actionKey === 'approval.review' || actionKey === 'approval.pending_items') {
+    target.target_view = 'application_review';
+    target.target_tab = 'overview';
+    target.target_section = 'detail-case-command-centre';
+    target.scroll_anchor = 'detail-case-command-centre';
+    target.action_mode = 'focus_section';
   }
   if (blocker.action && groupKey === 'edd_investigation') {
     if (String(blocker.action).indexOf('openEDDCaseFromApplication') === 0) {
@@ -23439,12 +23467,18 @@ function getCaseCommandBlockers(app) {
       'overview',
       'pre-approval-actions-topbar',
       true,
-      70
+      70,
+      '',
+      'case_stage.pre_approval',
+      caseCommandActionTarget('case_stage.pre_approval')
     );
   } else if (['draft', 'prescreening_submitted', 'pricing_review', 'pricing_accepted', 'pre_approved', 'kyc_documents'].indexOf(status) >= 0) {
     var pricingReviewMoveTarget = status === 'pricing_review'
       ? caseCommandActionTarget('pricing.move_to_compliance_review')
       : null;
+    var stageReviewTarget = status === 'kyc_documents'
+      ? caseCommandActionTarget('documents.review')
+      : caseCommandActionTarget('case_stage.review');
     addBlocker(
       'case-stage',
       'Case Stage',
@@ -23456,8 +23490,8 @@ function getCaseCommandBlockers(app) {
       true,
       80,
       '',
-      status === 'pricing_review' ? 'pricing.move_to_compliance_review' : '',
-      pricingReviewMoveTarget
+      status === 'pricing_review' ? 'pricing.move_to_compliance_review' : (status === 'kyc_documents' ? 'documents.review' : 'case_stage.review'),
+      pricingReviewMoveTarget || stageReviewTarget
     );
   }
 
@@ -23521,17 +23555,17 @@ function getCaseCommandBlockers(app) {
     );
   }
 
-	  if (documentReadiness.missingCount > 0 || documentReadiness.issueCount > 0 || documentReadiness.pepIncompleteCount > 0) {
-	    var documentParts = [];
-	    if (documentReadiness.missingCount > 0) documentParts.push(documentReadiness.missingCount + ' missing required document(s)');
-	    if (documentReadiness.issueCount > 0) documentParts.push(documentReadiness.issueCount + ' uploaded document(s) not reliance-ready');
-	    if (documentReadiness.blockerCount > documentReadiness.issueCount) documentParts.push(documentReadiness.blockerCount + ' document evidence blocker(s)');
-	    if (documentReadiness.pepIncompleteCount > 0) documentParts.push(documentReadiness.pepIncompleteCount + ' incomplete PEP declaration(s)');
-	    addBlocker(
-	      'documents',
-	      'KYC Documents',
-	      'Document evidence is not reliance-ready.',
-	      documentParts.join(' · ') + '. Review the KYC documents tab before approval.',
+  if (documentReadiness.missingCount > 0 || documentReadiness.issueCount > 0 || documentReadiness.pepIncompleteCount > 0) {
+    var documentParts = [];
+    if (documentReadiness.missingCount > 0) documentParts.push(documentReadiness.missingCount + ' missing required document(s)');
+    if (documentReadiness.issueCount > 0) documentParts.push(documentReadiness.issueCount + ' uploaded document(s) not reliance-ready');
+    if (documentReadiness.blockerCount > documentReadiness.issueCount) documentParts.push(documentReadiness.blockerCount + ' document evidence blocker(s)');
+    if (documentReadiness.pepIncompleteCount > 0) documentParts.push(documentReadiness.pepIncompleteCount + ' incomplete PEP declaration(s)');
+    addBlocker(
+      'documents',
+      'KYC Documents',
+      'Document evidence is not reliance-ready.',
+      documentParts.join(' · ') + '. Review the KYC documents tab before approval.',
       'Review documents',
       'kyc-docs',
       'detail-kyc-documents-panel',
@@ -23583,28 +23617,14 @@ function getCaseCommandBlockers(app) {
     );
   }
 
-  if (!memoData || !memoData.sections) {
-    addBlocker(
-      'memo-missing',
-      'Compliance Memo',
-      'Compliance memo has not been generated.',
-      'Generate the compliance memo from the overview tab before approval.',
-      'Generate memo',
-      'overview',
-      'detail-memo',
-      true,
-      50,
-      '',
-      'memo.open'
-    );
-  } else {
-    if (app.memoIsStale || app.memoRequiresRegeneration) {
+  if (routeRequiresCompliance(app)) {
+    if (!memoData || !memoData.sections) {
       addBlocker(
-        'memo-stale',
+        'memo-missing',
         'Compliance Memo',
-        'Compliance memo must be regenerated.',
-        app.memoStaleReason || 'Application data changed after the current memo was generated.',
-        'Open memo',
+        'Compliance memo has not been generated.',
+        'Generate the compliance memo from the overview tab before approval.',
+        'Generate memo',
         'overview',
         'detail-memo',
         true,
@@ -23612,94 +23632,110 @@ function getCaseCommandBlockers(app) {
         '',
         'memo.open'
       );
-    } else if (memoValidation === 'pending') {
-      addBlocker(
-        'memo-validation-pending',
-        'Compliance Memo',
-        'Compliance memo validation has not been run.',
-        'Run validation from the memo section before approval.',
-        'Open memo',
-        'overview',
-        'memo-validation-panel',
-        true,
-        50,
-        '',
-        'memo.validate'
-      );
-    } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
-      addBlocker(
-        'memo-validation-failed',
-        'Compliance Memo',
-        'Compliance memo validation needs attention.',
-        'Current validation status: ' + memoValidation.replace(/_/g, ' ') + '. Review the validation panel before approval.',
-        'Open memo',
-        'overview',
-        'memo-validation-panel',
-        true,
-        50,
-        '',
-        'memo.validate'
-      );
-    }
+    } else {
+      if (app.memoIsStale || app.memoRequiresRegeneration) {
+        addBlocker(
+          'memo-stale',
+          'Compliance Memo',
+          'Compliance memo must be regenerated.',
+          app.memoStaleReason || 'Application data changed after the current memo was generated.',
+          'Open memo',
+          'overview',
+          'detail-memo',
+          true,
+          50,
+          '',
+          'memo.open'
+        );
+      } else if (memoValidation === 'pending') {
+        addBlocker(
+          'memo-validation-pending',
+          'Compliance Memo',
+          'Compliance memo validation has not been run.',
+          'Run validation from the memo section before approval.',
+          'Open memo',
+          'overview',
+          'memo-validation-panel',
+          true,
+          50,
+          '',
+          'memo.validate'
+        );
+      } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
+        addBlocker(
+          'memo-validation-failed',
+          'Compliance Memo',
+          'Compliance memo validation needs attention.',
+          'Current validation status: ' + memoValidation.replace(/_/g, ' ') + '. Review the validation panel before approval.',
+          'Open memo',
+          'overview',
+          'memo-validation-panel',
+          true,
+          50,
+          '',
+          'memo.validate'
+        );
+      }
 
-    if (memoReview !== 'approved') {
-      addBlocker(
-        'memo-approval',
-        'Compliance Memo',
-        'Compliance memo is still awaiting officer approval.',
-        'Review the memo outcome and complete the memo approval step before final application approval.',
-        'Open memo',
-        'overview',
-        'detail-memo',
-        true,
-        50,
-        '',
-        'memo.open'
-      );
-    }
+      if (memoReview !== 'approved') {
+        addBlocker(
+          'memo-approval',
+          'Compliance Memo',
+          'Compliance memo is still awaiting officer approval.',
+          'Review the memo outcome and complete the memo approval step before final application approval.',
+          'Open memo',
+          'overview',
+          'detail-memo',
+          true,
+          50,
+          '',
+          'memo.open'
+        );
+      }
 
-    if (app.supervisorRequiresRerun) {
-      addBlocker(
-        'supervisor-rerun',
-        'Supervisor Review',
-        'Compliance supervisor analysis must be rerun.',
-        'Recent case changes require the supervisor workflow to be rerun before approval can continue.',
-        'Run supervisor',
-        'supervisor',
-        'detail-tab-supervisor',
-        true,
-        55,
-        '',
-        'supervisor.run'
-      );
-    } else if (!supervisorVerdict) {
-      addBlocker(
-        'supervisor-missing',
-        'Supervisor Review',
-        'Compliance supervisor review has not been completed.',
-        'Run the compliance supervisor before relying on the memo for final approval.',
-        'Run supervisor',
-        'supervisor',
-        'detail-tab-supervisor',
-        true,
-        55,
-        '',
-        'supervisor.run'
-      );
-    } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
-      addBlocker(
-        'supervisor-failed',
-        'Supervisor Review',
-        'Compliance supervisor review needs attention.',
-        'Current supervisor status: ' + supervisorVerdict.replace(/_/g, ' ') + '. Resolve the supervisor findings before approval.',
-        'Run supervisor',
-        'supervisor',
-        'detail-tab-supervisor',
-        true,
-        55,
-        '',
-        'supervisor.run'
-      );
+      if (app.supervisorRequiresRerun) {
+        addBlocker(
+          'supervisor-rerun',
+          'Supervisor Review',
+          'Compliance supervisor analysis must be rerun.',
+          'Recent case changes require the supervisor workflow to be rerun before approval can continue.',
+          'Run supervisor',
+          'supervisor',
+          'detail-tab-supervisor',
+          true,
+          55,
+          '',
+          'supervisor.run'
+        );
+      } else if (!supervisorVerdict) {
+        addBlocker(
+          'supervisor-missing',
+          'Supervisor Review',
+          'Compliance supervisor review has not been completed.',
+          'Run the compliance supervisor before relying on the memo for final approval.',
+          'Run supervisor',
+          'supervisor',
+          'detail-tab-supervisor',
+          true,
+          55,
+          '',
+          'supervisor.run'
+        );
+      } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
+        addBlocker(
+          'supervisor-failed',
+          'Supervisor Review',
+          'Compliance supervisor review needs attention.',
+          'Current supervisor status: ' + supervisorVerdict.replace(/_/g, ' ') + '. Resolve the supervisor findings before approval.',
+          'Run supervisor',
+          'supervisor',
+          'detail-tab-supervisor',
+          true,
+          55,
+          '',
+          'supervisor.run'
+        );
+      }
     }
   }
 
@@ -24064,6 +24100,17 @@ function renderApprovalBlockersPanel(app) {
   if (app) syncApplicationActionPermissions(app);
 }
 
+function renderApprovalPendingItemsPanel(panel, confirmBtn) {
+  confirmBtn.disabled = true;
+  panel.style.display = 'block';
+  panel.style.background = '#fef3c7';
+  panel.style.borderColor = '#fde68a';
+  panel.style.color = '#92400e';
+  panel.innerHTML =
+    '<strong>Approval not ready.</strong> Resolve the pending items in the Case Command Centre before approving.' +
+    '<div style="margin-top:10px;"><button type="button" class="btn btn-outline btn-sm" onclick="closeModal(\'modal-decision-reason\'); focusCaseCommandCentre()">View pending items</button></div>';
+}
+
 function renderDecisionReadiness(decision) {
   var panel = document.getElementById('decision-readiness-panel');
   var confirmBtn = document.getElementById('decision-confirm-btn');
@@ -24077,6 +24124,10 @@ function renderDecisionReadiness(decision) {
     ? actionState.approve
     : (decision === 'Reject' ? actionState.reject : null);
   if (terminalState && terminalState.disabled) {
+    if (decision === 'Approve' && disabledActionReason(terminalState) === APPROVAL_PENDING_ITEMS_MESSAGE) {
+      renderApprovalPendingItemsPanel(panel, confirmBtn);
+      return;
+    }
     confirmBtn.disabled = true;
     panel.style.display = 'block';
     panel.style.background = '#fef3c7';
@@ -24104,9 +24155,7 @@ function renderDecisionReadiness(decision) {
   panel.style.background = '#fef3c7';
   panel.style.borderColor = '#fde68a';
   panel.style.color = '#92400e';
-  panel.innerHTML = '<strong>Approval blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
-    readiness.blockers.map(function(b) { return '<li>' + escapeHtml(b) + '</li>'; }).join('') +
-    '</ul>';
+  renderApprovalPendingItemsPanel(panel, confirmBtn);
 }
 
 function approveApplication() {
@@ -24115,6 +24164,7 @@ function approveApplication() {
   var actionState = buildApplicationActionState(currentApp);
   if (actionState.approve.disabled) {
     showToast(disabledActionReason(actionState.approve, 'Approval is not available for this application.'), 'warn');
+    if (disabledActionReason(actionState.approve) === APPROVAL_PENDING_ITEMS_MESSAGE) focusCaseCommandCentre();
     return;
   }
   pendingDecision = 'Approve';
