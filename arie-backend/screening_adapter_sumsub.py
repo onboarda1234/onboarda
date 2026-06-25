@@ -8,6 +8,13 @@ SAFETY: Does not move logic out of screening.py.
 SAFETY: Does not modify sumsub_client.py.
 SAFETY: No side effects on import.
 SAFETY: Not called by runtime code unless abstraction is enabled.
+
+Provider responsibility note:
+    This adapter exists for legacy compatibility. Under the provider
+    responsibility model, Sumsub is authoritative for IDV/liveness/identity
+    documents only; ComplyAdvantage Mesh is the screening/adverse-media
+    authority. Do not add new screening/adverse-media gates that rely on this
+    adapter as authoritative provider truth.
 """
 
 import logging
@@ -27,6 +34,7 @@ class SumsubScreeningAdapter(ScreeningProvider):
 
     All calls delegate to the existing screening module.
     Results are normalized before returning.
+    This path is legacy/non-authoritative for screening and adverse media.
     """
 
     provider_name = "sumsub"

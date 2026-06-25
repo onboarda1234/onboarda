@@ -635,6 +635,7 @@ def _load_approval_idv_parties(db, app: Mapping[str, Any]) -> Tuple[List[Dict], 
 
 
 def _approval_idv_gate_summary(app: Mapping[str, Any], db) -> Dict[str, Any]:
+    """Build the Sumsub IDV-only gate; screening/adverse-media gates are separate."""
     existing = app.get("sumsub_idv_statuses") if isinstance(app, Mapping) else None
     if isinstance(existing, Mapping):
         return build_idv_gate_summary(existing)
@@ -1595,8 +1596,11 @@ class ApprovalGateValidator:
                     "Resolve configuration/data issues and retry approval."
                 )
 
-            # 5. Check screening report for any simulated or degraded provider statuses
-            #    Required checks (identity verification or CA screening) block approval if simulated.
+            # 5. Check screening report for any simulated or degraded provider statuses.
+            #    This is legacy compatibility for bundled screening reports.
+            #    The dedicated IDV gate above uses Sumsub IDV state; screening
+            #    provider truth is expected to come from ComplyAdvantage Mesh
+            #    when the screening cutover is active.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
             #    company_watchlist with api_status="not_configured" warns but does not block
             #    (no Sumsub company/KYB level provisioned).
@@ -2409,11 +2413,11 @@ def _collect_screening_provider_evidence(screening_report: Dict) -> list:
     Collects screening provider evidence with required/enrichment classification.
 
     Required (compliance-critical):
-      - company_watchlist (Sumsub company sanctions) or company_screening (CA)
-      - director_screening_N (Sumsub or CA person AML/PEP)
-      - ubo_screening_N (Sumsub or CA person AML/PEP)
+      - company_watchlist (legacy compatibility) or company_screening (CA)
+      - director_screening_N (legacy compatibility or CA person AML/PEP)
+      - ubo_screening_N (legacy compatibility or CA person AML/PEP)
       - intermediary_screening_N (CA intermediary/entity AML/PEP/sanctions)
-      - kyc_applicant_N (Sumsub identity verification)
+      - kyc_applicant_N (legacy bundled IDV field; dedicated Sumsub IDV gate is authoritative)
 
     Enrichment (optional, non-blocking):
       - company_registry (OpenCorporates corporate registry lookup)
@@ -2475,7 +2479,8 @@ def determine_screening_mode(screening_report: Dict) -> str:
     simulated status does not make the overall screening mode 'simulated'.
 
     Args:
-        screening_report: Dictionary with screening data, typically from SumSub API
+        screening_report: Dictionary with persisted screening data from the active
+            or legacy compatibility path.
 
     Returns:
         'live' if all required screening sources are production,

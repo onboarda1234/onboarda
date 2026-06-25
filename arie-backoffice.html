@@ -12783,8 +12783,8 @@ function renderScreeningProviderStatusPanel() {
   }
   var caActive = !!ca.active;
   var rows = [
-    ['Active AML Screening Provider', providerTruthValue(status, 'active_aml_screening_provider', caActive ? 'ComplyAdvantage Mesh' : 'Not active')],
-    ['Identity Verification Provider', providerTruthValue(status, 'identity_verification_provider', 'Sumsub IDV/KYC')],
+    ['Screening Provider Readiness', providerTruthValue(status, 'active_aml_screening_provider', caActive ? 'ComplyAdvantage Mesh' : 'Not active')],
+    ['IDV Provider', providerTruthValue(status, 'identity_verification_provider', 'Sumsub IDV/KYC')],
     ['IDV Status (Sumsub)', sumsub.status || (sumsub.configured ? 'live' : 'not configured')],
     ['Screening Abstraction', truth.screening_abstraction_enabled ? 'Enabled' : 'Disabled'],
     ['Simulation / Fallback Mode', providerTruthValue(status, 'simulation_fallback_mode', 'unknown')],
@@ -12795,7 +12795,7 @@ function renderScreeningProviderStatusPanel() {
     '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">Provider Status</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Read-only backend runtime status. Filters below only filter displayed results.</div></div>' +
-      '<span class="badge ' + (caActive ? 'success' : 'pending') + '">' + escapeHtml(caActive ? 'CA Mesh Active' : 'AML provider not active') + '</span>' +
+      '<span class="badge ' + (caActive ? 'success' : 'pending') + '">' + escapeHtml(caActive ? 'CA Mesh Active' : 'CA screening inactive') + '</span>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;">' +
       rows.map(function(row) {
@@ -12805,7 +12805,7 @@ function renderScreeningProviderStatusPanel() {
         '</div>';
       }).join('') +
     '</div>' +
-    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Identity verification provider scope: ' + escapeHtml(idvScope) + '. AML / PEP / sanctions provider: ComplyAdvantage Mesh only when backend active=true.</div>';
+    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Provider responsibility: Sumsub handles IDV/liveness/document checks (' + escapeHtml(idvScope) + '). ComplyAdvantage Mesh handles sanctions, PEP, watchlists, adverse media, and material screening concerns when backend active=true.</div>';
 }
 
 async function loadScreeningProviderStatus(options) {
@@ -13481,7 +13481,7 @@ function formatProviderName(value) {
   var key = raw.toLowerCase().replace(/[\s_-]+/g, '');
   if (!raw) return '';
   if (key === 'ca' || key === 'complyadvantage' || key === 'complyadvantagemesh' || key === 'mesh') return 'ComplyAdvantage Mesh';
-  if (key === 'sumsub') return 'Sumsub';
+  if (key === 'sumsub') return 'Sumsub IDV/KYC';
   if (key === 'opencorporates') return 'OpenCorporates';
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
@@ -30727,8 +30727,8 @@ async function checkAPIStatus() {
 	    html += '<div style="font-weight:600;margin-bottom:8px;">API Integration Status</div>';
 	    if (status.provider_truth) {
 	      var truthRows = [
-	        ['Active AML Screening Provider', status.provider_truth.active_aml_screening_provider || 'Not active'],
-	        ['Identity Verification Provider', status.provider_truth.identity_verification_provider || 'Sumsub IDV/KYC'],
+	        ['Screening Provider Readiness', status.provider_truth.active_aml_screening_provider || 'Not active'],
+	        ['IDV Provider', status.provider_truth.identity_verification_provider || 'Sumsub IDV/KYC'],
 	        ['Screening Abstraction', status.provider_truth.screening_abstraction_enabled ? 'Enabled' : 'Disabled'],
 	        ['Simulation / Fallback Mode', status.provider_truth.simulation_fallback_mode || 'unknown']
 	      ];
