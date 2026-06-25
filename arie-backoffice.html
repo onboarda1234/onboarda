@@ -2300,14 +2300,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 </div>
 
 <!-- Change Request Decision Modal -->
-<div id="cm-request-decision-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2100;overflow-y:auto;">
+<div id="cm-request-decision-modal" role="dialog" aria-modal="true" aria-labelledby="cm-decision-title" aria-describedby="cm-decision-subtitle" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2100;overflow-y:auto;">
   <div style="max-width:560px;margin:80px auto;background:var(--surface);border-radius:12px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:16px;">
       <div>
         <h3 id="cm-decision-title" style="font-size:16px;font-weight:800;margin-bottom:4px;">Change Request Action</h3>
         <div id="cm-decision-subtitle" style="font-size:12px;color:var(--text3);line-height:1.4;"></div>
       </div>
-      <button onclick="closeCmDecisionModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+      <button id="cm-decision-close" onclick="closeCmDecisionModal()" aria-label="Close decision modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
     </div>
     <div id="cm-decision-blockers" style="margin-bottom:14px;"></div>
     <label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;" id="cm-decision-notes-label">Notes</label>
@@ -2321,11 +2321,11 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 </div>
 
 <!-- Change Request Audit Reconstruction Modal -->
-<div id="cm-audit-reconstruction-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2100;overflow-y:auto;">
+<div id="cm-audit-reconstruction-modal" role="dialog" aria-modal="true" aria-labelledby="cm-audit-reconstruction-title" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2100;overflow-y:auto;">
   <div style="max-width:900px;margin:40px auto;background:var(--surface);border-radius:12px;padding:26px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-      <h3 style="font-size:16px;font-weight:800;">Audit Reconstruction</h3>
-      <button onclick="document.getElementById('cm-audit-reconstruction-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+      <h3 id="cm-audit-reconstruction-title" style="font-size:16px;font-weight:800;">Audit Reconstruction</h3>
+      <button id="cm-audit-reconstruction-close" onclick="closeCmAuditReconstructionModal()" aria-label="Close audit reconstruction modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
     </div>
     <div id="cm-audit-reconstruction-content"></div>
   </div>
@@ -9221,6 +9221,7 @@ document.addEventListener('click', function(event) {
 });
 
 document.addEventListener('keydown', function(event) {
+  if (cmHandleModalKeydown(event)) return;
   if (event.key === 'Escape') closeDocumentReviewMoreMenus();
 });
 
@@ -16075,6 +16076,8 @@ function showChangeMgmtTab(tab) {
 
 var CM_CURRENT_REQUEST_DETAIL = null;
 var CM_DECISION_STATE = {};
+var CM_ACTIVE_MODAL_ID = null;
+var CM_MODAL_LAST_FOCUS = null;
 
 function populateCMApplicationSelects(selectedAppId) {
   var apps = Array.isArray(CHANGE_MGMT_APPLICATIONS) ? CHANGE_MGMT_APPLICATIONS.slice() : [];
@@ -16447,9 +16450,13 @@ function cmRequestReadinessMeta(req) {
   if (status === 'draft') return { label: 'Draft not submitted', tone: '#6b7280' };
   if (status === 'approved') {
     var impl = cmImplementationBlockers(req);
-    return impl.length
-      ? { label: cmBlockerCategorySummary(impl) || 'Implementation blocked', tone: '#b45309' }
-      : { label: 'Ready for implementation', tone: '#198754' };
+    if (impl.length) {
+      return { label: cmBlockerCategorySummary(impl) || 'Implementation blocked', tone: '#b45309' };
+    }
+    if (req && req.implementation && req.implementation.can_implement === true) {
+      return { label: 'Ready for implementation', tone: '#198754' };
+    }
+    return { label: 'Implementation readiness unavailable', tone: '#6b7280' };
   }
   var blockers = cmApprovalBlockers(req);
   if (blockers.length) return { label: cmBlockerCategorySummary(blockers) || 'Controls incomplete', tone: '#b45309' };
@@ -16529,7 +16536,7 @@ function cmImplementationReadiness(req) {
   var blockers = cmImplementationBlockers(req);
   if (blockers.length) return { label: 'Blocked', tone: '#b45309', detail: 'Implementation gates report blockers.', blockers: blockers };
   if (req && req.implementation && req.implementation.can_implement === true) return { label: 'Ready', tone: '#198754', detail: 'Backend implementation readiness is satisfied.', blockers: [] };
-  return { label: 'Ready for backend validation', tone: '#198754', detail: 'The implementation endpoint remains authoritative at action time.', blockers: [] };
+  return { label: 'Unavailable', tone: '#6b7280', detail: 'Implementation readiness could not be confirmed. Reload the request detail before acting.', blockers: [] };
 }
 
 function cmReadinessCard(title, readiness, emptyText) {
@@ -17166,7 +17173,7 @@ function cmAuditTimelinePreview(rows) {
 function viewCmAuditReconstruction(reqId) {
   var content = document.getElementById('cm-audit-reconstruction-content');
   content.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px;">Loading audit reconstruction...</div>';
-  document.getElementById('cm-audit-reconstruction-modal').style.display = '';
+  openCmModal('cm-audit-reconstruction-modal', '#cm-audit-reconstruction-close');
   apiFetch('/api/change-management/requests/' + reqId + '/audit-reconstruction').then(function(payload) {
     var request = payload.request || {};
     var application = payload.application || {};
@@ -17209,8 +17216,89 @@ function viewCmAuditReconstruction(reqId) {
   });
 }
 
+function cmModalFocusableElements(modal) {
+  if (!modal || !modal.querySelectorAll) return [];
+  return Array.prototype.slice.call(modal.querySelectorAll(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  )).filter(function(el) {
+    return !el.disabled && el.offsetParent !== null;
+  });
+}
+
+function openCmModal(modalId, focusSelector) {
+  var modal = document.getElementById(modalId);
+  if (!modal) return;
+  CM_MODAL_LAST_FOCUS = document.activeElement;
+  CM_ACTIVE_MODAL_ID = modalId;
+  modal.style.display = '';
+  setTimeout(function() {
+    var target = focusSelector && modal.querySelector ? modal.querySelector(focusSelector) : null;
+    if (!target) {
+      var focusable = cmModalFocusableElements(modal);
+      target = focusable.length ? focusable[0] : modal;
+    }
+    if (target && target.focus) target.focus();
+  }, 0);
+}
+
+function closeCmModal(modalId) {
+  var modal = document.getElementById(modalId);
+  if (modal) modal.style.display = 'none';
+  if (CM_ACTIVE_MODAL_ID === modalId) CM_ACTIVE_MODAL_ID = null;
+  var previous = CM_MODAL_LAST_FOCUS;
+  CM_MODAL_LAST_FOCUS = null;
+  if (previous && previous.focus) {
+    setTimeout(function() {
+      try { previous.focus(); } catch (err) {}
+    }, 0);
+  }
+}
+
+function closeCmAuditReconstructionModal() {
+  closeCmModal('cm-audit-reconstruction-modal');
+}
+
+function cmHandleModalKeydown(event) {
+  if (!CM_ACTIVE_MODAL_ID) return false;
+  var modal = document.getElementById(CM_ACTIVE_MODAL_ID);
+  if (!modal || modal.style.display === 'none') {
+    CM_ACTIVE_MODAL_ID = null;
+    return false;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    if (CM_ACTIVE_MODAL_ID === 'cm-request-decision-modal') {
+      closeCmDecisionModal();
+    } else if (CM_ACTIVE_MODAL_ID === 'cm-audit-reconstruction-modal') {
+      closeCmAuditReconstructionModal();
+    } else {
+      closeCmModal(CM_ACTIVE_MODAL_ID);
+    }
+    return true;
+  }
+  if (event.key !== 'Tab') return false;
+  var focusable = cmModalFocusableElements(modal);
+  if (!focusable.length) {
+    event.preventDefault();
+    return true;
+  }
+  var first = focusable[0];
+  var last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+    return true;
+  }
+  return false;
+}
+
 function closeCmDecisionModal() {
-  document.getElementById('cm-request-decision-modal').style.display = 'none';
+  closeCmModal('cm-request-decision-modal');
   document.getElementById('cm-decision-error').style.display = 'none';
   CM_DECISION_STATE = {};
 }
@@ -17268,7 +17356,7 @@ function openCmDecisionModal(action, reqId) {
   submit.textContent = cfg.button;
   submit.style.background = cfg.buttonColor;
   submit.style.borderColor = cfg.buttonColor;
-  document.getElementById('cm-request-decision-modal').style.display = '';
+  openCmModal('cm-request-decision-modal', '#cm-decision-notes');
 }
 
 function setCmDecisionError(message, payload) {

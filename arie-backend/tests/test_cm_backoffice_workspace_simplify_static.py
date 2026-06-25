@@ -101,15 +101,35 @@ def test_approve_reject_implement_use_in_app_modal_not_browser_prompts():
     approve = _function_region(html, "approveRequest", "rejectRequest")
     reject = _function_region(html, "rejectRequest", "implementRequest")
     implement = _function_region(html, "implementRequest", "showCreateAlertModal")
+    close_modal = _function_region(html, "closeCmModal", "closeCmAuditReconstructionModal")
+    keydown = _function_region(html, "cmHandleModalKeydown", "closeCmDecisionModal")
 
     for region in (approve, reject, implement):
         assert "prompt(" not in region
         assert "confirm(" not in region
         assert "openCmDecisionModal" in region
 
-    assert "cm-request-decision-modal" in html
+    assert 'id="cm-request-decision-modal" role="dialog" aria-modal="true"' in html
+    assert 'id="cm-audit-reconstruction-modal" role="dialog" aria-modal="true"' in html
+    assert "cmModalFocusableElements" in html
+    assert "CM_MODAL_LAST_FOCUS" in close_modal
+    assert "event.key === 'Escape'" in keydown
+    assert "event.key !== 'Tab'" in keydown
     assert "cm-decision-notes" in html
     assert "submitCmDecisionAction" in html
+
+
+def test_unknown_implementation_readiness_is_not_presented_as_green_ready():
+    html = _html()
+
+    request_readiness = _function_region(html, "cmRequestReadinessMeta", "cmEvidenceReadiness")
+    implementation_readiness = _function_region(html, "cmImplementationReadiness", "cmReadinessCard")
+
+    assert "implementation.can_implement === true" in request_readiness
+    assert "Implementation readiness unavailable" in request_readiness
+    assert "implementation.can_implement === true" in implementation_readiness
+    assert "Implementation readiness could not be confirmed" in implementation_readiness
+    assert "Ready for backend validation" not in implementation_readiness
 
 
 def test_backend_detail_exposes_read_only_implementation_readiness():
