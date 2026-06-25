@@ -3108,6 +3108,15 @@ def get_change_request_detail(db, request_id: str) -> Optional[Dict]:
             result["approval"] = {"can_approve": None, "blockers": [], "approval_notes": []}
 
         try:
+            implementation = implementation_blockers(db, result)
+            result["implementation"] = {
+                "can_implement": result.get("status") in {"approved", "implemented"} and len(implementation) == 0,
+                "blockers": implementation,
+            }
+        except Exception:
+            result["implementation"] = {"can_implement": None, "blockers": []}
+
+        try:
             app_docs = _load_app_documents(db, result.get("application_id"))
             evidence, agent1_verifications = _evidence_summary(
                 result,

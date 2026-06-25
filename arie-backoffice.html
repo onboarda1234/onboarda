@@ -2191,8 +2191,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <p style="font-size:13px;color:var(--text3);">Manage change alerts and formal change requests for entity profiles. All material changes require review and approval before live implementation.</p>
     </div>
     <div style="display:flex;gap:8px;">
-      <button class="btn" onclick="showChangeMgmtTab('alerts')" id="cm-tab-alerts" style="font-size:12px;">Change Alerts</button>
-      <button class="btn btn-outline" onclick="showChangeMgmtTab('requests')" id="cm-tab-requests" style="font-size:12px;">Change Requests</button>
+      <button class="btn" onclick="showChangeMgmtTab('requests')" id="cm-tab-requests" style="font-size:12px;">Change Requests</button>
+      <button class="btn btn-outline" onclick="showChangeMgmtTab('alerts')" id="cm-tab-alerts" style="font-size:12px;">Change Alerts</button>
       <button class="btn btn-outline" onclick="showChangeMgmtTab('stats')" id="cm-tab-stats" style="font-size:12px;">Stats</button>
     </div>
   </div>
@@ -2257,15 +2257,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div id="cm-requests-list" style="background:var(--surface);border-radius:10px;border:1px solid var(--border1);overflow:hidden;">
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
         <thead><tr style="background:var(--bg2);border-bottom:1px solid var(--border1);">
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">ID</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Entity</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Request ID</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Customer / Application</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Source</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Reason</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Materiality</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Status</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Flags</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Created</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Actions</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Requested Change</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Stage</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Readiness</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Age</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Primary Action</th>
         </tr></thead>
         <tbody id="cm-requests-tbody"></tbody>
       </table>
@@ -2297,6 +2296,38 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <button onclick="document.getElementById('cm-request-detail-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
     </div>
     <div id="cm-request-detail-content"></div>
+  </div>
+</div>
+
+<!-- Change Request Decision Modal -->
+<div id="cm-request-decision-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2100;overflow-y:auto;">
+  <div style="max-width:560px;margin:80px auto;background:var(--surface);border-radius:12px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:16px;">
+      <div>
+        <h3 id="cm-decision-title" style="font-size:16px;font-weight:800;margin-bottom:4px;">Change Request Action</h3>
+        <div id="cm-decision-subtitle" style="font-size:12px;color:var(--text3);line-height:1.4;"></div>
+      </div>
+      <button onclick="closeCmDecisionModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+    </div>
+    <div id="cm-decision-blockers" style="margin-bottom:14px;"></div>
+    <label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;" id="cm-decision-notes-label">Notes</label>
+    <textarea id="cm-decision-notes" rows="4" style="width:100%;padding:9px;border-radius:8px;border:1px solid var(--border1);font-size:13px;resize:vertical;background:var(--surface);" placeholder="Add the decision reason or implementation note..."></textarea>
+    <div id="cm-decision-error" style="display:none;margin-top:10px;padding:10px 12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:12px;"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeCmDecisionModal()" style="font-size:12px;">Cancel</button>
+      <button class="btn" id="cm-decision-submit" onclick="submitCmDecisionAction()" style="font-size:12px;">Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- Change Request Audit Reconstruction Modal -->
+<div id="cm-audit-reconstruction-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2100;overflow-y:auto;">
+  <div style="max-width:900px;margin:40px auto;background:var(--surface);border-radius:12px;padding:26px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+      <h3 style="font-size:16px;font-weight:800;">Audit Reconstruction</h3>
+      <button onclick="document.getElementById('cm-audit-reconstruction-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+    </div>
+    <div id="cm-audit-reconstruction-content"></div>
   </div>
 </div>
 
@@ -16025,11 +16056,11 @@ function apiFetch(url, opts) {
 }
 
 function renderChangeMgmt() {
-  showChangeMgmtTab(CHANGE_MGMT_ACTIVE_TAB || 'alerts');
+  showChangeMgmtTab(CHANGE_MGMT_ACTIVE_TAB || 'requests');
 }
 
 function showChangeMgmtTab(tab) {
-  CHANGE_MGMT_ACTIVE_TAB = tab || 'alerts';
+  CHANGE_MGMT_ACTIVE_TAB = tab || 'requests';
   document.getElementById('cm-alerts-tab').style.display = (tab === 'alerts') ? '' : 'none';
   document.getElementById('cm-requests-tab').style.display = (tab === 'requests') ? '' : 'none';
   document.getElementById('cm-stats-tab').style.display = (tab === 'stats') ? '' : 'none';
@@ -16041,6 +16072,9 @@ function showChangeMgmtTab(tab) {
   if (tab === 'requests') loadChangeRequests();
   if (tab === 'stats') loadCMStats();
 }
+
+var CM_CURRENT_REQUEST_DETAIL = null;
+var CM_DECISION_STATE = {};
 
 function populateCMApplicationSelects(selectedAppId) {
   var apps = Array.isArray(CHANGE_MGMT_APPLICATIONS) ? CHANGE_MGMT_APPLICATIONS.slice() : [];
@@ -16257,8 +16291,8 @@ function cmDownstreamObligationChips(req) {
 
 function cmRequestBlockingState(req) {
   var status = String((req && req.status) || '').toLowerCase();
-  if (['implemented', 'rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Informational', tone: '#6b7280' };
-  return { label: 'Blocking review', tone: '#b45309' };
+  if (['implemented', 'rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Closed / Audit', tone: '#6b7280' };
+  return cmRequestReadinessMeta(req);
 }
 
 function cmRequestNextAction(req) {
@@ -16277,6 +16311,237 @@ function cmRequestNextAction(req) {
   if (status === 'cancelled') return 'Request cancelled. No further review action is required.';
   if (status === 'superseded') return 'A newer request has superseded this change.';
   return 'Review the request detail.';
+}
+
+function cmAgeLabel(dateValue) {
+  if (!dateValue) return 'Not dated';
+  var created = new Date(dateValue);
+  if (isNaN(created.getTime())) return String(dateValue).substring(0, 10);
+  var days = Math.max(0, Math.floor((Date.now() - created.getTime()) / 86400000));
+  if (days === 0) return 'Today';
+  if (days === 1) return '1 day';
+  return days + ' days';
+}
+
+function cmSourceLabel(req) {
+  var source = String((req && (req.source_channel || req.source)) || '').toLowerCase();
+  if (source.indexOf('portal') >= 0 || source.indexOf('client') >= 0) return 'Client';
+  if (source.indexOf('alert') >= 0 || req && req.source_alert_id) return 'Alert';
+  if (source.indexOf('system') >= 0 || source.indexOf('auto') >= 0) return 'System';
+  if (source.indexOf('backoffice') >= 0 || source.indexOf('officer') >= 0) return 'Officer';
+  return source ? cmHumanizeSlug(source) : 'Officer';
+}
+
+function cmCustomerApplicationLabel(req) {
+  var company = req && req.company_name ? String(req.company_name) : '';
+  var ref = req && req.application_ref ? String(req.application_ref) : '';
+  var appId = req && req.application_id ? String(req.application_id) : '';
+  var primary = company || ref || (appId ? appId.substring(0, 12) : 'Unknown customer');
+  var secondary = company && ref ? ref : (company && appId ? appId.substring(0, 12) : '');
+  return {
+    primary: primary,
+    secondary: secondary
+  };
+}
+
+function cmRequestSummary(req) {
+  var previews = cmPreviewItems(req);
+  if (previews.length) {
+    return previews.map(function(item) {
+      var values = cmResolveDiffValues(item || {});
+      var afterText = values.afterText ? ' -> ' + values.afterText : '';
+      return cmFieldLabel(item || {}) + afterText;
+    }).join('; ');
+  }
+  return (req && req.reason) ? String(req.reason) : 'Open request for change details';
+}
+
+function cmStageMeta(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  var stages = {
+    draft: { label: 'Intake', tone: '#6b7280', detail: 'Draft not submitted' },
+    submitted: { label: 'Review details', tone: '#0d6efd', detail: 'Submitted for triage' },
+    triage_in_progress: { label: 'Review details', tone: '#fd7e14', detail: 'Triage in progress' },
+    pending_information: { label: 'Evidence / Agent 1', tone: '#b45309', detail: 'More information required' },
+    ready_for_review: { label: 'Evidence / Agent 1', tone: '#0d6efd', detail: 'Ready for compliance review' },
+    screening_in_progress: { label: 'Screening / Risk', tone: '#7c3aed', detail: 'Screening review in progress' },
+    risk_review_required: { label: 'Screening / Risk', tone: '#7c3aed', detail: 'Risk review required' },
+    approval_pending: { label: 'Approval', tone: '#b45309', detail: 'Awaiting authorised decision' },
+    approved: { label: 'Implementation', tone: '#198754', detail: 'Approved; implementation pending' },
+    implemented: { label: 'Closed / Audit', tone: '#198754', detail: 'Implemented' },
+    rejected: { label: 'Closed / Audit', tone: '#dc3545', detail: 'Rejected' },
+    cancelled: { label: 'Closed / Audit', tone: '#6b7280', detail: 'Cancelled' },
+    superseded: { label: 'Closed / Audit', tone: '#6b7280', detail: 'Superseded' }
+  };
+  return stages[status] || { label: 'Intake', tone: '#6b7280', detail: cmStatusLabel(status || 'pending') };
+}
+
+function cmBlockerArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function cmApprovalBlockers(req) {
+  return cmBlockerArray(req && req.approval && req.approval.blockers);
+}
+
+function cmImplementationBlockers(req) {
+  return cmBlockerArray(req && req.implementation && req.implementation.blockers);
+}
+
+function cmBlockerMatches(blocker, terms) {
+  var haystack = [
+    blocker && blocker.code,
+    blocker && blocker.label,
+    blocker && blocker.next_action
+  ].join(' ').toLowerCase();
+  return terms.some(function(term) { return haystack.indexOf(term) >= 0; });
+}
+
+function cmBlockerCategory(blocker) {
+  if (cmBlockerMatches(blocker, ['maker', 'checker'])) return 'Maker/checker';
+  if (cmBlockerMatches(blocker, ['evidence', 'document', 'officer_review'])) return 'Evidence';
+  if (cmBlockerMatches(blocker, ['agent1', 'verification'])) return 'Agent 1';
+  if (cmBlockerMatches(blocker, ['screening'])) return 'Screening';
+  if (cmBlockerMatches(blocker, ['risk'])) return 'Risk';
+  if (cmBlockerMatches(blocker, ['implementation'])) return 'Implementation';
+  return 'Control';
+}
+
+function cmBlockerCategorySummary(blockers) {
+  var seen = {};
+  cmBlockerArray(blockers).forEach(function(blocker) {
+    seen[cmBlockerCategory(blocker)] = true;
+  });
+  var labels = Object.keys(seen);
+  return labels.length ? labels.join(' / ') : '';
+}
+
+function cmBlockerListHtml(blockers, emptyText) {
+  blockers = cmBlockerArray(blockers);
+  if (!blockers.length) {
+    return '<div style="font-size:12px;color:var(--text3);line-height:1.45;">' + escapeHtml(emptyText || 'No blockers currently reported.') + '</div>';
+  }
+  return '<ul style="margin:8px 0 0 18px;padding:0;color:var(--text2);font-size:12px;line-height:1.5;">' + blockers.map(function(blocker) {
+    var label = blocker && (blocker.label || blocker.code) ? (blocker.label || blocker.code) : 'Backend blocker';
+    var next = blocker && blocker.next_action ? ' - ' + blocker.next_action : '';
+    return '<li><strong>' + escapeHtml(cmBlockerCategory(blocker)) + ':</strong> ' + escapeHtml(label + next) + '</li>';
+  }).join('') + '</ul>';
+}
+
+function cmChip(label, color) {
+  return '<span style="display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:' + color + '14;color:' + color + ';font-size:11px;font-weight:800;border:1px solid ' + color + '2e;">' + escapeHtml(label) + '</span>';
+}
+
+function cmJsArg(value) {
+  return JSON.stringify(String(value || ''));
+}
+
+function cmJsAttrArg(value) {
+  return escapeHtml(cmJsArg(value));
+}
+
+function cmRequestReadinessMeta(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  if (status === 'implemented') return { label: 'Implemented', tone: '#198754' };
+  if (['rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Closed', tone: '#6b7280' };
+  if (status === 'draft') return { label: 'Draft not submitted', tone: '#6b7280' };
+  if (status === 'approved') {
+    var impl = cmImplementationBlockers(req);
+    return impl.length
+      ? { label: cmBlockerCategorySummary(impl) || 'Implementation blocked', tone: '#b45309' }
+      : { label: 'Ready for implementation', tone: '#198754' };
+  }
+  var blockers = cmApprovalBlockers(req);
+  if (blockers.length) return { label: cmBlockerCategorySummary(blockers) || 'Controls incomplete', tone: '#b45309' };
+  if (req && req.approval && req.approval.preconditions_met === true) return { label: 'Ready for approval', tone: '#198754' };
+  if (req && (req.screening_required || req.risk_review_required)) return { label: 'Screening / risk needed', tone: '#7c3aed' };
+  if (status === 'approval_pending') return { label: 'Awaiting approver', tone: '#0d6efd' };
+  if (status === 'ready_for_review') return { label: 'Ready for review', tone: '#0d6efd' };
+  return { label: 'Review details', tone: '#0d6efd' };
+}
+
+function cmEvidenceReadiness(req) {
+  var docs = Array.isArray(req && req.documents) ? req.documents : [];
+  var evidence = Array.isArray(req && req.evidence_summary) ? req.evidence_summary : [];
+  var blockers = cmApprovalBlockers(req).filter(function(blocker) {
+    return cmBlockerMatches(blocker, ['evidence', 'document', 'officer_review']);
+  });
+  if (blockers.length) {
+    return { label: 'Missing or incomplete', tone: '#b45309', detail: 'Evidence is required before approval.', blockers: blockers };
+  }
+  if (evidence.some(function(item) { return item && item.agent1_verification && item.agent1_verification.agent1_satisfied === true; })) {
+    return { label: 'Accepted', tone: '#198754', detail: 'Linked evidence is accepted by the current gate.', blockers: [] };
+  }
+  if (docs.length || evidence.length) {
+    return { label: 'Uploaded', tone: '#0d6efd', detail: 'Supporting evidence is linked; verify Agent 1 status before approval.', blockers: [] };
+  }
+  return { label: 'Evidence missing / not yet linked', tone: '#6b7280', detail: 'No evidence is linked to this request yet, or evidence is not required by the current gate.', blockers: [] };
+}
+
+function cmAgent1Readiness(req) {
+  var verifications = Array.isArray(req && req.agent1_verifications) ? req.agent1_verifications : [];
+  var blockers = cmApprovalBlockers(req).filter(function(blocker) {
+    return cmBlockerMatches(blocker, ['agent1', 'verification', 'stale', 'failed']);
+  });
+  if (blockers.length) {
+    var failed = blockers.some(function(blocker) { return cmBlockerMatches(blocker, ['failed', 'rejected']); });
+    var stale = blockers.some(function(blocker) { return cmBlockerMatches(blocker, ['stale']); });
+    return { label: failed ? 'Failed' : (stale ? 'Stale' : 'Pending'), tone: '#b45309', detail: 'Agent 1 verification must pass or be accepted before approval.', blockers: blockers };
+  }
+  if (verifications.some(function(v) { return v && v.agent1_satisfied === true; })) {
+    return { label: 'Passed / accepted', tone: '#198754', detail: 'Agent 1 verification satisfies the current request.', blockers: [] };
+  }
+  if (verifications.length) {
+    return { label: 'Pending', tone: '#b45309', detail: 'Verification records exist but are not accepted yet.', blockers: [] };
+  }
+  return { label: 'Not yet available', tone: '#6b7280', detail: 'Agent 1 is not available until evidence is linked.', blockers: [] };
+}
+
+function cmScreeningRiskReadiness(req) {
+  var blockers = cmApprovalBlockers(req).concat(cmImplementationBlockers(req)).filter(function(blocker) {
+    return cmBlockerMatches(blocker, ['screening', 'risk']);
+  });
+  if (blockers.length) {
+    var stale = blockers.some(function(blocker) { return cmBlockerMatches(blocker, ['stale']); });
+    var unresolved = blockers.some(function(blocker) { return cmBlockerMatches(blocker, ['unresolved', 'match', 'escalation']); });
+    return { label: unresolved ? 'Unresolved' : (stale ? 'Stale' : 'Missing'), tone: '#b45309', detail: 'Screening/risk readiness must be recorded before the controlled action.', blockers: blockers };
+  }
+  if (req && (req.screening_required || req.risk_review_required)) {
+    return { label: 'Current / ready', tone: '#198754', detail: 'No screening or risk blockers are currently reported.', blockers: [] };
+  }
+  return { label: 'Not required', tone: '#6b7280', detail: 'No screening or risk readiness requirement is flagged for this request.', blockers: [] };
+}
+
+function cmApprovalReadiness(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  if (['approved', 'implemented'].indexOf(status) >= 0) return { label: 'Approved', tone: '#198754', detail: 'Approval has been recorded.', blockers: [] };
+  if (['rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Closed', tone: '#6b7280', detail: 'No approval action is available for this request.', blockers: [] };
+  var blockers = cmApprovalBlockers(req);
+  if (blockers.length) return { label: 'Blocked', tone: '#b45309', detail: 'Backend approval gates report blockers.', blockers: blockers };
+  if (req && req.approval && req.approval.preconditions_met === true) return { label: 'Ready', tone: '#198754', detail: 'Backend approval preconditions are satisfied. Maker/checker still depends on the acting user.', blockers: [] };
+  return { label: 'Not ready', tone: '#6b7280', detail: 'Move the request through review before approval.', blockers: [] };
+}
+
+function cmImplementationReadiness(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  if (status === 'implemented') return { label: 'Implemented', tone: '#198754', detail: 'Final implementation has been recorded.', blockers: [] };
+  if (status !== 'approved') return { label: 'Not approved', tone: '#6b7280', detail: 'Approve the Change Request before implementation.', blockers: [] };
+  var blockers = cmImplementationBlockers(req);
+  if (blockers.length) return { label: 'Blocked', tone: '#b45309', detail: 'Implementation gates report blockers.', blockers: blockers };
+  if (req && req.implementation && req.implementation.can_implement === true) return { label: 'Ready', tone: '#198754', detail: 'Backend implementation readiness is satisfied.', blockers: [] };
+  return { label: 'Ready for backend validation', tone: '#198754', detail: 'The implementation endpoint remains authoritative at action time.', blockers: [] };
+}
+
+function cmReadinessCard(title, readiness, emptyText) {
+  readiness = readiness || { label: 'Unavailable', tone: '#6b7280', detail: emptyText || '' };
+  return '<div style="border:1px solid var(--border1);border-radius:10px;background:var(--surface);padding:13px;min-height:120px;">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px;">' +
+      '<div style="font-size:12px;font-weight:800;color:var(--text1);">' + escapeHtml(title) + '</div>' +
+      cmChip(readiness.label || 'Unavailable', readiness.tone || '#6b7280') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.45;">' + escapeHtml(readiness.detail || emptyText || '') + '</div>' +
+    cmBlockerListHtml(readiness.blockers || [], emptyText || 'No blockers currently reported.') +
+  '</div>';
 }
 
 function cmRenderDiffRows(items) {
@@ -16362,7 +16627,8 @@ function cmRequestPreviewRows(req) {
 
 function cmPanelAutoExpand(requests) {
   return requests.some(function(req) {
-    return cmMaterialityRank(req && req.materiality) >= 2 && cmRequestBlockingState(req).label === 'Blocking review';
+    var status = String((req && req.status) || '').toLowerCase();
+    return cmMaterialityRank(req && req.materiality) >= 2 && ['implemented', 'rejected', 'cancelled', 'superseded'].indexOf(status) < 0;
   });
 }
 
@@ -16684,22 +16950,21 @@ function loadChangeRequests() {
     if (reqs.length === 0) { empty.style.display = ''; return; }
     empty.style.display = 'none';
     reqs.forEach(function(req) {
-      var flags = [];
-      if (req.screening_required) flags.push('🔍');
-      if (req.risk_review_required) flags.push('⚠️');
-      if (req.edd_review_required) flags.push('📋');
+      var customer = cmCustomerApplicationLabel(req);
+      var stage = cmStageMeta(req);
+      var readiness = cmRequestReadinessMeta(req);
+      var summary = cmRequestSummary(req);
       var tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid var(--border1);cursor:pointer;';
       tr.onclick = function() { viewRequestDetail(req.id); };
       tr.innerHTML = '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' + (req.id||'').substring(0,12) + '</td>'
-        + '<td style="padding:10px 14px;">' + (req.application_id||'').substring(0,10) + '</td>'
-        + '<td style="padding:10px 14px;font-size:11px;">' + (req.source||'').replace(/_/g,' ') + '</td>'
-        + '<td style="padding:10px 14px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (req.reason||'—') + '</td>'
-        + '<td style="padding:10px 14px;">' + cmMaterialityBadge(req.materiality) + '</td>'
-        + '<td style="padding:10px 14px;">' + cmStatusBadge(req.status) + '</td>'
-        + '<td style="padding:10px 14px;">' + flags.join(' ') + '</td>'
-        + '<td style="padding:10px 14px;font-size:11px;">' + (req.created_at||'').substring(0,10) + '</td>'
-        + '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();viewRequestDetail(\'' + req.id + '\')">View</button></td>';
+        + '<td style="padding:10px 14px;min-width:180px;"><div style="font-weight:700;color:var(--text1);">' + escapeHtml(customer.primary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(customer.secondary || (req.application_id || '').substring(0, 12)) + '</div></td>'
+        + '<td style="padding:10px 14px;font-size:12px;">' + cmChip(cmSourceLabel(req), '#0d6efd') + '</td>'
+        + '<td style="padding:10px 14px;max-width:260px;"><div style="font-size:12px;font-weight:700;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(summary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(req.reason || 'No reason recorded') + '</div></td>'
+        + '<td style="padding:10px 14px;"><div style="display:grid;gap:5px;">' + cmChip(stage.label, stage.tone) + cmMaterialityBadge(req.materiality) + '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(cmStatusLabel(req.status)) + '</span></div></td>'
+        + '<td style="padding:10px 14px;">' + cmChip(readiness.label, readiness.tone) + '</td>'
+        + '<td style="padding:10px 14px;font-size:11px;color:var(--text2);">' + escapeHtml(cmAgeLabel(req.created_at || req.submitted_at)) + '</td>'
+        + '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();viewRequestDetail(\'' + req.id + '\')">Open detail</button></td>';
       tbody.appendChild(tr);
     });
   }).catch(function(e) { showToast('Failed to load requests: ' + e.message, 'error'); });
@@ -16707,27 +16972,42 @@ function loadChangeRequests() {
 
 function viewRequestDetail(reqId) {
   apiFetch('/api/change-management/requests/' + reqId).then(function(r) {
-    var blocking = cmRequestBlockingState(r);
+    CM_CURRENT_REQUEST_DETAIL = r;
     var changedCount = (r.changed_fields_count || (r.items && r.items.length) || 0);
     var changedLabel = changedCount === 1 ? '1 field changed' : changedCount + ' fields changed';
+    var customer = cmCustomerApplicationLabel(r);
+    var stage = cmStageMeta(r);
+    var readiness = cmRequestReadinessMeta(r);
+    var evidenceState = cmEvidenceReadiness(r);
+    var agent1State = cmAgent1Readiness(r);
+    var screeningRiskState = cmScreeningRiskReadiness(r);
+    var approvalState = cmApprovalReadiness(r);
+    var implementationState = cmImplementationReadiness(r);
+    var evidenceByRequestDoc = {};
+    (r.evidence_summary || []).forEach(function(evidence) {
+      if (evidence && evidence.id) evidenceByRequestDoc[String(evidence.id)] = evidence;
+    });
     var html = '<div style="display:grid;gap:16px;">' +
       '<div style="border:1px solid var(--border1);border-radius:14px;background:var(--surface2);padding:16px;">' +
         '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
           '<div>' +
             '<div style="font-size:18px;font-weight:800;color:var(--text1);">Change Request ' + escapeHtml(r.id || '') + '</div>' +
             '<div style="font-size:12px;color:var(--text2);margin-top:6px;">' +
-              escapeHtml((r.application_ref || r.application_id || 'Application') + (r.company_name ? ' · ' + r.company_name : '')) +
+              '<strong style="color:var(--text1);">' + escapeHtml(customer.primary) + '</strong>' +
+              (customer.secondary ? ' · ' + escapeHtml(customer.secondary) : '') +
             '</div>' +
           '</div>' +
           '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
             cmMaterialityBadge(r.materiality, 'full') +
             cmStatusBadge(r.status) +
-            '<span style="display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(180,83,9,0.08);color:' + blocking.tone + ';font-size:11px;font-weight:700;border:1px solid rgba(180,83,9,0.16);">' + escapeHtml(blocking.label) + '</span>' +
+            cmChip(stage.label, stage.tone) +
+            cmChip(readiness.label, readiness.tone) +
           '</div>' +
         '</div>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:16px;">' +
-          '<div><span style="font-size:11px;color:var(--text3);">Source</span><br><strong style="font-size:13px;">' + escapeHtml(cmHumanizeSlug(r.source || 'unknown')) + '</strong></div>' +
-          '<div><span style="font-size:11px;color:var(--text3);">Submitted</span><br><strong style="font-size:13px;">' + escapeHtml((r.submitted_at || r.created_at || '—').substring(0, 10)) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Source</span><br><strong style="font-size:13px;">' + escapeHtml(cmSourceLabel(r)) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Submitted / created</span><br><strong style="font-size:13px;">' + escapeHtml((r.submitted_at || r.created_at || '—').substring(0, 10)) + '</strong></div>' +
+          '<div><span style="font-size:11px;color:var(--text3);">Age</span><br><strong style="font-size:13px;">' + escapeHtml(cmAgeLabel(r.created_at || r.submitted_at)) + '</strong></div>' +
           '<div><span style="font-size:11px;color:var(--text3);">Materiality</span><br><strong style="font-size:13px;">' + escapeHtml(cmMaterialityMeta(r.materiality).fullLabel) + '</strong></div>' +
           '<div><span style="font-size:11px;color:var(--text3);">Changed fields</span><br><strong style="font-size:13px;">' + escapeHtml(changedLabel) + '</strong></div>' +
         '</div>' +
@@ -16743,26 +17023,43 @@ function viewRequestDetail(reqId) {
     html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
         '<div>' +
-          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Before / After Diff</div>' +
-          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Review each changed field side by side using the authoritative values stored with this change request.</div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Old value vs requested new value</div>' +
+          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Primary officer workspace for validating the requested profile change before decision and implementation.</div>' +
         '</div>' +
         '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(changedLabel) + '</span>' +
       '</div>' +
       '<table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--border1);border-radius:10px;overflow:hidden;">' +
-        '<thead><tr style="background:var(--bg2);"><th style="padding:8px 12px;text-align:left;">Field</th><th style="padding:8px 12px;text-align:left;">Before</th><th style="padding:8px 12px;text-align:left;">After</th><th style="padding:8px 12px;text-align:left;">Impact</th></tr></thead>' +
+        '<thead><tr style="background:var(--bg2);"><th style="padding:8px 12px;text-align:left;">Field</th><th style="padding:8px 12px;text-align:left;">Old value</th><th style="padding:8px 12px;text-align:left;">Requested new value</th><th style="padding:8px 12px;text-align:left;">Impact</th></tr></thead>' +
         '<tbody>' + cmRenderDiffRows(r.items || []) + '</tbody>' +
       '</table>' +
     '</div>';
 
-    // Documents
+    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface2);padding:16px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Readiness checklist</div>' +
+          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Backend gates remain authoritative; this checklist shows the officer what is missing before approval or implementation.</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;">' +
+        cmReadinessCard('Evidence', evidenceState, 'Evidence missing / not yet linked.') +
+        cmReadinessCard('Agent 1', agent1State, 'Agent 1 not available until evidence is linked.') +
+        cmReadinessCard('Screening / risk', screeningRiskState, 'Screening/risk readiness not yet recorded.') +
+        cmReadinessCard('Approval readiness', approvalState, 'Approval readiness unavailable for this request.') +
+        cmReadinessCard('Implementation readiness', implementationState, 'Implementation readiness unavailable for this request.') +
+      '</div>' +
+    '</div>';
+
+    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Evidence and Agent 1 detail</div>' +
+          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Shows request-linked evidence only. Application-level documents that are not linked here do not satisfy the gate.</div>' +
+        '</div>' +
+        cmChip(evidenceState.label, evidenceState.tone) +
+      '</div>' +
+      '<div style="margin-top:10px;display:grid;gap:8px;">';
     if (r.documents && r.documents.length > 0) {
-      var evidenceByRequestDoc = {};
-      (r.evidence_summary || []).forEach(function(evidence) {
-        if (evidence && evidence.id) evidenceByRequestDoc[String(evidence.id)] = evidence;
-      });
-      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
-        '<span style="font-size:11px;color:var(--text3);font-weight:600;">Supporting Documents (' + r.documents.length + ')</span>' +
-        '<div style="margin-top:10px;display:grid;gap:8px;">';
       r.documents.forEach(function(d) {
         var evidence = evidenceByRequestDoc[String(d.id || '')] || {};
         var verification = evidence.agent1_verification || {};
@@ -16776,36 +17073,38 @@ function viewRequestDetail(reqId) {
               (linkedName && linkedName !== d.doc_name ? ' · Linked KYC document: ' + escapeHtml(linkedName) : '') +
             '</div>' +
           '</div>' +
-          '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
-            cmEvidenceStatusBadge(verification) +
-          '</div>' +
+          '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' + cmEvidenceStatusBadge(verification) + '</div>' +
         '</div>';
       });
-      html += '</div></div>';
+    } else {
+      html += '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;background:var(--surface2);">Evidence missing / not yet linked. If required, attach evidence to this Change Request before approval.</div>';
     }
+    html += '</div></div>';
 
-    // Reviews
+    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Reviews and decision history</span>';
     if (r.reviews && r.reviews.length > 0) {
-      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Reviews</span>';
       r.reviews.forEach(function(rev) {
         var decColor = rev.decision === 'approved' ? '#198754' : rev.decision === 'rejected' ? '#dc3545' : '#fd7e14';
         html += '<div style="background:var(--bg2);padding:10px;border-radius:6px;margin-top:6px;">'
-          + '<span style="color:' + decColor + ';font-weight:600;font-size:12px;">' + (rev.decision||'').toUpperCase() + '</span>'
-          + ' by ' + (rev.reviewer_role||'') + ' at ' + (rev.reviewed_at||'').substring(0,16)
-          + (rev.decision_notes ? '<br><span style="font-size:11px;color:var(--text3);">' + rev.decision_notes + '</span>' : '')
+          + '<span style="color:' + decColor + ';font-weight:600;font-size:12px;">' + escapeHtml((rev.decision||'').toUpperCase()) + '</span>'
+          + ' by ' + escapeHtml(rev.reviewer_role||'') + ' at ' + escapeHtml((rev.reviewed_at||'').substring(0,16))
+          + (rev.decision_notes ? '<br><span style="font-size:11px;color:var(--text3);">' + escapeHtml(rev.decision_notes) + '</span>' : '')
           + '</div>';
       });
-      html += '</div>';
+    } else {
+      html += '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;background:var(--surface2);margin-top:10px;">No review decisions recorded yet.</div>';
     }
+    html += '</div>';
 
-    // Risk info
-    if (r.pre_change_risk_level || r.post_change_risk_level) {
-      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Risk Impact</span>'
-        + '<div style="display:flex;gap:20px;margin-top:6px;">'
-        + '<div><span style="font-size:11px;">Pre-change:</span> <strong>' + (r.pre_change_risk_level||'—') + '</strong></div>'
-        + '<div><span style="font-size:11px;">Post-change:</span> <strong>' + (r.post_change_risk_level||'—') + '</strong></div>'
-        + '</div></div>';
-    }
+    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:800;color:var(--text1);">Audit reconstruction</div>' +
+          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Regulator-grade reconstruction of request, evidence, checks, decisions, implementation, and timeline.</div>' +
+        '</div>' +
+        '<button class="btn btn-outline" style="font-size:12px;" onclick="viewCmAuditReconstruction(' + cmJsAttrArg(r.id) + ')">View audit reconstruction</button>' +
+      '</div>' +
+    '</div>';
 
     // Actions
     var actions = [];
@@ -16828,21 +17127,186 @@ function viewRequestDetail(reqId) {
       actions.push('<button class="btn" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'approval_pending\')">Send for Approval</button>');
     }
     if (r.status === 'approval_pending' && !isAnalyst) {
-      actions.push('<button class="btn" style="font-size:12px;background:#198754;" onclick="approveRequest(\'' + r.id + '\')">Approve</button>');
-      actions.push('<button class="btn" style="font-size:12px;background:#dc3545;" onclick="rejectRequest(\'' + r.id + '\')">Reject</button>');
+      actions.push('<button class="btn" style="font-size:12px;background:#198754;" onclick="approveRequest(' + cmJsAttrArg(r.id) + ')">Approve</button>');
+      actions.push('<button class="btn" style="font-size:12px;background:#dc3545;" onclick="rejectRequest(' + cmJsAttrArg(r.id) + ')">Reject</button>');
     }
     if (r.status === 'approved' && !isAnalyst) {
-      actions.push('<button class="btn" style="font-size:12px;background:#20c997;" onclick="implementRequest(\'' + r.id + '\')">Implement Changes</button>');
+      actions.push('<button class="btn" style="font-size:12px;background:#20c997;" onclick="implementRequest(' + cmJsAttrArg(r.id) + ')">Implement Changes</button>');
     }
 
     if (actions.length > 0) {
-      html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">' + actions.join('') + '</div>';
+      html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:8px;">Decision and implementation actions</div>' +
+        '<div style="font-size:12px;color:var(--text3);line-height:1.45;margin-bottom:12px;">Backend gates remain authoritative. If an action is blocked, the blocker details are shown here.</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + actions.join('') + '</div>' +
+      '</div>';
     }
 
     html += '</div>';
     document.getElementById('cm-request-detail-content').innerHTML = html;
     document.getElementById('cm-request-detail-modal').style.display = '';
   }).catch(function(e) { showToast('Failed to load request: ' + e.message, 'error'); });
+}
+
+function cmAuditTimelinePreview(rows) {
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) {
+    return '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;">No audit timeline rows were returned for this request.</div>';
+  }
+  return rows.slice(-8).map(function(row) {
+    var actor = row && row.actor ? (row.actor.name || row.actor.role || row.actor.id || 'System') : 'System';
+    return '<div style="padding:10px 0;border-top:1px solid var(--border1);display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px;">' +
+      '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(String((row && row.timestamp) || '').substring(0, 19)) + '</div>' +
+      '<div><div style="font-size:12px;font-weight:800;color:var(--text1);">' + escapeHtml((row && row.action) || 'Audit event') + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(actor) + '</div></div>' +
+    '</div>';
+  }).join('');
+}
+
+function viewCmAuditReconstruction(reqId) {
+  var content = document.getElementById('cm-audit-reconstruction-content');
+  content.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px;">Loading audit reconstruction...</div>';
+  document.getElementById('cm-audit-reconstruction-modal').style.display = '';
+  apiFetch('/api/change-management/requests/' + reqId + '/audit-reconstruction').then(function(payload) {
+    var request = payload.request || {};
+    var application = payload.application || {};
+    var changeSummary = payload.change_summary || {};
+    var evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+    var timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
+    var screening = payload.screening || {};
+    var risk = payload.risk || {};
+    var html = '<div style="display:grid;gap:14px;">' +
+      '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface2);padding:14px;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:8px;">Request identity</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:12px;">' +
+          '<div><span style="color:var(--text3);">Request</span><br><strong>' + escapeHtml(request.id || reqId) + '</strong></div>' +
+          '<div><span style="color:var(--text3);">Application</span><br><strong>' + escapeHtml(application.company_name || application.ref || application.id || 'Unknown') + '</strong></div>' +
+          '<div><span style="color:var(--text3);">Status</span><br><strong>' + escapeHtml(cmStatusLabel(request.status || 'unknown')) + '</strong></div>' +
+          '<div><span style="color:var(--text3);">Source</span><br><strong>' + escapeHtml(cmHumanizeSlug(request.source_channel || request.source || 'unknown')) + '</strong></div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
+        cmReadinessCard('Evidence', { label: evidence.length ? 'Linked evidence' : 'No linked evidence', tone: evidence.length ? '#198754' : '#6b7280', detail: evidence.length + ' evidence record(s) returned in reconstruction.', blockers: [] }, 'No linked evidence returned.') +
+        cmReadinessCard('Screening', { label: screening.status || 'Unknown', tone: screening.status === 'clean' ? '#198754' : '#6b7280', detail: screening.required ? 'Screening required for this request.' : 'Screening not required or not returned.', blockers: [] }, 'No screening data returned.') +
+        cmReadinessCard('Risk', { label: risk.status || 'Unknown', tone: risk.status === 'recorded' ? '#198754' : '#6b7280', detail: risk.required ? 'Risk review required for this request.' : 'Risk review not required or not returned.', blockers: [] }, 'No risk data returned.') +
+      '</div>' +
+      '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:14px;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:8px;">Change summary</div>' +
+        '<div style="font-size:12px;color:var(--text2);">' + escapeHtml(String(changeSummary.item_count || 0)) + ' item(s), before profile version ' + escapeHtml(changeSummary.before_profile_version_id || 'not recorded') + ', result profile version ' + escapeHtml(changeSummary.result_profile_version_id || 'not recorded') + '.</div>' +
+      '</div>' +
+      '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:14px;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:8px;">Timeline</div>' +
+        cmAuditTimelinePreview(timeline) +
+      '</div>' +
+      '<details style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:12px 14px;">' +
+        '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text2);">Raw reconstruction JSON</summary>' +
+        '<pre style="margin-top:10px;background:var(--bg2);padding:10px;border-radius:8px;font-size:11px;overflow:auto;max-height:320px;">' + escapeHtml(JSON.stringify(payload, null, 2)) + '</pre>' +
+      '</details>' +
+    '</div>';
+    content.innerHTML = html;
+  }).catch(function(e) {
+    content.innerHTML = '<div style="padding:14px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;">Audit reconstruction unavailable for this request: ' + escapeHtml(e.message || 'Request failed') + '</div>';
+  });
+}
+
+function closeCmDecisionModal() {
+  document.getElementById('cm-request-decision-modal').style.display = 'none';
+  document.getElementById('cm-decision-error').style.display = 'none';
+  CM_DECISION_STATE = {};
+}
+
+function cmDecisionConfig(action) {
+  if (action === 'approve') {
+    return {
+      title: 'Approve Change Request',
+      subtitle: 'Record an approval decision. Backend maker/checker, evidence, Agent 1, screening, and risk gates remain authoritative.',
+      notesLabel: 'Approval notes',
+      button: 'Approve',
+      buttonColor: '#198754'
+    };
+  }
+  if (action === 'reject') {
+    return {
+      title: 'Reject Change Request',
+      subtitle: 'Record a rejection decision with a clear reason for the audit trail.',
+      notesLabel: 'Rejection reason',
+      button: 'Reject',
+      buttonColor: '#dc3545'
+    };
+  }
+  return {
+    title: 'Implement Approved Changes',
+    subtitle: 'Apply the approved change to the live profile only if backend implementation gates pass.',
+    notesLabel: 'Implementation note',
+    button: 'Implement changes',
+    buttonColor: '#20c997'
+  };
+}
+
+function cmDecisionBlockersHtml(action, detail) {
+  var state = action === 'implement' ? cmImplementationReadiness(detail) : cmApprovalReadiness(detail);
+  var blockers = state.blockers || [];
+  if (!blockers.length) {
+    return '<div style="padding:10px 12px;border:1px solid #bbf7d0;border-radius:8px;background:#f0fdf4;color:#166534;font-size:12px;">No blockers are currently shown in the request detail. The backend will validate again when you submit.</div>';
+  }
+  return '<div style="padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12px;">' +
+    '<strong>Current blockers:</strong>' + cmBlockerListHtml(blockers, 'No blockers currently reported.') +
+  '</div>';
+}
+
+function openCmDecisionModal(action, reqId) {
+  var cfg = cmDecisionConfig(action);
+  var detail = CM_CURRENT_REQUEST_DETAIL && CM_CURRENT_REQUEST_DETAIL.id === reqId ? CM_CURRENT_REQUEST_DETAIL : null;
+  CM_DECISION_STATE = { action: action, requestId: reqId };
+  document.getElementById('cm-decision-title').textContent = cfg.title;
+  document.getElementById('cm-decision-subtitle').textContent = cfg.subtitle;
+  document.getElementById('cm-decision-notes-label').textContent = cfg.notesLabel;
+  document.getElementById('cm-decision-notes').value = '';
+  document.getElementById('cm-decision-error').style.display = 'none';
+  document.getElementById('cm-decision-blockers').innerHTML = detail ? cmDecisionBlockersHtml(action, detail) : '<div style="font-size:12px;color:var(--text3);">Open request detail to see current blockers before acting.</div>';
+  var submit = document.getElementById('cm-decision-submit');
+  submit.textContent = cfg.button;
+  submit.style.background = cfg.buttonColor;
+  submit.style.borderColor = cfg.buttonColor;
+  document.getElementById('cm-request-decision-modal').style.display = '';
+}
+
+function setCmDecisionError(message, payload) {
+  var detail = '';
+  if (payload && Array.isArray(payload.blockers) && payload.blockers.length) {
+    detail = cmBlockerListHtml(payload.blockers, '');
+  }
+  var el = document.getElementById('cm-decision-error');
+  el.innerHTML = escapeHtml(message || 'Action failed') + detail;
+  el.style.display = '';
+}
+
+function submitCmDecisionAction() {
+  var state = CM_DECISION_STATE || {};
+  var action = state.action;
+  var reqId = state.requestId;
+  var notes = (document.getElementById('cm-decision-notes').value || '').trim();
+  if (!reqId || !action) return;
+  if (action === 'reject' && !notes) {
+    setCmDecisionError('Rejection reason required.');
+    return;
+  }
+  var submit = document.getElementById('cm-decision-submit');
+  submit.disabled = true;
+  var path = '/api/change-management/requests/' + reqId + (action === 'implement' ? '/implement' : '/' + action);
+  var body = action === 'implement' ? { implementation_notes: notes } : { decision_notes: notes };
+  apiFetch(path, { method: 'POST', body: JSON.stringify(body) }).then(function(r) {
+    if (action === 'approve') showToast('Request approved', 'success');
+    if (action === 'reject') showToast('Request rejected', 'success');
+    if (action === 'implement') showToast('Changes implemented successfully. Profile version: ' + ((r && r.profile_version_id) || ''), 'success');
+    closeCmDecisionModal();
+    document.getElementById('cm-request-detail-modal').style.display = 'none';
+    loadChangeRequests();
+  }).catch(function(e) {
+    setCmDecisionError(e.message || 'Action failed', e.payload);
+  }).finally(function() {
+    submit.disabled = false;
+  });
 }
 
 function submitChangeRequest(reqId) {
@@ -16864,35 +17328,15 @@ function updateRequestStatus(reqId, status) {
 }
 
 function approveRequest(reqId) {
-  var notes = prompt('Approval notes (optional):', '') || '';
-  apiFetch('/api/change-management/requests/' + reqId + '/approve', {
-    method: 'POST', body: JSON.stringify({ decision_notes: notes })
-  }).then(function() {
-    showToast('Request approved', 'success');
-    document.getElementById('cm-request-detail-modal').style.display = 'none';
-    loadChangeRequests();
-  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+  openCmDecisionModal('approve', reqId);
 }
 
 function rejectRequest(reqId) {
-  var notes = prompt('Rejection reason:', '');
-  if (!notes) { showToast('Rejection reason required', 'error'); return; }
-  apiFetch('/api/change-management/requests/' + reqId + '/reject', {
-    method: 'POST', body: JSON.stringify({ decision_notes: notes })
-  }).then(function() {
-    showToast('Request rejected', 'success');
-    document.getElementById('cm-request-detail-modal').style.display = 'none';
-    loadChangeRequests();
-  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+  openCmDecisionModal('reject', reqId);
 }
 
 function implementRequest(reqId) {
-  if (!confirm('Implement approved changes to the live entity profile? This action cannot be undone.')) return;
-  apiFetch('/api/change-management/requests/' + reqId + '/implement', { method: 'POST' }).then(function(r) {
-    showToast('Changes implemented successfully. Profile version: ' + (r.profile_version_id||''), 'success');
-    document.getElementById('cm-request-detail-modal').style.display = 'none';
-    loadChangeRequests();
-  }).catch(function(e) { showToast('Implementation failed: ' + e.message, 'error'); });
+  openCmDecisionModal('implement', reqId);
 }
 
 async function showCreateAlertModal() {

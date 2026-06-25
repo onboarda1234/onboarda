@@ -277,7 +277,7 @@ class TestChangeManagementDiffRuntime:
                 """,
             )
         )
-        assert 'Before / After Diff' in result["html"]
+        assert 'Old value vs requested new value' in result["html"]
         assert 'Legal name' in result["html"]
         assert 'Unavailable — legacy request' in result["html"]
         assert 'Portal QA R11 mnyvqzto' in result["html"]
