@@ -623,6 +623,32 @@ def _apply_decision_paper_cleanup(memo, context):
     own_rating = context.get("own_rating") or "NOT_RATED"
     own_rating_justification = context.get("own_rating_justification") or "not recorded"
     struct_complexity = context.get("struct_complexity") or "Unknown"
+    ownership_status = (
+        context.get("ownership_transparency_status")
+        or (metadata.get("agent5_input_contract") or {}).get("ownership_transparency_status")
+        or "unknown"
+    )
+    ownership_status = str(ownership_status).lower()
+    ownership_is_transparent = ownership_status == "transparent"
+    if ownership_is_transparent and primary_ubo and control_pct not in ("N/A", None, "", "0"):
+        ownership_control_phrase = (
+            f"Beneficial ownership transparently disclosed to natural person level - {control_name} ({control_pct}%)."
+        )
+        ownership_checklist_phrase = (
+            f"UBO chain transparently disclosed to natural persons: {control_name} ({control_pct}%)"
+        )
+    elif primary_ubo and control_pct not in ("N/A", None, "", "0"):
+        ownership_control_phrase = (
+            f"Disclosed UBO/control data identifies {control_name} ({control_pct}%), but ownership transparency remains {ownership_status}."
+        )
+        ownership_checklist_phrase = (
+            f"UBO/control data reviewed: {control_name} ({control_pct}%); ownership transparency remains {ownership_status}"
+        )
+    else:
+        ownership_control_phrase = (
+            "Beneficial ownership could not be fully determined from current ownership data."
+        )
+        ownership_checklist_phrase = "UBO chain not verified - data gap"
     mon_tier = context.get("mon_tier") or "Standard"
     adverse_media_context = context.get("adverse_media_context") or {}
     enhanced_review_summary = context.get("enhanced_review_summary") or {}
@@ -746,7 +772,7 @@ def _apply_decision_paper_cleanup(memo, context):
             if screening_formally_cleared_match else
             None
         ),
-        f"Beneficial ownership traced to natural person level - {control_name} ({control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None,
+        f"Beneficial ownership transparently disclosed to natural person level - {control_name} ({control_pct}%)" if ownership_is_transparent and primary_ubo and control_pct not in ("N/A", None, "", "0") else None,
         f"Full documentation verified at {doc_confidence}% confidence" if documentation_complete and doc_confidence >= 80 else None,
     ]
     risk_increasing = _memo_unique_text([x for x in risk_increasing if x], max_items=5)
@@ -763,7 +789,7 @@ def _apply_decision_paper_cleanup(memo, context):
         red_flags = ["Residual onboarding risk remains subject to standard monitoring."]
     mitigants = _memo_unique_text([
         f"{len(verified_docs)} of {len(documents)} document(s) verified at {doc_confidence}% confidence" if verified_docs else None,
-        f"Beneficial ownership traced to {control_name} ({control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None,
+        f"Transparent beneficial ownership disclosed to {control_name} ({control_pct}%)" if ownership_is_transparent and primary_ubo and control_pct not in ("N/A", None, "", "0") else None,
         "Screening complete with defensible clear result" if screening_defensible_clear else None,
         "Screening match(es) formally cleared by officer evidence" if screening_formally_cleared_match else None,
         "Transaction monitoring will be applied after onboarding decision",
@@ -800,9 +826,7 @@ def _apply_decision_paper_cleanup(memo, context):
         "title": "Ownership & Control",
         "structure_complexity": struct_complexity,
         "control_statement": (
-            f"{control_name} exercises effective control at {control_pct}%."
-            if primary_ubo and control_pct not in ("N/A", None, "", "0")
-            else "Effective control cannot be fully determined from current ownership data."
+            ownership_control_phrase
         ),
         "content": (
             f"The entity has {len(directors)} director(s) and {len(ubos)} UBO(s). "
@@ -812,7 +836,9 @@ def _apply_decision_paper_cleanup(memo, context):
             + f"Ownership risk rating: {own_rating} based on {own_rating_justification}. "
             f"Structure complexity: {struct_complexity}. "
             + (
-                f"Control owner: {control_name} ({control_pct}%)."
+                f"Control owner: {control_name} ({control_pct}%); ownership transparency remains {ownership_status}."
+                if primary_ubo and not ownership_is_transparent and control_pct not in ("N/A", None, "", "0")
+                else f"Control owner: {control_name} ({control_pct}%)."
                 if primary_ubo and control_pct not in ("N/A", None, "", "0")
                 else "Ownership/control data gaps remain and prevent full assurance."
             )
@@ -1809,7 +1835,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         own_risk_factors += 1
         own_risk_reasons.append("complex corporate structure with potential layering")
     own_rating = "HIGH" if own_risk_factors >= 3 else "MEDIUM" if own_risk_factors >= 1 else "LOW"
-    own_rating_justification = "; ".join(own_risk_reasons) if own_risk_reasons else "clean ownership structure with full transparency"
+    own_rating_justification = "; ".join(own_risk_reasons) if own_risk_reasons else "ownership structure reviewed with no ownership risk reasons identified"
 
     # ── RULE 4B: Ownership risk floor enforcement ──
     # IF ownership % missing OR control undetermined OR no UBOs → ownership risk CANNOT be LOW
@@ -1830,6 +1856,38 @@ def build_compliance_memo(app, directors, ubos, documents):
         if not own_risk_reasons:
             own_risk_reasons.append("ownership data gaps prevent LOW classification")
         own_rating_justification = "; ".join(own_risk_reasons)
+
+    # ── Priority B.2: Ownership transparency normalization ────────────
+    # Narrative, Agent 5 contract, EDD routing, and supervisor escalation
+    # must all use the same deterministic ownership transparency status.
+    _own_struct_lc = (own_struct or "").lower()
+    _matched_opaque_keywords = sorted({kw for kw in OPAQUE_OWNERSHIP_KEYWORDS if kw in _own_struct_lc})
+    if "multi-jurisdiction" in _own_struct_lc or "multi jurisdiction" in _own_struct_lc \
+            or "multiple jurisdictions" in _own_struct_lc:
+        _matched_opaque_keywords = sorted(set(_matched_opaque_keywords) | {"multi-jurisdiction"})
+    _total_disclosed_pct = sum(float(u.get("ownership_pct", 0) or 0) for u in ubos) if ubos else 0.0
+    _is_opaque = (
+        own_rating == "HIGH"
+        or struct_complexity == "Complex"
+        or bool(_matched_opaque_keywords)
+        or (ubos and _total_disclosed_pct < 50)
+    )
+    _is_incomplete = (
+        ownership_has_gaps
+        or (ubos and _total_disclosed_pct < 75)
+    )
+    _ownership_status = (
+        "opaque" if _is_opaque
+        else "incomplete" if _is_incomplete
+        else "transparent"
+    )
+    if not own_risk_reasons:
+        if _ownership_status == "transparent":
+            own_rating_justification = "ownership disclosure supports a transparent natural-person UBO assessment"
+        elif _ownership_status == "opaque":
+            own_rating_justification = "ownership structure remains opaque or complex based on structure/disclosure indicators"
+        else:
+            own_rating_justification = "ownership disclosure remains incomplete based on available UBO information"
 
     # Risk aggregation consistency check (Issue C fix)
     # RISK_WEIGHTS and RISK_RANK imported from rule_engine.py
@@ -2035,11 +2093,14 @@ def build_compliance_memo(app, directors, ubos, documents):
         or is_high_risk_country
         or is_offshore
     )
-    _ownership_driver_phrase = (
-        "no PEP exposure and a clean ownership structure"
-        if screening_is_defensible_clear
-        else "no PEP exposure and a transparent ownership structure"
-    )
+    if _ownership_status == "transparent":
+        _ownership_driver_phrase = (
+            "no PEP exposure and a transparent natural-person UBO assessment"
+        )
+    else:
+        _ownership_driver_phrase = (
+            f"no PEP exposure, while ownership transparency remains {_ownership_status} and is treated as an EDD factor"
+        )
     if _has_principal_risk_driver:
         _executive_offset_phrase = (
             "These risk factors are materially offset by "
@@ -2050,6 +2111,37 @@ def build_compliance_memo(app, directors, ubos, documents):
         _executive_offset_phrase = "The low-risk profile is supported by "
     else:
         _executive_offset_phrase = "The base risk score is supported by "
+    if _ownership_status == "transparent":
+        _ownership_mitigant_phrase = (
+            f"transparent beneficial ownership based on disclosed natural-person UBO evidence ({control_name} at {control_pct}%)"
+            if primary_ubo and control_pct not in ("N/A", None, "", "0")
+            else "beneficial ownership assessment based on available transparent ownership disclosures"
+        )
+    elif _ownership_status == "opaque":
+        _ownership_mitigant_phrase = (
+            "ownership evidence received, but the structure remains opaque or complex and is treated as an EDD factor"
+        )
+    else:
+        _ownership_mitigant_phrase = (
+            "beneficial ownership assessment remains incomplete based on available disclosures"
+        )
+    if _ownership_status == "transparent" and primary_ubo and control_pct not in ("N/A", None, "", "0"):
+        _ownership_metadata_finding = (
+            f"Beneficial ownership transparently disclosed to natural person level via {struct_complexity.lower()} structure — {control_name} ({control_pct}%) exercises effective control"
+        )
+        _ownership_checklist_finding = (
+            f"UBO chain transparently disclosed to natural persons: {control_name} ({control_pct}%)"
+        )
+    elif primary_ubo and control_pct not in ("N/A", None, "", "0"):
+        _ownership_metadata_finding = (
+            f"Disclosed UBO/control data identifies {control_name} ({control_pct}%), but ownership transparency remains {_ownership_status}"
+        )
+        _ownership_checklist_finding = (
+            f"UBO/control data reviewed: {control_name} ({control_pct}%); ownership transparency remains {_ownership_status}"
+        )
+    else:
+        _ownership_metadata_finding = "Beneficial ownership could not be fully verified — critical data gap"
+        _ownership_checklist_finding = "UBO chain not verified — data gap"
 
     # ── Compile Rule Engine summary ───────────────────────────────────
     rule_engine_result = {
@@ -2111,7 +2203,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + ". "
                     + _executive_offset_phrase
                     + ((_screening_clean_phrase + ", ") if (not all_peps and screening_is_defensible_clear) else "")
-                    + (f"a fully traceable beneficial ownership chain ({control_name} at {control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else "beneficial ownership assessment")
+                    + _ownership_mitigant_phrase
                     + (f", and {len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence. " if has_documents else ", and no uploaded documents are currently available to substantiate entity verification. ")
                     + ("No documents have been uploaded, so entity verification remains incomplete and cannot be treated as a mitigant. " if not has_documents else f"{len(pending_docs)} document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. " if pending_docs else "")
                     + (f"Note: model confidence of {model_confidence}% is below threshold — this is reflected in the conditional nature of the recommendation. " if low_confidence else "")
@@ -2138,7 +2230,12 @@ def build_compliance_memo(app, directors, ubos, documents):
             "ownership_and_control": {
                 "title": "Ownership & Control",
                 "structure_complexity": struct_complexity,
-                "control_statement": f"{control_name} exercises effective control as {'majority' if float(control_pct or 0) > 50 else 'significant'} shareholder ({control_pct}%)." if primary_ubo else "Effective control cannot be determined — this represents a material data gap requiring resolution.",
+                "control_statement": (
+                    f"{control_name} is the largest disclosed natural-person owner as {'majority' if float(control_pct or 0) > 50 else 'significant'} shareholder ({control_pct}%); ownership transparency remains {_ownership_status} and must be assessed accordingly."
+                    if primary_ubo and _ownership_status != "transparent"
+                    else f"{control_name} exercises effective control as {'majority' if float(control_pct or 0) > 50 else 'significant'} shareholder ({control_pct}%)." if primary_ubo
+                    else "Effective control cannot be determined — this represents a material data gap requiring resolution."
+                ),
                 "content": (
                     f"The entity operates a {struct_complexity.lower()} corporate structure with {len(directors)} director(s) and {len(ubos)} UBO(s). "
                     + " ".join([
@@ -2211,7 +2308,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                                f"PEP exposure introduces corruption and undue influence risk per FATF Recommendation 12 requirements for enhanced scrutiny. "
                                + ("The PEP(s) hold direct ownership, elevating control risk. " if pep_ubos else "The PEP(s) hold board positions but no direct ownership stake, which partially mitigates control risk. ")
                                if all_peps else "No PEP exposure identified in the ownership or governance structure, which is a positive risk indicator. ")
-                            + (f"Beneficial ownership has been identified to natural person level — {control_name} ({control_pct}%) exercises effective control. " if primary_ubo and control_pct not in ("N/A", None, "", "0")
+                            + (f"Beneficial ownership has been identified to natural person level, but ownership transparency remains {_ownership_status}; {control_name} ({control_pct}%) is the largest disclosed UBO and this limitation remains an EDD factor. " if primary_ubo and _ownership_status != "transparent" and control_pct not in ("N/A", None, "", "0")
+                               else f"Beneficial ownership has been identified to natural person level — {control_name} ({control_pct}%) exercises effective control. " if primary_ubo and control_pct not in ("N/A", None, "", "0")
                                else f"Beneficial ownership partially identified but {'ownership percentages are incomplete for some UBOs' if ubos else 'could not be verified — this is a critical gap'}. " if ubos
                                else "No UBO information provided — beneficial ownership verification is not possible. This is a critical deficiency. ")
                             + f"Risk weighting factor: 0.25."
@@ -2290,7 +2388,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     (f"Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks" if not is_high_risk_country and not is_offshore else None),
                     (f"Low sector risk — {sector} does not exhibit elevated ML/TF typology indicators" if not is_high_risk_sector and not is_medium_risk_sector else None),
                     (_screening_mitigation_phrase if not all_peps else "Screening completed — PEP(s) identified and flagged for enhanced measures"),
-                    (f"Verified beneficial ownership traced to natural person level — {control_name} ({control_pct}%) exercises effective control" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None),
+                    (f"Beneficial ownership transparently disclosed to natural person level — {control_name} ({control_pct}%) exercises effective control" if _ownership_status == "transparent" and primary_ubo and control_pct not in ("N/A", None, "", "0") else None),
                     (f"Full documentation received and verified at {doc_confidence}% confidence" if documentation_complete and doc_confidence >= 80 else None),
                 ] if f is not None],
                 "factor_enforcement_applied": True,
@@ -2315,7 +2413,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + (f"(1) No PEP exposure — no contribution to ownership risk. " if not all_peps else "(1) PEP(s) identified and flagged for enhanced monitoring. ")
                     + (f"(2) Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks. " if not is_high_risk_country and not is_offshore else "")
                     + (f"{'(3) ' if not is_high_risk_country and not is_offshore else '(2) '}{_screening_content_factor_phrase} " if True else "")
-                    + (f"{'(4) ' if not is_high_risk_country and not is_offshore else '(3) '}Verified beneficial ownership to natural person level. " if primary_ubo and control_pct not in ("N/A", None, "", "0") else "")
+                    + (f"{'(4) ' if not is_high_risk_country and not is_offshore else '(3) '}Beneficial ownership transparently disclosed to natural person level. " if _ownership_status == "transparent" and primary_ubo and control_pct not in ("N/A", None, "", "0") else "")
                     + (f"Full documentation at {doc_confidence}% confidence. " if documentation_complete and doc_confidence >= 80 else "")
                     + f"Decision pathway: Agent 1 (Identity & Document Integrity) -> Agent 2 (External Database Cross-Verification) -> Agent 3 (FinCrime Screening Interpretation) -> Agent 4 (Corporate Structure & UBO Mapping) -> Agent 5 (Compliance Memo & Risk Recommendation). "
                     + "Supervisor module: Contradiction detection and inter-agent consistency check. "
@@ -2338,7 +2436,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + (["Document collection has been initiated, but no uploaded documents are yet available to support entity verification. Approval must remain conditional on document receipt and review."] if not has_documents else [f"Outstanding documents have been formally requested with a 14-business-day deadline. Failure to provide will trigger automatic escalation to Senior Compliance Officer. The {len(verified_docs)} documents already verified are internally consistent."] if pending_docs else [f"All required documents received and verified at {doc_confidence}% confidence, providing strong assurance of entity legitimacy."])
                     + ([f"{country} is currently compliant with FATF standards following completion of its action plan. The entity's business activity is consistent with the jurisdiction's commercial profile."] if is_offshore else [])
                     + ([_screening_clear_phrase + "."] if screening_is_defensible_clear else [_screening_mitigation_phrase + "."])
-                    + ([f"Beneficial ownership fully traced to natural person level via {struct_complexity.lower()} structure. {control_name} ({control_pct}%) confirmed as exercising effective control."] if primary_ubo else [])
+                    + ([f"Beneficial ownership transparently disclosed to natural person level via {struct_complexity.lower()} structure. {control_name} ({control_pct}%) confirmed as exercising effective control."] if _ownership_status == "transparent" and primary_ubo else [])
                     + ["Transaction monitoring will be applied on a quarterly basis for the first 12 months, with automated alerts for anomalous volumes, compensating for the absence of historical benchmarking data."]
                 )
             },
@@ -2420,7 +2518,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "pending_document_count": len(pending_docs),
             "documentation_complete": documentation_complete,
             "key_findings": [
-                f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
+                _ownership_metadata_finding,
                 f"{'PEP identified: ' + ', '.join([p['full_name'] + ' (' + ('Director' if p in pep_directors else 'UBO') + ')' for p in all_peps]) + '. Enhanced due diligence required.' if all_peps else 'No PEP exposure identified among directors or UBOs'}",
                 f"{_screening_key_finding}; adverse media {'clear' if adverse_media_context['terminal'] and not adverse_media_context['has_hit'] else ('hit(s) require disposition' if adverse_media_context['has_hit'] else 'NOT complete — clean reliance unavailable')}",
                 ("No documents uploaded — entity verification remains incomplete" if not has_documents else f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation")),
@@ -2436,7 +2534,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             ),
             "review_checklist": [
                 f"Company identity verified against registry — {'confirmed active' if verified_docs else 'not yet evidenced by uploaded documents' if not has_documents else 'pending verification'}",
-                f"UBO chain mapped to natural persons: {control_name + ' (' + str(control_pct) + '%)' if primary_ubo else 'Not verified — data gap'}",
+                _ownership_checklist_finding,
                 f"PEP screening {'completed' if screening_terminal else 'NOT complete'} — {len(all_peps)} declared/detected match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
                 _screening_review_check,
                 adverse_media_context["checklist"],
@@ -2790,37 +2888,8 @@ def build_compliance_memo(app, directors, ubos, documents):
     # from this single source so the decision path cannot diverge from
     # the facts. Keep the keys aligned with REQUIRED_FACT_KEYS in
     # edd_routing_policy.py.
-    # ── Priority B.2: Ownership transparency normalization ────────────
-    # The deterministic facts handed to Agent 5 / EDD routing must
-    # reflect ALL signals, not just struct_complexity == "Complex" or
-    # missing-pct gaps. A case explicitly described as multi-tier /
-    # multi-jurisdiction / nominee / shell / opaque, OR a case where
-    # the disclosed UBO ownership totals less than 75%, MUST normalize
-    # to "incomplete" or "opaque" — never "transparent".
-    _own_struct_lc = (own_struct or "").lower()
-    _matched_opaque_keywords = sorted({kw for kw in OPAQUE_OWNERSHIP_KEYWORDS if kw in _own_struct_lc})
-    # Multi-jurisdiction is a known opaqueness driver but not in the
-    # core OPAQUE_OWNERSHIP_KEYWORDS set; surface it explicitly.
-    if "multi-jurisdiction" in _own_struct_lc or "multi jurisdiction" in _own_struct_lc \
-            or "multiple jurisdictions" in _own_struct_lc:
-        _matched_opaque_keywords = sorted(set(_matched_opaque_keywords) | {"multi-jurisdiction"})
-    _total_disclosed_pct = sum(float(u.get("ownership_pct", 0) or 0) for u in ubos) if ubos else 0.0
-
-    _is_opaque = (
-        own_rating == "HIGH"
-        or struct_complexity == "Complex"
-        or bool(_matched_opaque_keywords)
-        or (ubos and _total_disclosed_pct < 50)
-    )
-    _is_incomplete = (
-        ownership_has_gaps
-        or (ubos and _total_disclosed_pct < 75)
-    )
-    _ownership_status = (
-        "opaque" if _is_opaque
-        else "incomplete" if _is_incomplete
-        else "transparent"
-    )
+    # _ownership_status is computed before memo prose generation so the
+    # narrative and the authoritative Agent 5 contract cannot diverge.
     _has_terminal_match = bool(_screening_terminality.get("has_terminal_match"))
     edd_trigger_flags = []
     try:
@@ -3297,6 +3366,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         "own_rating": own_rating,
         "own_rating_justification": own_rating_justification,
         "struct_complexity": struct_complexity,
+        "ownership_transparency_status": _ownership_status,
         "mon_tier": mon_tier,
         "adverse_media_context": adverse_media_context,
         "enhanced_review_summary": enhanced_review_summary,
