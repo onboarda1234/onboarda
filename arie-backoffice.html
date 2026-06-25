@@ -4824,13 +4824,13 @@ function mapApplicationFromApi(a) {
     rmiRequests: a.rmi_requests || [],
     enhancedReviewSummary: a.enhanced_review_summary || null,
     pepCount: (function() {
-      var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
-                     (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
-      if (declared > 0) return declared;
+      return (a.directors || []).filter(personHasDeclaredOrVerifiedPep).length +
+             (a.ubos || []).filter(personHasDeclaredOrVerifiedPep).length;
+    })(),
+    screeningPepCount: (function() {
       var sr = (a.prescreening_data || {}).screening_report || {};
-      var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
-                          (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
-      return screeningPeps;
+      return (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
+             (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
     })(),
     _raw_prescreening: a.prescreening_data
   };
@@ -8255,7 +8255,18 @@ function buildPrescreeningPartyFallback(items, personType) {
     })
     .map(function(item, idx) {
       var declaration = (item.pep_declaration && typeof item.pep_declaration === 'object') ? item.pep_declaration : {};
-      var declared = declaration.declared_pep === true || declaration.client_declared_pep === true || normalizePepDisplay(item.is_pep) === 'Yes';
+      var declared = personHasDeclaredOrVerifiedPep({
+        pep_declaration: declaration,
+        client_declared_pep: item.client_declared_pep,
+        declared_pep: item.declared_pep,
+        officer_verified_pep: item.officer_verified_pep,
+        verified_pep: item.verified_pep,
+        pep_status: item.pep_status,
+        pep_status_display: item.pep_status_display,
+        pep: item.pep,
+        is_pep: item.is_pep,
+        isPEP: item.isPEP
+      });
       var keyPrefix = personType === 'ubo' ? 'ubo' : 'dir';
       var personKey = item.person_key || item.personKey || (keyPrefix + (idx + 1));
       return {
@@ -8287,11 +8298,23 @@ function buildPrescreeningPartyFallback(items, personType) {
 
 function personHasDeclaredOrVerifiedPep(person) {
   if (!person) return false;
-  var declaration = (person.pep_declaration && typeof person.pep_declaration === 'object') ? person.pep_declaration : {};
-  if (person.client_declared_pep === true || person.declared_pep === true || person.officer_verified_pep === true) return true;
-  if (declaration.client_declared_pep === true || declaration.declared_pep === true) return true;
-  var label = String(person.pep_status_display || person.pep || person.pep_status || '').toLowerCase();
-  return label === 'yes' || label.indexOf('client-declared pep') >= 0 || label.indexOf('confirmed pep') >= 0 || label.indexOf('officer-verified pep') >= 0;
+  var declaration = person.pep_declaration || {};
+  if (typeof declaration === 'string') {
+    try { declaration = JSON.parse(declaration); } catch (e) { declaration = {}; }
+  }
+  if (!declaration || typeof declaration !== 'object') declaration = {};
+  var status = String(person.pep_status || declaration.pep_status || '').toLowerCase();
+  if (person.client_declared_pep === true || person.declared_pep === true || person.officer_verified_pep === true || person.verified_pep === true) return true;
+  if (declaration.client_declared_pep === true || declaration.declared_pep === true || declaration.officer_verified_pep === true || declaration.verified_pep === true) return true;
+  if (status === 'declared_yes' || status === 'confirmed_pep') return true;
+  if (person.client_declared_pep === false || person.declared_pep === false || person.officer_verified_pep === false || person.verified_pep === false) return false;
+  if (declaration.client_declared_pep === false || declaration.declared_pep === false || declaration.officer_verified_pep === false || declaration.verified_pep === false) return false;
+  if (['declared_no','false_positive','not_pep','pending_review','not_verified'].indexOf(status) >= 0) return false;
+  var label = String(person.pep_status_display || person.pep || '').toLowerCase();
+  if (label.indexOf('client declared no pep') >= 0 || label.indexOf('false positive') >= 0 || label.indexOf('not pep') >= 0) return false;
+  if (label.indexOf('client-declared pep') >= 0 || label.indexOf('confirmed pep') >= 0 || label.indexOf('officer-verified pep') >= 0) return true;
+  var raw = String(person.is_pep || person.isPEP || '').toLowerCase();
+  return !Object.keys(declaration).length && ['1','true','yes','y','declared_yes','confirmed_pep'].indexOf(raw) >= 0;
 }
 
 function buildPartyDisplayName(person) {
@@ -9479,16 +9502,7 @@ function buildExpectedKycDocumentSlots(app) {
   var risk = String((app && (app.final_risk_level || app.risk_level || app.base_risk_level)) || '').toUpperCase();
   var highOrVeryHigh = risk === 'HIGH' || risk === 'VERY_HIGH';
   function partyIsPep(person) {
-    if (!person) return false;
-    if (person.isPEP === true || person.is_pep === true) return true;
-    var flag = String(person.isPEP || person.is_pep || person.pep_status || '').toLowerCase();
-    if (['1','true','yes','y','declared_yes','confirmed_pep'].indexOf(flag) >= 0) return true;
-    var declaration = person.pep_declaration || {};
-    if (typeof declaration === 'string') {
-      try { declaration = JSON.parse(declaration); } catch (e) { declaration = {}; }
-    }
-    var declared = String((declaration && (declaration.declared_pep || declaration.client_declared_pep)) || '').toLowerCase();
-    return ['1','true','yes','y','declared_yes','confirmed_pep'].indexOf(declared) >= 0;
+    return personHasDeclaredOrVerifiedPep(person);
   }
   var expected = [
     { doc_type: 'cert_inc', label: 'Certificate of Incorporation', taxonomy_section: 'entity' },
@@ -10124,12 +10138,12 @@ async function fetchApplicationDetail(ref) {
     ubos: ubos,
     intermediaries: intermediaries,
     pepCount: (function() {
-      var declared = directors.filter(personHasDeclaredOrVerifiedPep).length + ubos.filter(personHasDeclaredOrVerifiedPep).length;
-      if (declared > 0) return declared;
+      return directors.filter(personHasDeclaredOrVerifiedPep).length + ubos.filter(personHasDeclaredOrVerifiedPep).length;
+    })(),
+    screeningPepCount: (function() {
       var sr = (psData || {}).screening_report || {};
-      var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
-                          (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
-      return screeningPeps;
+      return (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
+             (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
     })(),
     dims: dims,
     _documents: documents,
@@ -10935,7 +10949,8 @@ function renderAuthoritativeAppDetail(app, options) {
 
   document.getElementById('detail-business').innerHTML =
     '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>';
+    '<div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>' +
+    (app.screeningPepCount > 0 ? '<div class="detail-row"><span class="label">Provider PEP Matches</span><span class="value">' + escapeHtml(String(app.screeningPepCount)) + ' screening review</span></div>' : '');
 
   var dimLabels = { d1: 'Customer / Entity', d2: 'Geographic', d3: 'Product / Service', d4: 'Industry / Sector', d5: 'Delivery Channel' };
   var riskBarsHtml = '';

@@ -57,6 +57,51 @@ def safe_json_loads(val):
     return {}
 
 
+def _optional_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"yes", "true", "1", "y"}:
+        return True
+    if text in {"no", "false", "0", "n"}:
+        return False
+    return None
+
+
+def _party_has_declared_or_confirmed_pep(person):
+    if not isinstance(person, dict):
+        return False
+    declaration = safe_json_loads(person.get("pep_declaration"))
+    status = str(person.get("pep_status") or declaration.get("pep_status") or "").strip().lower()
+
+    declared = _optional_bool(person.get("client_declared_pep", declaration.get("client_declared_pep")))
+    if declared is None:
+        declared = _optional_bool(person.get("declared_pep", declaration.get("declared_pep")))
+    officer_verified = _optional_bool(
+        person.get("officer_verified_pep", declaration.get("officer_verified_pep"))
+    )
+    if officer_verified is None:
+        officer_verified = _optional_bool(person.get("verified_pep", declaration.get("verified_pep")))
+
+    if declared is True or officer_verified is True:
+        return True
+    if status in {"declared_yes", "confirmed_pep"}:
+        return True
+    if declared is False or officer_verified is False:
+        return False
+    if status in {"declared_no", "false_positive", "not_pep", "pending_review", "not_verified"}:
+        return False
+
+    # Legacy records with no declaration metadata pre-date the separated PEP
+    # state model. Keep them counted; explicit negative metadata wins.
+    raw_pep = str(person.get("is_pep") or person.get("isPEP") or "").strip().lower()
+    return not declaration and raw_pep in {"yes", "true", "1", "y", "confirmed_pep", "declared_yes"}
+
+
 def _apply_controlled_prescreening_correction_overlays(db, app_id, application, prescreening_data):
     """Apply officer working-value overlays without mutating original submission JSON."""
     app_overlay = dict(application or {})
@@ -954,7 +999,7 @@ def compute_risk_score(app_data, config_override=None):
     all_persons = data.get("directors", []) + data.get("ubos", [])
     pep_scores = []
     for p in all_persons:
-        if p.get("is_pep") == "Yes":
+        if _party_has_declared_or_confirmed_pep(p):
             pep_type = (p.get("pep_type") or p.get("pep_category") or "").lower()
             if "foreign" in pep_type or "international" in pep_type:
                 pep_scores.append(4)

@@ -802,9 +802,8 @@ def _approval_truthy_flag(value: Any) -> bool:
 
 
 def _approval_row_has_declared_pep(row: Mapping[str, Any]) -> bool:
-    if _approval_truthy_flag((row or {}).get("is_pep")):
-        return True
     pep_declaration = _json_object((row or {}).get("pep_declaration"))
+    status = _approval_text(pep_declaration.get("pep_status"))
     for key in (
         "declared_pep",
         "client_declared_pep",
@@ -814,17 +813,20 @@ def _approval_row_has_declared_pep(row: Mapping[str, Any]) -> bool:
     ):
         if _approval_truthy_flag(pep_declaration.get(key)):
             return True
-    return _approval_truthy_flag(pep_declaration.get("pep_status"))
+    if status in {"declared_yes", "confirmed_pep"}:
+        return True
+    if status in {"declared_no", "false_positive", "not_pep", "pending_review", "not_verified"}:
+        return False
+    return not pep_declaration and _approval_truthy_flag((row or {}).get("is_pep"))
 
 
 def _approval_has_declared_pep(app: Mapping[str, Any], db) -> bool:
     prescreening = _json_object((app or {}).get("prescreening_data"))
     screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
     for payload in (prescreening, screening_report if isinstance(screening_report, dict) else {}):
-        if _approval_truthy_flag(payload.get("declared_pep")):
-            return True
-        if _approval_truthy_flag(payload.get("any_pep_hits")) or _approval_truthy_flag(payload.get("has_pep_hit")):
-            return True
+        for key in ("declared_pep", "declared_pep_present", "has_declared_pep", "client_declared_pep"):
+            if _approval_truthy_flag(payload.get(key)):
+                return True
     if not db or not (app or {}).get("id"):
         return False
     try:
@@ -905,8 +907,10 @@ def _approval_escalation_reasons(
     escalation_text = " ".join(escalation_values + [_approval_text(app.get("elevation_reason_text"))])
     if "edd" in escalation_text:
         reasons.append("edd_trigger")
-    if "pep" in escalation_text:
-        reasons.append("pep")
+    if "declared_pep" in escalation_text or "declared pep" in escalation_text:
+        reasons.append("declared_pep_present")
+    elif "pep" in escalation_text:
+        reasons.append("provider_pep_match_unresolved")
     if "adverse" in escalation_text:
         reasons.append("adverse_media")
     if "material_screening" in escalation_text or "screening_concern" in escalation_text:
@@ -918,7 +922,7 @@ def _approval_escalation_reasons(
     sot_states = " ".join(str(item or "").lower() for item in (sot.get("states") or []))
     sot_allows_screening = sot_effect == SCREENING_ADVERSE_EFFECT_ALLOW
     if _approval_has_declared_pep(app, db):
-        reasons.append("pep")
+        reasons.append("declared_pep_present")
     if not sot_allows_screening and _approval_adverse_media_flag(prescreening):
         reasons.append("adverse_media")
     if not sot_allows_screening and _approval_truthy_flag(prescreening.get("screening_concern")):
@@ -940,7 +944,7 @@ def _approval_escalation_reasons(
     if sot_effect == SCREENING_ADVERSE_EFFECT_PROHIBITED:
         reasons.append("prohibited_screening_hit")
     if "pep_detected" in sot_states:
-        reasons.append("pep")
+        reasons.append("provider_pep_match_unresolved")
     if "adverse_media_hit" in sot_states:
         reasons.append("adverse_media")
     if "material_concern" in sot_states:

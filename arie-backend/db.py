@@ -8,6 +8,7 @@ import json
 import sqlite3
 import logging
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, Optional, Dict, List, Tuple
 import secrets
@@ -40,6 +41,7 @@ FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
 })
 
 _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY = "pr_cr1r_manual_defaults"
+_PEP_PROVIDER_DETECTION_REPAIR_MARKER_KEY = "pr_pep_provider_detection_separation"
 
 # Try to import psycopg2 for PostgreSQL support
 try:
@@ -6758,6 +6760,21 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.45: separate provider PEP detections from party PEP state.
+    # Conservative data repair only: provider matches remain in screening
+    # evidence/review queues; party ``is_pep`` is reset only where no client
+    # declaration or officer confirmation exists.
+    try:
+        _repair_provider_detected_pep_party_flags_once(db)
+        db.commit()
+        logger.info("Migration v2.45: Ensured provider PEP detection separation repair")
+    except Exception as e:
+        logger.error("Migration v2.45 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _ensure_change_request_precondition_schema(db: 'DBConnection'):
     """Add CM approval-precondition result storage (PR-CM-APPROVAL-PRECONDITIONS-1).
@@ -7012,6 +7029,208 @@ def _apply_pr_cr1r_manual_score_defaults_once(db: 'DBConnection') -> bool:
             (_PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY, *marker_values),
         )
     logger.info("PR-CR1R manual score defaults repair marked as applied")
+    return True
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _optional_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"yes", "true", "1", "y"}:
+        return True
+    if text in {"no", "false", "0", "n"}:
+        return False
+    return None
+
+
+def _normalized_subject_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _screening_item_has_provider_pep(item: Mapping[str, Any]) -> bool:
+    if not isinstance(item, Mapping):
+        return False
+    if (
+        item.get("undeclared_pep")
+        or item.get("provider_detected_pep")
+        or item.get("has_pep_hit")
+    ):
+        return True
+    screening = item.get("screening") if isinstance(item.get("screening"), Mapping) else {}
+    for result in screening.get("results") or []:
+        if isinstance(result, Mapping) and result.get("is_pep"):
+            return True
+    return False
+
+
+def _screening_item_matches_party(item: Mapping[str, Any], row: Mapping[str, Any]) -> bool:
+    row_name = _normalized_subject_text(row.get("full_name"))
+    row_keys = {
+        _normalized_subject_text(row.get(key))
+        for key in ("id", "person_key")
+        if row.get(key)
+    }
+    item_names = {
+        _normalized_subject_text(item.get(key))
+        for key in ("name", "full_name", "subject_name", "person_name")
+        if item.get(key)
+    }
+    item_keys = {
+        _normalized_subject_text(item.get(key))
+        for key in ("person_key", "personKey", "subject_key", "subject_id", "person_id", "source_id")
+        if item.get(key)
+    }
+    return bool((row_keys and row_keys.intersection(item_keys)) or (row_name and row_name in item_names))
+
+
+def _party_declaration_is_declared_or_confirmed(pep_declaration: Mapping[str, Any]) -> bool:
+    status = str(pep_declaration.get("pep_status") or "").strip().lower()
+    declared = _optional_bool(
+        pep_declaration.get("client_declared_pep", pep_declaration.get("declared_pep"))
+    )
+    officer_verified = _optional_bool(
+        pep_declaration.get("officer_verified_pep", pep_declaration.get("verified_pep"))
+    )
+    return (
+        declared is True
+        or officer_verified is True
+        or status in {"declared_yes", "confirmed_pep"}
+    )
+
+
+def _repair_provider_detected_pep_party_table(
+    db: 'DBConnection',
+    *,
+    table_name: str,
+    screening_bucket: str,
+) -> int:
+    rows = db.execute(
+        f"""
+        SELECT p.id, p.application_id, p.person_key, p.full_name, p.is_pep,
+               p.pep_declaration, a.prescreening_data
+        FROM {table_name} p
+        JOIN applications a ON a.id = p.application_id
+        WHERE LOWER(CAST(p.is_pep AS TEXT)) IN ('yes','true','1','t','y')
+        """
+    ).fetchall()
+
+    repaired = 0
+    for raw_row in rows or []:
+        row = dict(raw_row) if hasattr(raw_row, "keys") else {}
+        pep_declaration = _json_object(row.get("pep_declaration"))
+        if _party_declaration_is_declared_or_confirmed(pep_declaration):
+            continue
+
+        prescreening = _json_object(row.get("prescreening_data"))
+        report = prescreening.get("screening_report")
+        if not isinstance(report, dict):
+            continue
+        matching_provider_pep = any(
+            _screening_item_has_provider_pep(item)
+            and _screening_item_matches_party(item, row)
+            for item in report.get(screening_bucket) or []
+            if isinstance(item, Mapping)
+        )
+        if not matching_provider_pep:
+            continue
+
+        status = str(pep_declaration.get("pep_status") or "").strip().lower()
+        pep_declaration.setdefault("declared_pep", False)
+        pep_declaration.setdefault("client_declared_pep", False)
+        if status in {"", "not_verified"}:
+            pep_declaration["pep_status"] = "declared_no"
+            pep_declaration.setdefault("pep_verification_source", "client_declaration")
+        pep_declaration["provider_detection_repair"] = {
+            "source": "PR-PEP-PROVIDER-DETECTION-SEPARATION-1",
+            "reason": "provider_pep_detection_is_screening_evidence_not_party_pep_state",
+        }
+
+        db.execute(
+            f"UPDATE {table_name} SET is_pep=?, pep_declaration=? WHERE id=?",
+            (
+                False if getattr(db, "is_postgres", False) else "No",
+                json.dumps(pep_declaration, sort_keys=True),
+                row.get("id"),
+            ),
+        )
+        repaired += 1
+    return repaired
+
+
+def _repair_provider_detected_pep_party_flags_once(db: 'DBConnection') -> bool:
+    """Undo legacy provider-PEP writeback without clearing real PEP states.
+
+    Previous code copied unresolved provider PEP matches into directors/ubos
+    ``is_pep``. This one-time repair only resets rows whose declaration does
+    not show client declaration or officer confirmation and whose application
+    still has a matching provider PEP screening item.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_migration_markers (
+            marker_key TEXT PRIMARY KEY,
+            description TEXT,
+            applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    existing_marker = db.execute(
+        "SELECT marker_key FROM data_migration_markers WHERE marker_key=?",
+        (_PEP_PROVIDER_DETECTION_REPAIR_MARKER_KEY,),
+    ).fetchone()
+    if existing_marker:
+        return False
+    if not (
+        _safe_table_exists(db, "applications")
+        and _safe_table_exists(db, "directors")
+        and _safe_table_exists(db, "ubos")
+        and _safe_column_exists(db, "directors", "pep_declaration")
+        and _safe_column_exists(db, "ubos", "pep_declaration")
+    ):
+        return False
+
+    repaired = 0
+    repaired += _repair_provider_detected_pep_party_table(
+        db, table_name="directors", screening_bucket="director_screenings"
+    )
+    repaired += _repair_provider_detected_pep_party_table(
+        db, table_name="ubos", screening_bucket="ubo_screenings"
+    )
+    description = (
+        "Reset legacy party is_pep values that were derived only from unresolved provider PEP screening; "
+        f"rows_repaired={repaired}"
+    )
+    if getattr(db, "is_postgres", False):
+        db.execute(
+            """
+            INSERT INTO data_migration_markers (marker_key, description)
+            VALUES (?, ?)
+            ON CONFLICT (marker_key) DO NOTHING
+            """,
+            (_PEP_PROVIDER_DETECTION_REPAIR_MARKER_KEY, description),
+        )
+    else:
+        db.execute(
+            "INSERT OR IGNORE INTO data_migration_markers (marker_key, description) VALUES (?, ?)",
+            (_PEP_PROVIDER_DETECTION_REPAIR_MARKER_KEY, description),
+        )
+    logger.info("PEP provider detection separation repair marked as applied; rows_repaired=%s", repaired)
     return True
 
 

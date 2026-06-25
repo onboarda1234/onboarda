@@ -152,9 +152,53 @@ class SubmitToComplianceTest(AsyncHTTPTestCase):
         # PEP-flagged case (MEDIUM so authority is not the driver — PEP basis is).
         self._seed_app("stc_pep", "STC-PEP", "compliance_review", "MEDIUM", 45)
         self.db.execute(
-            "INSERT OR REPLACE INTO directors (id, application_id, full_name, is_pep) "
-            "VALUES (?, ?, ?, ?)",
-            ("stc_pep_dir", "stc_pep", "Jane PEP", "Yes"),
+            "INSERT OR REPLACE INTO directors (id, application_id, full_name, is_pep, pep_declaration) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "stc_pep_dir",
+                "stc_pep",
+                "Jane PEP",
+                "Yes",
+                json.dumps({"declared_pep": True, "client_declared_pep": True, "pep_status": "declared_yes"}),
+            ),
+        )
+        # Provider-only PEP match: this must remain screening evidence, not a
+        # declared/officer-confirmed party PEP.
+        self._seed_app("stc_provider_pep", "STC-PROVIDER-PEP", "compliance_review", "MEDIUM", 45)
+        self.db.execute(
+            """
+            UPDATE applications SET prescreening_data=? WHERE id=?
+            """,
+            (
+                json.dumps(
+                    {
+                        "screening_report": {
+                            "director_screenings": [
+                                {
+                                    "person_name": "Provider Match",
+                                    "name": "Provider Match",
+                                    "undeclared_pep": True,
+                                    "provider_detected_pep": True,
+                                    "has_pep_hit": True,
+                                }
+                            ],
+                            "ubo_screenings": [],
+                        }
+                    }
+                ),
+                "stc_provider_pep",
+            ),
+        )
+        self.db.execute(
+            "INSERT OR REPLACE INTO directors (id, application_id, full_name, is_pep, pep_declaration) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "stc_provider_pep_dir",
+                "stc_provider_pep",
+                "Provider Match",
+                "No",
+                json.dumps({"declared_pep": False, "client_declared_pep": False, "pep_status": "declared_no"}),
+            ),
         )
         self.db.commit()
 
@@ -208,10 +252,21 @@ class SubmitToComplianceTest(AsyncHTTPTestCase):
         assert not row["decided_at"]
         assert not row["decision_by"]
 
-    def test_pep_case_basis_includes_pep(self):
+    def test_declared_pep_case_basis_is_explicit(self):
         resp = self._submit("stc_pep", self.co_token)
         assert resp.code == 200, resp.body.decode()
-        assert "pep" in self._json(resp)["submission_basis"]
+        basis = self._json(resp)["submission_basis"]
+        assert "declared_pep_present" in basis
+        assert "pep" not in basis
+
+    def test_provider_pep_case_basis_is_screening_review_not_declared_pep(self):
+        resp = self._submit("stc_provider_pep", self.co_token)
+        assert resp.code == 200, resp.body.decode()
+        basis = self._json(resp)["submission_basis"]
+        assert "provider_pep_match_unresolved" in basis
+        assert "screening_pep_review_required" in basis
+        assert "declared_pep_present" not in basis
+        assert "pep" not in basis
 
     def test_sco_and_admin_can_submit(self):
         assert self._submit("stc_low", self.sco_token).code == 200
