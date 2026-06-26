@@ -13551,7 +13551,7 @@ function normalizeEvidenceCategoryLabel(value) {
   if (key.indexOf('sanction') !== -1) return 'Sanctions';
   if (key.indexOf('watchlist') !== -1 || key.indexOf('warning') !== -1) return 'Watchlist / warning';
   if (key.indexOf('regulatory') !== -1 || key.indexOf('regulation') !== -1) return 'Regulatory';
-  if (key.indexOf('provider screening') !== -1 || key.indexOf('provider hit') !== -1) return 'Unclassified Provider Risk';
+  if (key.indexOf('provider screening') !== -1 || key.indexOf('provider hit') !== -1) return 'Provider risk match - review context';
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
@@ -13572,7 +13572,7 @@ function evidenceCategories(hit) {
     seen[key] = true;
     return true;
   });
-  return normalized.length ? normalized : ['Unclassified Provider Risk'];
+  return normalized.length ? normalized : ['Provider risk match - review context'];
 }
 
 function evidenceGroupedIdentifiers(values) {
@@ -13596,7 +13596,7 @@ function evidenceReviewCategoryLabel(categories) {
   if (text.indexOf('sanction') !== -1) return 'sanctions';
   if (text.indexOf('watchlist') !== -1 || text.indexOf('warning') !== -1) return 'watchlist';
   if (text.indexOf('regulatory') !== -1) return 'regulatory';
-  return 'unclassified provider risk';
+  return 'provider risk match';
 }
 
 function evidenceSubjectLabel(hit, fallback) {
@@ -13619,7 +13619,7 @@ function evidenceReviewRationale(provider, categories, hit, matchedName) {
   if (category === 'sanctions') return providerName + ' found a potential sanctions match' + target + '.';
   if (category === 'watchlist') return providerName + ' found a potential watchlist or warning match' + target + '.';
   if (category === 'regulatory') return providerName + ' found a potential regulatory match' + target + '.';
-  return providerName + ' returned an unresolved unclassified provider risk' + target + '.';
+  return providerName + ' returned provider risk context' + target + ' that needs officer review.';
 }
 
 function evidencePrimaryLabel(hit, context) {
@@ -13662,13 +13662,13 @@ function evidencePrimaryCategoryLabel(hit) {
   var label = categories.slice().sort(function(a, b) {
     return evidenceCategoryPriority({ match_categories: [a] }) - evidenceCategoryPriority({ match_categories: [b] });
   })[0] || '';
-  return label || 'Unclassified Provider Risk';
+  return label || 'Provider risk match - review context';
 }
 
 function evidenceSensitivityLabel(hit) {
   var priority = evidenceCategoryPriority(hit || {});
-  if (priority <= 2) return 'High sensitivity';
-  if (priority <= 4) return 'Elevated sensitivity';
+  if (priority <= 2) return 'High sensitivity - sanctions or PEP';
+  if (priority <= 4) return 'Elevated sensitivity - screening concern';
   return 'Review context';
 }
 
@@ -13998,15 +13998,12 @@ function providerEvidenceGroupKey(hit, context) {
   hit = hit || {};
   var categories = evidencePrimaryCategoryLabel(hit).toLowerCase();
   var provider = formatProviderName(hit.provider || hit.source || (context || {}).provider || 'unknown').toLowerCase();
-  var profileIdentifier = hit.provider_profile_identifier || hit.profile_identifier || '';
-  var sourceIdentifier = hit.provider_match_identifier || hit.match_identifier || hit.provider_alert_identifier || hit.alert_identifier || hit.provider_case_identifier || hit.case_identifier || '';
-  var label = evidencePrimaryLabel(hit, context).toLowerCase();
-  var strategy = profileIdentifier ? 'profile' : (categories ? 'category' : (sourceIdentifier ? 'source' : 'fallback'));
   return [
-    strategy,
+    'category',
     provider,
-    profileIdentifier || categories || sourceIdentifier || label,
-    categories || label
+    (context || {}).subject_type || hit.subject_scope || '',
+    (context || {}).subject_name || hit._subject_name || '',
+    categories || 'provider risk match'
   ].join('|');
 }
 
@@ -14078,22 +14075,6 @@ function evidenceMatchStrength(hit) {
   return found.value.match_strength || found.value.match_score || found.value.similarity || found.value.confidence || '';
 }
 
-function providerEvidenceTechnicalDetails(hit) {
-  var technicalRows = [
-    ['Provider case ID', hit.provider_case_identifier || hit.case_identifier || ''],
-    ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier || ''],
-    ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier || ''],
-    ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier || '']
-  ].filter(function(row) { return row[1]; }).map(function(row) {
-    return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <span style="font-family:monospace;">' + escapeHtml(String(row[1])) + '</span></div>';
-  }).join('');
-  if (!technicalRows) return '';
-  return '<details style="margin-top:8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
-    '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--text1);">Technical provider details</summary>' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + technicalRows + '</div>' +
-  '</details>';
-}
-
 function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
   var categories = evidenceCategories(hit);
   var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
@@ -14103,7 +14084,6 @@ function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
   var mediaPublisher = hit.source_name || hit.publisher || hit.publication_name || '';
   var mediaDate = hit.publication_date || hit.article_date || hit.published_at || '';
   var mediaSnippet = hit.media_snippet || hit.snippet || hit.match_rationale || '';
-  var sourceUnavailable = !mediaUrl && categories.join(' ').toLowerCase().indexOf('adverse') !== -1;
   var summary = hit.summary || mediaSnippet || evidenceReviewRationale(hit.provider || hit.source || (context || {}).provider, categories, hit, evidencePrimaryLabel(hit, context));
   var evidenceKey = registerScreeningEvidence(hit, context || {}, String(groupIndex) + '_' + String(recordIndex));
   var rows = [
@@ -14127,8 +14107,6 @@ function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
     (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
     (riskLabels ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;"><strong>Risk labels:</strong> ' + escapeHtml(riskLabels) + '</div>' : '') +
     (summary ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(summary) + '</div>' : '') +
-    (sourceUnavailable ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(hit.source_url_unavailable_message || SCREENING_SOURCE_UNAVAILABLE_MESSAGE) + '</div>' : '') +
-    providerEvidenceTechnicalDetails(hit) +
     '<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" onclick="openScreeningEvidenceDrawer(\'' + evidenceKey + '\')">View evidence</button>' +
     (mediaUrl ? ' <a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a>' : '') +
     '</div>' +
@@ -14304,6 +14282,10 @@ function providerResultHighlights(results, context) {
     var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
     var groupSummary = hit.summary || evidenceReviewRationale(providerName, categories, hit, evidencePrimaryLabel(hit, context));
     var indicatorDetails = providerIndicatorDetails(hit.indicators || []);
+    var anyMissingSource = (hit._group_records || []).some(function(record) {
+      var recordCategories = evidenceCategories(record).join(' ').toLowerCase();
+      return !evidenceSourceUrl(record || {}) && recordCategories.indexOf('adverse') !== -1;
+    });
     var records = (hit._group_records || []).map(function(record, recordIndex) {
       return providerEvidenceRecordCard(record, context, index, recordIndex);
     }).join('');
@@ -14329,6 +14311,7 @@ function providerResultHighlights(results, context) {
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 12px;">' + traceRows + '</div>' +
         profileNote +
         '<div style="margin-top:6px;">' + escapeHtml(groupSummary) + '</div>' +
+        (anyMissingSource ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Source article link is not available from the ComplyAdvantage payload for one or more records.</div>' : '') +
         indicatorDetails +
         records +
       '</div>' +
@@ -14592,7 +14575,7 @@ function screeningTriageCategoryChipLabel(label) {
   if (normalized.indexOf('watchlist') !== -1 || normalized.indexOf('warning') !== -1) return 'Watchlist';
   if (normalized.indexOf('pep') !== -1) return 'PEP';
   if (normalized.indexOf('sanction') !== -1) return 'Sanctions';
-  if (normalized.indexOf('provider screening hit') !== -1 || normalized.indexOf('unclassified provider') !== -1 || normalized === 'provider hit') return 'Unclassified Provider Risk';
+  if (normalized.indexOf('provider screening hit') !== -1 || normalized.indexOf('unclassified provider') !== -1 || normalized.indexOf('provider risk match') !== -1 || normalized === 'provider hit') return 'Provider risk match - review context';
   return label;
 }
 
@@ -14602,14 +14585,14 @@ function screeningTriageCategoryOrder(label) {
   if (normalized === 'sanctions') return 2;
   if (normalized === 'adverse media') return 3;
   if (normalized === 'watchlist') return 4;
-  if (normalized === 'unclassified provider risk' || normalized === 'provider hit') return 5;
+  if (normalized === 'unclassified provider risk' || normalized === 'provider risk match - review context' || normalized === 'provider hit') return 5;
   return 6;
 }
 
 function screeningTriageCategoryChipClass(label) {
   var normalized = String(label || '').trim().toLowerCase();
   if (normalized === 'pep' || normalized === 'sanctions') return 'high';
-  if (normalized === 'adverse media' || normalized === 'watchlist' || normalized === 'unclassified provider risk' || normalized === 'provider hit') return 'pending';
+  if (normalized === 'adverse media' || normalized === 'watchlist' || normalized === 'unclassified provider risk' || normalized === 'provider risk match - review context' || normalized === 'provider hit') return 'pending';
   return 'draft';
 }
 
@@ -14628,7 +14611,7 @@ function screeningTriageCategoryLabels(results, facts) {
     if ((facts && facts.pep_hits) > 0) labels.push('PEP');
     if ((facts && facts.sanctions_hits) > 0) labels.push('Sanctions');
     if ((facts && facts.adverse_media_hits) > 0) labels.push('Adverse Media');
-    if ((facts && facts.other_hits) > 0) labels.push('Unclassified Provider Risk');
+    if ((facts && facts.other_hits) > 0) labels.push('Provider risk match - review context');
   }
   return labels.sort(function(a, b) {
     return screeningTriageCategoryOrder(a) - screeningTriageCategoryOrder(b) || String(a).localeCompare(String(b));
@@ -14682,13 +14665,20 @@ function screeningSubjectRoleBadge(subjectType) {
 function screeningTriageSubjectListItem(subject, isSelected) {
   if (!subject) return '';
   var status = screeningQueueCanonicalStatus(subject);
+  var priority = screeningTriagePriority(subject);
+  var dispositionText = String(subject.review_disposition || subject.review_disposition_code || subject.display_status_label || '').toLowerCase();
+  var isClear = priority >= 6 ||
+    status.key === 'screened_no_match' ||
+    String(status.label || '').toLowerCase() === 'clear' ||
+    dispositionText.indexOf('clear') !== -1 ||
+    dispositionText.indexOf('false_positive') !== -1;
   var tags = (subject.category_labels || []).map(function(label) {
     return screeningTagBadge(label, screeningTriageCategoryChipClass(label));
   }).join('');
   var selectedStyles = isSelected
     ? 'border-color:var(--brand);background:rgba(43,47,143,0.06);box-shadow:0 0 0 2px rgba(43,47,143,0.08);'
-    : 'border-color:var(--border1);background:#fff;';
-  return '<button type="button" onclick="setScreeningReviewFocus(\'' + escapeHtml(subject.subject_type) + '\',\'' + escapeHtml(subject.subject_name) + '\')" style="display:block;width:100%;text-align:left;padding:12px;border:1px solid transparent;border-radius:10px;cursor:pointer;' + selectedStyles + '">' +
+    : (isClear ? 'border-color:var(--border1);background:var(--surface2);opacity:0.72;' : 'border-color:var(--border1);background:#fff;');
+  return '<button type="button" data-screening-subject-card="' + (isClear ? 'clear' : 'review') + '" onclick="setScreeningReviewFocus(\'' + escapeHtml(subject.subject_type) + '\',\'' + escapeHtml(subject.subject_name) + '\')" style="display:block;width:100%;text-align:left;padding:12px;border:1px solid transparent;border-radius:10px;cursor:pointer;' + selectedStyles + '">' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
       '<div style="min-width:0;">' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:700;color:var(--text1);line-height:1.4;">' + screeningSubjectRoleBadge(subject.subject_type) + '<span>' + escapeHtml(subject.subject_name) + '</span></div>' +
@@ -14716,7 +14706,49 @@ function screeningReviewCard(title, badgesHtml, bodyHtml, isFocused) {
       '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;">' + badgesHtml + '</div>' +
     '</div>' +
     bodyHtml +
+	  '</div>';
+}
+
+function screeningDecisionSummaryPanel(config) {
+  config = config || {};
+  var indicators = (config.indicators || []).filter(Boolean);
+  var indicatorHtml = indicators.length
+    ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' + indicators.map(function(label) {
+        return screeningTagBadge(label, /sanction|pep/i.test(label) ? 'high' : 'pending');
+      }).join('') + '</div>'
+    : '<div style="font-size:12px;color:var(--text3);margin-top:8px;">No provider risk indicators recorded for this subject.</div>';
+  var rows = [
+    ['Subject', config.subjectName],
+    ['Role', config.role],
+    ['Declared PEP', config.declaredPep],
+    ['Provider detected', config.providerDetected],
+    ['Current status', config.currentStatus],
+    ['Materiality / severity', config.materiality],
+    ['Last screened', config.lastScreened],
+    ['Action needed', config.actionNeeded]
+  ].filter(function(row) { return evidenceDisplayValue(row[1]); }).map(function(row) {
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border1);"><span style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">' + escapeHtml(row[0]) + '</span><strong style="display:block;font-size:13px;color:var(--text1);margin-top:2px;">' + escapeHtml(evidenceDisplayValue(row[1])) + '</strong></div>';
+  }).join('');
+  return '<div data-screening-decision-summary="true" style="margin:0 18px 14px;padding:14px;border:1px solid var(--border1);border-left:4px solid var(--brand);border-radius:10px;background:rgba(43,47,143,0.035);">' +
+    '<div style="font-size:10px;text-transform:uppercase;color:var(--text3);font-weight:800;letter-spacing:.04em;">Decision summary</div>' +
+    '<div style="font-size:15px;font-weight:800;color:var(--text1);margin-top:4px;">' + escapeHtml(config.heading || 'Screening review required') + '</div>' +
+    indicatorHtml +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0 14px;margin-top:12px;">' + rows + '</div>' +
   '</div>';
+}
+
+function screeningProviderDetectedSummary(labels, facts) {
+  labels = (Array.isArray(labels) ? labels : []).filter(Boolean);
+  if (labels.length) return labels.join(', ');
+  if (facts && facts.matched) return 'Provider risk context';
+  return 'No provider match';
+}
+
+function screeningActionNeededText(row, hasHits) {
+  if (row && row.review_disposition) return 'Review recorded: ' + screeningReviewDisplayLabel(row) + '.';
+  if (row && row.review_required) return 'Decide whether this is a false positive, true match, escalation, or information request.';
+  if (hasHits) return 'Provider match exists but no actionable review is currently open.';
+  return 'No officer action needed unless new information appears.';
 }
 
 function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus) {
@@ -14796,6 +14828,19 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryEntityLabel || '') }));
 
   var body = '';
+  body += screeningDecisionSummaryPanel({
+    heading: app.company + (companyHits.adverse_media_hits > 0 ? ' - possible adverse media match' : (companyHits.sanctions_hits > 0 ? ' - possible sanctions/watchlist match' : ' - entity screening')),
+    subjectName: app.company,
+    role: 'Entity',
+    declaredPep: 'Not applicable',
+    providerDetected: screeningProviderDetectedSummary(screeningTriageCategoryLabels(companyResults, companyHits), companyHits),
+    currentStatus: screeningTriageDisplayStatusLabel(reviewRow, primaryEntityLabel),
+    materiality: companyHits.sanctions_hits > 0 ? 'High sensitivity - sanctions/watchlist' : (companyHits.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (companyHits.matched ? 'Review context' : 'Clear')),
+    lastScreened: ((screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19),
+    actionNeeded: screeningActionNeededText(reviewRow, companyHits.matched),
+    indicators: screeningTriageCategoryLabels(companyResults, companyHits)
+  });
+  body += renderInlineScreeningDispositionPanel(app, reviewRow, 'entity', app.company);
   body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Registry Status</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(company.found ? 'Registry record found' : (screeningSummary.screening_run_recorded ? 'Registry record not found' : 'Awaiting screening')) + '</div></div>';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(companyHits.total_hits || 0)) + '</div></div>';
@@ -14823,7 +14868,6 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (redApplicants.length) body += '<div style="margin-top:10px;"><strong>KYC review flags:</strong> RED outcome for ' + escapeHtml(redApplicants.join(', ')) + '</div>';
   body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml((companyAdverse.matched || monitoringMedia.matched) ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media company match recorded.') + '</div>';
   body += '</div>';
-  body += renderInlineScreeningDispositionPanel(app, reviewRow, 'entity', app.company);
   body += screeningReviewHistory(reviewRow);
 
   return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
@@ -14901,6 +14945,22 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryPersonLabel || '') }));
 
   var body = '';
+  var personProviderResultsForSummary = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
+  var personIndicators = screeningTriageCategoryLabels(personProviderResultsForSummary, facts);
+  if (personDeclaredPep && personIndicators.indexOf('Declared PEP') === -1) personIndicators.unshift('Declared PEP');
+  body += screeningDecisionSummaryPanel({
+    heading: person.name + (providerPep ? ' - possible PEP match' : (facts.adverse_media_hits > 0 ? ' - possible adverse media match' : ' - screening review')),
+    subjectName: person.name,
+    role: screeningSubjectTypeLabel(person.subject_type),
+    declaredPep: personDeclaredPep ? 'Yes' : 'No',
+    providerDetected: screeningProviderDetectedSummary(personIndicators, facts),
+    currentStatus: screeningTriageDisplayStatusLabel(reviewRow, primaryPersonLabel),
+    materiality: providerPep || facts.sanctions_hits > 0 ? 'High sensitivity - PEP/sanctions' : (facts.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (facts.matched ? 'Review context' : 'Clear')),
+    lastScreened: ((facts.screened_at || screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19),
+    actionNeeded: screeningActionNeededText(reviewRow, facts.matched || personDeclaredPep),
+    indicators: personIndicators
+  });
+  body += renderInlineScreeningDispositionPanel(app, reviewRow, person.subject_type, person.name);
   body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Role</div><div style="font-size:13px;font-weight:600;text-transform:capitalize;">' + escapeHtml(person.subject_type) + '</div></div>';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Jurisdiction / Ownership</div><div style="font-size:13px;font-weight:600;">' + escapeHtml((person.subject_type === 'ubo' || person.subject_type === 'intermediary') ? String(person.pct || 0) + '%' + (person.nat ? ' · ' + person.nat : '') : (person.nat || 'Not recorded')) + '</div></div>';
@@ -14929,18 +14989,17 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
       declared_pep: personDeclaredPep ? 'Yes' : 'No',
       provider_detected_pep: providerPep ? 'Yes' : 'No',
       undeclared_pep: undeclaredPep ? 'Yes' : 'No'
-    };
-    body += screeningQueueEvidenceReadinessPanel(reviewRow);
-    body += buildScreeningComparisonPanel('person', person, personProviderResults, {
-      declaredPep: personDeclaredPep ? 'Yes' : 'No',
-      providerPep: providerPep ? 'Yes' : 'No'
-    }, personProviderContext);
-    body += providerResultHighlights(personProviderResults, personProviderContext);
-  }
-  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(facts.adverse_media_hits > 0 ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media person match recorded.') + '</div>';
-  body += '</div>';
-  body += renderInlineScreeningDispositionPanel(app, reviewRow, person.subject_type, person.name);
-  body += screeningReviewHistory(reviewRow);
+	    };
+	    body += screeningQueueEvidenceReadinessPanel(reviewRow);
+	    body += buildScreeningComparisonPanel('person', person, personProviderResults, {
+	      declaredPep: personDeclaredPep ? 'Yes' : 'No',
+	      providerPep: providerPep ? 'Yes' : 'No'
+	    }, personProviderContext);
+	    body += providerResultHighlights(personProviderResults, personProviderContext);
+	  }
+	  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(facts.adverse_media_hits > 0 ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media person match recorded.') + '</div>';
+	  body += '</div>';
+	  body += screeningReviewHistory(reviewRow);
 
   return screeningReviewCard(escapeHtml(person.name), badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
 }
@@ -21261,11 +21320,17 @@ function monitoringAlertSourceUrl(ref) {
 function monitoringAlertProviderEvidenceRows(raw) {
   var evidence = Array.isArray(raw && raw.provider_evidence) ? raw.provider_evidence : [];
   if (!evidence.length) return '';
+  var missingSourceCount = evidence.filter(function(item) {
+    return !(item && (item.source_url || item.provider_case_url));
+  }).length;
+  var missingSourceMessage = missingSourceCount
+    ? '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Source article link is not available from the ComplyAdvantage payload for ' + escapeHtml(String(missingSourceCount)) + ' evidence record' + (missingSourceCount === 1 ? '' : 's') + '.</div>'
+    : '';
   return evidence.map(function(item, idx) {
     var sourceUrl = item.source_url || item.provider_case_url || '';
     var sourceValue = sourceUrl
       ? '<a href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener noreferrer">Open source</a>'
-      : escapeHtml(item.source_url_unavailable_reason || 'Source article link not available from ComplyAdvantage Mesh payload.');
+      : 'Not supplied';
     var category = item.match_category || item.evidence_type || '';
     var risk = item.risk_indicator || '';
     var categoryRisk = [category, risk].filter(Boolean).join(' / ');
@@ -21277,15 +21342,15 @@ function monitoringAlertProviderEvidenceRows(raw) {
       '</div>' +
       monitoringInfoGrid([
         ['Evidence status', monitoringTextValue(item.evidence_status, 'Not available')],
-        ['Provider case ID', monitoringTextValue(item.case_identifier, 'Not available')],
-        ['Provider alert ID', monitoringTextValue(item.alert_identifier, 'Not available')],
         ['Category / risk indicator', monitoringTextValue(categoryRisk, 'Not available')],
         ['Confidence', monitoringTextValue(item.match_confidence, 'Not available')],
+        ['Source title / reference', monitoringTextValue(item.source_title || item.title || item.source_name, 'Not available')],
+        ['Detected date', monitoringTextValue(item.detected_at || item.discovered_at || item.created_at, 'Not available')],
         ['Source link', sourceValue]
       ]) +
       (snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">' + escapeHtml(snippet) + '</div>' : '') +
     '</div>';
-  }).join('');
+  }).join('') + missingSourceMessage;
 }
 
 function monitoringDocumentRefreshContext(alert) {
@@ -21521,7 +21586,6 @@ function renderMonitoringDecisionSection(alert) {
   return monitoringDetailCard('Officer Action',
     '<div style="display:grid;gap:12px;">' +
       '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Suggested action: ' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>' +
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-start-review-btn" onclick="startMonitoringAlertReview()">Start Review</button></div>' +
       '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:start;">' +
         '<div><div class="form-label">Choose Outcome</div><select class="form-select" id="monitoring-alert-outcome" onchange="updateMonitoringDecisionNoteHint()"><option value="">Select outcome</option>' + options + '</select></div>' +
         '<div><div class="form-label">Add Note <span id="monitoring-alert-note-required" style="color:var(--red);display:none;">*</span></div><textarea class="form-input" id="monitoring-alert-decision-note" rows="4" placeholder="Record the rationale, evidence considered, and next operational step."></textarea><div id="monitoring-alert-decision-hint" style="font-size:11px;color:var(--text3);margin-top:4px;">Notes are mandatory for material outcomes and high/critical alerts.</div></div>' +

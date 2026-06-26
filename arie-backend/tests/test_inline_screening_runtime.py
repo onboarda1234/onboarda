@@ -1187,11 +1187,13 @@ class TestInlineScreeningRuntime:
         )
         assert "Evidence groups" in result["providerHighlightsHtml"]
         assert "PEP · 2 evidence records" in result["providerHighlightsHtml"]
-        assert "Unclassified Provider Risk · 2 evidence records" in result["providerHighlightsHtml"]
+        assert "Provider risk match - review context · 2 evidence records" in result["providerHighlightsHtml"]
         assert result["providerHighlightsHtml"].count("Vladimir Putin") >= 4
         assert "Show evidence" in result["providerHighlightsHtml"]
-        assert "Technical provider details" in result["providerHighlightsHtml"]
-        assert "Provider case ID" in result["providerHighlightsHtml"]
+        assert "Technical provider details" not in result["providerHighlightsHtml"]
+        assert "Provider case ID" not in result["providerHighlightsHtml"]
+        assert "Provider alert ID" not in result["providerHighlightsHtml"]
+        assert "Provider risk ID" not in result["providerHighlightsHtml"]
         assert "<details" in result["providerHighlightsHtml"]
         assert "Declared vs Provider Match" in result["comparisonHtml"]
         assert "Comparison shown against highest-risk provider match." in result["comparisonHtml"]
@@ -1227,6 +1229,12 @@ class TestInlineScreeningRuntime:
         assert result["boCallsAfterFocus"] == 0
         assert "Screening Subjects" in result["triageCockpitHtml"]
         assert "Select one subject to review comparison, evidence, and disposition state." in result["triageCockpitHtml"]
+        assert 'data-screening-subject-card="review"' in result["triageCockpitHtml"]
+        assert 'data-screening-subject-card="clear"' in result["triageCockpitHtml"]
+        assert 'data-screening-decision-summary="true"' in result["triageCockpitHtml"]
+        assert "Decision summary" in result["triageCockpitHtml"]
+        assert result["triageCockpitHtml"].index("Decision summary") < result["triageCockpitHtml"].index("Save disposition")
+        assert result["triageCockpitHtml"].index("Save disposition") < result["triageCockpitHtml"].index("Evidence groups")
         assert "Jane Director" in result["triageCockpitHtml"]
         assert "John Harbor" in result["triageCockpitHtml"]
         assert "Triage Holdings Ltd" in result["triageCockpitHtml"]

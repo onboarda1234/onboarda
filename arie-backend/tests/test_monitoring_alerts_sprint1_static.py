@@ -195,15 +195,16 @@ def test_monitoring_alert_detail_renders_compact_provider_evidence_without_fake_
     assert "match_confidence" in evidence
     assert 'data-monitoring-provider-evidence-card="true"' in evidence
     assert "Evidence status" in evidence
-    assert "Provider case ID" in evidence
-    assert "Provider alert ID" in evidence
     assert "Category / risk indicator" in evidence
+    assert "Source title / reference" in evidence
+    assert "Detected date" in evidence
     assert "Source link" in evidence
-    assert "Source article link not available from ComplyAdvantage Mesh payload." in evidence
+    assert "Source article link is not available from the ComplyAdvantage payload" in evidence
     assert "target=\"_blank\"" in evidence
+    assert "Provider case ID" not in evidence
+    assert "Provider alert ID" not in evidence
     assert "Evidence fetched" not in evidence
     assert "Matched subject" not in evidence
-    assert "source_title" not in evidence
     assert "publication_date" not in evidence
     assert "Raw alert payload" not in evidence
 
@@ -229,7 +230,7 @@ def test_monitoring_alert_decision_and_assignment_controls_are_simplified():
     decision = _function_region(html, "renderMonitoringDecisionSection", "renderMonitoringAssignmentSection")
     assignment = _function_region(html, "renderMonitoringAssignmentSection", "renderMonitoringDownstreamLinks")
 
-    assert "Start Review" in decision
+    assert "Start Review" not in decision
     assert "Choose Outcome" in decision
     assert "Add Note" in decision
     assert "Save Decision" in decision
