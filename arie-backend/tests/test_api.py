@@ -6220,6 +6220,107 @@ class TestGovernanceAttemptAudit:
         assert detail["previous_status"] == "edd_required"
         assert detail["new_status"] == "in_review"
 
+    def test_false_positive_clearance_does_not_advance_to_kyc_when_another_floor_remains(self, api_server):
+        """False-positive clearance must not skip pre-approval while another EDD floor remains."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_workflow_fp_other_floor"
+        app_ref = "ARF-2026-SCREEN-WORKFLOW-FP-FLOOR"
+        company_name = "Screening Workflow False Positive Floor Ltd"
+        conn = get_db()
+        self._insert_screening_workflow_app(
+            conn,
+            app_id,
+            app_ref,
+            company_name=company_name,
+            status="pre_approval_review",
+            lane="EDD",
+            risk_level="HIGH",
+            final_risk_level="HIGH",
+        )
+        conn.execute(
+            """
+            UPDATE applications
+            SET sector = ?,
+                risk_escalations = ?,
+                elevation_reason_text = ?
+            WHERE id = ?
+            """,
+            (
+                "Crypto VASP exchange",
+                json.dumps(["floor_rule_high_risk_sector", "material_screening_disposition_floor"]),
+                "High-risk sector floor and unresolved screening match require EDD.",
+                app_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        first_token = create_token("admin001", "admin", "Test Admin", "officer")
+        first_payload = {
+            "application_id": app_ref,
+            "subject_type": "entity",
+            "subject_name": company_name,
+            "disposition": "false_positive_cleared",
+            "rationale": "Officer matched provider evidence against registry records and confirmed a different entity.",
+            "evidence_reference": "Registry extract and provider case CA-FP-FLOOR-001.",
+        }
+        first = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=first_payload,
+            headers={"Authorization": f"Bearer {first_token}"},
+            timeout=5,
+        )
+        assert first.status_code == 202, first.text
+
+        second_token = create_token("sco_phase1c_floor", "sco", "Second Officer", "officer")
+        second_payload = dict(first_payload)
+        second_payload["rationale"] = "Independent second review confirmed the provider hit belongs to another company."
+        second_payload["evidence_reference"] = "Second-review registry pack and provider case CA-FP-FLOOR-001."
+        second = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=second_payload,
+            headers={"Authorization": f"Bearer {second_token}"},
+            timeout=5,
+        )
+
+        assert second.status_code == 200, second.text
+        body = second.json()
+        assert body["review"]["canonical_disposition"] == "false_positive_cleared"
+        assert body["risk_recomputed"] is True
+        assert "workflow_normalization" not in body
+
+        conn = get_db()
+        app = conn.execute(
+            """
+            SELECT status, onboarding_lane, base_risk_level, final_risk_level,
+                   risk_escalations, elevation_reason_text
+            FROM applications WHERE id = ?
+            """,
+            (app_id,),
+        ).fetchone()
+        review = conn.execute(
+            """
+            SELECT disposition_code, second_reviewer_id
+            FROM screening_reviews WHERE application_id = ?
+            """,
+            (app_id,),
+        ).fetchone()
+        conn.close()
+
+        escalations = set(json.loads(app["risk_escalations"] or "[]"))
+        assert app["status"] != "kyc_documents"
+        assert app["status"] in {"pre_approval_review", "edd_required"}
+        assert app["onboarding_lane"] == "EDD"
+        assert app["base_risk_level"] == "LOW"
+        assert app["final_risk_level"] == "HIGH"
+        assert "floor_rule_high_risk_sector" in escalations
+        assert "material_screening_disposition_floor" not in escalations
+        assert "High-risk sector floor" in app["elevation_reason_text"]
+        assert review["disposition_code"] == "false_positive_cleared"
+        assert review["second_reviewer_id"] == "sco_phase1c_floor"
+
     def test_provider_only_pep_false_positive_clearance_recalculates_to_base_low(self, api_server):
         """Provider-only PEP clearance must remove the temporary PEP/EDD floor."""
         from auth import create_token
