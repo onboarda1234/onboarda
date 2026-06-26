@@ -345,22 +345,22 @@ class TestGenerator(_PRDBase):
         "artifact_references", "audit_references",
     }
 
-    def _complete_review(self, rid, outcome="no_change",
-                         reason="baseline checks pass"):
-        # Mark the review completed directly so the generator can be
-        # exercised in isolation (without the handler).
+    def _record_outcome_pending_memo(self, rid, outcome="no_change",
+                                     reason="baseline checks pass"):
+        # Mark the outcome recorded but not terminal so the memo generator can
+        # be exercised in its allowed completion_pending_memo state.
         self._conn.execute(
-            "UPDATE periodic_reviews SET status='completed', "
+            "UPDATE periodic_reviews SET status='completion_pending_memo', "
             "outcome=?, outcome_reason=?, "
             "outcome_recorded_at=datetime('now'), "
-            "completed_at=datetime('now') WHERE id = ?",
+            "completed_at=NULL WHERE id = ?",
             (outcome, reason, rid),
         )
         self._conn.commit()
 
     def test_build_memo_data_has_all_addendum_sections(self):
         rid = self._create_review()
-        self._complete_review(rid)
+        self._record_outcome_pending_memo(rid)
         import periodic_review_memo as prm
         data = prm.build_memo_data(self._conn, rid)
         self.assertEqual(set(data.keys()), self.EXPECTED_SECTIONS)
@@ -374,7 +374,7 @@ class TestGenerator(_PRDBase):
                 {"id": 1, "label": "Updated CoI", "rationale": "doc stale"},
             ],
         )
-        self._complete_review(rid, outcome="enhanced_monitoring")
+        self._record_outcome_pending_memo(rid, outcome="enhanced_monitoring")
 
         import periodic_review_memo as prm
         result = prm.generate_periodic_review_memo(self._conn, rid)
@@ -420,7 +420,7 @@ class TestGenerator(_PRDBase):
 
     def test_compliance_memos_never_written(self):
         rid = self._create_review()
-        self._complete_review(rid)
+        self._record_outcome_pending_memo(rid)
         import periodic_review_memo as prm
         prm.generate_periodic_review_memo(self._conn, rid)
         count = self._conn.execute(
@@ -431,7 +431,7 @@ class TestGenerator(_PRDBase):
     def test_edd_linkage_populates_edd_summary(self):
         edd_id = self._create_edd()
         rid = self._create_review(linked_edd_id=edd_id)
-        self._complete_review(rid, outcome="edd_required")
+        self._record_outcome_pending_memo(rid, outcome="edd_required")
         import periodic_review_memo as prm
         prm.generate_periodic_review_memo(self._conn, rid)
         row = self._conn.execute(
@@ -444,7 +444,7 @@ class TestGenerator(_PRDBase):
 
     def test_generation_failure_persists_failure_row(self):
         rid = self._create_review()
-        self._complete_review(rid)
+        self._record_outcome_pending_memo(rid)
         import periodic_review_memo as prm
         with mock.patch.object(prm, "build_memo_data",
                                side_effect=RuntimeError("boom")):
@@ -455,13 +455,13 @@ class TestGenerator(_PRDBase):
             "WHERE periodic_review_id = ?", (rid,)
         ).fetchone()
         self.assertEqual(row["status"], "generation_failed")
-        # Outcome still committed.
+        # Outcome still recorded and held in memo quarantine.
         self.assertEqual(
             self._conn.execute(
                 "SELECT status FROM periodic_reviews WHERE id = ?",
                 (rid,),
             ).fetchone()["status"],
-            "completed",
+            "completion_pending_memo",
         )
 
 
@@ -724,8 +724,8 @@ class TestMemoReadEndpoint(_PRDBase):
             "(application_id, client_name, risk_level, status, "
             " outcome, outcome_reason, "
             " outcome_recorded_at, completed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-            (self._app_id, "PRD Test Co", "MEDIUM", "completed",
+            "VALUES (?, ?, ?, ?, ?, ?, datetime('now'), NULL)",
+            (self._app_id, "PRD Test Co", "MEDIUM", "completion_pending_memo",
              "no_change", "ok"),
         )
         self._conn.commit()
@@ -771,8 +771,8 @@ class TestEDDIntegrationIsolation(_PRDBase):
             "(application_id, client_name, risk_level, status, "
             " outcome, outcome_reason, "
             " outcome_recorded_at, completed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-            (self._app_id, "PRD Test Co", "MEDIUM", "completed",
+            "VALUES (?, ?, ?, ?, ?, ?, datetime('now'), NULL)",
+            (self._app_id, "PRD Test Co", "MEDIUM", "completion_pending_memo",
              "no_change", "ok"),
         )
         self._conn.commit()
@@ -832,10 +832,10 @@ class TestDeterminism(_PRDBase):
     def test_no_ai_client_calls_during_generation(self):
         rid = self._create_review()
         self._conn.execute(
-            "UPDATE periodic_reviews SET status='completed', "
+            "UPDATE periodic_reviews SET status='completion_pending_memo', "
             "outcome=?, outcome_reason=?, "
             "outcome_recorded_at=datetime('now'), "
-            "completed_at=datetime('now') WHERE id = ?",
+            "completed_at=NULL WHERE id = ?",
             ("no_change", "ok", rid),
         )
         self._conn.commit()

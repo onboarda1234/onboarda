@@ -30449,6 +30449,8 @@ class PeriodicReviewRiskReassessmentHandler(BaseHandler):
                 )
             except prr.ReviewNotFound:
                 return self.error("Review not found", 404)
+            except prr.ReviewClosedError as exc:
+                return self.error(str(exc), 409)
             except prr.RiskReassessmentError as exc:
                 return self.error(str(exc), 400)
             self.success({
@@ -31828,6 +31830,7 @@ class PeriodicReviewMemoHandler(BaseHandler):
         db = get_db()
         try:
             import periodic_review_memo as prm
+            import periodic_review_risk_reassessment as prr
             review = db.execute(
                 "SELECT id FROM periodic_reviews WHERE id = ?",
                 (review_id,),
@@ -31839,6 +31842,8 @@ class PeriodicReviewMemoHandler(BaseHandler):
                 generated_on_demand = True
                 try:
                     prm.generate_periodic_review_memo(db, review_id)
+                except prr.ReviewClosedError as exc:
+                    return self.error(str(exc), 409)
                 except Exception:
                     # The generator persists a generation_failed row before
                     # re-raising. Return that row if available so the UI has
@@ -31851,7 +31856,6 @@ class PeriodicReviewMemoHandler(BaseHandler):
             else:
                 memo["generated_on_demand"] = False
             try:
-                import periodic_review_risk_reassessment as prr
                 if memo.get("generated_on_demand"):
                     prr.mark_memo_addendum_generated(
                         db,
@@ -31906,6 +31910,8 @@ class PeriodicReviewMemoHandler(BaseHandler):
                 return self.error("Review not found", 404)
             try:
                 memo_result = prm.generate_periodic_review_memo(db, review_id)
+            except prr.ReviewClosedError as exc:
+                return self.error(str(exc), 409)
             except Exception as exc:
                 memo_result = {
                     "status": "generation_failed",
@@ -31969,6 +31975,8 @@ class PeriodicReviewMemoFinalizeHandler(BaseHandler):
                 )
             except prr.ReviewNotFound:
                 return self.error("Review not found", 404)
+            except prr.ReviewClosedError as exc:
+                return self.error(str(exc), 409)
             except prr.RiskReassessmentError as exc:
                 return self.error(str(exc), 400)
             self.success({
@@ -34215,6 +34223,11 @@ class PortalApplicationPeriodicReviewAttestationDraftHandler(BaseHandler):
             app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
             if not app or not review or not projection:
                 return
+            import periodic_review_engine as pre
+            try:
+                pre.require_review_not_terminal(review, action="attestation updated")
+            except pre.ReviewClosedError as exc:
+                return self.error(str(exc), 409)
             before_snapshot = _attestation_snapshot_from_review(review)
             data = self.get_json() or {}
             try:
@@ -34303,6 +34316,11 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
             app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
             if not app or not review or not projection:
                 return
+            import periodic_review_engine as pre
+            try:
+                pre.require_review_not_terminal(review, action="attestation submitted")
+            except pre.ReviewClosedError as exc:
+                return self.error(str(exc), 409)
             before_snapshot = _attestation_snapshot_from_review(review)
             data = self.get_json() or {}
             try:

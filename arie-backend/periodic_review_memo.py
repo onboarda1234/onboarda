@@ -40,6 +40,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from periodic_review_engine import require_review_not_terminal
+
 
 logger = logging.getLogger("arie.periodic_review_memo")
 
@@ -587,6 +589,8 @@ def generate_periodic_review_memo(db, review_id: int) -> Dict[str, Any]:
     ERROR with full traceback, and re-raises so the caller can surface
     the error. The caller MUST NOT roll back the outcome commit.
     """
+    review = _fetch_review(db, review_id)
+    require_review_not_terminal(review, action="memo generated")
     try:
         memo_data = build_memo_data(db, review_id)
         persisted = _insert_memo_row(

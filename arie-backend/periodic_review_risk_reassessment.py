@@ -10,6 +10,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from periodic_review_engine import ReviewClosedError, require_review_not_terminal
+
 
 RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
 RISK_LEVEL_RANK = {level: idx for idx, level in enumerate(RISK_LEVELS)}
@@ -372,6 +374,7 @@ def save_risk_reassessment(db, review_id: int, *, payload: Dict[str, Any],
     if audit_writer is None:
         raise RiskReassessmentError("audit_writer is required")
     review = _fetch_review(db, review_id)
+    require_review_not_terminal(review, action="risk reassessed")
     application = _fetch_application(db, _row_get(review, "application_id"))
     current = canonical_risk_level(
         _row_get(application, "final_risk_level")
@@ -499,6 +502,7 @@ def save_risk_reassessment(db, review_id: int, *, payload: Dict[str, Any],
 def mark_memo_addendum_generated(db, review_id: int, *, memo_result: Dict[str, Any],
                                  user=None, audit_writer=None) -> Dict[str, Any]:
     review = _fetch_review(db, review_id)
+    require_review_not_terminal(review, action="memo addendum updated")
     status = ADDENDUM_DRAFT if memo_result.get("status") == "generated" else ADDENDUM_FAILED
     ts = _utc_now_iso()
     db.execute(
@@ -527,6 +531,7 @@ def mark_memo_addendum_generated(db, review_id: int, *, memo_result: Dict[str, A
 
 def finalize_memo_addendum(db, review_id: int, *, user=None, audit_writer=None) -> Dict[str, Any]:
     review = _fetch_review(db, review_id)
+    require_review_not_terminal(review, action="memo addendum finalized")
     latest = _latest_memo_row(db, review_id)
     if latest is None:
         raise RiskReassessmentError("memo addendum must be generated before finalization")
@@ -572,6 +577,7 @@ __all__ = [
     "DECISION_ESCALATE",
     "RiskReassessmentError",
     "ReviewNotFound",
+    "ReviewClosedError",
     "build_reassessment_snapshot",
     "derive_suggested_risk_impact",
     "save_risk_reassessment",

@@ -429,6 +429,20 @@ def _is_terminal_review_state(state: Optional[str]) -> bool:
     return _coerce_state(state) in {STATE_COMPLETED, STATE_CANCELLED}
 
 
+def require_review_not_terminal(review, *, action: str = "modify") -> None:
+    """Raise ``ReviewClosedError`` when ``review`` is terminal.
+
+    This is the public terminal immutability guard for periodic-review helper
+    modules that do not otherwise route through this engine.
+    """
+    status = _coerce_state(_row_get(review, "status"))
+    if _is_terminal_review_state(status):
+        review_id = _row_get(review, "id")
+        raise ReviewClosedError(
+            f"periodic_review id={review_id} is already {status} and cannot be {action}"
+        )
+
+
 def _parse_ts(value) -> Optional[datetime]:
     if value in (None, ""):
         return None
@@ -2805,4 +2819,5 @@ __all__ = [
     "escalate_review_to_edd",
     "record_review_outcome",
     "finalize_review_memo_completion",
+    "require_review_not_terminal",
 ]
