@@ -479,6 +479,155 @@ class TestRequiredItemPatchHandler(_PRReviewHandlerBase):
         self.assertEqual(resp.code, 400)
 
 
+class TestTerminalImmutabilityMatrix(_PRReviewHandlerBase):
+    TERMINAL_STATUSES = ("completed", "cancelled", "canceled")
+
+    def _review_snapshot(self, rid):
+        row = self._conn.execute(
+            "SELECT status, outcome, outcome_reason, completed_at, closed_at, "
+            "assigned_officer, priority, required_items, linked_edd_case_id, "
+            "memo_status, periodic_review_memo_id "
+            "FROM periodic_reviews WHERE id=?",
+            (rid,),
+        ).fetchone()
+        return dict(row)
+
+    def _assert_terminal_route_rejected_without_review_mutation(self, status, path, body, *, method="POST"):
+        rid = self._create_review(status=status)
+        self._conn.execute(
+            "UPDATE periodic_reviews SET required_items=? WHERE id=?",
+            (json.dumps([{
+                "id": "item-1",
+                "code": "kyc_refresh",
+                "item_type": "kyc_refresh",
+                "label": "Refresh KYC",
+                "rationale": "terminal matrix fixture",
+            }]), rid),
+        )
+        doc_id = f"doc-{status}-{rid}"
+        self._create_document(doc_id=doc_id)
+        self._conn.commit()
+        body = dict(body)
+        if body.get("document_id"):
+            body["document_id"] = doc_id
+        before = self._review_snapshot(rid)
+        audit_before = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log"
+        ).fetchone()["c"]
+
+        resolved_path = path.format(rid=rid)
+        if method == "PATCH":
+            resp = self._patch(resolved_path, body)
+        else:
+            resp = self._post(resolved_path, body)
+
+        self.assertEqual(resp.code, 409, f"{status} {method} {resolved_path}: {resp.body!r}")
+        after = self._review_snapshot(rid)
+        self.assertEqual(after, before, f"{status} {method} {resolved_path} mutated review row")
+        audit_after = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log"
+        ).fetchone()["c"]
+        self.assertEqual(audit_after, audit_before)
+
+    def test_terminal_statuses_reject_existing_guarded_mutators(self):
+        routes = [
+            ("/api/monitoring/reviews/{rid}/state", {"state": "in_progress"}, "POST"),
+            ("/api/monitoring/reviews/{rid}/assignment", {"assigned_officer": "co001"}, "POST"),
+            (
+                "/api/monitoring/reviews/{rid}/import-setup",
+                {
+                    "last_review_date": "2026-01-01",
+                    "source_type": "legacy_file",
+                    "confidence": "high",
+                    "source_note": "terminal attempt",
+                },
+                "POST",
+            ),
+            (
+                "/api/monitoring/reviews/{rid}/baseline",
+                {"baseline_status": "not_applicable", "officer_note": "terminal attempt"},
+                "POST",
+            ),
+            ("/api/monitoring/reviews/{rid}/import-acknowledgement", {}, "POST"),
+            (
+                "/api/monitoring/reviews/{rid}/officer-rationale",
+                {"officer_rationale": "terminal attempt"},
+                "POST",
+            ),
+            (
+                "/api/monitoring/reviews/{rid}/findings",
+                {"officer_findings_note": "terminal attempt"},
+                "POST",
+            ),
+            (
+                "/api/monitoring/reviews/{rid}/material-change-attestation",
+                {
+                    "material_change_attestation": "material_change_identified",
+                    "material_change_categories": ["directors"],
+                },
+                "POST",
+            ),
+            (
+                "/api/monitoring/reviews/{rid}/risk-change",
+                {"new_risk_level": "HIGH", "reason_code": "periodic_review_change"},
+                "POST",
+            ),
+            ("/api/monitoring/reviews/{rid}/complete", self._completion_payload(), "POST"),
+            (
+                "/api/monitoring/reviews/{rid}/decision",
+                {"decision": "continue", "decision_reason": "terminal replay attempt"},
+                "POST",
+            ),
+            (
+                "/api/monitoring/reviews/{rid}/required-items/custom",
+                {
+                    "label": "Terminal custom item",
+                    "rationale": "should be blocked",
+                    "severity": "high",
+                },
+                "POST",
+            ),
+            ("/api/monitoring/reviews/{rid}/required-items/generate", {}, "POST"),
+            (
+                "/api/monitoring/reviews/{rid}/required-items/item-1",
+                {"status": "cleared", "officer_note": "terminal attempt"},
+                "PATCH",
+            ),
+            (
+                "/api/monitoring/reviews/{rid}/evidence-links",
+                {"document_id": "__fixture_doc__", "requirement_id": "item-1"},
+                "POST",
+            ),
+            ("/api/monitoring/reviews/{rid}/run-screening-refresh", {}, "POST"),
+            ("/api/monitoring/reviews/{rid}/escalate", {"trigger_notes": "terminal attempt"}, "POST"),
+        ]
+        for status in self.TERMINAL_STATUSES:
+            for path, body, method in routes:
+                self._assert_terminal_route_rejected_without_review_mutation(
+                    status, path, body, method=method,
+                )
+
+    def test_completed_memo_recovery_is_safe_idempotent_noop(self):
+        rid = self._create_review(status="completed")
+        before = self._review_snapshot(rid)
+
+        resp = self._post(f"/api/monitoring/reviews/{rid}/memo/recover", {})
+
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "already_completed")
+        after = self._review_snapshot(rid)
+        self.assertEqual(after, before)
+
+    def test_cancelled_memo_recovery_is_rejected_without_mutation(self):
+        for status in ("cancelled", "canceled"):
+            self._assert_terminal_route_rejected_without_review_mutation(
+                status,
+                "/api/monitoring/reviews/{rid}/memo/recover",
+                {},
+            )
+
+
 # ─────────────────────────────────────────────────────────────────
 # Escalate endpoint
 # ─────────────────────────────────────────────────────────────────

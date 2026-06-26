@@ -140,6 +140,43 @@ class TestPeriodicReviewRiskReassessment(_PRReviewHandlerBase):
 
         assert resp.code in (401, 403)
 
+    def test_terminal_reviews_reject_risk_reassessment_without_mutation(self):
+        for status in ("completed", "cancelled", "canceled"):
+            rid = self._create_review(status=status)
+            before = self._conn.execute(
+                "SELECT status, risk_reassessment_status, risk_impact_category, "
+                "officer_risk_decision, confirmed_risk_level, "
+                "risk_reassessment_rationale, risk_reassessment_saved_by, "
+                "risk_reassessment_saved_at, memo_addendum_status, "
+                "periodic_review_memo_id "
+                "FROM periodic_reviews WHERE id=?",
+                (rid,),
+            ).fetchone()
+            audit_before = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM audit_log"
+            ).fetchone()["c"]
+
+            resp = self._post(
+                f"/api/monitoring/reviews/{rid}/risk-reassessment",
+                self._save_payload(rationale=f"terminal {status} mutation attempt"),
+            )
+
+            assert resp.code == 409
+            after = self._conn.execute(
+                "SELECT status, risk_reassessment_status, risk_impact_category, "
+                "officer_risk_decision, confirmed_risk_level, "
+                "risk_reassessment_rationale, risk_reassessment_saved_by, "
+                "risk_reassessment_saved_at, memo_addendum_status, "
+                "periodic_review_memo_id "
+                "FROM periodic_reviews WHERE id=?",
+                (rid,),
+            ).fetchone()
+            assert dict(after) == dict(before)
+            audit_after = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM audit_log"
+            ).fetchone()["c"]
+            assert audit_after == audit_before
+
     def test_memo_addendum_generation_contains_periodic_review_evidence_and_audit(self):
         rid = self._create_review()
         save = self._post(
@@ -165,6 +202,36 @@ class TestPeriodicReviewRiskReassessment(_PRReviewHandlerBase):
         actions = [action for action, _detail in _audit_actions(self._conn)]
         assert "periodic_review_memo_addendum_generated" in actions
 
+    def test_terminal_reviews_reject_memo_generation_without_mutation(self):
+        for status in ("completed", "cancelled", "canceled"):
+            rid = self._create_review(status=status)
+            before = self._conn.execute(
+                "SELECT status, memo_status, periodic_review_memo_id, "
+                "memo_addendum_status, memo_addendum_generated_at "
+                "FROM periodic_reviews WHERE id=?",
+                (rid,),
+            ).fetchone()
+            memo_count_before = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM periodic_review_memos WHERE periodic_review_id=?",
+                (rid,),
+            ).fetchone()["c"]
+
+            resp = self._post(f"/api/periodic-reviews/{rid}/memo", {})
+
+            assert resp.code == 409
+            after = self._conn.execute(
+                "SELECT status, memo_status, periodic_review_memo_id, "
+                "memo_addendum_status, memo_addendum_generated_at "
+                "FROM periodic_reviews WHERE id=?",
+                (rid,),
+            ).fetchone()
+            assert dict(after) == dict(before)
+            memo_count_after = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM periodic_review_memos WHERE periodic_review_id=?",
+                (rid,),
+            ).fetchone()["c"]
+            assert memo_count_after == memo_count_before
+
     def test_memo_addendum_finalize_updates_status_and_audit(self):
         rid = self._create_review()
         assert self._post(f"/api/periodic-reviews/{rid}/memo", {}).code == 200
@@ -181,6 +248,39 @@ class TestPeriodicReviewRiskReassessment(_PRReviewHandlerBase):
         assert memo["status"] == "finalized"
         actions = [action for action, _detail in _audit_actions(self._conn)]
         assert "periodic_review_memo_addendum_finalized" in actions
+
+    def test_terminal_reviews_reject_memo_finalization_without_mutation(self):
+        for status in ("completed", "cancelled", "canceled"):
+            rid = self._create_review(status=status)
+            self._conn.execute(
+                "INSERT INTO periodic_review_memos "
+                "(periodic_review_id, application_id, version, memo_data, memo_context, generated_by, status) "
+                "VALUES (?, ?, 1, '{}', '{}', 'test', 'generated')",
+                (rid, self._app_id),
+            )
+            self._conn.commit()
+            before = self._conn.execute(
+                "SELECT status, memo_addendum_status, memo_addendum_finalized_at, "
+                "memo_addendum_finalized_by, periodic_review_memo_id "
+                "FROM periodic_reviews WHERE id=?",
+                (rid,),
+            ).fetchone()
+
+            resp = self._post(f"/api/periodic-reviews/{rid}/memo/finalize", {})
+
+            assert resp.code == 409
+            after = self._conn.execute(
+                "SELECT status, memo_addendum_status, memo_addendum_finalized_at, "
+                "memo_addendum_finalized_by, periodic_review_memo_id "
+                "FROM periodic_reviews WHERE id=?",
+                (rid,),
+            ).fetchone()
+            assert dict(after) == dict(before)
+            memo = self._conn.execute(
+                "SELECT status FROM periodic_review_memos WHERE periodic_review_id=?",
+                (rid,),
+            ).fetchone()
+            assert memo["status"] == "generated"
 
     def test_memo_addendum_generation_failure_is_recorded_safely(self):
         rid = self._create_review()
