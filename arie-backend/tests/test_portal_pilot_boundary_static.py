@@ -128,6 +128,38 @@ def _extract_js_function(html, function_name):
     raise AssertionError(f"Could not extract function {function_name}")
 
 
+def _extract_js_var_object(html, variable_name):
+    marker = f"var {variable_name} = {{"
+    start = html.index(marker)
+    brace = html.index("{", start)
+    depth = 0
+    for pos in range(brace, len(html)):
+        char = html[pos]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start:pos + 1]
+    raise AssertionError(f"Could not extract object {variable_name}")
+
+
+def _extract_js_object_property(object_source, property_name):
+    marker = f"  {property_name}: {{"
+    start = object_source.index(marker)
+    brace = object_source.index("{", start)
+    depth = 0
+    for pos in range(brace, len(object_source)):
+        char = object_source[pos]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return object_source[start:pos + 1]
+    raise AssertionError(f"Could not extract object property {property_name}")
+
+
 def _assert_client_safe_text(text):
     for pattern in FORBIDDEN_CLIENT_PATTERNS:
         assert not re.search(pattern, text, flags=re.IGNORECASE), pattern
@@ -249,12 +281,23 @@ def test_initial_review_submit_button_matches_reset_copy():
 
 def test_left_application_badges_use_client_safe_labels():
     html = _portal_html()
+    projection_source = _extract_js_var_object(html, "PORTAL_STATUS_PROJECTIONS")
     label_body = _extract_js_function(html, "getClientPortalStatusLabel")
     sidebar_body = _extract_js_function(html, "renderSidebarApps")
 
-    for label in ("Documents", "Submitted", "Approved", "Declined", "Info Required", "Under Review"):
-        assert label in label_body
+    for label in (
+        "Documents Required",
+        "Submitted",
+        "Approved",
+        "Declined",
+        "Information Required",
+        "Under Review",
+        "Pricing Review",
+        "Enhanced Review Required",
+    ):
+        assert label in projection_source
 
+    assert "getPortalStatusProjection(status).badge" in label_body
     assert "getClientPortalStatusLabel(app.status)" in sidebar_body
     assert "getClientPortalStatusClass(app.status)" in sidebar_body
     assert "escapeHtml(label)" in sidebar_body
@@ -273,6 +316,95 @@ def test_left_application_badges_use_client_safe_labels():
     )
     for label in forbidden_badges:
         assert label not in sidebar_body
+
+
+def test_portal_status_projection_defines_required_status_contracts():
+    html = _portal_html()
+    projection_source = _extract_js_var_object(html, "PORTAL_STATUS_PROJECTIONS")
+
+    draft = _extract_js_object_property(projection_source, "draft")
+    assert "view: 'prescreening'" in draft
+    assert "primaryCta: 'Continue application'" in draft
+    assert "allowsDraftRestore: true" in draft
+    assert "autosaveAllowed: true" in draft
+    assert "prescreeningEditable: true" in draft
+    assert "showSubmitInitialReview: true" in draft
+
+    required_non_draft_statuses = (
+        "submitted",
+        "prescreening_submitted",
+        "pricing_review",
+        "pricing_accepted",
+        "pre_approval_review",
+        "pre_approved",
+        "kyc_documents",
+        "kyc_submitted",
+        "compliance_review",
+        "submitted_to_compliance",
+        "in_review",
+        "under_review",
+        "edd_required",
+        "approved",
+        "rejected",
+        "rmi_sent",
+        "withdrawn",
+    )
+    for status in required_non_draft_statuses:
+        block = _extract_js_object_property(projection_source, status)
+        assert "allowsDraftRestore: false" in block, status
+        assert "autosaveAllowed: false" in block, status
+        assert "prescreeningEditable: false" in block, status
+        assert "showSubmitInitialReview: false" in block, status
+
+    assert "view: 'pricing'" in _extract_js_object_property(projection_source, "pricing_review")
+    assert "primaryCta: 'Accept pricing'" in _extract_js_object_property(projection_source, "pricing_review")
+    assert "view: 'pre-approval-hold'" in _extract_js_object_property(projection_source, "pre_approval_review")
+    assert "progressFlow: 'enhanced'" in _extract_js_object_property(projection_source, "pre_approval_review")
+    assert "view: 'onboarding'" in _extract_js_object_property(projection_source, "kyc_documents")
+    assert "hydrateParties: true" in _extract_js_object_property(projection_source, "kyc_documents")
+    assert "view: 'docs-review'" in _extract_js_object_property(projection_source, "kyc_submitted")
+    assert "view: 'compliance-hold'" in _extract_js_object_property(projection_source, "submitted_to_compliance")
+    assert "view: 'pre-approval-hold'" in _extract_js_object_property(projection_source, "edd_required")
+    assert "Enhanced Review Required" in _extract_js_object_property(projection_source, "edd_required")
+    assert "primaryCta: 'No resubmission'" in _extract_js_object_property(projection_source, "approved")
+    assert "Change Management" in _extract_js_object_property(projection_source, "approved")
+
+
+def test_portal_projection_drives_progress_editability_and_primary_cta():
+    html = _portal_html()
+    render_progress = _extract_js_function(html, "renderPortalProgress")
+    apply_body = _extract_js_function(html, "applyPortalProjectionToView")
+    editability_body = _extract_js_function(html, "updatePrescreeningEditability")
+    dashboard_body = _extract_js_function(html, "loadMyApplications")
+
+    assert "progressFlow === 'enhanced'" in render_progress
+    assert "Pre-Approval" in render_progress
+    assert "Compliance Review" in render_progress
+    assert "Decision" in render_progress
+    assert "steps.innerHTML = renderPortalProgress(projection)" in apply_body
+    assert "updatePrescreeningEditability(projection)" in apply_body
+    assert "updatePrescreeningSubmitVisibility(projection)" in apply_body
+    assert "projection.prescreeningEditable === true" in editability_body
+    assert "el.disabled = !editable" in editability_body
+    assert "var primaryCta = projection.primaryCta || 'Open';" in dashboard_body
+    assert "escapeHtml(primaryCta)" in dashboard_body
+
+
+def test_portal_static_progress_trackers_match_canonical_flow_labels():
+    html = _portal_html()
+    for view_id in ("view-pending", "view-risk-scoring", "view-pricing", "view-onboarding", "view-docs-review", "view-compliance-hold"):
+        markup = _extract_div_by_id(html, view_id)
+        assert "Pricing" in markup, view_id
+        assert "KYC & Documents" in markup, view_id
+        assert "Compliance Review" in markup, view_id
+        assert "Decision" in markup, view_id
+        assert "Application Review" not in _visible_text(markup).split("Application Timeline")[0], view_id
+        assert "Approved" not in _visible_text(markup).split("Application Timeline")[0], view_id
+
+    pre_approval_markup = _extract_div_by_id(html, "view-pre-approval-hold")
+    assert "Pre-Approval" in pre_approval_markup
+    assert "Compliance Review" in pre_approval_markup
+    assert "Decision" in pre_approval_markup
 
 
 def test_pricing_acceptance_routes_by_backend_status_not_frontend_risk():
@@ -303,10 +435,41 @@ def test_pricing_acceptance_routes_by_backend_status_not_frontend_risk():
 
 
 def test_prescreening_submit_routes_by_backend_status():
-    body = _extract_js_function(_portal_html(), "submitPrescreening")
+    html = _portal_html()
+    body = _extract_js_function(html, "submitPrescreening")
+    consent_wrapper = html.split("submitPrescreening = function(e) {", 1)[1].split("var required = ", 1)[0]
+    assert body.index("!getCurrentPortalProjection().showSubmitInitialReview") < body.index("apiCall('PUT'")
+    assert "blockNonDraftPrescreeningSubmit()" in body
+    assert "!getCurrentPortalProjection().showSubmitInitialReview" in consent_wrapper
+    assert "blockNonDraftPrescreeningSubmit()" in consent_wrapper
     assert "routePortalByBackendStatus(submitResp.status" in body
     assert "submitResp.risk_level" not in body
     assert "showView('risk-scoring')" not in body
+
+
+def test_portal_resume_and_save_resume_are_draft_only():
+    html = _portal_html()
+    resume_body = _extract_js_function(html, "resumeApplication")
+    cta_body = _extract_js_function(html, "renderResumeCTA")
+    save_body = _extract_js_function(html, "saveDraft")
+    autosave_body = _extract_js_function(html, "startAutoSave")
+
+    assert "if (projection.allowsDraftRestore)" in resume_body
+    assert "apiCall('GET', '/save-resume?application_id='" in resume_body
+    assert resume_body.index("if (projection.allowsDraftRestore)") < resume_body.index("apiCall('GET', '/save-resume?application_id='")
+    assert "projection.allowsDraftRestore || projection.hydrateParties === true" in resume_body
+    assert "restoredFields && getCurrentPortalProjection().allowsDraftRestore" in resume_body
+    assert "showToast('success', 'Draft Restored'" in resume_body
+    assert "showToast('info', 'Application Loaded'" in resume_body
+
+    assert "var draftApps = (apps || []).filter(function(a) {" in cta_body
+    assert "var draftSessions = (activeDrafts || []).filter(function(a) {" in cta_body
+    assert "allowsDraftRestore === true" in cta_body
+    assert "app = drafts.length ? drafts[0] : inProgress[0];" not in cta_body
+    assert "Draft ready to continue" in cta_body
+
+    assert "!getCurrentPortalProjection().autosaveAllowed" in save_body
+    assert "!getCurrentPortalProjection().autosaveAllowed" in autosave_body
 
 
 def test_person_document_polling_rejects_invalid_person_identifiers():

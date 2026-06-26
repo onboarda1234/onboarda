@@ -1507,7 +1507,10 @@
   }
   .app-status.kyc { background: var(--amber-dim); color: var(--amber); }
   .app-status.review { background: var(--blue-dim); color: var(--blue); }
+  .app-status.draft { background: var(--bg3); color: var(--text2); }
+  .app-status.pricing { background: var(--blue-dim); color: var(--blue); }
   .app-status.approved { background: var(--green-dim); color: var(--green); }
+  .app-status.rejected { background: var(--red-dim); color: var(--red); }
 
 
   /* ── Risk Scoring Animation ── */
@@ -2402,11 +2405,11 @@
 
       <!-- Steps -->
       <div class="steps">
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Register</div></div>
-        <div class="step active" id="step-1"><div class="step-circle">2</div><div class="step-label">Initial Review</div></div>
-        <div class="step" id="step-2"><div class="step-circle">3</div><div class="step-label">Application Review</div></div>
-        <div class="step" id="step-3"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step" id="step-4"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step active" id="step-1"><div class="step-circle">1</div><div class="step-label">Initial Review</div></div>
+        <div class="step" id="step-2"><div class="step-circle">2</div><div class="step-label">Pricing</div></div>
+        <div class="step" id="step-3"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step" id="step-4"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step" id="step-5"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="card">
@@ -3314,10 +3317,11 @@
     <div class="page">
       <!-- Steps -->
       <div class="steps">
-        <div class="step done" id="s2-1"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">Application Review</div></div>
+        <div class="step active" id="s2-1"><div class="step-circle">1</div><div class="step-label">Initial Review</div></div>
+        <div class="step" id="s2-2"><div class="step-circle">2</div><div class="step-label">Pricing</div></div>
         <div class="step" id="s2-3"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step" id="s2-4"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
+        <div class="step" id="s2-4"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step" id="s2-5"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="status-hero">
@@ -3383,10 +3387,11 @@
   <div id="view-risk-scoring" class="hidden">
     <div class="page">
       <div class="steps">
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step active"><div class="step-circle">2</div><div class="step-label">Application Review</div></div>
+        <div class="step active"><div class="step-circle">1</div><div class="step-label">Initial Review</div></div>
+        <div class="step"><div class="step-circle">2</div><div class="step-label">Pricing</div></div>
         <div class="step"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="risk-computing-overlay" id="risk-computing">
@@ -3444,11 +3449,11 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
-        <div class="step active"><div class="step-circle">4</div><div class="step-label">Pre-Approval</div></div>
-        <div class="step"><div class="step-circle">5</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">6</div><div class="step-label">Approved</div></div>
+        <div class="step active"><div class="step-circle">3</div><div class="step-label">Pre-Approval</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Compliance Review</div></div>
+        <div class="step"><div class="step-circle">6</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="status-hero">
@@ -3498,9 +3503,10 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
-        <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
+        <div class="step"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step active"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="compliance-referral-card">
@@ -3530,9 +3536,10 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
-        <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
+        <div class="step active"><div class="step-circle">2</div><div class="step-label">Pricing</div></div>
+        <div class="step"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="pricing-view">
@@ -3584,9 +3591,10 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <!-- Progress -->
@@ -4221,9 +4229,10 @@
 
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Initial Review</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step active"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
+        <div class="step active"><div class="step-circle">4</div><div class="step-label">Compliance Review</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Decision</div></div>
       </div>
 
       <div class="status-hero">
@@ -4911,6 +4920,447 @@ const API_BASE = '/api';
 let AUTH_TOKEN = '';
 let AUTH_USER = null;
 let currentApplicationId = '';
+let currentApplicationStatus = 'draft';
+
+var PORTAL_STATUS_PROJECTIONS = {
+  draft: {
+    badge: 'Draft',
+    statusLabel: 'Application Started',
+    statusClass: 'draft',
+    color: '#6b7280',
+    view: 'prescreening',
+    progressFlow: 'standard',
+    progressStep: 'initial',
+    primaryCta: 'Continue application',
+    nextAction: 'Continue this application and submit Initial Review.',
+    progressLabel: 'You can continue this application',
+    allowsDraftRestore: true,
+    autosaveAllowed: true,
+    prescreeningEditable: true,
+    showSubmitInitialReview: true,
+    terminal: false
+  },
+  submitted: {
+    badge: 'Submitted',
+    statusLabel: 'Initial Review in Progress',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'pending',
+    progressFlow: 'standard',
+    progressStep: 'initial',
+    primaryCta: 'No action required',
+    nextAction: 'Your application has been submitted. We will notify you when the next step is available.',
+    progressLabel: 'Initial review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  prescreening_submitted: {
+    badge: 'Submitted',
+    statusLabel: 'Initial Review in Progress',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'pending',
+    progressFlow: 'standard',
+    progressStep: 'initial',
+    primaryCta: 'No action required',
+    nextAction: 'Initial Review is in progress. We will notify you when the next step is available.',
+    progressLabel: 'Initial review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  pricing_review: {
+    badge: 'Pricing Review',
+    statusLabel: 'Pricing Available',
+    statusClass: 'pricing',
+    color: '#3b82f6',
+    view: 'pricing',
+    progressFlow: 'standard',
+    progressStep: 'pricing',
+    primaryCta: 'Accept pricing',
+    nextAction: 'Review and accept the pricing schedule to continue.',
+    progressLabel: 'Pricing available',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  pricing_accepted: {
+    badge: 'Pricing Accepted',
+    statusLabel: 'Pricing Accepted',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'pending',
+    progressFlow: 'standard',
+    progressStep: 'pricing',
+    primaryCta: 'No action required',
+    nextAction: 'Pricing has been accepted. We are preparing the next step.',
+    progressLabel: 'Pricing accepted',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  pre_approval_review: {
+    badge: 'Pre-Approval Review',
+    statusLabel: 'Pre-Approval Review',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'pre-approval-hold',
+    progressFlow: 'enhanced',
+    progressStep: 'pre_approval',
+    primaryCta: 'No action required',
+    nextAction: 'Your application is under review before document submission is opened.',
+    progressLabel: 'Pre-approval review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  pre_approved: {
+    badge: 'Pre-Approved',
+    statusLabel: 'Pre-Approved',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'pending',
+    progressFlow: 'enhanced',
+    progressStep: 'pre_approval',
+    primaryCta: 'No action required',
+    nextAction: 'Pre-approval is recorded. We are preparing the document step.',
+    progressLabel: 'Pre-approved; awaiting routing',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  kyc_documents: {
+    badge: 'Documents Required',
+    statusLabel: 'KYC Documents Required',
+    statusClass: 'kyc',
+    color: '#f59e0b',
+    view: 'onboarding',
+    progressFlow: 'standard',
+    progressStep: 'kyc',
+    primaryCta: 'Upload documents',
+    nextAction: 'Upload and submit the requested KYC documents.',
+    progressLabel: 'Documents needed',
+    allowsDraftRestore: false,
+    hydrateParties: true,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  kyc_submitted: {
+    badge: 'Documents Submitted',
+    statusLabel: 'Documents Under Review',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'docs-review',
+    progressFlow: 'standard',
+    progressStep: 'compliance',
+    primaryCta: 'No action required',
+    nextAction: 'Your documents have been submitted and are under review.',
+    progressLabel: 'Documents submitted',
+    allowsDraftRestore: false,
+    hydrateParties: true,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  compliance_review: {
+    badge: 'Under Review',
+    statusLabel: 'Compliance Review',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'compliance-hold',
+    progressFlow: 'standard',
+    progressStep: 'compliance',
+    primaryCta: 'No action required',
+    nextAction: 'Your application is under compliance review.',
+    progressLabel: 'Compliance review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  submitted_to_compliance: {
+    badge: 'Under Review',
+    statusLabel: 'Under Review',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'compliance-hold',
+    progressFlow: 'standard',
+    progressStep: 'compliance',
+    primaryCta: 'No action required',
+    nextAction: 'Your application is under review. No action is required right now.',
+    progressLabel: 'Compliance review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  in_review: {
+    badge: 'Under Review',
+    statusLabel: 'Compliance Review',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'compliance-hold',
+    progressFlow: 'standard',
+    progressStep: 'compliance',
+    primaryCta: 'No action required',
+    nextAction: 'Your application is under review.',
+    progressLabel: 'Review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  under_review: {
+    badge: 'Under Review',
+    statusLabel: 'Compliance Review',
+    statusClass: 'review',
+    color: '#3b82f6',
+    view: 'compliance-hold',
+    progressFlow: 'standard',
+    progressStep: 'compliance',
+    primaryCta: 'No action required',
+    nextAction: 'Your application is under review.',
+    progressLabel: 'Review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  edd_required: {
+    badge: 'Enhanced Review Required',
+    statusLabel: 'Enhanced Review Required',
+    statusClass: 'review',
+    color: '#8b5cf6',
+    view: 'pre-approval-hold',
+    progressFlow: 'enhanced',
+    progressStep: 'pre_approval',
+    primaryCta: 'No action required',
+    nextAction: 'Enhanced review is in progress. We will show any required client action here.',
+    progressLabel: 'Enhanced review in progress',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  approved: {
+    badge: 'Approved',
+    statusLabel: 'Approved',
+    statusClass: 'approved',
+    color: '#10b981',
+    view: 'approved',
+    progressFlow: 'standard',
+    progressStep: 'decision',
+    primaryCta: 'No resubmission',
+    nextAction: 'Your application has been approved. Future material changes use Change Management.',
+    progressLabel: 'Completed',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: true
+  },
+  rejected: {
+    badge: 'Declined',
+    statusLabel: 'Declined',
+    statusClass: 'rejected',
+    color: '#ef4444',
+    view: 'rejected',
+    progressFlow: 'standard',
+    progressStep: 'decision',
+    primaryCta: 'Closed',
+    nextAction: 'This application is closed.',
+    progressLabel: 'Closed',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: true
+  },
+  rmi_sent: {
+    badge: 'Information Required',
+    statusLabel: 'Information Required',
+    statusClass: 'kyc',
+    color: '#f59e0b',
+    view: 'client-notifications',
+    progressFlow: 'standard',
+    progressStep: 'compliance',
+    primaryCta: 'Respond to request',
+    nextAction: 'Respond to the requested information so review can continue.',
+    progressLabel: 'Waiting on you',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: false
+  },
+  withdrawn: {
+    badge: 'Withdrawn',
+    statusLabel: 'Withdrawn',
+    statusClass: 'rejected',
+    color: '#6b7280',
+    view: 'withdrawn',
+    progressFlow: 'standard',
+    progressStep: 'decision',
+    primaryCta: 'Closed',
+    nextAction: 'This application has been withdrawn.',
+    progressLabel: 'Closed',
+    allowsDraftRestore: false,
+    autosaveAllowed: false,
+    prescreeningEditable: false,
+    showSubmitInitialReview: false,
+    terminal: true
+  }
+};
+
+function normalizePortalStatus(status) {
+  return String(status || '').trim().toLowerCase() || 'draft';
+}
+
+function getPortalStatusProjection(status, app) {
+  var key = normalizePortalStatus(status);
+  var known = !!PORTAL_STATUS_PROJECTIONS[key];
+  var base = known ? PORTAL_STATUS_PROJECTIONS[key] : PORTAL_STATUS_PROJECTIONS.submitted;
+  var projection = Object.assign({ status: known ? key : 'submitted' }, base);
+  if (key === 'pricing_review') {
+    var pricingPayload = serverPricing || (app && app.prescreening_data && app.prescreening_data.pricing);
+    if (!pricingPayload) {
+      projection.primaryCta = 'No action required';
+      projection.nextAction = 'Pricing is being prepared. We will show it here when available.';
+      projection.progressLabel = 'Pricing being prepared';
+    }
+  }
+  return projection;
+}
+
+function getCurrentPortalProjection() {
+  return getPortalStatusProjection(currentApplicationStatus || 'draft');
+}
+
+function isPortalDraftStatus(status) {
+  return normalizePortalStatus(status) === 'draft';
+}
+
+function portalAutosaveAllowedForView(viewName) {
+  var projection = getCurrentPortalProjection();
+  return projection.autosaveAllowed === true && viewName === 'prescreening';
+}
+
+function portalDashboardInProgress(app) {
+  return !getPortalStatusProjection(app && app.status, app).terminal;
+}
+
+function portalProgressIndex(stepKey, flow) {
+  var order = flow === 'enhanced'
+    ? ['initial', 'pricing', 'pre_approval', 'kyc', 'compliance', 'decision']
+    : ['initial', 'pricing', 'kyc', 'compliance', 'decision'];
+  var idx = order.indexOf(stepKey);
+  return idx >= 0 ? idx : 0;
+}
+
+function renderPortalProgress(projection) {
+  var flow = projection.progressFlow === 'enhanced' ? 'enhanced' : 'standard';
+  var steps = flow === 'enhanced'
+    ? [
+        { key: 'initial', label: 'Initial Review' },
+        { key: 'pricing', label: 'Pricing' },
+        { key: 'pre_approval', label: 'Pre-Approval' },
+        { key: 'kyc', label: 'KYC & Documents' },
+        { key: 'compliance', label: 'Compliance Review' },
+        { key: 'decision', label: 'Decision' }
+      ]
+    : [
+        { key: 'initial', label: 'Initial Review' },
+        { key: 'pricing', label: 'Pricing' },
+        { key: 'kyc', label: 'KYC & Documents' },
+        { key: 'compliance', label: 'Compliance Review' },
+        { key: 'decision', label: 'Decision' }
+      ];
+  var activeIndex = portalProgressIndex(projection.progressStep, flow);
+  return steps.map(function(step, index) {
+    var cls = index < activeIndex ? 'done' : (index === activeIndex ? 'active' : '');
+    var marker = index < activeIndex ? '&#10003;' : String(index + 1);
+    return '<div class="step ' + cls + '" data-portal-step="' + escapeHtml(step.key) + '">' +
+      '<div class="step-circle">' + marker + '</div>' +
+      '<div class="step-label">' + escapeHtml(step.label) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function updatePrescreeningSubmitVisibility(projection) {
+  var btn = document.querySelector('#prescreening-form .btn-submit');
+  if (!btn) return;
+  var allowed = projection.showSubmitInitialReview === true;
+  btn.style.display = allowed ? '' : 'none';
+  btn.disabled = !allowed;
+  btn.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+  if (allowed && !/Submit Initial Review/.test(btn.textContent || '')) {
+    btn.innerHTML = '&#128640; Submit Initial Review';
+  }
+}
+
+function updatePrescreeningEditability(projection) {
+  var form = document.getElementById('prescreening-form');
+  if (!form) return;
+  var editable = projection.prescreeningEditable === true;
+  form.querySelectorAll('input, textarea, select, button').forEach(function(el) {
+    if (el.classList && el.classList.contains('btn-submit')) return;
+    el.disabled = !editable;
+  });
+  form.classList.toggle('is-readonly', !editable);
+}
+
+function setPortalViewCopy(viewName, projection) {
+  var view = document.getElementById('view-' + viewName);
+  if (!view) return;
+  var heroTitle = view.querySelector('.status-hero h2, .compliance-referral-card h3');
+  var heroBody = view.querySelector('.status-hero p, .compliance-referral-card > p');
+  if (heroTitle && projection.statusLabel) heroTitle.textContent = projection.statusLabel;
+  if (heroBody && projection.nextAction) heroBody.textContent = projection.nextAction;
+}
+
+function applyPortalProjectionToView(viewName, status, app) {
+  var projection = getPortalStatusProjection(status || currentApplicationStatus || 'draft', app);
+  if (status) currentApplicationStatus = projection.status;
+  updatePrescreeningEditability(projection);
+  updatePrescreeningSubmitVisibility(projection);
+  var view = document.getElementById('view-' + (viewName || projection.view));
+  if (view) {
+    var steps = view.querySelector('.steps');
+    if (steps) steps.innerHTML = renderPortalProgress(projection);
+  }
+  setPortalViewCopy(viewName || projection.view, projection);
+  return projection;
+}
+
+function blockNonDraftPrescreeningSubmit() {
+  var btn = document.querySelector('#prescreening-form .btn-submit');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '&#128640; Submit Initial Review';
+  }
+  showToast('info', 'Application Already Submitted', 'This application has already been submitted. Please follow the current status shown in the portal.');
+}
 
 // ─── Environment Detection ────────────────────────────────
 var APP_ENV = 'production';
@@ -5184,6 +5634,7 @@ function resetPortalPricingState() {
 
 function resetPortalApplicationState() {
   currentApplicationId = '';
+  currentApplicationStatus = 'draft';
   appRef = '';
   setPortalReferenceDisplay('ref-display', '');
   setApprovedApplicationRef('');
@@ -5423,6 +5874,7 @@ function setApprovedApplicationRef(ref) {
 }
 
 function applyApplicationViewState(target) {
+  applyPortalProjectionToView(target);
   syncConditionalFormState();
   showHighRiskDocs();
   if (target === 'pricing') {
@@ -5481,6 +5933,7 @@ function showView(name) {
   var targetView = document.getElementById('view-' + name) || document.getElementById('view-landing');
   if (!targetView) return;
   targetView.classList.remove('hidden');
+  applyPortalProjectionToView(name);
   // Show / hide persistent client sidebar
   const sidebar = document.getElementById('global-client-sidebar');
   const showSidebar = SIDEBAR_VIEWS.includes(name);
@@ -5969,7 +6422,7 @@ async function loadMyApplications() {
 
     // Update stats
     var total = apps.length;
-    var inProgress = apps.filter(a => ['pending','in_review','edd_required'].includes(a.status)).length;
+    var inProgress = apps.filter(function(a) { return portalDashboardInProgress(a); }).length;
     var approved = apps.filter(a => a.status === 'approved').length;
     var el1 = document.getElementById('stat-total');
     var el2 = document.getElementById('stat-progress');
@@ -5989,26 +6442,19 @@ async function loadMyApplications() {
     }
 
     var html = '';
-    var progressLabels = {
-      draft: 'You can continue this application',
-      kyc_documents: 'Documents needed',
-      rmi_sent: 'Waiting on you',
-      approved: 'Completed',
-      rejected: 'Closed',
-      withdrawn: 'Closed'
-    };
     apps.forEach(function(app) {
-      var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',submitted_to_compliance:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
-      var color = statusColors[app.status] || '#999';
-      var label = getClientPortalStatusLabel(app.status);
+      var projection = getPortalStatusProjection(app.status, app);
+      var color = projection.color || '#999';
+      var label = projection.badge;
       var date = (app.updated_at || app.created_at) ? new Date(app.updated_at || app.created_at).toLocaleDateString() : '';
       var ref = app.ref || app.id;
       var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
       var statusJs = JSON.stringify(app.status || '').replace(/"/g, '&quot;');
       var companyJs = JSON.stringify(app.company_name || 'this draft application').replace(/"/g, '&quot;');
-      var isDraft = (app.status || '') === 'draft';
-      var stageLabel = label;
-      var progressLabel = progressLabels[app.status] || 'In progress';
+      var isDraft = projection.allowsDraftRestore === true;
+      var stageLabel = projection.statusLabel || label;
+      var progressLabel = projection.progressLabel || projection.nextAction || 'In progress';
+      var primaryCta = projection.primaryCta || 'Open';
       html += '<tr style="cursor:pointer;" onclick="resumeApplication(' + refJs + ', ' + statusJs + ')">';
       html += '<td><div class="app-tbl-name">' + escapeHtml(app.company_name || '-') + '</div></td>';
       html += '<td><div class="app-tbl-ref">' + escapeHtml(app.ref || app.id) + '</div></td>';
@@ -6016,7 +6462,7 @@ async function loadMyApplications() {
       html += '<td>' + escapeHtml(progressLabel) + '</td>';
       html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + escapeHtml(label) + '</span></td>';
       html += '<td>' + escapeHtml(date) + '</td>';
-      html += '<td class="actions-cell"><div class="app-table-actions"><button type="button" class="btn-table-action" onclick="event.stopPropagation();resumeApplication(' + refJs + ', ' + statusJs + ')">Open</button>' +
+      html += '<td class="actions-cell"><div class="app-table-actions"><button type="button" class="btn-table-action" onclick="event.stopPropagation();resumeApplication(' + refJs + ', ' + statusJs + ')">' + escapeHtml(primaryCta) + '</button>' +
         (isDraft ? '<button type="button" class="btn-table-action danger" onclick="event.stopPropagation();deleteApplication(' + refJs + ', ' + companyJs + ')">Delete</button>' : '') +
         '</div></td>';
       html += '</tr>';
@@ -6919,6 +7365,10 @@ function restorePepDeclarationFieldsFromPrescreening(prescreeningData) {
 async function submitPrescreening(e) {
   e.preventDefault();
   const btn = e.target.querySelector('.btn-submit');
+  if (!getCurrentPortalProjection().showSubmitInitialReview) {
+    blockNonDraftPrescreeningSubmit();
+    return;
+  }
   btn.disabled = true;
   btn.textContent = '⏳ Submitting…';
 
@@ -7347,7 +7797,7 @@ var VALID_RISK_LEVELS = ['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH'];
 var RISK_REQUIRED_STATUSES = [
   'submitted', 'prescreening_submitted', 'pricing_review', 'pricing_accepted',
   'pre_approval_review', 'pre_approved', 'kyc_documents', 'kyc_submitted',
-  'compliance_review', 'in_review', 'under_review', 'edd_required',
+  'compliance_review', 'submitted_to_compliance', 'in_review', 'under_review', 'edd_required',
   'approved', 'rejected', 'rmi_sent', 'withdrawn'
 ];
 var RISK_UNAVAILABLE_TEXT = 'Application status unavailable. Please contact our team if this continues.';
@@ -7684,14 +8134,26 @@ function continueToKYCDocuments(message) {
 function routePortalByBackendStatus(status, messages) {
   var nextStatus = String(status || '').trim();
   messages = messages || {};
+  currentApplicationStatus = normalizePortalStatus(nextStatus);
+  var projection = getPortalStatusProjection(currentApplicationStatus);
   if (nextStatus === 'pricing_review') {
-    showPricingView();
-    showToast('info', 'Pricing Available', messages.pricingMessage || 'Please review and accept the pricing to continue.');
+    var hasPricing = projection.primaryCta === 'Accept pricing';
+    if (hasPricing) {
+      showPricingView();
+    } else {
+      showView(projection.view);
+      applyApplicationViewState(projection.view);
+    }
+    showToast(
+      'info',
+      hasPricing ? 'Pricing Available' : 'Application Updated',
+      messages.pricingMessage || projection.nextAction
+    );
     return;
   }
   if (nextStatus === 'pre_approval_review') {
     showPreApprovalHold();
-    showToast('info', 'Application Under Review', messages.reviewMessage || 'Application under compliance review.');
+    showToast('info', 'Application Under Review', messages.reviewMessage || projection.nextAction);
     return;
   }
   if (nextStatus === 'kyc_documents') {
@@ -7710,10 +8172,10 @@ function routePortalByBackendStatus(status, messages) {
     showToast('info', 'Additional Information Required', messages.rmiMessage || 'Additional information is required to complete your application.');
     return;
   }
-  var target = getApplicationView(nextStatus);
+  var target = projection.view;
   showView(target);
   applyApplicationViewState(target);
-  showToast('info', 'Application Updated', 'Your application status has been updated.');
+  showToast('info', 'Application Updated', projection.nextAction || 'Your application status has been updated.');
 }
 
 function showComplianceHold() {
@@ -8360,6 +8822,10 @@ document.addEventListener('change', function(e) {
 var origSubmitPrescreening = submitPrescreening;
 submitPrescreening = function(e) {
   e.preventDefault();
+  if (!getCurrentPortalProjection().showSubmitInitialReview) {
+    blockNonDraftPrescreeningSubmit();
+    return;
+  }
   var required = ['f-consent-dpa','f-consent-sharing','f-consent-retention','f-consent-monitoring','f-consent-declaration'];
   var allChecked = required.every(function(id) {
     var cb = document.getElementById(id);
@@ -9310,9 +9776,12 @@ function _restoreSelectValue(selectEl, rawValue, aliasKey) {
 }
 
 async function saveDraft() {
-  // Priority C follow-up: save must persist both pre-submit and post-submit.
   if (!AUTH_TOKEN) {
     showToast('error', 'Sign In Required', 'Please sign in to save your draft.');
+    return;
+  }
+  if (!getCurrentPortalProjection().autosaveAllowed) {
+    showToast('info', 'Save Unavailable', 'This application has already been submitted. Please follow the current status shown in the portal.');
     return;
   }
   _setSaveStatus('Saving…', 'var(--text3)');
@@ -9575,10 +10044,13 @@ function loadDraft(ref) {
 }
 
 function startAutoSave() {
-  // Priority C: dirty-only autosave with single in-flight guard. Runs on
-  // both the initial review view (where the bulk of editing happens) and
-  // the onboarding/KYC view. Skips ticks when nothing has changed, when
-  // the user is unauthenticated, or when no application_id exists yet.
+  if (!getCurrentPortalProjection().autosaveAllowed) {
+    if (autoSaveTimer) clearInterval(autoSaveTimer);
+    autoSaveTimer = null;
+    return;
+  }
+  // Priority C: dirty-only autosave with single in-flight guard. Runs only
+  // while Initial Review is still a draft.
   if (autoSaveTimer) clearInterval(autoSaveTimer);
   _attachDraftDirtyListener();
   _attachBeforeUnloadGuard();
@@ -9615,10 +10087,7 @@ showView = async function(name) {
   var canNavigateWithoutConfirm = _confirmDiscardUnsavedChangesForNavigation(name);
   function continueNavigation() {
     origShowView(name);
-    // Priority C: Save & Resume — autosave runs during initial review and
-    // onboarding (the two long client-edit views). Stop on terminal/passive
-    // views so we don't churn the API after submission.
-    if (name === 'prescreening' || name === 'onboarding') {
+    if (portalAutosaveAllowedForView(name)) {
       var refDisplay = document.getElementById('save-ref-display');
       if (refDisplay) refDisplay.textContent = appRef ? 'Ref: ' + appRef : '';
       var bar = document.getElementById('save-draft-bar');
@@ -9626,9 +10095,13 @@ showView = async function(name) {
       _attachDraftDirtyListener();
       _attachBeforeUnloadGuard();
       startAutoSave();
-    } else if (autoSaveTimer) {
-      clearInterval(autoSaveTimer);
-      autoSaveTimer = null;
+    } else {
+      var saveBar = document.getElementById('save-draft-bar');
+      if (saveBar) saveBar.style.display = 'none';
+      if (autoSaveTimer) {
+        clearInterval(autoSaveTimer);
+        autoSaveTimer = null;
+      }
     }
     if (name === 'client-notifications') {
       loadClientNotifications();
@@ -10083,6 +10556,7 @@ async function finalSubmitFromReview() {
   _draftDirty = false;
   generateComplianceMemo();
   updateDocsReviewMessaging(lastReviewSummaryState);
+  currentApplicationStatus = 'kyc_submitted';
   showView('docs-review');
   showToast('info', 'Submitted for Compliance Review', 'Your KYC documents have been submitted. A compliance officer will review your application and you will be notified by email.');
   // Clear the draft
@@ -10360,7 +10834,8 @@ function updateClientStatusTracker(status) {
   const stageReview = document.getElementById('stage-under-review');
   const stageDecision = document.getElementById('stage-decision');
   const summary = document.getElementById('client-status-summary');
-  const normalized = String(status || '').toLowerCase();
+  const projection = getPortalStatusProjection(status || currentApplicationStatus || 'in_review');
+  const normalized = projection.status;
 
   if (!stageReview || !stageDecision || !summary) return;
 
@@ -10382,8 +10857,8 @@ function updateClientStatusTracker(status) {
     stageDecision.style.borderColor = 'var(--green)';
     stageDecision.style.color = 'var(--green)';
     stageDecision.innerHTML = '✓';
-    summary.innerHTML = '<strong>Current Status:</strong> Your application has been approved.';
-  } else if (normalized === 'rejected') {
+    summary.innerHTML = '<strong>Current Status:</strong> ' + escapeHtml(projection.nextAction);
+  } else if (normalized === 'rejected' || normalized === 'withdrawn') {
     stageReview.style.background = 'var(--red-dim)';
     stageReview.style.borderColor = 'var(--red)';
     stageReview.style.color = 'var(--red)';
@@ -10392,12 +10867,12 @@ function updateClientStatusTracker(status) {
     stageDecision.style.borderColor = 'var(--red)';
     stageDecision.style.color = 'var(--red)';
     stageDecision.innerHTML = '✗';
-    summary.innerHTML = '<strong>Current Status:</strong> Your application was declined.';
+    summary.innerHTML = '<strong>Current Status:</strong> ' + escapeHtml(projection.nextAction);
   } else if (normalized === 'kyc_documents' || normalized === 'rmi_sent') {
     stageReview.innerHTML = '📄';
-    summary.innerHTML = '<strong>Current Status:</strong> Additional documents are required before review can continue.';
+    summary.innerHTML = '<strong>Current Status:</strong> ' + escapeHtml(projection.nextAction);
   } else {
-    summary.innerHTML = '<strong>Current Status:</strong> Your application is under compliance review. We will notify you when a decision has been made.';
+    summary.innerHTML = '<strong>Current Status:</strong> ' + escapeHtml(projection.nextAction || 'Your application is under review.');
   }
 }
 
@@ -10847,7 +11322,10 @@ async function loadClientNotifications() {
     const notifications = resp.notifications || [];
     renderRMIRequests(resp.rmi_requests || []);
     renderClientNotifications(notifications);
-    if (notifications.length > 0) {
+    var trackerStatus = currentApplicationStatus && currentApplicationStatus !== 'draft'
+      ? currentApplicationStatus
+      : '';
+    if (!trackerStatus && notifications.length > 0) {
       const latest = notifications[0];
       let inferredStatus = '';
       if (latest.notification_type === 'approved') inferredStatus = 'approved';
@@ -10855,10 +11333,9 @@ async function loadClientNotifications() {
       else if (latest.notification_type === 'request_documents' || latest.notification_type === 'documents_required') inferredStatus = 'rmi_sent';
       else if (latest.notification_type === 'pre_approval' || latest.notification_type === 'pre_approved') inferredStatus = 'pre_approved';
       else inferredStatus = 'in_review';
-      updateClientStatusTracker(inferredStatus);
-    } else {
-      updateClientStatusTracker('in_review');
+      trackerStatus = inferredStatus;
     }
+    updateClientStatusTracker(trackerStatus || 'in_review');
   } catch (err) {
     renderRMIRequests([]);
     container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--red);font-size:12px;text-align:center;">Could not load notifications right now.</div>';
@@ -13235,52 +13712,11 @@ function setKYCType(personId, type, btn) {
 var REF_TO_SNAV = {};
 
 function getApplicationView(status) {
-  const stageMap = {
-    draft: 'prescreening',
-    submitted: 'pending',
-    prescreening_submitted: 'pending',
-    pricing_review: 'pricing',
-    pricing_accepted: 'onboarding',
-    pre_approval_review: 'pre-approval-hold',
-    pre_approved: 'onboarding',
-    kyc_documents: 'onboarding',
-    kyc_submitted: 'pending',
-    in_review: 'pending',
-    compliance_review: 'compliance-hold',
-    submitted_to_compliance: 'compliance-hold',
-    approved: 'approved',
-    rejected: 'rejected',
-    edd_required: 'pending',
-    rmi_sent: 'client-notifications',
-    withdrawn: 'withdrawn'
-  };
-  return stageMap[status] || 'pending';
+  return getPortalStatusProjection(status).view;
 }
 
 function getClientPortalStatusLabel(status) {
-  var key = String(status || '').trim();
-  var labelMap = {
-    draft: 'Under Review',
-    pending: 'Under Review',
-    submitted: 'Submitted',
-    prescreening_submitted: 'Submitted',
-    pricing_review: 'Under Review',
-    pricing_accepted: 'Submitted',
-    pre_approval_review: 'Under Review',
-    pre_approved: 'Documents',
-    kyc_documents: 'Documents',
-    kyc_submitted: 'Submitted',
-    compliance_review: 'Under Review',
-    submitted_to_compliance: 'Under Review',
-    in_review: 'Under Review',
-    under_review: 'Under Review',
-    edd_required: 'Documents',
-    approved: 'Approved',
-    rejected: 'Declined',
-    rmi_sent: 'Info Required',
-    withdrawn: 'Declined'
-  };
-  return labelMap[key] || 'Under Review';
+  return getPortalStatusProjection(status).badge;
 }
 
 function sanitizeClientPortalCopy(value) {
@@ -13293,11 +13729,7 @@ function sanitizeClientPortalCopy(value) {
 }
 
 function getClientPortalStatusClass(status) {
-  var label = getClientPortalStatusLabel(status);
-  if (label === 'Approved') return 'approved';
-  if (label === 'Declined') return 'rejected';
-  if (label === 'Documents' || label === 'Info Required') return 'kyc';
-  return 'review';
+  return getPortalStatusProjection(status).statusClass || 'review';
 }
 
 function resetPortalDocumentState() {
@@ -13438,28 +13870,32 @@ async function resumeApplication(ref, stage) {
       resetPortalApplicationState();
       currentApplicationId = app.id || '';
       appRef = app.ref || ref;
+      currentApplicationStatus = normalizePortalStatus(app.status || stage || 'draft');
+      var projection = getPortalStatusProjection(currentApplicationStatus, app);
       setCurrentRiskFromApp(app);
       if (app.risk_dimensions) dimScores = app.risk_dimensions;
       var psDataForPricing = app.prescreening_data || {};
       serverPricing = psDataForPricing.pricing || null;
       serverScreening = psDataForPricing.screening_report || null;
-      target = getApplicationView(app.status || stage);
+      target = projection.view;
 
-      restoredFields = restoreDraftFromData(buildDraftDataFromApplication(app), { allowRiskRestore: false }) || restoredFields;
+      if (projection.allowsDraftRestore) {
+        restoredFields = restoreDraftFromData(buildDraftDataFromApplication(app), { allowRiskRestore: false }) || restoredFields;
 
-      // Restore saved form data from save-resume API
-      try {
-        var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
-        if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
-          // App-specific saved session is the most recent authoritative client draft overlay.
-          restoredFields = restoreDraftFromData(savedSession.form_data, { allowRiskRestore: false }) || restoredFields;
-          setCurrentRiskFromApp(app);
+        // Restore saved form data from save-resume API only for true drafts.
+        try {
+          var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
+          if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
+            // App-specific saved session is the most recent authoritative client draft overlay.
+            restoredFields = restoreDraftFromData(savedSession.form_data, { allowRiskRestore: false }) || restoredFields;
+            setCurrentRiskFromApp(app);
+          }
+        } catch (resumeErr) {
+          console.warn('No saved session to restore or restore failed:', resumeErr);
         }
-      } catch (resumeErr) {
-        console.warn('No saved session to restore or restore failed:', resumeErr);
       }
 
-      // Fallback: if save-resume didn't restore directors/UBOs, populate from prescreening_data
+      // Fallback: use canonical application data for draft restore or KYC display hydration.
       var ps = app.prescreening_data || (typeof app.prescreening === 'string' ? JSON.parse(app.prescreening) : app.prescreening) || {};
       var dirTbody = document.getElementById('directors-body');
       var uboTbody = document.getElementById('ubos-body');
@@ -13472,7 +13908,8 @@ async function resumeApplication(ref, stage) {
       var psUbos = ps.ubos || app.ubos || [];
       var psInts = ps.intermediaries || app.intermediaries || [];
 
-      if (dirEmpty && Array.isArray(psDirs) && psDirs.length) {
+      var allowPartyHydration = projection.allowsDraftRestore || projection.hydrateParties === true;
+      if (allowPartyHydration && dirEmpty && Array.isArray(psDirs) && psDirs.length) {
         restorePartyRows('directors-body', psDirs.map(function(d) {
           return {
             first_name: d.first_name || '',
@@ -13498,9 +13935,9 @@ async function resumeApplication(ref, stage) {
             imported_by: d.imported_by || ''
           };
         }), 'director');
-        restoredFields = true;
+        if (projection.allowsDraftRestore) restoredFields = true;
       }
-      if (uboEmpty && Array.isArray(psUbos) && psUbos.length) {
+      if (allowPartyHydration && uboEmpty && Array.isArray(psUbos) && psUbos.length) {
         restorePartyRows('ubos-body', psUbos.map(function(u) {
           return {
             first_name: u.first_name || '',
@@ -13525,9 +13962,9 @@ async function resumeApplication(ref, stage) {
             imported_by: u.imported_by || ''
           };
         }), 'ubo');
-        restoredFields = true;
+        if (projection.allowsDraftRestore) restoredFields = true;
       }
-      if (Array.isArray(psInts) && psInts.length) {
+      if (allowPartyHydration && Array.isArray(psInts) && psInts.length) {
         var intEmpty = !intTbody || !intTbody.querySelector('input[type="text"]') || !intTbody.querySelector('input[type="text"]').value.trim();
         if (intEmpty) {
           restorePartyRows('intermediaries-body', psInts.map(function(i) {
@@ -13551,7 +13988,7 @@ async function resumeApplication(ref, stage) {
               imported_by: i.imported_by || ''
             };
           }), 'intermediary');
-          restoredFields = true;
+          if (projection.allowsDraftRestore) restoredFields = true;
         }
       }
 
@@ -13584,7 +14021,7 @@ async function resumeApplication(ref, stage) {
     const el = document.getElementById(snavId);
     if (el) el.classList.add('active');
   }
-  if (restoredFields) {
+  if (restoredFields && getCurrentPortalProjection().allowsDraftRestore) {
     showToast('success', 'Draft Restored', 'Ref: ' + ref + ' — your saved form data, documents, and party details have been restored.');
   } else {
     showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
@@ -13645,29 +14082,37 @@ function renderSidebarApps(apps) {
 function renderResumeCTA(apps, activeDrafts) {
   var cta = document.getElementById('resume-cta');
   if (!cta) return;
-  var inProgress = (apps || []).filter(function(a) { return a.status !== 'approved' && a.status !== 'rejected'; });
-  if (inProgress.length === 0) {
-    cta.style.display = 'none';
-    return;
-  }
-  var drafts = inProgress.filter(function(a) { return (a.status || '') === 'draft'; });
+  var draftApps = (apps || []).filter(function(a) {
+    return getPortalStatusProjection(a && a.status, a).allowsDraftRestore === true;
+  });
+  var draftSessions = (activeDrafts || []).filter(function(a) {
+    return getPortalStatusProjection(a && a.status, a).allowsDraftRestore === true;
+  });
   function _asTime(v) {
     var t = Date.parse(v || '');
     return Number.isNaN(t) ? 0 : t;
   }
-  drafts.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
-  inProgress.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
-  var authoritativeDrafts = (activeDrafts || []).slice().sort(function(a, b) {
+  draftApps.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
+  var authoritativeDrafts = draftSessions.slice().sort(function(a, b) {
     return _asTime(b.last_saved_at || b.updated_at || b.created_at) - _asTime(a.last_saved_at || a.updated_at || a.created_at);
   });
   var app = null;
   if (authoritativeDrafts.length) {
     var draftRef = authoritativeDrafts[0].ref || authoritativeDrafts[0].application_id || '';
-    app = inProgress.find(function(item) {
+    app = draftApps.find(function(item) {
       return (item.ref || item.id || '') === draftRef;
     }) || authoritativeDrafts[0];
   } else {
-    app = drafts.length ? drafts[0] : inProgress[0];
+    app = draftApps[0] || null;
+  }
+  if (!app) {
+    cta.style.display = 'none';
+    cta.removeAttribute('data-app-id');
+    cta.removeAttribute('data-app-ref');
+    cta.removeAttribute('data-app-name');
+    var discardHidden = document.getElementById('resume-cta-discard');
+    if (discardHidden) discardHidden.style.display = 'none';
+    return;
   }
   var ref = app.ref || app.id || app.application_id || '';
   var stage = app.status || 'pending';
@@ -13677,7 +14122,7 @@ function renderResumeCTA(apps, activeDrafts) {
   cta.setAttribute('onclick', 'resumeApplication(' + refJs + ',' + stageJs + ')');
   var desc = document.getElementById('resume-cta-desc');
   var refEl = document.getElementById('resume-cta-ref');
-  if (desc) desc.textContent = (app.company_name || 'Your application') + ' · Awaiting action';
+  if (desc) desc.textContent = (app.company_name || 'Your application') + ' · Draft ready to continue';
   if (refEl) refEl.textContent = 'Ref: ' + ref;
   cta.setAttribute('data-app-id', app.id || app.application_id || '');
   cta.setAttribute('data-app-ref', ref);
@@ -13689,7 +14134,7 @@ function renderResumeCTA(apps, activeDrafts) {
   // discarded from this banner — they belong to live workflows.
   var discardBtn = document.getElementById('resume-cta-discard');
   if (discardBtn) {
-    if (app.status === 'draft') {
+    if (getPortalStatusProjection(app.status, app).allowsDraftRestore === true) {
       discardBtn.style.display = 'inline-flex';
       discardBtn.setAttribute('data-app-id', app.id || app.application_id || '');
       discardBtn.setAttribute('data-app-ref', ref);

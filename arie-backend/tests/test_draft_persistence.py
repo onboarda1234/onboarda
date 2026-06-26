@@ -1093,7 +1093,10 @@ def test_portal_renders_save_draft_bar_and_dirty_tracking():
     assert "_draftDirty" in src
     assert "_markDraftDirty" in src
     # Autosave must be wired into the pre-screening view, not only onboarding.
-    assert "name === 'prescreening'" in src or 'name === "prescreening"' in src
+    assert "function portalAutosaveAllowedForView(viewName)" in src
+    assert "projection.autosaveAllowed === true" in src
+    assert "viewName === 'prescreening'" in src or 'viewName === "prescreening"' in src
+    assert "portalAutosaveAllowedForView(name)" in src
 
 
 def test_portal_has_beforeunload_navigation_guard():
@@ -1153,10 +1156,15 @@ def test_portal_new_application_has_duplicate_draft_guard():
 def test_portal_resume_cta_prefers_active_pre_submit_draft():
     src = _portal_html()
     assert "function renderResumeCTA(apps, activeDrafts) {" in src
-    assert "var authoritativeDrafts = (activeDrafts || []).slice().sort(function(a, b) {" in src
+    assert "var draftApps = (apps || []).filter(function(a) {" in src
+    assert "var draftSessions = (activeDrafts || []).filter(function(a) {" in src
+    assert "return getPortalStatusProjection(a && a.status, a).allowsDraftRestore === true;" in src
+    assert "var authoritativeDrafts = draftSessions.slice().sort(function(a, b) {" in src
     assert "return _asTime(b.last_saved_at || b.updated_at || b.created_at) - _asTime(a.last_saved_at || a.updated_at || a.created_at);" in src
-    assert "app = inProgress.find(function(item) {" in src
-    assert "app = drafts.length ? drafts[0] : inProgress[0];" in src
+    assert "app = draftApps.find(function(item) {" in src
+    assert "}) || authoritativeDrafts[0];" in src
+    assert "app = draftApps[0] || null;" in src
+    assert "app = drafts.length ? drafts[0] : inProgress[0];" not in src
 
 
 def test_portal_restore_normalizes_key_dropdowns_and_nationality():

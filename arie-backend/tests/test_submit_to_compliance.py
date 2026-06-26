@@ -16,10 +16,16 @@ import os
 import sys
 import tempfile
 import uuid
+from pathlib import Path
 
 from tornado.testing import AsyncHTTPTestCase
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tests.test_portal_pilot_boundary_static import (  # noqa: E402
+    _extract_js_object_property,
+    _extract_js_var_object,
+)
 
 
 def _sync_test_db_path(path):
@@ -344,15 +350,18 @@ def test_status_label_registered():
 
 
 def test_portal_keeps_submitted_to_compliance_neutral():
-    from pathlib import Path
     portal = (Path(__file__).resolve().parents[2] / "arie-portal.html").read_text(encoding="utf-8")
+    projection_source = _extract_js_var_object(portal, "PORTAL_STATUS_PROJECTIONS")
+    submitted_to_compliance = _extract_js_object_property(projection_source, "submitted_to_compliance")
+
     # The applicant-facing status label must be the neutral "Under Review", and the
     # status must route to the compliance-hold (neutral) view.
-    assert "submitted_to_compliance: 'Under Review'" in portal
-    assert "submitted_to_compliance: 'compliance-hold'" in portal
+    assert "badge: 'Under Review'" in submitted_to_compliance
+    assert "statusLabel: 'Under Review'" in submitted_to_compliance
+    assert "view: 'compliance-hold'" in submitted_to_compliance
     # The internal status key must never be mapped to a label that leaks mechanics
     # (e.g. an applicant-facing 'Submitted to Compliance' status badge).
-    assert "submitted_to_compliance: 'Submitted to Compliance'" not in portal
+    assert "Submitted to Compliance" not in submitted_to_compliance
 
 
 def test_backoffice_has_submit_to_compliance_control():
