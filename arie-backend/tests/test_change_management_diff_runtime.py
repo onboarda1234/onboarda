@@ -55,7 +55,8 @@ def _runtime_js(html, config, action_js):
                     attributes: {{}},
                     className: '',
                     setAttribute(name, value) {{ this.attributes[name] = String(value); }},
-                    getAttribute(name) {{ return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }}
+                    getAttribute(name) {{ return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }},
+                    appendChild(child) {{ this.children = this.children || []; this.children.push(child); return child; }}
                   }};
                 }}
 
@@ -88,6 +89,12 @@ def _runtime_js(html, config, action_js):
                   if (path.indexOf('/change-management/requests') === 0) {{
                     return Promise.resolve({{ requests: CONFIG.requestList || [] }});
                   }}
+                  if (path.indexOf('/change-management/alerts') === 0) {{
+                    return Promise.resolve({{ alerts: CONFIG.alertList || [] }});
+                  }}
+                  if (path.indexOf('/change-management/stats') === 0) {{
+                    return Promise.resolve(CONFIG.stats || {{ alerts: {{ total: 0, by_status: {{}} }}, requests: {{ total: 0, by_status: {{}} }} }});
+                  }}
                   if (path.indexOf('/applications') === 0) {{
                     return Promise.resolve({{ applications: [] }});
                   }}
@@ -101,8 +108,10 @@ def _runtime_js(html, config, action_js):
                 document.getElementById('cm-request-detail-modal');
                 document.getElementById('cm-request-status-filter').value = '';
                 document.getElementById('cm-request-materiality-filter').value = '';
-                document.getElementById('cm-requests-tbody');
-                document.getElementById('cm-requests-empty').style.display = 'none';
+                document.getElementById('cm-alert-status-filter').value = '';
+                document.getElementById('cm-workspace-dashboard');
+                document.getElementById('cm-work-queue-tbody');
+                document.getElementById('cm-work-queue-empty').style.display = 'none';
                 """
             ),
             region,
