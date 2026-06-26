@@ -1094,6 +1094,7 @@ def test_portal_renders_save_draft_bar_and_dirty_tracking():
     assert "_markDraftDirty" in src
     # Autosave must be wired into the pre-screening view, not only onboarding.
     assert "function portalAutosaveAllowedForView(viewName)" in src
+    assert "projection.autosaveAllowed === true" in src
     assert "viewName === 'prescreening'" in src or 'viewName === "prescreening"' in src
     assert "portalAutosaveAllowedForView(name)" in src
 
@@ -1157,10 +1158,11 @@ def test_portal_resume_cta_prefers_active_pre_submit_draft():
     assert "function renderResumeCTA(apps, activeDrafts) {" in src
     assert "var draftApps = (apps || []).filter(function(a) {" in src
     assert "var draftSessions = (activeDrafts || []).filter(function(a) {" in src
-    assert "allowsDraftRestore === true" in src
+    assert "return getPortalStatusProjection(a && a.status, a).allowsDraftRestore === true;" in src
     assert "var authoritativeDrafts = draftSessions.slice().sort(function(a, b) {" in src
     assert "return _asTime(b.last_saved_at || b.updated_at || b.created_at) - _asTime(a.last_saved_at || a.updated_at || a.created_at);" in src
     assert "app = draftApps.find(function(item) {" in src
+    assert "}) || authoritativeDrafts[0];" in src
     assert "app = draftApps[0] || null;" in src
     assert "app = drafts.length ? drafts[0] : inProgress[0];" not in src
 

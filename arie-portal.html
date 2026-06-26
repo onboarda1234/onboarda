@@ -8137,8 +8137,18 @@ function routePortalByBackendStatus(status, messages) {
   currentApplicationStatus = normalizePortalStatus(nextStatus);
   var projection = getPortalStatusProjection(currentApplicationStatus);
   if (nextStatus === 'pricing_review') {
-    showPricingView();
-    showToast('info', 'Pricing Available', messages.pricingMessage || 'Please review and accept the pricing to continue.');
+    var hasPricing = projection.primaryCta === 'Accept pricing';
+    if (hasPricing) {
+      showPricingView();
+    } else {
+      showView(projection.view);
+      applyApplicationViewState(projection.view);
+    }
+    showToast(
+      'info',
+      hasPricing ? 'Pricing Available' : 'Application Updated',
+      messages.pricingMessage || projection.nextAction
+    );
     return;
   }
   if (nextStatus === 'pre_approval_review') {
