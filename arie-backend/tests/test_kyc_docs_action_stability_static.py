@@ -23,7 +23,8 @@ def test_kyc_document_actions_refresh_back_to_documents_tab():
     review = _region(html, "async function confirmDocumentReview", "// ══════════════════════════════════════════════════════════")
 
     assert "openAppDetail(ref, { initialTab: 'kyc-docs' })" in helper
-    assert "await refreshCurrentKycDocumentsDetail(currentApp.ref)" in upload
+    assert "var uploadAppRef = currentApp.ref;" in upload
+    assert "await refreshCurrentKycDocumentsDetail(uploadAppRef)" in upload
     assert "await refreshCurrentKycDocumentsDetail(appRef || (currentApp && currentApp.ref))" in reverify
     assert "await refreshCurrentKycDocumentsDetail(appRef || (currentApp && currentApp.ref))" in review
 
