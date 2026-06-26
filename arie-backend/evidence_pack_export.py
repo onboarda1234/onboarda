@@ -45,6 +45,8 @@ DEFAULT_SECTIONS = tuple(sorted(SECTIONS))
 GENERATED_BY_NOTE = "Raw provider JSON is not included in this MVP export."
 UNAVAILABLE_VALUE = "Value unavailable / securely stored"
 ACTIVE_DOCUMENT_SQL = "COALESCE(is_current, TRUE) = TRUE"
+NOT_AVAILABLE = "Not available"
+RISK_LEVEL_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
 
 
 class ExportValidationError(ValueError):
@@ -130,6 +132,290 @@ def _first(*values: Any) -> Any:
         if value not in (None, ""):
             return value
     return ""
+
+
+def _safe_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalise_risk_level(value: Any) -> str:
+    level = str(value or "").strip().upper().replace(" ", "_")
+    return level if level in RISK_LEVEL_RANK else ""
+
+
+def _risk_config_from_db(db) -> dict[str, Any]:
+    try:
+        row = db.execute(
+            "SELECT dimensions, thresholds FROM risk_config WHERE id=1"
+        ).fetchone()
+    except Exception:
+        return {}
+    if not row:
+        return {}
+    return {
+        "dimensions": _json_loads(row["dimensions"], None),
+        "thresholds": _json_loads(row["thresholds"], None),
+    }
+
+
+def _dimension_weight_map(risk_config: dict[str, Any]) -> dict[str, float]:
+    dimensions = risk_config.get("dimensions")
+    if not isinstance(dimensions, list):
+        return {}
+    weights: dict[str, float] = {}
+    for dimension in dimensions:
+        if not isinstance(dimension, dict):
+            continue
+        dim_id = str(dimension.get("id") or "").strip().lower()
+        weight = _safe_float(dimension.get("weight"))
+        if not dim_id or weight is None or weight <= 0:
+            continue
+        weights[dim_id] = weight / 100.0 if weight > 1 else weight
+    total = sum(weights.values())
+    if total > 0 and abs(total - 1.0) > 0.02:
+        weights = {key: value / total for key, value in weights.items()}
+    return weights
+
+
+def _derive_base_numeric_score(
+    app: dict[str, Any],
+    risk_dimensions: dict[str, Any],
+    risk_config: dict[str, Any],
+) -> float | None:
+    stored = _safe_float(app.get("base_risk_score"))
+    if stored is not None:
+        return round(stored, 1)
+    if not isinstance(risk_dimensions, dict):
+        return None
+    weights = _dimension_weight_map(risk_config)
+    required = ("d1", "d2", "d3", "d4", "d5")
+    if not weights or any(key not in weights for key in required):
+        return None
+    values: dict[str, float] = {}
+    for key in required:
+        value = _safe_float(risk_dimensions.get(key, risk_dimensions.get(key.upper())))
+        if value is None or value < 1 or value > 4:
+            return None
+        values[key] = value
+    weighted_average = sum(values[key] * weights[key] for key in required)
+    return round((weighted_average - 1) / 3 * 100, 1)
+
+
+def _classify_base_risk_level(base_score: float | None, risk_config: dict[str, Any]) -> str:
+    if base_score is None:
+        return ""
+    try:
+        from rule_engine import classify_risk_level
+
+        return _normalise_risk_level(classify_risk_level(base_score, risk_config))
+    except Exception:
+        return ""
+
+
+def _boolish(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"yes", "true", "1", "y", "declared_yes", "confirmed_pep"}:
+        return True
+    if text in {"no", "false", "0", "n", "declared_no", "false_positive", "not_pep"}:
+        return False
+    return None
+
+
+def _party_has_declared_or_confirmed_pep(row: dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    declaration = _json_loads(row.get("pep_declaration"), {})
+    declaration = declaration if isinstance(declaration, dict) else {}
+    status = str(row.get("pep_status") or declaration.get("pep_status") or "").strip().lower()
+    declared = _boolish(row.get("client_declared_pep", declaration.get("client_declared_pep")))
+    if declared is None:
+        declared = _boolish(row.get("declared_pep", declaration.get("declared_pep")))
+    officer_verified = _boolish(row.get("officer_verified_pep", declaration.get("officer_verified_pep")))
+    if officer_verified is None:
+        officer_verified = _boolish(row.get("verified_pep", declaration.get("verified_pep")))
+    if declared is True or officer_verified is True:
+        return True
+    if status in {"declared_yes", "confirmed_pep"}:
+        return True
+    if declared is False or officer_verified is False:
+        return False
+    if status in {"declared_no", "false_positive", "not_pep", "pending_review", "not_verified"}:
+        return False
+    return not declaration and _boolish(row.get("is_pep")) is True
+
+
+def _case_has_declared_or_confirmed_pep(case: dict[str, Any]) -> bool:
+    return any(
+        _party_has_declared_or_confirmed_pep(row)
+        for row in (case.get("directors") or []) + (case.get("ubos") or [])
+    )
+
+
+def _provider_pep_detected(case: dict[str, Any]) -> bool:
+    report = case.get("prescreening", {}).get("screening_report")
+    if not isinstance(report, dict):
+        return False
+    items = []
+    for key in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
+        value = report.get(key)
+        if isinstance(value, list):
+            items.extend(item for item in value if isinstance(item, dict))
+    for item in items:
+        screening = item.get("screening") if isinstance(item.get("screening"), dict) else {}
+        if _boolish(item.get("undeclared_pep")) is True or _boolish(screening.get("undeclared_pep")) is True:
+            return True
+        results = screening.get("results") if isinstance(screening.get("results"), list) else []
+        if any(isinstance(result, dict) and _boolish(result.get("is_pep")) is True for result in results):
+            return True
+    return False
+
+
+def _json_list(value: Any) -> list[Any]:
+    parsed = _json_loads(value, [])
+    return parsed if isinstance(parsed, list) else []
+
+
+def _pep_stale_label_present(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return (
+        "declared_pep_present" in lowered
+        or "floor_rule_declared_pep" in lowered
+        or "declared pep floor" in lowered
+    )
+
+
+def _filter_current_risk_escalations(case: dict[str, Any]) -> list[str]:
+    has_current_pep = _case_has_declared_or_confirmed_pep(case)
+    filtered = []
+    for item in _json_list(case["application"].get("risk_escalations")):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if not has_current_pep and _pep_stale_label_present(text):
+            continue
+        filtered.append(text)
+    return filtered
+
+
+def _clean_floor_reason_for_current_truth(case: dict[str, Any], reason: Any) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    if _case_has_declared_or_confirmed_pep(case):
+        return text
+    parts = re.split(r"\s*;\s*", text)
+    cleaned = [part for part in parts if part and not _pep_stale_label_present(part)]
+    return "; ".join(cleaned).strip()
+
+
+def _humanise_escalation(code: str) -> str:
+    mapping = {
+        "floor_rule_edd_routing": "EDD routing floor",
+        "material_screening_disposition_floor": "Unresolved provider-detected PEP / screening review required",
+        "provider_pep_match_unresolved": "Unresolved provider-detected PEP / screening review required",
+        "floor_rule_high_risk_sector": "High-risk sector floor",
+        "floor_rule_elevated_jurisdiction": "Elevated jurisdiction floor",
+    }
+    return mapping.get(code, code.replace("_", " "))
+
+
+def _floor_reason(case: dict[str, Any], escalations: list[str]) -> str:
+    app = case["application"]
+    candidates = [
+        app.get("elevation_reason_text"),
+        case["prescreening"].get("elevation_rules"),
+    ]
+    for candidate in candidates:
+        cleaned = _clean_floor_reason_for_current_truth(case, candidate)
+        if cleaned:
+            return cleaned
+    if _provider_pep_detected(case) and not _case_has_declared_or_confirmed_pep(case):
+        return "Unresolved provider-detected PEP / screening review required"
+    if escalations:
+        return "; ".join(_humanise_escalation(item) for item in escalations)
+    return NOT_AVAILABLE
+
+
+def _current_risk_factors(case: dict[str, Any]) -> Any:
+    value = _first(case["prescreening"].get("risk_factors"), case["prescreening"].get("risk_flags"))
+    if value in (None, "") or _case_has_declared_or_confirmed_pep(case):
+        return value
+    if isinstance(value, list):
+        cleaned = [
+            item for item in value
+            if not _pep_stale_label_present(str(item or ""))
+        ]
+        return cleaned if cleaned else ""
+    if isinstance(value, dict):
+        cleaned = {
+            key: item for key, item in value.items()
+            if not _pep_stale_label_present(str(key)) and not _pep_stale_label_present(str(item))
+        }
+        return cleaned if cleaned else ""
+    text = str(value)
+    parts = re.split(r"\s*(?:;|,)\s*", text)
+    cleaned = [part for part in parts if part and not _pep_stale_label_present(part)]
+    if cleaned and len(cleaned) != len(parts):
+        return "; ".join(cleaned)
+    return "" if _pep_stale_label_present(text) else value
+
+
+def _floor_applied_display(
+    base_score: float | None,
+    final_score: float | None,
+    base_level: str,
+    final_level: str,
+    floor_reason: str,
+    escalations: list[str],
+) -> str:
+    if floor_reason and floor_reason != NOT_AVAILABLE:
+        return "Yes"
+    if escalations:
+        return "Yes"
+    if base_level and final_level:
+        if RISK_LEVEL_RANK.get(final_level, 0) > RISK_LEVEL_RANK.get(base_level, 0):
+            return "Yes"
+        if RISK_LEVEL_RANK.get(final_level, 0) == RISK_LEVEL_RANK.get(base_level, 0):
+            if base_score is None or final_score is None:
+                return "No"
+            return "Yes" if round(base_score, 1) != round(final_score, 1) else "No"
+    if base_score is not None and final_score is not None:
+        return "Yes" if round(base_score, 1) != round(final_score, 1) else "No"
+    return "Unknown"
+
+
+def _risk_breakdown(case: dict[str, Any]) -> dict[str, Any]:
+    app = case["application"]
+    risk_config = case.get("risk_config") if isinstance(case.get("risk_config"), dict) else {}
+    base_score = _derive_base_numeric_score(app, case["risk_dimensions"], risk_config)
+    final_score = _safe_float(
+        app.get("final_risk_score") if app.get("final_risk_score") not in (None, "") else app.get("risk_score")
+    )
+    base_level = _normalise_risk_level(app.get("base_risk_level")) or _classify_base_risk_level(base_score, risk_config)
+    final_level = _normalise_risk_level(app.get("final_risk_level")) or _normalise_risk_level(app.get("risk_level"))
+    escalations = _filter_current_risk_escalations(case)
+    reason = _floor_reason(case, escalations)
+    floor_applied = _floor_applied_display(base_score, final_score, base_level, final_level, reason, escalations)
+    return {
+        "base_score": base_score,
+        "base_level": base_level or NOT_AVAILABLE,
+        "final_score": final_score,
+        "final_level": final_level or NOT_AVAILABLE,
+        "floor_applied": floor_applied,
+        "floor_reason": reason,
+        "escalations": escalations,
+    }
 
 
 def _display(value: Any) -> str:
@@ -325,6 +611,7 @@ def _load_case(db, app: dict[str, Any]) -> dict[str, Any]:
     app_id = app["id"]
     prescreening = _json_loads(app.get("prescreening_data"), {})
     risk_dimensions = _json_loads(app.get("risk_dimensions"), {})
+    risk_config = _risk_config_from_db(db)
     directors = _rows(db, "SELECT * FROM directors WHERE application_id = ? ORDER BY created_at ASC, id ASC", (app_id,))
     ubos = _rows(db, "SELECT * FROM ubos WHERE application_id = ? ORDER BY created_at ASC, id ASC", (app_id,))
     intermediaries = _rows(db, "SELECT * FROM intermediaries WHERE application_id = ? ORDER BY created_at ASC, id ASC", (app_id,))
@@ -362,6 +649,7 @@ def _load_case(db, app: dict[str, Any]) -> dict[str, Any]:
         "application": app,
         "prescreening": prescreening if isinstance(prescreening, dict) else {},
         "risk_dimensions": risk_dimensions if isinstance(risk_dimensions, dict) else {},
+        "risk_config": risk_config if isinstance(risk_config, dict) else {},
         "directors": directors,
         "ubos": ubos,
         "intermediaries": intermediaries,
@@ -461,16 +749,25 @@ def _latest_correction_values(corrections: list[dict[str, Any]]) -> dict[str, An
 
 def render_risk_assessment(case: dict[str, Any]) -> bytes:
     app = case["application"]
+    risk = _risk_breakdown(case)
     body = _table([
-        ("Risk score", app.get("risk_score")),
-        ("Risk level", app.get("final_risk_level") or app.get("risk_level")),
-        ("Base risk level", app.get("base_risk_level")),
+        ("Base numeric score", risk["base_score"] if risk["base_score"] is not None else NOT_AVAILABLE),
+        ("Base risk level", risk["base_level"]),
+        ("Floor/escalation applied", risk["floor_applied"]),
+        ("Floor/escalation reason", risk["floor_reason"]),
+        ("Final/floored score", risk["final_score"] if risk["final_score"] is not None else NOT_AVAILABLE),
+        ("Final risk classification", risk["final_level"]),
         ("Onboarding lane", app.get("onboarding_lane")),
         ("Risk recomputation timestamp", app.get("risk_computed_at") or app.get("updated_at")),
         ("Risk dimensions", case["risk_dimensions"] or "N/A"),
-        ("Risk factors", _first(case["prescreening"].get("risk_factors"), case["prescreening"].get("risk_flags"))),
-        ("Floor/elevation rules", _first(app.get("elevation_reason_text"), case["prescreening"].get("elevation_rules"))),
+        ("Risk factors", _current_risk_factors(case)),
     ])
+    if risk["floor_applied"] == "Yes":
+        body += (
+            "<p class='note'>The base score reflects the deterministic questionnaire/dimension score "
+            "before floor rules. The final classification reflects mandatory screening/risk floor rules "
+            "and is the authoritative approval classification.</p>"
+        )
     risk_changes = []
     for row in case["corrections"]:
         before = _json_loads(row.get("before_state"), {})
