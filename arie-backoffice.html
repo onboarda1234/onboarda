@@ -2185,57 +2185,40 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ CHANGE MANAGEMENT ═══════════════ -->
 <div class="view" id="view-change-mgmt">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;gap:16px;flex-wrap:wrap;">
     <div>
       <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Change Management</h3>
-      <p style="font-size:13px;color:var(--text3);">Manage change alerts and formal change requests for entity profiles. All material changes require review and approval before live implementation.</p>
+      <p style="font-size:13px;color:var(--text3);">Manage post-approval profile changes from one workspace: triage alerts, review requests, confirm readiness, decide, implement, and open audit reconstruction.</p>
     </div>
-    <div style="display:flex;gap:8px;">
-      <button class="btn" onclick="showChangeMgmtTab('requests')" id="cm-tab-requests" style="font-size:12px;">Change Requests</button>
-      <button class="btn btn-outline" onclick="showChangeMgmtTab('alerts')" id="cm-tab-alerts" style="font-size:12px;">Change Alerts</button>
-      <button class="btn btn-outline" onclick="showChangeMgmtTab('stats')" id="cm-tab-stats" style="font-size:12px;">Stats</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn" onclick="showCreateRequestModal()" style="font-size:12px;">+ New Request</button>
+      <button class="btn btn-outline" onclick="showCreateAlertModal()" style="font-size:12px;">+ New Alert</button>
     </div>
   </div>
-  <!-- Alerts Tab -->
-  <div id="cm-alerts-tab">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-      <div style="display:flex;gap:8px;">
-        <select id="cm-alert-status-filter" onchange="loadChangeAlerts()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
-          <option value="">All Statuses</option>
-          <option value="new">New</option>
-          <option value="under_review">Under Review</option>
-          <option value="awaiting_client_confirmation">Awaiting Client</option>
-          <option value="converted_to_change_request">Converted</option>
-          <option value="dismissed">Dismissed</option>
-          <option value="escalated">Escalated</option>
-        </select>
+
+  <div id="cm-workspace-dashboard" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:16px;"></div>
+
+  <div style="background:var(--surface);border:1px solid var(--border1);border-radius:12px;padding:14px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px;">
+      <div>
+        <div style="font-size:13px;font-weight:800;color:var(--text1);">Unified CM queue</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:3px;">Change Requests are the operational default. Alerts appear here as triage work and convert into formal requests.</div>
       </div>
-      <button class="btn" onclick="showCreateAlertModal()" style="font-size:12px;">+ New Alert</button>
+      <button class="btn btn-outline" onclick="loadChangeManagementWorkspace({ force: true })" style="font-size:12px;">Refresh</button>
     </div>
-    <div id="cm-alerts-list" style="background:var(--surface);border-radius:10px;border:1px solid var(--border1);overflow:hidden;">
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead><tr style="background:var(--bg2);border-bottom:1px solid var(--border1);">
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">ID</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Type</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Entity</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Summary</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Materiality</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Source</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Status</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Created</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Actions</th>
-        </tr></thead>
-        <tbody id="cm-alerts-tbody"></tbody>
-      </table>
-      <div id="cm-alerts-empty" style="padding:40px;text-align:center;color:var(--text3);display:none;">No change alerts found.</div>
+    <div id="cm-work-filter-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="btn btn-outline" id="cm-work-filter-all" onclick="cmSetWorkFilter('all')" style="font-size:12px;">All work</button>
+      <button class="btn btn-outline" id="cm-work-filter-requests" onclick="cmSetWorkFilter('requests')" style="font-size:12px;">Change Requests</button>
+      <button class="btn btn-outline" id="cm-work-filter-alerts" onclick="cmSetWorkFilter('alerts')" style="font-size:12px;">Change Alerts</button>
+      <button class="btn btn-outline" id="cm-work-filter-my" onclick="cmSetWorkFilter('my')" style="font-size:12px;">My items</button>
+      <button class="btn btn-outline" id="cm-work-filter-pending_approval" onclick="cmSetWorkFilter('pending_approval')" style="font-size:12px;">Pending approval</button>
+      <button class="btn btn-outline" id="cm-work-filter-ready_implement" onclick="cmSetWorkFilter('ready_implement')" style="font-size:12px;">Ready to implement</button>
+      <button class="btn btn-outline" id="cm-work-filter-blocked" onclick="cmSetWorkFilter('blocked')" style="font-size:12px;">Blocked</button>
+      <button class="btn btn-outline" id="cm-work-filter-closed" onclick="cmSetWorkFilter('closed')" style="font-size:12px;">Converted / closed</button>
     </div>
-  </div>
-  <!-- Requests Tab -->
-  <div id="cm-requests-tab" style="display:none;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-      <div style="display:flex;gap:8px;">
-        <select id="cm-request-status-filter" onchange="loadChangeRequests()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
-          <option value="">All Statuses</option>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <select id="cm-request-status-filter" onchange="cmRenderWorkQueue()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
+          <option value="">All request statuses</option>
           <option value="draft">Draft</option>
           <option value="submitted">Submitted</option>
           <option value="triage_in_progress">Triage</option>
@@ -2244,36 +2227,40 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <option value="implemented">Implemented</option>
           <option value="rejected">Rejected</option>
           <option value="cancelled">Cancelled</option>
-        </select>
-        <select id="cm-request-materiality-filter" onchange="loadChangeRequests()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
+      </select>
+      <select id="cm-request-materiality-filter" onchange="cmRenderWorkQueue()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
           <option value="">All Tiers</option>
           <option value="tier1">Tier 1 — Material</option>
           <option value="tier2">Tier 2 — Moderate</option>
           <option value="tier3">Tier 3 — Minor</option>
-        </select>
-      </div>
-      <button class="btn" onclick="showCreateRequestModal()" style="font-size:12px;">+ New Request</button>
+      </select>
+      <select id="cm-alert-status-filter" onchange="cmRenderWorkQueue()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
+          <option value="">All alert statuses</option>
+          <option value="new">New</option>
+          <option value="under_review">Under Review</option>
+          <option value="awaiting_client_confirmation">Awaiting Client</option>
+          <option value="converted_to_change_request">Converted</option>
+          <option value="dismissed">Dismissed</option>
+          <option value="escalated">Escalated</option>
+      </select>
     </div>
-    <div id="cm-requests-list" style="background:var(--surface);border-radius:10px;border:1px solid var(--border1);overflow:hidden;">
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead><tr style="background:var(--bg2);border-bottom:1px solid var(--border1);">
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Request ID</th>
+  </div>
+
+  <div id="cm-unified-queue-list" style="background:var(--surface);border-radius:10px;border:1px solid var(--border1);overflow:hidden;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="background:var(--bg2);border-bottom:1px solid var(--border1);">
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Work item</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Customer / Application</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Source</th>
-          <th style="padding:10px 14px;text-align:left;font-weight:600;">Requested Change</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Requested change / alert</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Stage</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Readiness</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Age</th>
           <th style="padding:10px 14px;text-align:left;font-weight:600;">Primary Action</th>
-        </tr></thead>
-        <tbody id="cm-requests-tbody"></tbody>
-      </table>
-      <div id="cm-requests-empty" style="padding:40px;text-align:center;color:var(--text3);display:none;">No change requests found.</div>
-    </div>
-  </div>
-  <!-- Stats Tab -->
-  <div id="cm-stats-tab" style="display:none;">
-    <div id="cm-stats-content" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;"></div>
+      </tr></thead>
+      <tbody id="cm-work-queue-tbody"></tbody>
+    </table>
+    <div id="cm-work-queue-empty" style="padding:40px;text-align:center;color:var(--text3);display:none;">No Change Management work matches this filter.</div>
   </div>
 </div>
 
@@ -4295,7 +4282,7 @@ function resetBackofficeSessionData() {
     legacy_unmapped: { offset: 0, pagination: null, load_error: null, is_loading: false }
   };
   LIFECYCLE_SUMMARY_CACHE = {};
-  CHANGE_MGMT_ACTIVE_TAB = 'alerts';
+  CHANGE_MGMT_ACTIVE_TAB = 'all';
   CHANGE_MGMT_APPLICATIONS = [];
   CHANGE_MGMT_APPLICATIONS_PROMISE = null;
   CHANGE_MGMT_APPLICATIONS_ERROR = '';
@@ -5780,7 +5767,7 @@ var LIFECYCLE_QUEUE_STATE = {
   legacy_unmapped: { offset: 0, pagination: null, load_error: null, is_loading: false }
 };
 var LIFECYCLE_SUMMARY_CACHE = {};
-var CHANGE_MGMT_ACTIVE_TAB = 'alerts';
+var CHANGE_MGMT_ACTIVE_TAB = 'all';
 var CHANGE_MGMT_APPLICATIONS = [];
 var CHANGE_MGMT_APPLICATIONS_PROMISE = null;
 var CHANGE_MGMT_APPLICATIONS_ERROR = '';
@@ -16131,27 +16118,28 @@ function apiFetch(url, opts) {
 }
 
 function renderChangeMgmt() {
-  showChangeMgmtTab(CHANGE_MGMT_ACTIVE_TAB || 'requests');
+  loadChangeManagementWorkspace();
 }
 
 function showChangeMgmtTab(tab) {
-  CHANGE_MGMT_ACTIVE_TAB = tab || 'requests';
-  document.getElementById('cm-alerts-tab').style.display = (tab === 'alerts') ? '' : 'none';
-  document.getElementById('cm-requests-tab').style.display = (tab === 'requests') ? '' : 'none';
-  document.getElementById('cm-stats-tab').style.display = (tab === 'stats') ? '' : 'none';
-  ['alerts','requests','stats'].forEach(function(t) {
-    var btn = document.getElementById('cm-tab-' + t);
-    if (btn) { btn.className = (t === tab) ? 'btn' : 'btn btn-outline'; }
-  });
-  if (tab === 'alerts') loadChangeAlerts();
-  if (tab === 'requests') loadChangeRequests();
-  if (tab === 'stats') loadCMStats();
+  var mapped = tab === 'alerts' ? 'alerts' : (tab === 'requests' ? 'requests' : 'all');
+  cmSetWorkFilter(mapped);
+  return loadChangeManagementWorkspace();
 }
 
 var CM_CURRENT_REQUEST_DETAIL = null;
 var CM_DECISION_STATE = {};
 var CM_ACTIVE_MODAL_ID = null;
 var CM_MODAL_LAST_FOCUS = null;
+var CM_WORKSPACE_STATE = {
+  alerts: [],
+  requests: [],
+  stats: null,
+  loading: false,
+  error: '',
+  loaded: false,
+  filter: 'all'
+};
 
 function populateCMApplicationSelects(selectedAppId) {
   var apps = Array.isArray(CHANGE_MGMT_APPLICATIONS) ? CHANGE_MGMT_APPLICATIONS.slice() : [];
@@ -16436,9 +16424,9 @@ function cmRequestSummary(req) {
 function cmStageMeta(req) {
   var status = String((req && req.status) || '').toLowerCase();
   var stages = {
-    draft: { label: 'Intake', tone: '#6b7280', detail: 'Draft not submitted' },
-    submitted: { label: 'Review details', tone: '#0d6efd', detail: 'Submitted for triage' },
-    triage_in_progress: { label: 'Review details', tone: '#fd7e14', detail: 'Triage in progress' },
+    draft: { label: 'Intake', tone: '#6b7280', detail: 'Draft request — submit for review' },
+    submitted: { label: 'Review requested change', tone: '#0d6efd', detail: 'Submitted for triage' },
+    triage_in_progress: { label: 'Review requested change', tone: '#fd7e14', detail: 'Triage in progress' },
     pending_information: { label: 'Evidence / Agent 1', tone: '#b45309', detail: 'More information required' },
     ready_for_review: { label: 'Evidence / Agent 1', tone: '#0d6efd', detail: 'Ready for compliance review' },
     screening_in_progress: { label: 'Screening / Risk', tone: '#7c3aed', detail: 'Screening review in progress' },
@@ -16499,7 +16487,7 @@ function cmBlockerListHtml(blockers, emptyText) {
     return '<div style="font-size:12px;color:var(--text3);line-height:1.45;">' + escapeHtml(emptyText || 'No blockers currently reported.') + '</div>';
   }
   return '<ul style="margin:8px 0 0 18px;padding:0;color:var(--text2);font-size:12px;line-height:1.5;">' + blockers.map(function(blocker) {
-    var label = blocker && (blocker.label || blocker.code) ? (blocker.label || blocker.code) : 'Backend blocker';
+    var label = blocker && (blocker.label || blocker.code) ? (blocker.label || blocker.code) : 'System blocker';
     var next = blocker && blocker.next_action ? ' - ' + blocker.next_action : '';
     return '<li><strong>' + escapeHtml(cmBlockerCategory(blocker)) + ':</strong> ' + escapeHtml(label + next) + '</li>';
   }).join('') + '</ul>';
@@ -16521,7 +16509,7 @@ function cmRequestReadinessMeta(req) {
   var status = String((req && req.status) || '').toLowerCase();
   if (status === 'implemented') return { label: 'Implemented', tone: '#198754' };
   if (['rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Closed', tone: '#6b7280' };
-  if (status === 'draft') return { label: 'Draft not submitted', tone: '#6b7280' };
+  if (status === 'draft') return { label: 'Draft request — submit for review', tone: '#6b7280' };
   if (status === 'approved') {
     var impl = cmImplementationBlockers(req);
     if (impl.length) {
@@ -16530,15 +16518,15 @@ function cmRequestReadinessMeta(req) {
     if (req && req.implementation && req.implementation.can_implement === true) {
       return { label: 'Ready for implementation', tone: '#198754' };
     }
-    return { label: 'Implementation readiness unavailable', tone: '#6b7280' };
+    return { label: 'Implementation check pending', tone: '#6b7280' };
   }
   var blockers = cmApprovalBlockers(req);
   if (blockers.length) return { label: cmBlockerCategorySummary(blockers) || 'Controls incomplete', tone: '#b45309' };
   if (req && req.approval && req.approval.preconditions_met === true) return { label: 'Ready for approval', tone: '#198754' };
-  if (req && (req.screening_required || req.risk_review_required)) return { label: 'Screening / risk needed', tone: '#7c3aed' };
+  if (req && (req.screening_required || req.risk_review_required)) return { label: 'Screening/risk review required', tone: '#7c3aed' };
   if (status === 'approval_pending') return { label: 'Awaiting approver', tone: '#0d6efd' };
   if (status === 'ready_for_review') return { label: 'Ready for review', tone: '#0d6efd' };
-  return { label: 'Review details', tone: '#0d6efd' };
+  return { label: 'Review requested change', tone: '#0d6efd' };
 }
 
 function cmEvidenceReadiness(req) {
@@ -16556,7 +16544,7 @@ function cmEvidenceReadiness(req) {
   if (docs.length || evidence.length) {
     return { label: 'Uploaded', tone: '#0d6efd', detail: 'Supporting evidence is linked; verify Agent 1 status before approval.', blockers: [] };
   }
-  return { label: 'Evidence missing / not yet linked', tone: '#6b7280', detail: 'No evidence is linked to this request yet, or evidence is not required by the current gate.', blockers: [] };
+  return { label: 'Evidence required — add or link evidence', tone: '#6b7280', detail: 'No evidence is linked to this request yet, or evidence is not required by the current gate.', blockers: [] };
 }
 
 function cmAgent1Readiness(req) {
@@ -16598,19 +16586,19 @@ function cmApprovalReadiness(req) {
   if (['approved', 'implemented'].indexOf(status) >= 0) return { label: 'Approved', tone: '#198754', detail: 'Approval has been recorded.', blockers: [] };
   if (['rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return { label: 'Closed', tone: '#6b7280', detail: 'No approval action is available for this request.', blockers: [] };
   var blockers = cmApprovalBlockers(req);
-  if (blockers.length) return { label: 'Blocked', tone: '#b45309', detail: 'Backend approval gates report blockers.', blockers: blockers };
-  if (req && req.approval && req.approval.preconditions_met === true) return { label: 'Ready', tone: '#198754', detail: 'Backend approval preconditions are satisfied. Maker/checker still depends on the acting user.', blockers: [] };
+  if (blockers.length) return { label: 'Blocked', tone: '#b45309', detail: 'System checks report blockers.', blockers: blockers };
+  if (req && req.approval && req.approval.preconditions_met === true) return { label: 'Ready', tone: '#198754', detail: 'Approval checks are satisfied. Maker/checker still depends on the acting user.', blockers: [] };
   return { label: 'Not ready', tone: '#6b7280', detail: 'Move the request through review before approval.', blockers: [] };
 }
 
 function cmImplementationReadiness(req) {
   var status = String((req && req.status) || '').toLowerCase();
   if (status === 'implemented') return { label: 'Implemented', tone: '#198754', detail: 'Final implementation has been recorded.', blockers: [] };
-  if (status !== 'approved') return { label: 'Not approved', tone: '#6b7280', detail: 'Approve the Change Request before implementation.', blockers: [] };
+  if (status !== 'approved') return { label: 'Available after approval', tone: '#6b7280', detail: 'Approve the Change Request before implementation.', blockers: [] };
   var blockers = cmImplementationBlockers(req);
   if (blockers.length) return { label: 'Blocked', tone: '#b45309', detail: 'Implementation gates report blockers.', blockers: blockers };
-  if (req && req.implementation && req.implementation.can_implement === true) return { label: 'Ready', tone: '#198754', detail: 'Backend implementation readiness is satisfied.', blockers: [] };
-  return { label: 'Unavailable', tone: '#6b7280', detail: 'Implementation readiness could not be confirmed. Reload the request detail before acting.', blockers: [] };
+  if (req && req.implementation && req.implementation.can_implement === true) return { label: 'Ready', tone: '#198754', detail: 'Implementation checks are satisfied.', blockers: [] };
+  return { label: 'Check pending', tone: '#6b7280', detail: 'Implementation readiness will be confirmed by system checks before changes are applied.', blockers: [] };
 }
 
 function cmReadinessCard(title, readiness, emptyText) {
@@ -16883,33 +16871,323 @@ function maybeStartAlertReview(alert) {
   });
 }
 
-function loadChangeAlerts() {
-  var status = document.getElementById('cm-alert-status-filter').value;
-  var url = '/api/change-management/alerts';
-  if (status) url += '?status=' + status;
-  apiFetch(url).then(function(r) {
-    var alerts = r.alerts || [];
-    var tbody = document.getElementById('cm-alerts-tbody');
-    var empty = document.getElementById('cm-alerts-empty');
-    tbody.innerHTML = '';
-    if (alerts.length === 0) { empty.style.display = ''; return; }
+function cmWorkspaceCurrentUserKeys() {
+  var user = BO_AUTH_USER || {};
+  return [
+    user.id,
+    user.user_id,
+    user.email,
+    user.username,
+    user.name
+  ].filter(Boolean).map(function(value) { return String(value).toLowerCase(); });
+}
+
+function cmWorkOwnedByCurrentUser(record) {
+  var keys = cmWorkspaceCurrentUserKeys();
+  if (!keys.length || !record) return false;
+  var candidates = [
+    record.assigned_to,
+    record.assignee,
+    record.owner,
+    record.owner_id,
+    record.created_by,
+    record.requested_by,
+    record.reviewer_id,
+    record.updated_by
+  ].filter(Boolean).map(function(value) { return String(value).toLowerCase(); });
+  return candidates.some(function(value) { return keys.indexOf(value) >= 0; });
+}
+
+function cmRequestIsClosed(status) {
+  return ['implemented', 'rejected', 'cancelled', 'superseded'].indexOf(String(status || '').toLowerCase()) >= 0;
+}
+
+function cmAlertStageMeta(alert) {
+  var status = String((alert && alert.status) || '').toLowerCase();
+  if (status === 'converted_to_change_request') return { label: 'Closed / Audit', tone: '#198754', detail: 'Converted to Change Request' };
+  if (status === 'dismissed' || status === 'resolved_no_change') return { label: 'Closed / Audit', tone: '#6b7280', detail: 'Dismissed' };
+  if (status === 'escalated') return { label: 'Escalated', tone: '#dc3545', detail: 'Escalation pending' };
+  if (status === 'under_review') return { label: 'Review requested change', tone: '#fd7e14', detail: 'Alert review started' };
+  return { label: 'Intake', tone: '#0d6efd', detail: 'Triage alert' };
+}
+
+function cmAlertReadinessMeta(alert) {
+  var status = String((alert && alert.status) || '').toLowerCase();
+  if (status === 'converted_to_change_request') return { label: 'Linked request', tone: '#198754' };
+  if (status === 'dismissed' || status === 'resolved_no_change') return { label: 'Dismissed', tone: '#6b7280' };
+  if (status === 'escalated') return { label: 'Escalated', tone: '#dc3545' };
+  return { label: 'Triage needed', tone: '#b45309' };
+}
+
+function cmAlertCustomerApplicationLabel(alert) {
+  return {
+    primary: String((alert && (alert.company_name || alert.application_ref || alert.application_id)) || 'Unknown customer'),
+    secondary: alert && alert.company_name && alert.application_ref ? String(alert.application_ref) : ''
+  };
+}
+
+function cmAlertSummary(alert) {
+  var summary = alert && alert.summary ? String(alert.summary) : '';
+  if (summary) return summary;
+  return cmHumanizeSlug((alert && alert.alert_type) || 'Change alert');
+}
+
+function cmRequestPrimaryActionLabel(req) {
+  var status = String((req && req.status) || '').toLowerCase();
+  if (status === 'draft') return 'Submit draft';
+  if (status === 'approval_pending') return 'Review decision';
+  if (status === 'approved') return 'Review implementation';
+  if (status === 'implemented') return 'View audit';
+  if (['rejected', 'cancelled', 'superseded'].indexOf(status) >= 0) return 'View record';
+  return 'Open detail';
+}
+
+function cmAlertPrimaryActionLabel(alert) {
+  var status = String((alert && alert.status) || '').toLowerCase();
+  if (status === 'converted_to_change_request' && alert && alert.converted_request_id) return 'Open linked request';
+  if (cmAlertIsTerminal(status)) return 'View alert';
+  return 'Triage alert';
+}
+
+function cmNormalizeRequestWorkItem(req) {
+  var stage = cmStageMeta(req);
+  var readiness = cmRequestReadinessMeta(req);
+  var customer = cmCustomerApplicationLabel(req);
+  var status = String((req && req.status) || '').toLowerCase();
+  return {
+    kind: 'request',
+    id: req && req.id,
+    raw: req,
+    primary: customer.primary,
+    secondary: customer.secondary || (req && req.application_id ? String(req.application_id).substring(0, 12) : ''),
+    source: cmSourceLabel(req),
+    sourceColor: '#0d6efd',
+    summary: cmRequestSummary(req),
+    reason: (req && req.reason) || 'No reason recorded',
+    stage: stage,
+    readiness: readiness,
+    materiality: req && req.materiality,
+    status: status,
+    age: cmAgeLabel(req && (req.created_at || req.submitted_at)),
+    actionLabel: cmRequestPrimaryActionLabel(req),
+    closed: cmRequestIsClosed(status),
+    blocked: (cmApprovalBlockers(req).length + cmImplementationBlockers(req).length) > 0,
+    my: cmWorkOwnedByCurrentUser(req)
+  };
+}
+
+function cmNormalizeAlertWorkItem(alert) {
+  var stage = cmAlertStageMeta(alert);
+  var readiness = cmAlertReadinessMeta(alert);
+  var customer = cmAlertCustomerApplicationLabel(alert);
+  var status = String((alert && alert.status) || '').toLowerCase();
+  return {
+    kind: 'alert',
+    id: alert && alert.id,
+    raw: alert,
+    primary: customer.primary,
+    secondary: customer.secondary || (alert && alert.application_id ? String(alert.application_id).substring(0, 12) : ''),
+    source: 'Alert',
+    sourceColor: '#7c3aed',
+    summary: cmAlertSummary(alert),
+    reason: cmHumanizeSlug((alert && alert.alert_type) || 'change_alert'),
+    stage: stage,
+    readiness: readiness,
+    materiality: alert && alert.materiality,
+    status: status,
+    age: cmAgeLabel(alert && alert.created_at),
+    actionLabel: cmAlertPrimaryActionLabel(alert),
+    closed: cmAlertIsTerminal(status),
+    blocked: status === 'escalated',
+    my: cmWorkOwnedByCurrentUser(alert)
+  };
+}
+
+function cmWorkspaceItems() {
+  return (CM_WORKSPACE_STATE.requests || []).map(cmNormalizeRequestWorkItem)
+    .concat((CM_WORKSPACE_STATE.alerts || []).map(cmNormalizeAlertWorkItem));
+}
+
+function cmWorkspaceSelectedValue(id) {
+  var el = document.getElementById(id);
+  return el ? String(el.value || '') : '';
+}
+
+function cmWorkItemPassesSelectFilters(item) {
+  if (!item) return false;
+  if (item.kind === 'request') {
+    var requestStatus = cmWorkspaceSelectedValue('cm-request-status-filter');
+    var materiality = cmWorkspaceSelectedValue('cm-request-materiality-filter');
+    if (requestStatus && item.status !== requestStatus) return false;
+    if (materiality && String(item.materiality || '').toLowerCase() !== materiality) return false;
+  }
+  if (item.kind === 'alert') {
+    var alertStatus = cmWorkspaceSelectedValue('cm-alert-status-filter');
+    if (alertStatus && item.status !== alertStatus) return false;
+  }
+  return true;
+}
+
+function cmWorkFilterMatches(item, filter) {
+  filter = filter || CM_WORKSPACE_STATE.filter || 'all';
+  if (!cmWorkItemPassesSelectFilters(item)) return false;
+  if (filter === 'requests') return item.kind === 'request';
+  if (filter === 'alerts') return item.kind === 'alert';
+  if (filter === 'my') return item.my;
+  if (filter === 'pending_approval') return item.kind === 'request' && item.status === 'approval_pending';
+  if (filter === 'ready_implement') return item.kind === 'request' && item.status === 'approved';
+  if (filter === 'blocked') return item.blocked || (item.kind === 'request' && item.status === 'pending_information');
+  if (filter === 'closed') return item.closed;
+  return true;
+}
+
+function cmRefreshWorkFilterButtons() {
+  ['all','requests','alerts','my','pending_approval','ready_implement','blocked','closed'].forEach(function(key) {
+    var btn = document.getElementById('cm-work-filter-' + key);
+    if (btn) btn.className = key === CM_WORKSPACE_STATE.filter ? 'btn' : 'btn btn-outline';
+  });
+}
+
+function cmSetWorkFilter(filter) {
+  CM_WORKSPACE_STATE.filter = filter || 'all';
+  CHANGE_MGMT_ACTIVE_TAB = CM_WORKSPACE_STATE.filter;
+  cmRefreshWorkFilterButtons();
+  cmRenderWorkQueue();
+}
+
+function cmWorkspaceDashboardCounts() {
+  var requests = CM_WORKSPACE_STATE.requests || [];
+  var alerts = CM_WORKSPACE_STATE.alerts || [];
+  var items = cmWorkspaceItems();
+  return {
+    all: items.length,
+    alerts: alerts.filter(function(alert) { return !cmAlertIsTerminal(alert && alert.status); }).length,
+    pendingApproval: requests.filter(function(req) { return String((req && req.status) || '').toLowerCase() === 'approval_pending'; }).length,
+    readyImplement: requests.filter(function(req) { return String((req && req.status) || '').toLowerCase() === 'approved'; }).length,
+    blocked: items.filter(function(item) { return item.blocked || (item.kind === 'request' && item.status === 'pending_information'); }).length,
+    closed: items.filter(function(item) { return item.closed; }).length
+  };
+}
+
+function cmWorkspaceDashboardCard(label, count, filter, tone, detail) {
+  return '<button onclick="cmSetWorkFilter(' + cmJsAttrArg(filter) + ')" style="text-align:left;border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:14px;cursor:pointer;">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">' +
+      '<div style="font-size:12px;font-weight:800;color:var(--text2);">' + escapeHtml(label) + '</div>' +
+      '<span style="display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:' + tone + '14;color:' + tone + ';font-size:11px;font-weight:800;border:1px solid ' + tone + '2e;">' + escapeHtml(String(count)) + '</span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text3);line-height:1.45;margin-top:8px;">' + escapeHtml(detail) + '</div>' +
+  '</button>';
+}
+
+function cmRenderWorkspaceDashboard() {
+  var el = document.getElementById('cm-workspace-dashboard');
+  if (!el) return;
+  if (CM_WORKSPACE_STATE.loading && !CM_WORKSPACE_STATE.loaded) {
+    el.innerHTML = cmWorkspaceDashboardCard('Loading workspace', '...', 'all', '#6b7280', 'Fetching Change Requests, Change Alerts, and summary counts.');
+    return;
+  }
+  var counts = cmWorkspaceDashboardCounts();
+  el.innerHTML =
+    cmWorkspaceDashboardCard('All CM work', counts.all, 'all', '#0d6efd', 'Requests and alerts in one operational queue.') +
+    cmWorkspaceDashboardCard('Alerts to triage', counts.alerts, 'alerts', '#7c3aed', 'Review, convert, dismiss, or escalate detected changes.') +
+    cmWorkspaceDashboardCard('Pending approval', counts.pendingApproval, 'pending_approval', '#b45309', 'Requests waiting for an authorised maker/checker decision.') +
+    cmWorkspaceDashboardCard('Ready to implement', counts.readyImplement, 'ready_implement', '#198754', 'Approved requests waiting for implementation checks.') +
+    cmWorkspaceDashboardCard('Blocked', counts.blocked, 'blocked', '#dc3545', 'Items with evidence, Agent 1, screening, risk, or other blockers.') +
+    cmWorkspaceDashboardCard('Converted / closed', counts.closed, 'closed', '#6b7280', 'Completed, dismissed, rejected, cancelled, or converted records.');
+}
+
+function cmOpenWorkItem(kind, id) {
+  if (kind === 'alert') {
+    viewAlertDetail(id);
+    return;
+  }
+  viewRequestDetail(id);
+}
+
+function cmWorkItemRowHtml(item) {
+  var action = item.kind === 'alert' && item.raw && item.raw.converted_request_id
+    ? 'openChangeRequestFromApplication(' + cmJsAttrArg(item.raw.converted_request_id) + ')'
+    : 'cmOpenWorkItem(' + cmJsAttrArg(item.kind) + ',' + cmJsAttrArg(item.id) + ')';
+  var typeLabel = item.kind === 'alert' ? 'Alert' : 'Request';
+  return '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' +
+      '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(typeLabel) + '</div>' +
+      '<div>' + escapeHtml(String(item.id || '').substring(0, 12)) + '</div>' +
+    '</td>' +
+    '<td style="padding:10px 14px;min-width:180px;"><div style="font-weight:700;color:var(--text1);">' + escapeHtml(item.primary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.secondary || '') + '</div></td>' +
+    '<td style="padding:10px 14px;font-size:12px;">' + cmChip(item.source, item.sourceColor) + '</td>' +
+    '<td style="padding:10px 14px;max-width:280px;"><div style="font-size:12px;font-weight:700;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(item.summary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(item.reason) + '</div></td>' +
+    '<td style="padding:10px 14px;"><div style="display:grid;gap:5px;">' + cmChip(item.stage.label, item.stage.tone) + cmMaterialityBadge(item.materiality) + '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(cmStatusLabel(item.status)) + '</span></div></td>' +
+    '<td style="padding:10px 14px;">' + cmChip(item.readiness.label, item.readiness.tone) + '</td>' +
+    '<td style="padding:10px 14px;font-size:11px;color:var(--text2);">' + escapeHtml(item.age) + '</td>' +
+    '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();' + action + '">' + escapeHtml(item.actionLabel) + '</button></td>';
+}
+
+function cmRenderWorkQueue() {
+  cmRenderWorkspaceDashboard();
+  cmRefreshWorkFilterButtons();
+  var tbody = document.getElementById('cm-work-queue-tbody');
+  var empty = document.getElementById('cm-work-queue-empty');
+  if (!tbody || !empty) return;
+  tbody.innerHTML = '';
+  if (CM_WORKSPACE_STATE.loading && !CM_WORKSPACE_STATE.loaded) {
     empty.style.display = 'none';
-    alerts.forEach(function(a) {
-      var tr = document.createElement('tr');
-      tr.style.cssText = 'border-bottom:1px solid var(--border1);cursor:pointer;';
-      tr.onclick = function() { viewAlertDetail(a.id); };
-      tr.innerHTML = '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' + (a.id||'').substring(0,12) + '</td>'
-        + '<td style="padding:10px 14px;">' + (a.alert_type||'').replace(/_/g,' ') + '</td>'
-        + '<td style="padding:10px 14px;">' + (a.application_id||'').substring(0,10) + '</td>'
-        + '<td style="padding:10px 14px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (a.summary||'') + '</td>'
-        + '<td style="padding:10px 14px;">' + cmMaterialityBadge(a.materiality) + '</td>'
-        + '<td style="padding:10px 14px;font-size:11px;">' + (a.source_channel||'') + '</td>'
-        + '<td style="padding:10px 14px;">' + cmStatusBadge(a.status) + '</td>'
-        + '<td style="padding:10px 14px;font-size:11px;">' + (a.created_at||'').substring(0,10) + '</td>'
-        + '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();viewAlertDetail(\'' + a.id + '\')">View</button></td>';
-      tbody.appendChild(tr);
-    });
-  }).catch(function(e) { showToast('Failed to load alerts: ' + e.message, 'error'); });
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:var(--text3);font-size:12px;">Loading Change Management workspace...</td></tr>';
+    return;
+  }
+  if (CM_WORKSPACE_STATE.error) {
+    empty.style.display = 'none';
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:#991b1b;font-size:12px;background:#fef2f2;">' + escapeHtml(CM_WORKSPACE_STATE.error) + '</td></tr>';
+    return;
+  }
+  var items = cmWorkspaceItems().filter(function(item) { return cmWorkFilterMatches(item, CM_WORKSPACE_STATE.filter); });
+  items.sort(function(a, b) {
+    var aTime = new Date((a.raw && (a.raw.created_at || a.raw.submitted_at)) || 0).getTime() || 0;
+    var bTime = new Date((b.raw && (b.raw.created_at || b.raw.submitted_at)) || 0).getTime() || 0;
+    return bTime - aTime;
+  });
+  if (!items.length) {
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  items.forEach(function(item) {
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border1);cursor:pointer;';
+    tr.onclick = function() { cmOpenWorkItem(item.kind, item.id); };
+    tr.innerHTML = cmWorkItemRowHtml(item);
+    tbody.appendChild(tr);
+  });
+}
+
+function loadChangeManagementWorkspace(options) {
+  options = options || {};
+  CM_WORKSPACE_STATE.loading = true;
+  CM_WORKSPACE_STATE.error = '';
+  cmRenderWorkQueue();
+  return Promise.all([
+    apiFetch('/api/change-management/requests?'),
+    apiFetch('/api/change-management/alerts'),
+    apiFetch('/api/change-management/stats').catch(function() { return null; })
+  ]).then(function(results) {
+    CM_WORKSPACE_STATE.requests = Array.isArray(results[0] && results[0].requests) ? results[0].requests : [];
+    CM_WORKSPACE_STATE.alerts = Array.isArray(results[1] && results[1].alerts) ? results[1].alerts : [];
+    CM_WORKSPACE_STATE.stats = results[2] || null;
+    CM_WORKSPACE_STATE.loaded = true;
+    CM_WORKSPACE_STATE.loading = false;
+    CM_WORKSPACE_STATE.error = '';
+    cmRenderWorkQueue();
+    return CM_WORKSPACE_STATE;
+  }).catch(function(e) {
+    CM_WORKSPACE_STATE.loading = false;
+    CM_WORKSPACE_STATE.error = 'Failed to load Change Management workspace: ' + (e && e.message ? e.message : 'Request failed');
+    cmRenderWorkQueue();
+    showToast(CM_WORKSPACE_STATE.error, 'error');
+    return CM_WORKSPACE_STATE;
+  });
+}
+
+function loadChangeAlerts() {
+  return loadChangeManagementWorkspace({ force: true });
 }
 
 function viewAlertDetail(alertId) {
@@ -17018,37 +17296,7 @@ function convertAlertToRequest(alertId) {
 }
 
 function loadChangeRequests() {
-  var status = document.getElementById('cm-request-status-filter').value;
-  var materiality = document.getElementById('cm-request-materiality-filter').value;
-  var url = '/api/change-management/requests?';
-  if (status) url += 'status=' + status + '&';
-  if (materiality) url += 'materiality=' + materiality + '&';
-  apiFetch(url).then(function(r) {
-    var reqs = r.requests || [];
-    var tbody = document.getElementById('cm-requests-tbody');
-    var empty = document.getElementById('cm-requests-empty');
-    tbody.innerHTML = '';
-    if (reqs.length === 0) { empty.style.display = ''; return; }
-    empty.style.display = 'none';
-    reqs.forEach(function(req) {
-      var customer = cmCustomerApplicationLabel(req);
-      var stage = cmStageMeta(req);
-      var readiness = cmRequestReadinessMeta(req);
-      var summary = cmRequestSummary(req);
-      var tr = document.createElement('tr');
-      tr.style.cssText = 'border-bottom:1px solid var(--border1);cursor:pointer;';
-      tr.onclick = function() { viewRequestDetail(req.id); };
-      tr.innerHTML = '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' + (req.id||'').substring(0,12) + '</td>'
-        + '<td style="padding:10px 14px;min-width:180px;"><div style="font-weight:700;color:var(--text1);">' + escapeHtml(customer.primary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(customer.secondary || (req.application_id || '').substring(0, 12)) + '</div></td>'
-        + '<td style="padding:10px 14px;font-size:12px;">' + cmChip(cmSourceLabel(req), '#0d6efd') + '</td>'
-        + '<td style="padding:10px 14px;max-width:260px;"><div style="font-size:12px;font-weight:700;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(summary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(req.reason || 'No reason recorded') + '</div></td>'
-        + '<td style="padding:10px 14px;"><div style="display:grid;gap:5px;">' + cmChip(stage.label, stage.tone) + cmMaterialityBadge(req.materiality) + '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(cmStatusLabel(req.status)) + '</span></div></td>'
-        + '<td style="padding:10px 14px;">' + cmChip(readiness.label, readiness.tone) + '</td>'
-        + '<td style="padding:10px 14px;font-size:11px;color:var(--text2);">' + escapeHtml(cmAgeLabel(req.created_at || req.submitted_at)) + '</td>'
-        + '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();viewRequestDetail(\'' + req.id + '\')">Open detail</button></td>';
-      tbody.appendChild(tr);
-    });
-  }).catch(function(e) { showToast('Failed to load requests: ' + e.message, 'error'); });
+  return loadChangeManagementWorkspace({ force: true });
 }
 
 function viewRequestDetail(reqId) {
@@ -17119,15 +17367,15 @@ function viewRequestDetail(reqId) {
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px;">' +
         '<div>' +
           '<div style="font-size:13px;font-weight:800;color:var(--text1);">Readiness checklist</div>' +
-          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Backend gates remain authoritative; this checklist shows the officer what is missing before approval or implementation.</div>' +
+          '<div style="font-size:12px;color:var(--text3);margin-top:4px;">System checks control final approval and implementation. This checklist shows what is missing before the officer acts.</div>' +
         '</div>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;">' +
-        cmReadinessCard('Evidence', evidenceState, 'Evidence missing / not yet linked.') +
+        cmReadinessCard('Evidence', evidenceState, 'Evidence required — add or link evidence.') +
         cmReadinessCard('Agent 1', agent1State, 'Agent 1 not available until evidence is linked.') +
         cmReadinessCard('Screening / risk', screeningRiskState, 'Screening/risk readiness not yet recorded.') +
         cmReadinessCard('Approval readiness', approvalState, 'Approval readiness unavailable for this request.') +
-        cmReadinessCard('Implementation readiness', implementationState, 'Implementation readiness unavailable for this request.') +
+        cmReadinessCard('Implementation readiness', implementationState, 'Available after approval.') +
       '</div>' +
     '</div>';
 
@@ -17158,11 +17406,12 @@ function viewRequestDetail(reqId) {
         '</div>';
       });
     } else {
-      html += '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;background:var(--surface2);">Evidence missing / not yet linked. If required, attach evidence to this Change Request before approval.</div>';
+      html += '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;background:var(--surface2);">Evidence required — add or link evidence. If evidence is required, attach it to this Change Request before approval.</div>';
     }
     html += '</div></div>';
 
-    html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Reviews and decision history</span>';
+    html += '<details style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:12px 16px;">' +
+      '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text2);">Reviews and decision history</summary>';
     if (r.reviews && r.reviews.length > 0) {
       r.reviews.forEach(function(rev) {
         var decColor = rev.decision === 'approved' ? '#198754' : rev.decision === 'rejected' ? '#dc3545' : '#fd7e14';
@@ -17173,9 +17422,9 @@ function viewRequestDetail(reqId) {
           + '</div>';
       });
     } else {
-      html += '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;background:var(--surface2);margin-top:10px;">No review decisions recorded yet.</div>';
+      html += '<div style="padding:12px;border:1px dashed var(--border1);border-radius:8px;color:var(--text3);font-size:12px;background:var(--surface2);margin-top:10px;">Review decision history will appear here after approval or rejection.</div>';
     }
-    html += '</div>';
+    html += '</details>';
 
     html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
@@ -17218,7 +17467,7 @@ function viewRequestDetail(reqId) {
     if (actions.length > 0) {
       html += '<div style="border:1px solid var(--border1);border-radius:12px;background:var(--surface);padding:16px;">' +
         '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:8px;">Decision and implementation actions</div>' +
-        '<div style="font-size:12px;color:var(--text3);line-height:1.45;margin-bottom:12px;">Backend gates remain authoritative. If an action is blocked, the blocker details are shown here.</div>' +
+        '<div style="font-size:12px;color:var(--text3);line-height:1.45;margin-bottom:12px;">System checks control final approval and implementation. If an action is blocked, the blocker details are shown here.</div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + actions.join('') + '</div>' +
       '</div>';
     }
@@ -17381,7 +17630,7 @@ function cmDecisionConfig(action) {
   if (action === 'approve') {
     return {
       title: 'Approve Change Request',
-      subtitle: 'Record an approval decision. Backend maker/checker, evidence, Agent 1, screening, and risk gates remain authoritative.',
+      subtitle: 'Record an approval decision. System checks still enforce maker/checker, evidence, Agent 1, screening, and risk controls.',
       notesLabel: 'Approval notes',
       button: 'Approve',
       buttonColor: '#198754'
@@ -17398,7 +17647,7 @@ function cmDecisionConfig(action) {
   }
   return {
     title: 'Implement Approved Changes',
-    subtitle: 'Apply the approved change to the live profile only if backend implementation gates pass.',
+    subtitle: 'Apply the approved change to the live profile only if implementation checks pass.',
     notesLabel: 'Implementation note',
     button: 'Implement changes',
     buttonColor: '#20c997'
@@ -17409,7 +17658,7 @@ function cmDecisionBlockersHtml(action, detail) {
   var state = action === 'implement' ? cmImplementationReadiness(detail) : cmApprovalReadiness(detail);
   var blockers = state.blockers || [];
   if (!blockers.length) {
-    return '<div style="padding:10px 12px;border:1px solid #bbf7d0;border-radius:8px;background:#f0fdf4;color:#166534;font-size:12px;">No blockers are currently shown in the request detail. The backend will validate again when you submit.</div>';
+    return '<div style="padding:10px 12px;border:1px solid #bbf7d0;border-radius:8px;background:#f0fdf4;color:#166534;font-size:12px;">No blockers are currently shown in the request detail. System checks validate again when you submit.</div>';
   }
   return '<div style="padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12px;">' +
     '<strong>Current blockers:</strong>' + cmBlockerListHtml(blockers, 'No blockers currently reported.') +
@@ -17553,24 +17802,8 @@ function submitCreateRequest() {
 }
 
 function loadCMStats() {
-  apiFetch('/api/change-management/stats').then(function(s) {
-    var html = '<div style="background:var(--surface);padding:20px;border-radius:10px;border:1px solid var(--border1);">'
-      + '<h4 style="margin-bottom:4px;">Alerts Overview</h4>'
-      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;">' + s.alerts.total + '</div><div style="font-size:11px;color:var(--text3);">Total</div></div>'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#0d6efd;">' + (s.alerts.by_status.new||0) + '</div><div style="font-size:11px;color:var(--text3);">New</div></div>'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#fd7e14;">' + (s.alerts.by_status.under_review||0) + '</div><div style="font-size:11px;color:var(--text3);">Under Review</div></div>'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#198754;">' + (s.alerts.by_status.converted_to_change_request||0) + '</div><div style="font-size:11px;color:var(--text3);">Converted</div></div>'
-      + '</div>'
-      + '<h4 style="margin-bottom:4px;">Requests Overview</h4>'
-      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;">' + s.requests.total + '</div><div style="font-size:11px;color:var(--text3);">Total</div></div>'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#ffc107;">' + (s.requests.by_status.approval_pending||0) + '</div><div style="font-size:11px;color:var(--text3);">Pending Approval</div></div>'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#198754;">' + (s.requests.by_status.approved||0) + '</div><div style="font-size:11px;color:var(--text3);">Approved</div></div>'
-      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#20c997;">' + (s.requests.by_status.implemented||0) + '</div><div style="font-size:11px;color:var(--text3);">Implemented</div></div>'
-      + '</div></div>';
-    document.getElementById('cm-stats-content').innerHTML = html;
-  }).catch(function(e) { showToast('Failed to load stats: ' + e.message, 'error'); });
+  cmSetWorkFilter('all');
+  return loadChangeManagementWorkspace({ force: true });
 }
 
 var activeCaseTab = 'my-assigned';

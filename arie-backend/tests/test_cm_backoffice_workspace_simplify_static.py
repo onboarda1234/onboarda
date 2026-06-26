@@ -20,19 +20,24 @@ def test_change_requests_is_default_operational_surface():
     html = _html()
 
     render_region = _function_region(html, "renderChangeMgmt", "populateCMApplicationSelects")
-    assert "showChangeMgmtTab(CHANGE_MGMT_ACTIVE_TAB || 'requests')" in render_region
-    assert "CHANGE_MGMT_ACTIVE_TAB = tab || 'requests'" in render_region
-    assert html.index("id=\"cm-tab-requests\"") < html.index("id=\"cm-tab-alerts\"")
+    assert "loadChangeManagementWorkspace();" in render_region
+    assert "filter: 'all'" in render_region
+    assert "id=\"cm-workspace-dashboard\"" in html
+    assert "Unified CM queue" in html
+    assert "id=\"cm-work-filter-requests\"" in html
+    assert "id=\"cm-work-filter-alerts\"" in html
+    assert "id=\"cm-tab-requests\"" not in html
+    assert "id=\"cm-tab-alerts\"" not in html
 
 
 def test_queue_uses_customer_identity_stage_readiness_and_primary_action_columns():
     html = _html()
-    queue_region = _function_region(html, "loadChangeRequests", "viewRequestDetail")
+    queue_region = _function_region(html, "cmRenderWorkQueue", "loadChangeManagementWorkspace")
 
     for header in (
-        "Request ID",
+        "Work item",
         "Customer / Application",
-        "Requested Change",
+        "Requested change / alert",
         "Stage",
         "Readiness",
         "Age",
@@ -40,21 +45,56 @@ def test_queue_uses_customer_identity_stage_readiness_and_primary_action_columns
     ):
         assert header in html
 
-    assert "cmCustomerApplicationLabel(req)" in queue_region
-    assert "cmStageMeta(req)" in queue_region
-    assert "cmRequestReadinessMeta(req)" in queue_region
-    assert "Open detail" in queue_region
+    assert "cmCustomerApplicationLabel(req)" in html
+    assert "cmAlertCustomerApplicationLabel(alert)" in html
+    assert "cmNormalizeAlertWorkItem" in html
+    assert "cmNormalizeRequestWorkItem" in html
+    assert "cmStageMeta(req)" in html
+    assert "cmRequestReadinessMeta(req)" in html
+    assert "cmWorkItemRowHtml(item)" in queue_region
     assert "application_id||'').substring(0,10)" not in queue_region
+
+
+def test_dashboard_cards_and_unified_filters_replace_tab_heavy_workspace():
+    html = _html()
+
+    for label in (
+        "All CM work",
+        "Alerts to triage",
+        "Pending approval",
+        "Ready to implement",
+        "Blocked",
+        "Converted / closed",
+    ):
+        assert label in html
+
+    for filter_id in (
+        "cm-work-filter-all",
+        "cm-work-filter-requests",
+        "cm-work-filter-alerts",
+        "cm-work-filter-my",
+        "cm-work-filter-pending_approval",
+        "cm-work-filter-ready_implement",
+        "cm-work-filter-blocked",
+        "cm-work-filter-closed",
+    ):
+        assert filter_id in html
+
+    assert "cm-alerts-tab" not in html
+    assert "cm-requests-tab" not in html
+    assert "cm-stats-tab" not in html
 
 
 def test_queue_and_detail_use_meaningful_readiness_not_generic_blocking_review():
     html = _html()
 
     assert "Blocking review" not in html
+    assert "Backend gates remain authoritative" not in html
     for label in (
-        "Review details",
+        "Review requested change",
         "Evidence / Agent 1",
         "Screening / Risk",
+        "Screening/risk review required",
         "Approval",
         "Implementation",
         "Closed / Audit",
@@ -79,11 +119,11 @@ def test_request_detail_promotes_old_value_requested_new_value_and_readiness_car
 def test_missing_data_states_remain_visible_in_request_detail():
     html = _html()
 
-    assert "Evidence missing / not yet linked" in html
+    assert "Evidence required — add or link evidence" in html
     assert "Agent 1 not available until evidence is linked" in html
     assert "Screening/risk readiness not yet recorded" in html
     assert "Audit reconstruction unavailable for this request" in html
-    assert "No review decisions recorded yet" in html
+    assert "Review decision history will appear here after approval or rejection" in html
 
 
 def test_audit_reconstruction_link_calls_existing_endpoint():
@@ -126,9 +166,10 @@ def test_unknown_implementation_readiness_is_not_presented_as_green_ready():
     implementation_readiness = _function_region(html, "cmImplementationReadiness", "cmReadinessCard")
 
     assert "implementation.can_implement === true" in request_readiness
-    assert "Implementation readiness unavailable" in request_readiness
+    assert "Implementation check pending" in request_readiness
     assert "implementation.can_implement === true" in implementation_readiness
-    assert "Implementation readiness could not be confirmed" in implementation_readiness
+    assert "Implementation readiness will be confirmed by system checks" in implementation_readiness
+    assert "Available after approval" in implementation_readiness
     assert "Ready for backend validation" not in implementation_readiness
 
 
