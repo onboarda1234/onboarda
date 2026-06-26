@@ -346,6 +346,55 @@ def test_backoffice_upload_stores_valid_officer_uploaded_by(
     assert job_count == 0
 
 
+def test_backoffice_upload_rejects_mismatched_upload_session_app(
+    upload_contract_server,
+    upload_contract_application,
+):
+    from auth import create_token
+    from db import get_db
+
+    token = create_token("admin001", "admin", "Test Admin", "officer")
+    resp = http_requests.post(
+        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {token}"},
+        data={
+            "upload_session_app_id": "other_application",
+            "upload_session_app_ref": "ARF-OTHER-APPLICATION",
+        },
+        files={"file": ("wrong-app-coi.pdf", PDF_BYTES, "application/pdf")},
+        timeout=5,
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "Upload cancelled because the active application changed" in resp.text
+
+    conn = get_db()
+    try:
+        doc_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM documents WHERE application_id=? AND doc_name=?",
+            (APPLICATION_ID, "wrong-app-coi.pdf"),
+        ).fetchone()["c"]
+        audit = conn.execute(
+            """
+            SELECT detail
+            FROM audit_log
+            WHERE target=? AND action='Upload Rejected: upload_session_app_mismatch'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (APPLICATION_REF,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert doc_count == 0
+    assert audit is not None
+    detail = json.loads(audit["detail"])
+    assert detail["reason_code"] == "upload_session_app_mismatch"
+    assert detail["response_code"] == 409
+    assert detail["doc_type"] == "cert_inc"
+
+
 def test_portal_upload_persists_checks_after_async_verification_completes(
     upload_contract_server,
     upload_contract_application,

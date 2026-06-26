@@ -10558,6 +10558,30 @@ class DocumentUploadHandler(BaseHandler):
             )
             db.close()
             return self.error(doc_type_error, 400)
+        upload_session_app_id = (
+            self.get_body_argument("upload_session_app_id", "")
+            or self.request.headers.get("X-Upload-Session-App-Id", "")
+        ).strip()
+        upload_session_app_ref = (
+            self.get_body_argument("upload_session_app_ref", "")
+            or self.request.headers.get("X-Upload-Session-App-Ref", "")
+        ).strip()
+        if (
+            (upload_session_app_id and upload_session_app_id != app["id"])
+            or (upload_session_app_ref and upload_session_app_ref != app["ref"])
+        ):
+            message = "Upload cancelled because the active application changed. Please reopen upload for this application."
+            self._audit_upload_rejected(
+                user,
+                app["ref"],
+                "upload_session_app_mismatch",
+                message,
+                doc_type=requested_doc_type,
+                db=db,
+                status_code=409,
+            )
+            db.close()
+            return self.error(message, 409)
         screening_evidence_upload = self.get_argument("screening_evidence", "false").lower() == "true"
         screening_evidence_upload_allowed = (
             screening_evidence_upload

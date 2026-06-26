@@ -1680,12 +1680,15 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <div class="detail-collapsible-body">
           <div class="detail-collapsible-inline-header">
             <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
+            <span id="bo-doc-upload-disabled-copy" style="display:none;font-size:11px;color:var(--text3);"></span>
           </div>
           <div class="document-review-helper-note"><strong>Agent 1</strong><span>Agent 1 assists document review. Officers must review exceptions before relying on documents.</span></div>
           <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
         <div id="bo-doc-upload-context" class="document-review-helper-note" style="display:none;margin-bottom:10px;"><strong>Upload target</strong><span id="bo-doc-upload-context-copy"></span></div>
         <input type="hidden" id="bo-upload-person-id" value="" />
         <input type="hidden" id="bo-upload-person-type" value="" />
+        <input type="hidden" id="bo-upload-session-app-id" value="" />
+        <input type="hidden" id="bo-upload-session-app-ref" value="" />
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
           <div class="form-group" style="margin:0;">
             <div class="form-label">Document Type</div>
@@ -1716,6 +1719,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <div class="form-label">Notes</div>
           <textarea class="form-input" id="bo-upload-notes" rows="2" placeholder="Optional upload notes for audit context" style="resize:vertical;"></textarea>
         </div>
+        <div id="bo-doc-upload-status" style="display:none;margin-top:10px;font-size:12px;color:#92400e;"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
           <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()">Cancel</button>
           <button class="btn btn-primary btn-sm" onclick="submitBoDocUpload()">Upload to Record</button>
@@ -4017,6 +4021,38 @@ function refreshBoDocUploadLimitCopy() {
   }
 }
 
+function boNormalizedStatus(app) {
+  return String((app && (app.statusRaw || app.status)) || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function boKycUploadRequiresPreApproval(app) {
+  app = app || {};
+  var risk = String(app.finalRiskLevel || app.rawRiskLevel || app.risk || '').trim().toUpperCase();
+  var lane = String(app.lane || app.onboarding_lane || '').trim().toUpperCase();
+  return risk === 'HIGH' || risk === 'VERY_HIGH' || lane === 'EDD' || lane === 'ENHANCED_DUE_DILIGENCE' || lane === 'ENHANCED DUE DILIGENCE';
+}
+
+function boKycUploadPreApprovalSatisfied(app) {
+  if (!boKycUploadRequiresPreApproval(app)) return true;
+  var decision = String((app && (app.preApprovalDecision || app.pre_approval_decision)) || '').trim().toUpperCase();
+  return decision === 'PRE_APPROVE';
+}
+
+function isBoOrdinaryKycUploadAllowed(app) {
+  return boNormalizedStatus(app) === 'kyc_documents' && boKycUploadPreApprovalSatisfied(app);
+}
+
+function boOrdinaryKycUploadDisabledReason(app) {
+  if (!app) return 'Open an application before uploading documents.';
+  if (boNormalizedStatus(app) !== 'kyc_documents') {
+    return 'Officer upload is available only while the application is in KYC Documents.';
+  }
+  if (!boKycUploadPreApprovalSatisfied(app)) {
+    return 'Officer upload is locked until required pre-approval is completed.';
+  }
+  return '';
+}
+
 async function loadEnvironment() {
   try {
     const res = await fetch((BO_API_BASE || '/api') + '/config/environment');
@@ -6243,6 +6279,7 @@ function syncApplicationActionPermissions(app) {
 
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
 var currentApp = null;
+var BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };
 var currentScreeningReviewFocus = null;
 var detailLifecycleSummaryOverview = null;
 
@@ -6346,6 +6383,7 @@ function showView(name, navItem) {
   name = typeof normalizeBackofficeRouteView === 'function' ? normalizeBackofficeRouteView(name) : String(name || '');
   var requestedName = name;
   if (name === 'screening-queue') name = 'screening';
+  if (name !== 'app-detail' && typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'view_changed' });
   // Enforce frontend role restrictions on admin-only views
   var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'settings'];
   var scoOnlyViews = ['audit'];
@@ -8585,6 +8623,7 @@ function buildKycDocumentPanelSummary(app, summary) {
 function updateKycDocumentsPanelState(app, summary) {
   var summaryEl = document.getElementById('detail-kyc-documents-summary-copy');
   if (summaryEl) summaryEl.textContent = buildKycDocumentPanelSummary(app, summary);
+  updateBoDocUploadAvailability(app);
   setDetailsExpandedState('detail-kyc-documents-details', !!(summary && summary.isIncomplete));
 }
 
@@ -9242,6 +9281,10 @@ function renderDocumentPrimaryAction(app, doc, state, expectedSlot) {
     var expectedPersonId = expectedSlot && expectedSlot.person_id ? expectedSlot.person_id : '';
     var expectedPersonType = expectedSlot && expectedSlot.person_type ? expectedSlot.person_type : '';
     var expectedOwner = expectedSlot && expectedSlot.owner ? expectedSlot.owner : '';
+    if (!isBoOrdinaryKycUploadAllowed(app)) {
+      var disabledReason = boOrdinaryKycUploadDisabledReason(app);
+      return '<button class="doc-action-btn secondary" disabled title="' + escapeHtml(disabledReason) + '" aria-label="' + escapeHtml(disabledReason) + '">Upload</button>';
+    }
     return '<button class="doc-action-btn secondary" onclick=\'openBoDocUploadForExpectedSlot(' + JSON.stringify(expectedDocType) + ',' + JSON.stringify(expectedLabel) + ',' + JSON.stringify(expectedPersonId) + ',' + JSON.stringify(expectedPersonType) + ',' + JSON.stringify(expectedOwner) + ')\'>Upload</button>';
   }
   var docId = escapeHtml(doc.id || doc.document_id || '');
@@ -10109,6 +10152,7 @@ async function fetchApplicationDetail(ref) {
     lane: detail.onboarding_lane || 'Standard Review',
     status: formatStatus(detail.status),
     statusRaw: detail.status || '',
+    preApprovalDecision: detail.pre_approval_decision || '',
     approvalRoute: detail.approval_route || detail.approvalRoute || {},
     approval_route: detail.approval_route || detail.approvalRoute || {},
     assignedId: detail.assigned_to || '',
@@ -10786,6 +10830,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var psData = app.prescreeningData || {};
   var documentReadiness = computeDocumentReadinessSummary(app);
   if (currentApp && currentApp.id && currentApp.id !== app.id) {
+    if (typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'application_changed' });
     PRESCREEN_CORRECTION_MODE_ACTIVE = false;
   }
   currentApp = app;
@@ -23208,6 +23253,7 @@ function setCaseWorkFilter(filter, btn) {
 
 function switchDetailTab(tab) {
   var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'alerts', 'activity'];
+  if (tab !== 'kyc-docs' && typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'detail_tab_changed' });
   if (tab === 'activity') loadDecisionRecords();
   tabs.forEach(function(t) {
     var tabEl = document.getElementById('tab-' + t);
@@ -30186,27 +30232,102 @@ async function handleResourceUpload(input) {
 // DOCUMENT REVIEW ACTIONS
 // ═══════════════════════════════════════════════════════════
 // ── Back-office Document Upload ──
-function toggleBoDocUpload() {
+function setBoDocUploadStatus(message) {
+  var statusEl = document.getElementById('bo-doc-upload-status');
+  if (!statusEl) return;
+  statusEl.textContent = message || '';
+  statusEl.style.display = message ? '' : 'none';
+}
+
+function resetBoDocUploadState(options) {
+  options = options || {};
   var panel = document.getElementById('bo-doc-upload-panel');
   var btn = document.getElementById('btn-bo-upload-toggle-top');
   var context = document.getElementById('bo-doc-upload-context');
   var contextCopy = document.getElementById('bo-doc-upload-context-copy');
+  var ids = [
+    'bo-upload-doc-type',
+    'bo-upload-file',
+    'bo-upload-notes',
+    'bo-upload-person-id',
+    'bo-upload-person-type',
+    'bo-upload-session-app-id',
+    'bo-upload-session-app-ref'
+  ];
+  ids.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };
+  if (context) context.style.display = 'none';
+  if (contextCopy) contextCopy.textContent = '';
+  setBoDocUploadStatus('');
+  if (panel) panel.style.display = 'none';
+  if (btn) btn.textContent = '📤 Upload Document';
+  refreshBoDocUploadLimitCopy();
+  if (!options.skipAvailability) updateBoDocUploadAvailability(currentApp);
+}
+
+function beginBoDocUploadSession(app) {
+  app = app || currentApp || {};
+  BO_DOC_UPLOAD_SESSION = {
+    appId: String(app.id || ''),
+    appRef: String(app.ref || '')
+  };
+  var idEl = document.getElementById('bo-upload-session-app-id');
+  var refEl = document.getElementById('bo-upload-session-app-ref');
+  if (idEl) idEl.value = BO_DOC_UPLOAD_SESSION.appId;
+  if (refEl) refEl.value = BO_DOC_UPLOAD_SESSION.appRef;
+  setBoDocUploadStatus('');
+}
+
+function isBoDocUploadSessionBoundToActiveApp() {
+  if (!currentApp || !BO_DOC_UPLOAD_SESSION) return false;
+  var activeId = String(currentApp.id || '');
+  var activeRef = String(currentApp.ref || '');
+  var sessionId = String(BO_DOC_UPLOAD_SESSION.appId || '');
+  var sessionRef = String(BO_DOC_UPLOAD_SESSION.appRef || '');
+  if (!sessionId && !sessionRef) return false;
+  if (sessionId && activeId && sessionId !== activeId) return false;
+  if (sessionRef && activeRef && sessionRef !== activeRef) return false;
+  return true;
+}
+
+function updateBoDocUploadAvailability(app) {
+  var btn = document.getElementById('btn-bo-upload-toggle-top');
+  var disabledCopy = document.getElementById('bo-doc-upload-disabled-copy');
+  var allowed = isBoOrdinaryKycUploadAllowed(app);
+  var reason = allowed ? '' : boOrdinaryKycUploadDisabledReason(app);
+  if (btn) {
+    btn.disabled = !allowed;
+    btn.title = reason;
+    btn.setAttribute('aria-label', allowed ? 'Upload Document' : reason);
+    if (!allowed) btn.textContent = '📤 Upload Document';
+  }
+  if (disabledCopy) {
+    disabledCopy.textContent = reason;
+    disabledCopy.style.display = reason ? '' : 'none';
+  }
+  if (!allowed) resetBoDocUploadState({ skipAvailability: true, reason: 'upload_not_allowed' });
+}
+
+function toggleBoDocUpload() {
+  var panel = document.getElementById('bo-doc-upload-panel');
+  var btn = document.getElementById('btn-bo-upload-toggle-top');
   if (!panel) return;
+  if (!isBoOrdinaryKycUploadAllowed(currentApp)) {
+    resetBoDocUploadState({ reason: 'upload_not_allowed' });
+    showToast(boOrdinaryKycUploadDisabledReason(currentApp), 'warn');
+    return;
+  }
   if (panel.style.display === 'none') {
+    resetBoDocUploadState({ skipAvailability: true, reason: 'open_upload' });
     panel.style.display = 'block';
     if (btn) btn.textContent = '✕ Cancel Upload';
-    // Reset form
-    document.getElementById('bo-upload-doc-type').value = '';
-    document.getElementById('bo-upload-file').value = '';
-    document.getElementById('bo-upload-notes').value = '';
-    document.getElementById('bo-upload-person-id').value = '';
-    document.getElementById('bo-upload-person-type').value = '';
-    if (context) context.style.display = 'none';
-    if (contextCopy) contextCopy.textContent = '';
+    beginBoDocUploadSession(currentApp);
     refreshBoDocUploadLimitCopy();
   } else {
-    panel.style.display = 'none';
-    if (btn) btn.textContent = '📤 Upload Document';
+    resetBoDocUploadState({ reason: 'upload_cancelled' });
   }
 }
 
@@ -30216,8 +30337,15 @@ function openBoDocUploadForExpectedSlot(docType, label, personId, personType, ow
   var context = document.getElementById('bo-doc-upload-context');
   var contextCopy = document.getElementById('bo-doc-upload-context-copy');
   if (!panel) return;
+  if (!isBoOrdinaryKycUploadAllowed(currentApp)) {
+    resetBoDocUploadState({ reason: 'upload_not_allowed' });
+    showToast(boOrdinaryKycUploadDisabledReason(currentApp), 'warn');
+    return;
+  }
+  resetBoDocUploadState({ skipAvailability: true, reason: 'open_expected_slot_upload' });
   panel.style.display = 'block';
   if (btn) btn.textContent = '✕ Cancel Upload';
+  beginBoDocUploadSession(currentApp);
   document.getElementById('bo-upload-doc-type').value = docType || '';
   document.getElementById('bo-upload-file').value = '';
   document.getElementById('bo-upload-notes').value = '';
@@ -30240,30 +30368,49 @@ async function refreshCurrentKycDocumentsDetail(appRef) {
 async function submitBoDocUpload() {
   if (!currentApp) { showToast('No application selected'); return; }
   if (!BO_AUTH_TOKEN) { showToast('Back-office upload requires a live authenticated backend session'); return; }
+  if (!isBoOrdinaryKycUploadAllowed(currentApp)) {
+    var disabledReason = boOrdinaryKycUploadDisabledReason(currentApp);
+    resetBoDocUploadState({ reason: 'upload_not_allowed' });
+    showToast(disabledReason, 'warn');
+    return;
+  }
+  if (!isBoDocUploadSessionBoundToActiveApp()) {
+    var mismatchMessage = 'Upload cancelled because the active application changed. Please reopen upload for this application.';
+    resetBoDocUploadState({ reason: 'application_mismatch' });
+    showToast(mismatchMessage, 'warn');
+    return;
+  }
 
   var docType = document.getElementById('bo-upload-doc-type').value;
   var fileInput = document.getElementById('bo-upload-file');
   var notes = document.getElementById('bo-upload-notes').value.trim();
   var personId = document.getElementById('bo-upload-person-id').value.trim();
   var personType = document.getElementById('bo-upload-person-type').value.trim();
+  var sessionAppId = document.getElementById('bo-upload-session-app-id').value;
+  var sessionAppRef = document.getElementById('bo-upload-session-app-ref').value;
   var file = fileInput.files && fileInput.files[0];
 
-  if (!docType) { showToast('Please select a document type'); return; }
-  if (!file) { showToast('Please select a file to upload'); return; }
+  if (!docType) { resetBoDocUploadState({ reason: 'missing_doc_type' }); showToast('Please select a document type'); return; }
+  if (!file) { resetBoDocUploadState({ reason: 'missing_file' }); showToast('Please select a file to upload'); return; }
 
   if (file.size > boDocUploadMaxBytes()) {
+    resetBoDocUploadState({ reason: 'file_too_large' });
     showToast('File too large — maximum ' + boDocUploadMaxLabel());
     return;
   }
 
+  var uploadAppRef = currentApp.ref;
+  var uploadAppTarget = currentApp.id || currentApp.ref;
   try {
     var formData = new FormData();
     formData.append('file', file);
     if (notes) formData.append('notes', notes);
+    formData.append('upload_session_app_id', sessionAppId || '');
+    formData.append('upload_session_app_ref', sessionAppRef || '');
     var query = '?doc_type=' + encodeURIComponent(docType);
     if (personId) query += '&person_id=' + encodeURIComponent(personId);
     if (personType) query += '&person_type=' + encodeURIComponent(personType);
-    var resp = await boApiCall('POST', '/applications/' + (currentApp.id || currentApp.ref) + '/documents' + query, formData);
+    var resp = await boApiCall('POST', '/applications/' + uploadAppTarget + '/documents' + query, formData);
     var uploadedDocId = resp && (resp.id || (resp.data && resp.data.id));
     if (uploadedDocId) {
       try {
@@ -30274,11 +30421,12 @@ async function submitBoDocUpload() {
     }
     await loadFromAPI();
     refreshAdminAuditEvidence();
-    toggleBoDocUpload();
-    await refreshCurrentKycDocumentsDetail(currentApp.ref);
+    resetBoDocUploadState({ reason: 'upload_success' });
+    await refreshCurrentKycDocumentsDetail(uploadAppRef);
     showToast('Document uploaded to the application record.');
   } catch(e) {
     console.warn('Back-office document upload failed:', e);
+    resetBoDocUploadState({ reason: 'upload_failed' });
     showToast(e.message || 'Document upload failed');
     return;
   }

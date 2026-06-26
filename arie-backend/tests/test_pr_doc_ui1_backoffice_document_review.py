@@ -105,6 +105,57 @@ def test_missing_documents_disable_view_and_download():
     assert ">Upload</button>" in primary
 
 
+def test_backoffice_upload_state_is_session_bound_and_reset_on_navigation():
+    html = _backoffice_html()
+    upload_helpers = _function_region(html, "setBoDocUploadStatus", "refreshCurrentKycDocumentsDetail")
+    submit = _function_region(html, "submitBoDocUpload", "viewBackofficeDocument")
+    detail = _function_region(html, "renderAuthoritativeAppDetail", "openAppDetail")
+    tabs = _function_region(html, "switchDetailTab", "safeParseAuditDetail")
+    show_view = _function_region(html, "showView", "normalizeRiskLevel")
+
+    assert 'id="bo-upload-session-app-id"' in html
+    assert 'id="bo-upload-session-app-ref"' in html
+    assert "var BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };" in html
+    assert "function resetBoDocUploadState" in upload_helpers
+    assert "function beginBoDocUploadSession" in upload_helpers
+    assert "function isBoDocUploadSessionBoundToActiveApp" in upload_helpers
+    assert "BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };" in upload_helpers
+    assert "bo-upload-file" in upload_helpers
+    assert "bo-upload-doc-type" in upload_helpers
+    assert "bo-upload-notes" in upload_helpers
+    assert "bo-upload-person-id" in upload_helpers
+    assert "bo-upload-person-type" in upload_helpers
+    assert "bo-upload-session-app-id" in upload_helpers
+    assert "bo-upload-session-app-ref" in upload_helpers
+
+    assert "if (typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'application_changed' });" in detail
+    assert "if (tab !== 'kyc-docs' && typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'detail_tab_changed' });" in tabs
+    assert "if (name !== 'app-detail' && typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'view_changed' });" in show_view
+    assert "Upload cancelled because the active application changed. Please reopen upload for this application." in submit
+    assert "if (!isBoDocUploadSessionBoundToActiveApp())" in submit
+    assert "formData.append('upload_session_app_id', sessionAppId || '')" in submit
+    assert "formData.append('upload_session_app_ref', sessionAppRef || '')" in submit
+
+
+def test_generic_backoffice_upload_is_gated_by_ordinary_kyc_status():
+    html = _backoffice_html()
+    gate_helpers = _function_region(html, "boNormalizedStatus", "loadEnvironment")
+    panel_state = _function_region(html, "updateKycDocumentsPanelState", "buildDocumentVerificationHistorySummary")
+    primary = _function_region(html, "renderDocumentPrimaryAction", "renderDocumentDirectActions")
+    upload_helpers = _function_region(html, "setBoDocUploadStatus", "refreshCurrentKycDocumentsDetail")
+
+    assert "function isBoOrdinaryKycUploadAllowed" in gate_helpers
+    assert "boNormalizedStatus(app) === 'kyc_documents'" in gate_helpers
+    assert "boKycUploadPreApprovalSatisfied(app)" in gate_helpers
+    assert "Officer upload is available only while the application is in KYC Documents." in gate_helpers
+    assert "updateBoDocUploadAvailability(app)" in panel_state
+    assert "if (!isBoOrdinaryKycUploadAllowed(app))" in primary
+    assert "disabled title=" in primary
+    assert "if (!isBoOrdinaryKycUploadAllowed(currentApp))" in upload_helpers
+    assert "btn.disabled = !allowed" in upload_helpers
+    assert "resetBoDocUploadState({ skipAvailability: true, reason: 'upload_not_allowed' })" in upload_helpers
+
+
 def test_default_row_is_action_first_and_details_hold_audit_fields():
     html = _backoffice_html()
     card_renderer = _function_region(html, "renderUnifiedKycDocumentCard", "renderMissingKycDocumentRow")
