@@ -18494,6 +18494,17 @@ def _screening_workflow_snapshot(app):
     }
 
 
+def _screening_workflow_requires_pre_approval(app):
+    app = dict(app or {})
+    lane = str(app.get("onboarding_lane") or "").strip().upper()
+    risk_level = str(
+        app.get("final_risk_level")
+        or app.get("risk_level")
+        or ""
+    ).strip().upper()
+    return lane == "EDD" or risk_level in {"HIGH", "VERY_HIGH"}
+
+
 def _normalise_screening_disposition_workflow_state(
     db,
     app_id,
@@ -18548,6 +18559,12 @@ def _normalise_screening_disposition_workflow_state(
         if current_status == "edd_required" and current_lane != "EDD":
             target_status = "in_review"
             reason = "false_positive_clearance_removed_screening_edd_trigger"
+        elif (
+            current_status == "pre_approval_review"
+            and not _screening_workflow_requires_pre_approval(current)
+        ):
+            target_status = "kyc_documents"
+            reason = "false_positive_clearance_removed_pre_approval_trigger"
 
     update_needed = (
         target_status != current.get("status")

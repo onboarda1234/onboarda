@@ -6220,6 +6220,342 @@ class TestGovernanceAttemptAudit:
         assert detail["previous_status"] == "edd_required"
         assert detail["new_status"] == "in_review"
 
+    def test_provider_only_pep_false_positive_clearance_recalculates_to_base_low(self, api_server):
+        """Provider-only PEP clearance must remove the temporary PEP/EDD floor."""
+        from auth import create_token
+        from db import get_db
+        from security_hardening import classify_approval_route, collect_approval_gate_blockers
+
+        app_id = "app_provider_only_pep_false_positive_recalc"
+        app_ref = "ARF-2026-PROVIDER-PEP-FP-LOW"
+        company_name = "Provider Only PEP False Positive Ltd"
+        director_id = "dir_provider_pep_fp"
+        director_name = "Provider Only PEP Director"
+        ubo_id = "ubo_provider_pep_clean"
+        ubo_name = "Clean Beneficial Owner"
+        screened_at = "2026-06-20T10:00:00Z"
+        provider_case_id = "CA-PEP-FP-001"
+        provider_risk_id = "CA-RISK-PEP-FP-001"
+        pep_declaration = {
+            "declared_pep": False,
+            "client_declared_pep": False,
+            "officer_verified_pep": False,
+            "pep_status": "declared_no",
+        }
+        prescreening = {
+            "operating_countries": ["United Kingdom"],
+            "target_markets": ["United Kingdom"],
+            "source_of_wealth": "Operating revenue",
+            "source_of_funds": "Client subscription revenue",
+            "monthly_volume": "0-50000",
+            "cross_border": False,
+            "screening_valid_until": "2026-09-20T10:00:00Z",
+            "screening_report": {
+                "provider": "complyadvantage",
+                "screening_provider": "complyadvantage",
+                "screening_mode": "live",
+                "screened_at": screened_at,
+                "total_hits": 1,
+                "any_pep_hits": True,
+                "any_sanctions_hits": False,
+                "has_adverse_media_hit": False,
+                "company_screening": {
+                    "company_name": company_name,
+                    "provider": "complyadvantage",
+                    "source": "complyadvantage",
+                    "api_status": "live",
+                    "matched": False,
+                    "results": [],
+                },
+                "director_screenings": [
+                    {
+                        "source_id": director_id,
+                        "person_name": director_name,
+                        "declared_pep": False,
+                        "provider_detected_pep": True,
+                        "has_pep_hit": True,
+                        "has_sanctions_hit": False,
+                        "has_adverse_media_hit": False,
+                        "undeclared_pep": True,
+                        "screening": {
+                            "provider": "complyadvantage",
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "screened_at": screened_at,
+                            "matched": True,
+                            "results": [
+                                {
+                                    "id": "pep-provider-hit-1",
+                                    "name": director_name,
+                                    "is_pep": True,
+                                    "is_sanctioned": False,
+                                    "is_adverse_media": False,
+                                    "provider": "complyadvantage",
+                                    "provider_case_identifier": provider_case_id,
+                                    "provider_risk_identifier": provider_risk_id,
+                                    "match_categories": ["pep"],
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "ubo_screenings": [
+                    {
+                        "source_id": ubo_id,
+                        "person_name": ubo_name,
+                        "declared_pep": False,
+                        "provider_detected_pep": False,
+                        "has_pep_hit": False,
+                        "has_sanctions_hit": False,
+                        "has_adverse_media_hit": False,
+                        "screening": {
+                            "provider": "complyadvantage",
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "screened_at": screened_at,
+                            "matched": False,
+                            "results": [],
+                        },
+                    }
+                ],
+                "ip_geolocation": {"source": "ipapi", "api_status": "live", "risk_level": "LOW"},
+            },
+        }
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?)", (app_ref, f"application:{app_ref}"))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM ubos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type,
+                 ownership_structure, status, onboarding_lane, risk_level,
+                 base_risk_level, final_risk_level, risk_score, risk_dimensions,
+                 risk_escalations, elevation_reason_text, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                app_ref,
+                "client_provider_pep_fp",
+                company_name,
+                "United Kingdom",
+                "Technology",
+                "Listed Company",
+                "Simple - direct identifiable UBOs",
+                "pre_approval_review",
+                "EDD",
+                "HIGH",
+                "LOW",
+                "HIGH",
+                55.0,
+                json.dumps({"d1": 1.0, "d2": 1.0, "d3": 1.0, "d4": 1.0, "d5": 1.0}),
+                json.dumps(["floor_rule_edd_routing", "material_screening_disposition_floor"]),
+                "EDD routing floor: deterministic routing required EDD (material_screening_concern)",
+                json.dumps(prescreening),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO directors
+                (id, application_id, person_key, first_name, last_name, full_name,
+                 nationality, is_pep, pep_declaration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                director_id,
+                app_id,
+                "director-provider-pep-fp",
+                "Provider",
+                "Director",
+                director_name,
+                "United Kingdom",
+                "No",
+                json.dumps(pep_declaration),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO ubos
+                (id, application_id, person_key, first_name, last_name, full_name,
+                 nationality, ownership_pct, is_pep, pep_declaration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ubo_id,
+                app_id,
+                "ubo-clean-owner",
+                "Clean",
+                "Owner",
+                ubo_name,
+                "United Kingdom",
+                100.0,
+                "No",
+                json.dumps({
+                    "declared_pep": False,
+                    "client_declared_pep": False,
+                    "officer_verified_pep": False,
+                    "pep_status": "declared_no",
+                }),
+            ),
+        )
+        conn.commit()
+        before_app = dict(conn.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())
+        before_route = classify_approval_route(before_app, conn)
+        before_blockers = collect_approval_gate_blockers(before_app, conn)
+        conn.close()
+
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        detail_before = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=5,
+        )
+        assert detail_before.status_code == 200, detail_before.text
+        before_body = detail_before.json()
+        before_truth = before_body["screening_adverse_truth_summary"]
+
+        assert before_body["status"] == "pre_approval_review"
+        assert before_body["onboarding_lane"] == "EDD"
+        assert before_body["final_risk_level"] == "HIGH"
+        assert before_body["directors"][0]["is_pep"] in ("No", False, 0)
+        assert before_body["directors"][0]["pep_declaration"]["client_declared_pep"] is False
+        assert before_body["directors"][0]["pep_declaration"]["officer_verified_pep"] is False
+        assert before_body["directors"][0]["pep_declaration"]["pep_status"] == "declared_no"
+        assert before_truth["approval_effect"] == "submit_to_compliance_required"
+        assert "pep_detected" in set(before_truth["states"])
+        assert "provider_detected_pep" in {
+            component.get("reason") for component in before_truth.get("components", [])
+        }
+        assert not ({"adverse_media_hit", "sanctions_hit", "material_concern"} & set(before_truth["states"]))
+        assert "provider_pep_match_unresolved" in before_route["escalation_reasons"]
+        assert "screening_adverse_truth" in {blocker.get("id") for blocker in before_blockers}
+
+        first = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "director",
+                "subject_name": director_name,
+                "disposition": "false_positive_cleared",
+                "rationale": "Officer compared provider PEP evidence with identity records and confirmed a false positive.",
+                "evidence_reference": "Provider case CA-PEP-FP-001 and identity pack reviewed.",
+            },
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=5,
+        )
+        assert first.status_code == 202, first.text
+        assert first.json()["status"] == "second_review_required"
+
+        sco_token = create_token("sco_provider_pep_fp", "sco", "Second Review SCO", "officer")
+        second = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "director",
+                "subject_name": director_name,
+                "disposition": "false_positive_cleared",
+                "rationale": "Independent SCO review confirmed the possible PEP profile belongs to a different person.",
+                "evidence_reference": "Second-review pack for provider case CA-PEP-FP-001 retained.",
+            },
+            headers={"Authorization": f"Bearer {sco_token}"},
+            timeout=5,
+        )
+        assert second.status_code == 200, second.text
+        second_body = second.json()
+        assert second_body["review"]["canonical_disposition"] == "false_positive_cleared"
+        assert second_body["review"]["second_reviewer_id"] == "sco_provider_pep_fp"
+        assert second_body["risk_recomputed"] is True
+        assert second_body["workflow_normalization"]["previous_status"] == "pre_approval_review"
+        assert second_body["workflow_normalization"]["new_status"] == "kyc_documents"
+        assert second_body["workflow_normalization"]["new_lane"] != "EDD"
+
+        detail_after = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=5,
+        )
+        assert detail_after.status_code == 200, detail_after.text
+        after_body = detail_after.json()
+        after_truth = after_body["screening_adverse_truth_summary"]
+
+        conn = get_db()
+        app = conn.execute(
+            """
+            SELECT *
+            FROM applications WHERE id = ?
+            """,
+            (app_id,),
+        ).fetchone()
+        director = conn.execute(
+            "SELECT is_pep, pep_declaration FROM directors WHERE id = ?",
+            (director_id,),
+        ).fetchone()
+        review = conn.execute(
+            """
+            SELECT disposition, disposition_code, rationale, reviewer_id,
+                   second_reviewer_id, second_rationale
+            FROM screening_reviews WHERE application_id = ? AND subject_type = 'director'
+            """,
+            (app_id,),
+        ).fetchone()
+        audit = conn.execute(
+            """
+            SELECT detail, before_state, after_state FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        after_route = classify_approval_route(dict(app), conn)
+        after_blockers = collect_approval_gate_blockers(dict(app), conn)
+        conn.close()
+
+        app = dict(app)
+        director_pep = json.loads(director["pep_declaration"])
+        risk_escalations = set(json.loads(app["risk_escalations"] or "[]"))
+        audit_detail = json.loads(audit["detail"])
+        retained_report = json.loads(app["prescreening_data"])["screening_report"]
+        retained_hit = retained_report["director_screenings"][0]["screening"]["results"][0]
+
+        assert app["status"] == "kyc_documents"
+        assert after_body["status"] == "kyc_documents"
+        assert app["onboarding_lane"] != "EDD"
+        assert app["final_risk_level"] == "LOW"
+        assert app["risk_level"] == "LOW"
+        assert app["base_risk_level"] == "LOW"
+        assert after_body["final_risk_level"] == "LOW"
+        assert "floor_rule_declared_pep" not in risk_escalations
+        assert "floor_rule_edd_routing" not in risk_escalations
+        assert "material_screening_disposition_floor" not in risk_escalations
+        assert "false_positive" not in (app["elevation_reason_text"] or "")
+        assert director["is_pep"] in ("No", False, 0)
+        assert director_pep["client_declared_pep"] is False
+        assert director_pep["officer_verified_pep"] is False
+        assert director_pep["pep_status"] in {"declared_no", "false_positive", "not_pep"}
+        assert review["disposition"] == "cleared"
+        assert review["disposition_code"] == "false_positive_cleared"
+        assert review["reviewer_id"] == "admin001"
+        assert review["second_reviewer_id"] == "sco_provider_pep_fp"
+        assert "different person" in review["second_rationale"]
+        assert audit_detail["canonical_disposition"] == "false_positive_cleared"
+        assert audit_detail["rationale"]
+        assert audit_detail["provider_references"]["case_ids"] == [provider_case_id]
+        assert retained_hit["is_pep"] is True
+        assert retained_hit["provider_case_identifier"] == provider_case_id
+        assert after_truth["approval_effect"] == "allow_direct_approval"
+        assert "pep_detected" not in set(after_truth["states"])
+        assert "provider_detected_pep" not in {
+            component.get("reason") for component in after_truth.get("components", [])
+        }
+        assert "provider_pep_match_unresolved" not in after_route["escalation_reasons"]
+        assert "material_screening_concern" not in after_route["escalation_reasons"]
+        assert "screening_adverse_truth" not in {blocker.get("id") for blocker in after_blockers}
+
     def test_screening_review_context_error_fails_closed(self, api_server, monkeypatch):
         """A context derivation error should require four-eyes rather than single-officer clear."""
         import server as server_module
