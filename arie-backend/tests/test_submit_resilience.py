@@ -2,13 +2,13 @@
 Tests for SubmitApplicationHandler resilience hardening.
 
 Covers:
-    1. run_full_screening() raises → submit returns controlled 503, not generic 500
+    1. run_full_screening() is deferred → submit persists pending screening state
     2. Degraded screening path: individual provider failures produce degraded markers
     3. DB write failure after screening → controlled 500 error
     4. Successful submit path still works (happy path)
     5. Structured logging / expected status code behavior
     6. store_screening_mode() failure is handled gracefully
-    7. ScreeningProviderError produces 503
+    7. ScreeningProviderError is a proper exception for worker/provider paths
     8. Outer defence-in-depth handler catches unexpected errors
 """
 import json
@@ -68,56 +68,67 @@ def _make_handler(server_mod, error_calls, success_calls=None):
     handler.get_client_ip = MagicMock(return_value="127.0.0.1")
     handler.log_audit = MagicMock()
     handler.check_app_ownership = MagicMock(return_value=True)
+    handler.request = MagicMock()
+    handler.request.headers = {}
     return handler
 
 
 # ---------------------------------------------------------------------------
-# 1. run_full_screening raises → controlled 503
+# 1. run_full_screening is deferred → durable pending screening state
 # ---------------------------------------------------------------------------
 
 class TestScreeningExceptionReturns503:
-    """When run_full_screening raises, the handler must return 503 not 500."""
+    """Submit must not call run_full_screening; provider errors are worker-path concerns."""
 
     def test_screening_exception_returns_503(self, temp_db):
-        """Simulate run_full_screening raising a generic exception."""
+        """A provider exception would not affect submit because submit does not call the provider."""
         server = _get_server_module()
 
         error_calls = []
-        handler = _make_handler(server, error_calls)
+        success_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
 
-        with patch.object(server, "run_full_screening", side_effect=RuntimeError("Sumsub timeout")):
+        with patch.object(server, "run_full_screening", side_effect=RuntimeError("CA timeout")) as screening_mock:
             db = _get_project_db(temp_db)
             app_id = _setup_test_app(db)
             handler._do_submit(db, {"sub": "testuser", "name": "Test", "role": "client", "type": "client"}, app_id)
             row = db.execute("SELECT status, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
+            job_count = db.execute("SELECT COUNT(*) AS c FROM screening_jobs WHERE application_id=?", (app_id,)).fetchone()["c"]
             db.close()
 
-        assert len(error_calls) > 0, "Expected error to be called"
-        last_error = error_calls[-1]
-        assert last_error[1] == 503, f"Expected 503 but got {last_error[1]}"
-        assert "temporarily unavailable" in last_error[0].lower() or "retry" in last_error[0].lower()
-        assert row["status"] == "draft"
-        assert "screening_report" not in json.loads(row["prescreening_data"])
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][1] == 200
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert success_calls[0][0]["screening"]["pending"] is True
+        assert row["status"] == "pricing_review"
+        assert json.loads(row["prescreening_data"])["screening_report"]["screening_async"]["status"] == "pending"
+        assert job_count == 1
+        assert screening_mock.call_count == 0
 
     def test_screening_provider_error_returns_503(self, temp_db):
-        """Simulate ScreeningProviderError specifically."""
+        """ScreeningProviderError is deferred to worker processing, not submit response."""
         server = _get_server_module()
         from screening import ScreeningProviderError
 
         error_calls = []
-        handler = _make_handler(server, error_calls)
+        success_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
 
-        with patch.object(server, "run_full_screening", side_effect=ScreeningProviderError("All providers down")):
+        with patch.object(server, "run_full_screening", side_effect=ScreeningProviderError("All providers down")) as screening_mock:
             db = _get_project_db(temp_db)
             app_id = _setup_test_app(db)
             handler._do_submit(db, {"sub": "testuser", "name": "Test", "role": "client", "type": "client"}, app_id)
             row = db.execute("SELECT status, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
+            job = db.execute("SELECT * FROM screening_jobs WHERE application_id=?", (app_id,)).fetchone()
             db.close()
 
-        assert len(error_calls) > 0
-        assert error_calls[-1][1] == 503
-        assert row["status"] == "draft"
-        assert "screening_report" not in json.loads(row["prescreening_data"])
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][0]["screening"]["pending"] is True
+        assert row["status"] == "pricing_review"
+        assert json.loads(row["prescreening_data"])["screening_report"]["screening_async"]["job_id"] == job["id"]
+        assert screening_mock.call_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +355,8 @@ class TestHappyPathSubmit:
         assert data["risk_level"] == "LOW"
         assert "screening" in data
         assert "degraded_sources" in data["screening"]
-        assert screening_mock.call_args.kwargs["provider_options"] is None
+        assert data["screening"]["pending"] is True
+        assert screening_mock.call_count == 0
 
     def test_edd_routed_low_risk_is_floored_before_persisting(self, temp_db):
         """A policy-routed EDD case must not persist or return final LOW risk."""
@@ -415,10 +427,15 @@ class TestHappyPathSubmit:
         assert app["base_risk_level"] == "LOW"
         assert app["risk_score"] >= 55
         assert "EDD routing floor" in app["elevation_reason_text"]
-        audit_after = handler.log_audit.call_args.kwargs["after_state"]
+        audit_after = next(
+            call.kwargs["after_state"]
+            for call in handler.log_audit.call_args_list
+            if call.args[1] == "Pre-Screening Submitted"
+        )
         assert audit_after["final_risk_level"] == data["risk_level"]
         assert "EDD routing floor" in audit_after["elevation_reason_text"]
-        assert screening_mock.call_args.kwargs["provider_options"]["allow_pending_on_timeout"] is True
+        assert data["screening"]["pending"] is True
+        assert screening_mock.call_count == 0
 
     def test_deferred_enhanced_requirements_schedule_without_preapproval(self, temp_db):
         """Deferred enhanced triggers must still enqueue post-commit generation."""
@@ -569,7 +586,8 @@ class TestHappyPathSubmit:
         assert app["risk_score"] == 72
         assert app["submitted_at"]
         assert req_count == 0
-        assert screening_mock.call_args.kwargs["provider_options"]["allow_pending_on_timeout"] is True
+        assert success_calls[0][0]["screening"]["pending"] is True
+        assert screening_mock.call_count == 0
         scheduled_names = [item[0].__name__ for item in scheduled]
         assert "_generate_prescreening_enhanced_requirements_async" in scheduled_names
         assert "_send_prescreening_compliance_notifications" in scheduled_names
@@ -941,7 +959,7 @@ class TestHappyPathSubmit:
         assert after_audit_count == before_audit_count
 
     def test_incomplete_submitted_state_does_not_return_recovery(self, temp_db):
-        """Risk data alone is not enough for recovery; submit must have a completed pricing footprint."""
+        """Risk data alone is not enough for recovery; submit repairs it through a durable submit."""
         server = _get_server_module()
         from screening import ScreeningProviderError
 
@@ -984,10 +1002,13 @@ class TestHappyPathSubmit:
             )
         db.close()
 
-        assert success_calls == []
-        assert len(error_calls) == 1
-        assert error_calls[0][1] == 503
-        assert screening_mock.call_count == 1
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][1] == 200
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert success_calls[0][0].get("idempotent_recovery") is None
+        assert success_calls[0][0]["screening"]["pending"] is True
+        assert screening_mock.call_count == 0
 
     def test_sanctioned_prescreening_country_returns_403_before_screening_and_is_retry_safe(self, temp_db):
         """Sanctioned jurisdiction aliases must fail deterministically before provider work."""
@@ -1104,13 +1125,13 @@ class TestStructuredLogging:
     """Errors are logged with structured context."""
 
     def test_screening_failure_logs_context(self, temp_db, caplog):
-        """On screening failure, structured log includes app_id, ref, user, ip, stage."""
+        """On async submit DB failure, structured log includes app_id, ref, user, stage."""
         server = _get_server_module()
 
         error_calls = []
         handler = _make_handler(server, error_calls)
 
-        with patch.object(server, "run_full_screening", side_effect=ConnectionError("Provider timeout")):
+        with patch.object(server, "enqueue_screening_job", side_effect=ConnectionError("queue unavailable")):
             db = _get_project_db(temp_db)
             app_id = _setup_test_app(db)
 
@@ -1123,11 +1144,12 @@ class TestStructuredLogging:
             db.close()
 
         assert len(error_calls) == 1
-        assert error_calls[0][1] == 503
+        assert error_calls[0][1] == 500
 
         # Check log contains structured context
         log_text = caplog.text
-        assert app_id in log_text or "run_full_screening" in log_text
+        assert app_id in log_text
+        assert "async_submit_db_write" in log_text
 
     def test_no_traceback_leaked_to_client(self, temp_db):
         """Error messages to client should not contain tracebacks."""
@@ -1136,7 +1158,7 @@ class TestStructuredLogging:
         error_calls = []
         handler = _make_handler(server, error_calls)
 
-        with patch.object(server, "run_full_screening", side_effect=RuntimeError("Traceback (most recent call last):\n...")):
+        with patch.object(server, "enqueue_screening_job", side_effect=RuntimeError("Traceback (most recent call last):\n...")):
             db = _get_project_db(temp_db)
             app_id = _setup_test_app(db)
 

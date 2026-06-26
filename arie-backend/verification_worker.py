@@ -18,6 +18,15 @@ from typing import Any, Callable, Dict, Optional
 from base_handler import _safe_json
 from db import get_db
 from observability import emit_cloudwatch_metric_log
+from screening_jobs import (
+    claim_next_screening_job,
+    format_screening_job_timing_log_fields,
+    mark_screening_job_failed,
+    mark_screening_job_succeeded,
+    recover_stuck_screening_jobs,
+    screening_job_timing_ms,
+    screening_queue_observability_snapshot,
+)
 from verification_jobs import (
     format_async_job_health_log_line,
     format_verification_job_timing_log_fields,
@@ -47,6 +56,7 @@ SYSTEM_USER = {
     "role": "system",
 }
 _LAST_OBSERVABILITY_EMIT_MONOTONIC = 0.0
+_LAST_SCREENING_OBSERVABILITY_EMIT_MONOTONIC = 0.0
 
 
 class RetryableVerificationWorkerError(Exception):
@@ -55,6 +65,14 @@ class RetryableVerificationWorkerError(Exception):
 
 class TerminalVerificationWorkerError(Exception):
     """Raised when the job should fail terminally."""
+
+
+class RetryableScreeningWorkerError(Exception):
+    """Raised when the screening job should be returned to the queue."""
+
+
+class TerminalScreeningWorkerError(Exception):
+    """Raised when the screening job should fail terminally."""
 
 
 class _WorkerRequest:
@@ -153,6 +171,14 @@ def _is_retryable_exception(exc: Exception) -> bool:
     return isinstance(exc, (TimeoutError, ConnectionError))
 
 
+def _is_retryable_screening_exception(exc: Exception) -> bool:
+    if isinstance(exc, RetryableScreeningWorkerError):
+        return True
+    if isinstance(exc, TerminalScreeningWorkerError):
+        return False
+    return isinstance(exc, (TimeoutError, ConnectionError))
+
+
 def _observability_interval_seconds() -> float:
     try:
         return max(
@@ -218,6 +244,61 @@ def emit_verification_observability_metrics(
     return {"emitted": True, "snapshot": snapshot}
 
 
+def emit_screening_observability_metrics(
+    db,
+    *,
+    worker_id: str,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Emit PII-safe screening queue gauges for CloudWatch alarms."""
+
+    global _LAST_SCREENING_OBSERVABILITY_EMIT_MONOTONIC
+    now_monotonic = time.monotonic()
+    if (
+        not force
+        and now_monotonic - _LAST_SCREENING_OBSERVABILITY_EMIT_MONOTONIC
+        < _observability_interval_seconds()
+    ):
+        return {"emitted": False}
+
+    snapshot = screening_queue_observability_snapshot(db)
+    dimensions = {
+        "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT", "unknown"),
+        "service": "verification-worker",
+    }
+    emit_cloudwatch_metric_log(
+        "ScreeningQueueDepth",
+        snapshot.get("queue_depth") or 0,
+        **dimensions,
+    )
+    emit_cloudwatch_metric_log(
+        "ScreeningInProgressJobs",
+        snapshot.get("in_progress") or 0,
+        **dimensions,
+    )
+    emit_cloudwatch_metric_log(
+        "ScreeningOldestPendingAgeSeconds",
+        snapshot.get("oldest_pending_age_seconds") or 0,
+        unit="Seconds",
+        **dimensions,
+    )
+    emit_cloudwatch_metric_log(
+        "ScreeningFailedJobsLastHour",
+        snapshot.get("failed_last_hour") or 0,
+        **dimensions,
+    )
+    logger.info(
+        "screening_queue_observability queue_depth=%s in_progress=%s oldest_pending_age_seconds=%s failed_last_hour=%s worker_id=%s",
+        snapshot.get("queue_depth"),
+        snapshot.get("in_progress"),
+        snapshot.get("oldest_pending_age_seconds"),
+        snapshot.get("failed_last_hour"),
+        worker_id,
+    )
+    _LAST_SCREENING_OBSERVABILITY_EMIT_MONOTONIC = now_monotonic
+    return {"emitted": True, "snapshot": snapshot}
+
+
 def _safe_emit_worker_metric(metric_name: str, value, *, unit: str = "Count") -> None:
     try:
         emit_cloudwatch_metric_log(
@@ -277,6 +358,101 @@ def default_verification_executor(db, job: Dict[str, Any], worker_id: str) -> Di
 
 
 VerificationExecutor = Callable[[Any, Dict[str, Any], str], Dict[str, Any]]
+
+
+def default_screening_executor(db, job: Dict[str, Any], worker_id: str) -> Dict[str, Any]:
+    """Run the submit-time provider screening path outside the HTTP request."""
+    from server import process_async_screening_job
+
+    return process_async_screening_job(db, job, worker_id)
+
+
+ScreeningExecutor = Callable[[Any, Dict[str, Any], str], Dict[str, Any]]
+
+
+def process_claimed_screening_job(
+    db,
+    job: Dict[str, Any],
+    *,
+    worker_id: str,
+    screening_executor: Optional[ScreeningExecutor] = None,
+) -> Dict[str, Any]:
+    executor = screening_executor or default_screening_executor
+    try:
+        result = executor(db, job, worker_id)
+        if result.get("retryable_error"):
+            raise RetryableScreeningWorkerError(result.get("error") or "screening provider retry requested")
+        if result.get("terminal_error"):
+            raise TerminalScreeningWorkerError(result.get("error") or "screening provider terminal failure")
+        updated = mark_screening_job_succeeded(db, job["id"], worker_id=worker_id)
+        db.commit()
+        try:
+            timing = screening_job_timing_ms(updated)
+            if timing.get("end_to_end_job_ms") is not None:
+                _safe_emit_worker_metric(
+                    "ScreeningEndToEndJobMs",
+                    timing["end_to_end_job_ms"],
+                    unit="Milliseconds",
+                )
+        except Exception:
+            logger.exception("screening_worker_timing_metric_failed job_id=%s", job["id"])
+        logger.info(
+            "screening_worker_job_completed job_id=%s application_id=%s worker_id=%s %s",
+            job["id"],
+            job.get("application_id"),
+            worker_id,
+            format_screening_job_timing_log_fields(updated),
+        )
+        return {
+            "processed": True,
+            "job_type": "screening",
+            "outcome": "succeeded",
+            "job": updated,
+            "result": result,
+        }
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        retryable = _is_retryable_screening_exception(exc)
+        try:
+            from server import mark_async_screening_failure
+
+            mark_async_screening_failure(
+                db,
+                job,
+                worker_id=worker_id,
+                error=str(exc),
+                retryable=retryable,
+            )
+        except Exception:
+            logger.exception("screening_worker_failed_state_persist_failed job_id=%s", job.get("id"))
+        failed = mark_screening_job_failed(
+            db,
+            job["id"],
+            worker_id=worker_id,
+            error=str(exc),
+            retryable=retryable,
+        )
+        db.commit()
+        _safe_emit_worker_metric("ScreeningWorkerFailures", 1)
+        logger.warning(
+            "screening_worker_job_failed job_id=%s application_id=%s retryable=%s error_type=%s %s",
+            job["id"],
+            job.get("application_id"),
+            retryable,
+            type(exc).__name__,
+            format_screening_job_timing_log_fields(failed),
+        )
+        return {
+            "processed": True,
+            "job_type": "screening",
+            "outcome": failed["status"],
+            "job": failed,
+            "retryable": retryable,
+            "error": str(exc),
+        }
 
 
 def process_claimed_job(
@@ -378,10 +554,41 @@ def run_once(
         health = recover_stuck_verification_jobs(db, worker_id=worker_id)
         if health.get("stuck_jobs"):
             logger.warning(format_async_job_health_log_line(health))
+        screening_health = recover_stuck_screening_jobs(db, worker_id=worker_id)
+        if screening_health.get("stuck_jobs"):
+            logger.warning(
+                "screening_async_job_health stuck_jobs=%s requeued_jobs=%s failed_jobs=%s worker_id=%s",
+                screening_health.get("stuck_jobs"),
+                screening_health.get("requeued_jobs"),
+                screening_health.get("failed_jobs"),
+                worker_id,
+            )
         try:
             emit_verification_observability_metrics(db, worker_id=worker_id)
         except Exception:
             logger.exception("verification_observability_emit_failed worker_id=%s", worker_id)
+        try:
+            emit_screening_observability_metrics(db, worker_id=worker_id)
+        except Exception:
+            logger.exception("screening_observability_emit_failed worker_id=%s", worker_id)
+        screening_job = claim_next_screening_job(db, worker_id)
+        db.commit()
+        if screening_job:
+            logger.info(
+                "screening_worker_job_claimed job_id=%s application_id=%s worker_id=%s attempt_count=%s %s",
+                screening_job["id"],
+                screening_job.get("application_id"),
+                worker_id,
+                screening_job.get("attempt_count"),
+                format_screening_job_timing_log_fields(screening_job),
+            )
+            result = process_claimed_screening_job(
+                db,
+                screening_job,
+                worker_id=worker_id,
+            )
+            result["worker_id"] = worker_id
+            return result
         job = claim_next_verification_job(db, worker_id)
         db.commit()
         if not job:
@@ -390,6 +597,7 @@ def run_once(
                 "outcome": "idle",
                 "worker_id": worker_id,
                 "stuck_jobs_failed": int(health.get("failed_jobs") or 0),
+                "screening_stuck_jobs_failed": int(screening_health.get("failed_jobs") or 0),
             }
         logger.info(
             "verification_worker_job_claimed job_id=%s document_id=%s worker_id=%s attempt_count=%s %s",

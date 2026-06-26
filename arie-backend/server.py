@@ -135,6 +135,13 @@ from memo_governance import (
     memo_selection_metadata,
 )
 from provider_errors import sanitize_provider_error
+from screening_jobs import (
+    JOB_FAILED as SCREENING_JOB_FAILED,
+    JOB_PENDING as SCREENING_JOB_PENDING,
+    JOB_RETRYING as SCREENING_JOB_RETRYING,
+    SYSTEM_ACTOR_ID as SCREENING_JOB_SYSTEM_ACTOR_ID,
+    enqueue_screening_job,
+)
 
 # ── Sprint 2: Extracted modules ──────────────────────────
 from auth import (
@@ -2716,16 +2723,6 @@ def _submit_recovery_payload(app, prescreening):
 
     screening_report = prescreening.get("screening_report")
     screening_report = screening_report if isinstance(screening_report, dict) else {}
-    company_screening = screening_report.get("company_screening")
-    company_screening = company_screening if isinstance(company_screening, dict) else {}
-    ip_geolocation = screening_report.get("ip_geolocation")
-    ip_geolocation = ip_geolocation if isinstance(ip_geolocation, dict) else {}
-    director_screenings = screening_report.get("director_screenings") or []
-    sanctions_source = "none"
-    if director_screenings and isinstance(director_screenings[0], dict):
-        screening = director_screenings[0].get("screening")
-        if isinstance(screening, dict):
-            sanctions_source = screening.get("source", "none")
 
     return {
         "ref": _row_value(app, "ref"),
@@ -2743,17 +2740,729 @@ def _submit_recovery_payload(app, prescreening):
         "pricing": pricing,
         "idempotent_recovery": True,
         "message": "Application submit already completed; returning current persisted state.",
-        "screening": {
-            "total_hits": screening_report.get("total_hits", 0),
-            "flags": screening_report.get("overall_flags", []),
-            "degraded_sources": screening_report.get("degraded_sources", []),
-            "api_sources": {
-                "sanctions": sanctions_source,
-                "corporate_registry": company_screening.get("source", "none"),
-                "ip_geolocation": ip_geolocation.get("source", "none"),
-            },
+        "screening": _screening_response_fragment(screening_report),
+    }
+
+
+def _submit_attempt_id(real_id):
+    return f"submit_{real_id}_{uuid.uuid4().hex[:16]}"
+
+
+def _yes_no_flag(value):
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    text = str(value or "").strip().lower()
+    return "Yes" if text in {"yes", "true", "1", "y"} else "No"
+
+
+def _subject_party_name(party, *keys):
+    for key in keys:
+        value = (party or {}).get(key)
+        if str(value or "").strip():
+            return str(value).strip()
+    return ""
+
+
+def _pending_provider_record(*, status, state, evidence_quality, subject_type, subject_name, application_id, submit_attempt_id, job_id=None, error=None, retryable=None):
+    record = {
+        "provider": "complyadvantage",
+        "source": "complyadvantage",
+        "api_status": status,
+        "provider_mode": status,
+        "screening_state": state,
+        "matched": False,
+        "results": [],
+        "evidence_quality": evidence_quality,
+        "subject_type": subject_type,
+        "subject_name": subject_name,
+        "provider_references": {
+            "application_id": application_id,
+            "submit_attempt_id": submit_attempt_id,
+        },
+        "reason": (
+            "async_screening_provider_pending"
+            if status in {"pending", "in_progress", "retrying"}
+            else "async_screening_provider_failed"
+        ),
+    }
+    if job_id:
+        record["provider_references"]["screening_job_id"] = job_id
+    if error:
+        record["error"] = sanitize_provider_error(error, max_len=500)
+    if retryable is not None:
+        record["retryable"] = bool(retryable)
+    return record
+
+
+def _async_screening_subject_entry(
+    party,
+    *,
+    bucket,
+    subject_type,
+    application_id,
+    submit_attempt_id,
+    job_id=None,
+    status=SCREENING_JOB_PENDING,
+    state="pending_provider",
+    evidence_quality="partial",
+    error=None,
+    retryable=None,
+):
+    name = _subject_party_name(
+        party,
+        "full_name",
+        "entity_name",
+        "company_name",
+        "legal_name",
+        "name",
+    ) or "Unknown"
+    screening = _pending_provider_record(
+        status=status,
+        state=state,
+        evidence_quality=evidence_quality,
+        subject_type=subject_type,
+        subject_name=name,
+        application_id=application_id,
+        submit_attempt_id=submit_attempt_id,
+        job_id=job_id,
+        error=error,
+        retryable=retryable,
+    )
+    if (party or {}).get("id"):
+        screening["person_key"] = (party or {}).get("id")
+    entry = {
+        "person_name": name,
+        "person_type": subject_type,
+        "subject_type": subject_type,
+        "nationality": (party or {}).get("nationality", ""),
+        "declared_pep": _yes_no_flag((party or {}).get("is_pep") or (party or {}).get("declared_pep")),
+        "provider_detected_pep": False,
+        "undeclared_pep": False,
+        "has_pep_hit": False,
+        "has_sanctions_hit": False,
+        "has_adverse_media_hit": None,
+        "adverse_media_coverage": "none",
+        "screening": screening,
+        "screening_state": state,
+        "requires_review": False,
+    }
+    if bucket == "ubo_screenings":
+        entry["ownership_pct"] = (party or {}).get("ownership_pct", 0)
+    if bucket == "intermediary_screenings":
+        entry["entity_name"] = name
+    return entry
+
+
+def _build_async_screening_report(
+    app,
+    scoring_input,
+    directors,
+    ubos,
+    intermediaries,
+    *,
+    submit_attempt_id,
+    job=None,
+    status=SCREENING_JOB_PENDING,
+    state="pending_provider",
+    evidence_quality="partial",
+    error=None,
+    retryable=None,
+):
+    app_dict = dict(app or {})
+    job = job if isinstance(job, dict) else {}
+    application_id = app_dict.get("id") or (scoring_input or {}).get("application_id") or ""
+    company_name = (
+        (scoring_input or {}).get("company_name")
+        or app_dict.get("company_name")
+        or app_dict.get("ref")
+        or "Unknown"
+    )
+    job_id = job.get("id")
+    provider_status = "pending" if status in {"pending", "in_progress"} else status
+    async_status = status
+    if status == SCREENING_JOB_FAILED:
+        provider_status = "failed"
+        async_status = SCREENING_JOB_FAILED
+    elif status == SCREENING_JOB_RETRYING:
+        provider_status = "pending"
+        async_status = SCREENING_JOB_RETRYING
+
+    company_screening = _pending_provider_record(
+        status=provider_status,
+        state=state,
+        evidence_quality=evidence_quality,
+        subject_type="entity",
+        subject_name=company_name,
+        application_id=application_id,
+        submit_attempt_id=submit_attempt_id,
+        job_id=job_id,
+        error=error,
+        retryable=retryable,
+    )
+    company_screening.update({
+        "company_name": company_name,
+        "name": company_name,
+        "found": None,
+        "sanctions": _pending_provider_record(
+            status=provider_status,
+            state=state,
+            evidence_quality=evidence_quality,
+            subject_type="entity",
+            subject_name=company_name,
+            application_id=application_id,
+            submit_attempt_id=submit_attempt_id,
+            job_id=job_id,
+            error=error,
+            retryable=retryable,
+        ),
+    })
+
+    report = {
+        "provider": "complyadvantage",
+        "screening_provider": "complyadvantage",
+        "source": "complyadvantage",
+        "normalized_version": "2.0",
+        "screening_mode": "failed" if status == SCREENING_JOB_FAILED else "pending",
+        "screening_state": state,
+        "company_screening_state": state,
+        "screening_async": {
+            "status": async_status,
+            "job_id": job_id,
+            "submit_attempt_id": submit_attempt_id,
+            "provider": "complyadvantage",
+            "queued_at": job.get("created_at"),
+            "attempt_count": job.get("attempt_count"),
+        },
+        "company_screening_coverage": "partial",
+        "has_company_screening_hit": None,
+        "company_screening": company_screening,
+        "director_screenings": [
+            _async_screening_subject_entry(
+                party,
+                bucket="director_screenings",
+                subject_type="director",
+                application_id=application_id,
+                submit_attempt_id=submit_attempt_id,
+                job_id=job_id,
+                status=provider_status,
+                state=state,
+                evidence_quality=evidence_quality,
+                error=error,
+                retryable=retryable,
+            )
+            for party in (directors or [])
+        ],
+        "ubo_screenings": [
+            _async_screening_subject_entry(
+                party,
+                bucket="ubo_screenings",
+                subject_type="ubo",
+                application_id=application_id,
+                submit_attempt_id=submit_attempt_id,
+                job_id=job_id,
+                status=provider_status,
+                state=state,
+                evidence_quality=evidence_quality,
+                error=error,
+                retryable=retryable,
+            )
+            for party in (ubos or [])
+        ],
+        "intermediary_screenings": [
+            _async_screening_subject_entry(
+                party,
+                bucket="intermediary_screenings",
+                subject_type="intermediary",
+                application_id=application_id,
+                submit_attempt_id=submit_attempt_id,
+                job_id=job_id,
+                status=provider_status,
+                state=state,
+                evidence_quality=evidence_quality,
+                error=error,
+                retryable=retryable,
+            )
+            for party in (intermediaries or [])
+        ],
+        "ip_geolocation": {"source": "not_run", "api_status": "not_started"},
+        "overall_flags": [],
+        "total_hits": 0,
+        "degraded_sources": [
+            "complyadvantage_failed" if status == SCREENING_JOB_FAILED else "complyadvantage_pending"
+        ],
+        "any_non_terminal_subject": True,
+        "any_pep_hits": False,
+        "any_sanctions_hits": False,
+        "has_adverse_media_hit": None,
+        "adverse_media_coverage": "none",
+        "total_persons_screened": 0,
+        "total_intermediaries_screened": 0,
+        "total_subjects_screened": 0,
+        "provider_specific": {
+            "complyadvantage": {
+                "async_screening": {
+                    "status": async_status,
+                    "job_id": job_id,
+                    "submit_attempt_id": submit_attempt_id,
+                    "provider": "complyadvantage",
+                }
+            }
         },
     }
+    if error:
+        report["screening_async"]["last_error"] = sanitize_provider_error(error, max_len=500)
+        report["provider_specific"]["complyadvantage"]["async_screening"]["last_error"] = report["screening_async"]["last_error"]
+    if retryable is not None:
+        report["screening_async"]["retryable"] = bool(retryable)
+        report["provider_specific"]["complyadvantage"]["async_screening"]["retryable"] = bool(retryable)
+    return report
+
+
+def _screening_response_fragment(screening_report):
+    screening_report = screening_report if isinstance(screening_report, dict) else {}
+    company_screening = screening_report.get("company_screening")
+    company_screening = company_screening if isinstance(company_screening, dict) else {}
+    ip_geolocation = screening_report.get("ip_geolocation")
+    ip_geolocation = ip_geolocation if isinstance(ip_geolocation, dict) else {}
+    director_screenings = screening_report.get("director_screenings") or []
+    sanctions_source = "none"
+    if director_screenings and isinstance(director_screenings[0], dict):
+        screening = director_screenings[0].get("screening")
+        if isinstance(screening, dict):
+            sanctions_source = screening.get("source", "none")
+    async_state = screening_report.get("screening_async")
+    async_state = async_state if isinstance(async_state, dict) else {}
+    state = (
+        screening_report.get("screening_state")
+        or screening_report.get("company_screening_state")
+        or company_screening.get("screening_state")
+        or ""
+    )
+    status = async_state.get("status") or state or screening_report.get("screening_mode") or "unknown"
+    pending = str(status).lower() in {"pending", "in_progress", "retrying", "pending_provider", "partial_result", "not_started"}
+    failed = str(status).lower() in {"failed", "provider_failed"}
+    return {
+        "status": status,
+        "state": state,
+        "pending": pending,
+        "provider_failed": failed,
+        "job_id": async_state.get("job_id"),
+        "submit_attempt_id": async_state.get("submit_attempt_id"),
+        "provider": screening_report.get("screening_provider") or screening_report.get("provider") or "unknown",
+        "total_hits": screening_report.get("total_hits", 0),
+        "flags": screening_report.get("overall_flags", []),
+        "degraded_sources": screening_report.get("degraded_sources", []),
+        "api_sources": {
+            "sanctions": sanctions_source,
+            "corporate_registry": company_screening.get("source", "none"),
+            "ip_geolocation": ip_geolocation.get("source", "none"),
+        },
+    }
+
+
+def _submit_response_payload(app, prescreening, risk, pricing, screening_report, *, result_status="pricing_review"):
+    risk_level = str(risk.get("level") or "MEDIUM").upper()
+    lane = str(risk.get("lane") or "")
+    return {
+        "ref": _row_value(app, "ref"),
+        "risk_score": risk.get("score"),
+        "risk_level": risk_level,
+        "base_risk_score": risk.get("base_risk_score"),
+        "base_risk_level": risk.get("base_risk_level", risk_level),
+        "final_risk_level": risk.get("final_risk_level", risk_level),
+        "risk_escalations": risk.get("escalations", []),
+        "elevation_reason_text": risk.get("elevation_reason_text", ""),
+        "risk_dimensions": risk.get("dimensions", {}),
+        "onboarding_lane": lane,
+        "status": result_status,
+        "requires_pre_approval": risk_level in ("HIGH", "VERY_HIGH") or lane.upper() == "EDD",
+        "pricing": pricing,
+        "screening": _screening_response_fragment(screening_report),
+    }
+
+
+def _async_screening_actor(worker_id=None):
+    return {
+        "sub": worker_id or SCREENING_JOB_SYSTEM_ACTOR_ID,
+        "name": "Async Screening Worker",
+        "role": "system",
+    }
+
+
+def _async_screening_audit(db, user, action, target, detail, **kwargs):
+    before_state = kwargs.get("before_state")
+    after_state = kwargs.get("after_state")
+    db.execute(
+        "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            (user or {}).get("sub", ""),
+            (user or {}).get("name", ""),
+            (user or {}).get("role", ""),
+            action,
+            target,
+            detail,
+            "screening-worker",
+            _safe_json(before_state),
+            _safe_json(after_state),
+        ),
+    )
+
+
+def _application_risk_dict_from_row(app_row):
+    app_row = dict(app_row or {})
+    risk_level = app_row.get("risk_level") or app_row.get("final_risk_level") or "MEDIUM"
+    return {
+        "score": app_row.get("risk_score"),
+        "level": risk_level,
+        "base_risk_score": app_row.get("base_risk_score"),
+        "base_risk_level": app_row.get("base_risk_level") or risk_level,
+        "final_risk_level": app_row.get("final_risk_level") or risk_level,
+        "risk_escalations": _list_or_empty(app_row.get("risk_escalations")),
+        "escalations": _list_or_empty(app_row.get("risk_escalations")),
+        "elevation_reason_text": app_row.get("elevation_reason_text") or "",
+        "dimensions": _dict_or_empty(app_row.get("risk_dimensions")),
+        "lane": app_row.get("onboarding_lane") or "Standard Review",
+    }
+
+
+def _persist_application_risk_snapshot(db, application_id, risk, *, config_version=""):
+    db.execute(
+        """UPDATE applications SET
+            risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+            risk_computed_at=?, risk_config_version=?,
+            risk_escalations=?,
+            base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
+            updated_at=datetime('now') WHERE id=?""",
+        (
+            risk.get("score"),
+            risk.get("level"),
+            json.dumps(risk.get("dimensions") or {}),
+            risk.get("lane") or "Standard Review",
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            str(config_version or risk.get("_config_version") or ""),
+            json.dumps(risk.get("escalations") or risk.get("risk_escalations") or []),
+            risk.get("base_risk_level") or risk.get("level"),
+            risk.get("final_risk_level") or risk.get("level"),
+            risk.get("elevation_reason_text") or "",
+            application_id,
+        ),
+    )
+
+
+def _screening_report_terminal_for_job(report, job_id):
+    if not isinstance(report, dict) or not report:
+        return False
+    async_state = report.get("screening_async")
+    async_state = async_state if isinstance(async_state, dict) else {}
+    if async_state.get("status") == "completed" and async_state.get("job_id") == job_id:
+        return True
+    summary = build_screening_terminality_summary(report, {})
+    return bool(summary.get("terminal")) and not bool(summary.get("has_non_terminal"))
+
+
+def process_async_screening_job(db, job, worker_id):
+    """Run ComplyAdvantage screening for a submitted application from the worker."""
+    job = dict(job or {})
+    application_id = job.get("application_id")
+    job_id = job.get("id")
+    submit_attempt_id = job.get("submit_attempt_id") or ""
+    actor = _async_screening_actor(worker_id)
+    app = db.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+    if not app:
+        return {"terminal_error": True, "error": f"application not found for screening job {job_id}"}
+
+    app_dict = dict(app)
+    prescreening = safe_json_loads(app_dict.get("prescreening_data"))
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    existing_report = prescreening.get("screening_report")
+    if _screening_report_terminal_for_job(existing_report, job_id):
+        _async_screening_audit(
+            db,
+            actor,
+            "Async Screening Already Completed",
+            app_dict.get("ref", application_id),
+            json.dumps({
+                "event": "async_screening_already_completed",
+                "application_id": application_id,
+                "application_ref": app_dict.get("ref"),
+                "job_id": job_id,
+                "submit_attempt_id": submit_attempt_id,
+            }, default=str, sort_keys=True),
+            after_state={"screening_async": (existing_report or {}).get("screening_async")},
+        )
+        return {"already_completed": True}
+
+    directors, ubos, intermediaries = get_application_parties(db, application_id)
+    scoring_input = build_prescreening_risk_input(
+        application=app_dict,
+        prescreening_data=prescreening,
+        directors=directors,
+        ubos=ubos,
+        intermediaries=intermediaries,
+    )
+
+    try:
+        screening_report = run_full_screening(
+            scoring_input,
+            directors,
+            ubos,
+            intermediaries,
+            client_ip="screening-worker",
+            db=db,
+            provider_options=None,
+        )
+    except ScreeningProviderError as exc:
+        return {
+            "retryable_error": True,
+            "error": sanitize_provider_error(exc, max_len=500) or "screening provider unavailable",
+        }
+    except Exception as exc:
+        return {
+            "retryable_error": True,
+            "error": sanitize_provider_error(exc, max_len=500) or "screening provider failed",
+        }
+
+    if not isinstance(screening_report, dict) or not screening_report:
+        return {"retryable_error": True, "error": "screening provider returned empty report"}
+
+    mode = determine_screening_mode(screening_report)
+    if not store_screening_mode(db, application_id, mode):
+        logger.warning("store_screening_mode returned False: app_id=%s mode=%s", application_id, mode)
+    screening_report["screening_mode"] = mode
+    screening_report["screening_async"] = {
+        "status": "completed",
+        "job_id": job_id,
+        "submit_attempt_id": submit_attempt_id,
+        "provider": job.get("provider") or "complyadvantage",
+        "completed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "attempt_count": job.get("attempt_count"),
+    }
+
+    populate_screening_freshness_metadata(
+        prescreening,
+        screening_report,
+        screened_by=actor.get("sub"),
+    )
+    # Provider PEP detections are screening evidence. They must not mutate
+    # party-level declared/officer-confirmed PEP state.
+    screening_summary = build_screening_terminality_summary(screening_report, prescreening)
+    before_state = {
+        "screening_async": (existing_report or {}).get("screening_async") if isinstance(existing_report, dict) else None,
+        "screening_state": (existing_report or {}).get("screening_state") if isinstance(existing_report, dict) else None,
+    }
+    prescreening["screening_report"] = screening_report
+    prescreening["screening_async"] = screening_report.get("screening_async", {})
+    db.execute(
+        "UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
+        (json.dumps(prescreening, default=str), application_id),
+    )
+
+    try:
+        _persist_normalized_screening_report_if_enabled(
+            db,
+            app_dict.get("client_id", ""),
+            application_id,
+            screening_report,
+        )
+    except Exception as _norm_exc:
+        logger.warning(
+            "Normalized async screening write failed: app_id=%s client_id=%s error_type=%s",
+            application_id,
+            app_dict.get("client_id", ""),
+            type(_norm_exc).__name__,
+        )
+
+    _async_screening_audit(
+        db,
+        actor,
+        "Async Screening Completed",
+        app_dict.get("ref", application_id),
+        json.dumps({
+            "event": "async_screening_completed",
+            "application_id": application_id,
+            "application_ref": app_dict.get("ref"),
+            "job_id": job_id,
+            "submit_attempt_id": submit_attempt_id,
+            "provider": screening_report.get("provider") or screening_report.get("screening_provider"),
+            "screening_mode": screening_report.get("screening_mode"),
+            "total_hits": screening_report.get("total_hits"),
+            "overall_flags_count": len(screening_report.get("overall_flags") or []),
+            "canonical_state": screening_summary.get("canonical_state"),
+            "terminal": screening_summary.get("terminal"),
+            "approval_blocking": screening_summary.get("approval_blocking"),
+        }, default=str, sort_keys=True),
+        before_state=before_state,
+        after_state={
+            "screening_async": screening_report.get("screening_async"),
+            "screening_summary": screening_summary,
+        },
+    )
+
+    def _async_risk_audit(audit_user, action, target, detail, **kwargs):
+        kwargs.pop("db", None)
+        return _async_screening_audit(
+            db,
+            audit_user,
+            action,
+            target,
+            detail,
+            **kwargs,
+        )
+
+    risk_result = recompute_risk(
+        db,
+        application_id,
+        "async_screening_completed",
+        user=actor,
+        log_audit_fn=_async_risk_audit,
+        apply_routing_policy=False,
+    )
+
+    routing_outcome = {}
+    try:
+        from routing_actuator import apply_routing_decision, SOURCE_SCREENING_UPDATE
+
+        refreshed_app = db.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+        risk_dict = _application_risk_dict_from_row(refreshed_app)
+        routing_outcome = apply_routing_decision(
+            db=db,
+            app_row=dict(refreshed_app) if refreshed_app else app_dict,
+            risk_dict=risk_dict,
+            screening_summary=screening_summary,
+            user=actor,
+            client_ip="screening-worker",
+            source=SOURCE_SCREENING_UPDATE,
+        )
+        if str((routing_outcome or {}).get("route") or "").lower() == "edd":
+            floored = _apply_edd_route_risk_floor(risk_dict, routing_outcome)
+            if floored is not risk_dict and floored != risk_dict:
+                _persist_application_risk_snapshot(
+                    db,
+                    application_id,
+                    floored,
+                    config_version=_row_value(refreshed_app, "risk_config_version", ""),
+                )
+    except Exception as route_exc:
+        routing_outcome = {"ran": False, "errors": [str(route_exc)]}
+        logger.warning(
+            "Async screening routing update failed: app_id=%s ref=%s job_id=%s error=%s",
+            application_id,
+            app_dict.get("ref", ""),
+            job_id,
+            str(route_exc)[:300],
+            exc_info=True,
+        )
+
+    try:
+        _mark_latest_memo_stale(
+            db,
+            application_id,
+            trigger="async_screening_completed",
+            reason="Background ComplyAdvantage screening completed and may affect compliance conclusions.",
+            actor=actor,
+            app_ref=app_dict.get("ref", ""),
+            ip_address="screening-worker",
+            before_state=before_state,
+            after_state={
+                "screening_async": screening_report.get("screening_async"),
+                "screening_summary": screening_summary,
+                "risk_result": risk_result,
+                "routing_outcome": routing_outcome,
+            },
+        )
+    except Exception:
+        logger.warning(
+            "Async screening memo stale marker failed: app_id=%s ref=%s job_id=%s",
+            application_id,
+            app_dict.get("ref", ""),
+            job_id,
+            exc_info=True,
+        )
+
+    return {
+        "screening_completed": True,
+        "application_id": application_id,
+        "application_ref": app_dict.get("ref"),
+        "job_id": job_id,
+        "risk_result": risk_result,
+        "routing_outcome": routing_outcome,
+        "screening_summary": screening_summary,
+    }
+
+
+def mark_async_screening_failure(db, job, *, worker_id, error, retryable):
+    """Persist fail-closed provider state when the async worker cannot finish CA."""
+    job = dict(job or {})
+    application_id = job.get("application_id")
+    app = db.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+    if not app:
+        return {"updated": False, "reason": "application_not_found"}
+
+    app_dict = dict(app)
+    prescreening = safe_json_loads(app_dict.get("prescreening_data"))
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    directors, ubos, intermediaries = get_application_parties(db, application_id)
+    scoring_input = build_prescreening_risk_input(
+        application=app_dict,
+        prescreening_data=prescreening,
+        directors=directors,
+        ubos=ubos,
+        intermediaries=intermediaries,
+    )
+    async_status = SCREENING_JOB_RETRYING if retryable else SCREENING_JOB_FAILED
+    provider_state = "pending_provider" if retryable else "failed"
+    evidence_quality = "partial" if retryable else "provider_error"
+    submit_attempt_id = job.get("submit_attempt_id") or (
+        (prescreening.get("screening_async") or {}).get("submit_attempt_id")
+        if isinstance(prescreening.get("screening_async"), dict)
+        else ""
+    )
+    report = _build_async_screening_report(
+        app_dict,
+        scoring_input,
+        directors,
+        ubos,
+        intermediaries,
+        submit_attempt_id=submit_attempt_id,
+        job=job,
+        status=async_status,
+        state=provider_state,
+        evidence_quality=evidence_quality,
+        error=error,
+        retryable=retryable,
+    )
+    report["screening_async"]["failed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    prescreening["screening_report"] = report
+    prescreening["screening_async"] = report.get("screening_async", {})
+    db.execute(
+        "UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
+        (json.dumps(prescreening, default=str), application_id),
+    )
+    store_screening_mode(db, application_id, "pending" if retryable else "failed")
+
+    actor = _async_screening_actor(worker_id)
+    _async_screening_audit(
+        db,
+        actor,
+        "Async Screening Failed",
+        app_dict.get("ref", application_id),
+        json.dumps({
+            "event": "async_screening_failed",
+            "application_id": application_id,
+            "application_ref": app_dict.get("ref"),
+            "job_id": job.get("id"),
+            "submit_attempt_id": submit_attempt_id,
+            "provider": job.get("provider") or "complyadvantage",
+            "retryable": bool(retryable),
+            "screening_state": provider_state,
+            "error": sanitize_provider_error(error, max_len=500),
+        }, default=str, sort_keys=True),
+        after_state={
+            "screening_async": report.get("screening_async"),
+            "screening_state": provider_state,
+        },
+    )
+    return {"updated": True, "retryable": bool(retryable), "screening_state": provider_state}
 
 
 def _send_prescreening_compliance_notifications(app_id, app_ref, company_name, risk_level, risk_score, lane):
@@ -3108,7 +3817,6 @@ from screening_adverse_truth import (
     build_screening_adverse_truth_summary,
     load_monitoring_truth_inputs,
 )
-
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
 from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler
@@ -8516,149 +9224,29 @@ class SubmitApplicationHandler(BaseHandler):
             pre_screening_route_triggers=pre_screening_route_triggers,
         )
 
-        # ── Run real screening (Agents 1, 2, 3, 5) ──
+        # ── Defer real provider screening outside the client request ──
         client_ip = self.get_client_ip()
-        provider_options = None
-        if preliminary_requires_preapproval:
-            provider_options = {
-                "poll_timeout_seconds": _submit_ca_poll_timeout_seconds(),
-                "allow_pending_on_timeout": True,
-            }
+        submit_attempt_id = _submit_attempt_id(real_id)
         _log_submit_timing(
             submit_timing,
-            "screening_start",
-            submit_safe_pending=bool(provider_options),
-            ca_poll_timeout_seconds=(provider_options or {}).get("poll_timeout_seconds"),
+            "screening_deferred",
+            submit_attempt_id=submit_attempt_id,
+            provider="complyadvantage",
+            background_queue="screening_jobs",
         )
-        try:
-            screening_report = run_full_screening(
-                scoring_input,
-                directors,
-                ubos,
-                intermediaries,
-                client_ip=client_ip,
-                db=db,
-                provider_options=provider_options,
-            )
-            _log_submit_timing(
-                submit_timing,
-                "screening_end",
-                total_hits=(screening_report or {}).get("total_hits"),
-                degraded_sources=(screening_report or {}).get("degraded_sources"),
-                any_non_terminal_subject=(screening_report or {}).get("any_non_terminal_subject"),
-            )
-        except ScreeningProviderError as spe:
-            logger.error(
-                "Screening provider critical failure: app_id=%s ref=%s user=%s ip=%s stage=run_full_screening error=%s",
-                real_id, app.get("ref", ""), user.get("sub", ""), client_ip, str(spe)[:300],
-                exc_info=True,
-            )
-            return self.error(
-                "Screening provider temporarily unavailable. Please retry in a moment.", 503
-            )
-        except Exception as screening_exc:
-            logger.error(
-                "Screening failed: app_id=%s ref=%s user=%s ip=%s stage=run_full_screening error=%s",
-                real_id, app.get("ref", ""), user.get("sub", ""), client_ip, str(screening_exc)[:300],
-                exc_info=True,
-            )
-            return self.error(
-                "Screening provider temporarily unavailable. Please retry in a moment.", 503
-            )
-
-        # Track screening mode (live vs simulated)
-        try:
-            screening_mode = determine_screening_mode(screening_report)
-            if not store_screening_mode(db, real_id, screening_mode):
-                logger.warning(
-                    "store_screening_mode returned False: app_id=%s mode=%s", real_id, screening_mode
-                )
-            screening_report["screening_mode"] = screening_mode
-        except Exception as mode_exc:
-            logger.error(
-                "Screening mode storage failed: app_id=%s ref=%s stage=store_screening_mode error=%s",
-                real_id, app.get("ref", ""), str(mode_exc)[:300],
-                exc_info=True,
-            )
-            screening_report["screening_mode"] = "unknown"
-
-        populate_screening_freshness_metadata(
-            prescreening,
-            screening_report,
-            screened_by=user.get("sub"),
-        )
-        screening_summary = build_screening_terminality_summary(
-            screening_report,
-            prescreening,
-        )
-
-        # Priority E: policy-driven EDD routing on prescreening submit.
-        # Even when level=MEDIUM, sector/jurisdiction/PEP/ownership can
-        # mandate EDD. Run the deterministic v1 policy now so the case
-        # is on the EDD lane and an edd_cases row is created
-        # before the application reaches the officer queue.
-        _routing_outcome = {}
-        try:
-            from routing_actuator import (
-                apply_routing_decision,
-                SOURCE_PRESCREENING_SUBMIT,
-            )
-            _routing_outcome = apply_routing_decision(
-                db=db,
-                app_row=app,
-                risk_dict=risk,
-                screening_summary=screening_summary,
-                user=user,
-                client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
-                source=SOURCE_PRESCREENING_SUBMIT,
-                defer_enhanced_requirements=True,
-            )
-            if str(_routing_outcome.get("route") or "").lower() == "edd":
-                risk['lane'] = 'EDD'
-                risk = _apply_edd_route_risk_floor(risk, _routing_outcome)
-        except Exception as _routing_err:
-            logger.warning(
-                'apply_routing_decision (prescreening_submit) failed: %s',
-                _routing_err,
-            )
-            risk["screening_elevated"] = True
-            risk["screening_hits"] = screening_report["total_hits"]
 
         # ── DB write path: store screening results and update application ──
+        screening_report = None
+        pricing = None
+        _routing_outcome = {}
+        requires_compliance_preapproval = (
+            risk["level"] in ("HIGH", "VERY_HIGH")
+            or str(risk.get("lane") or "").upper() == "EDD"
+            or pre_screening_route_requires_edd
+        )
+        requires_enhanced_generation = False
         try:
             _log_submit_timing(submit_timing, "db_transaction_start")
-            # Store screening report in prescreening_data
-            prescreening["screening_report"] = screening_report
-            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                       (json.dumps(prescreening, default=str), real_id))
-
-            # SCR-010: Dual-write normalized screening report (non-authoritative)
-            try:
-                _persist_normalized_screening_report_if_enabled(
-                    db, app.get("client_id", ""), real_id, screening_report
-                )
-            except Exception as _norm_exc:
-                logger.warning(
-                    "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",
-                    real_id, app.get("client_id", ""), type(_norm_exc).__name__,
-                )
-                try:
-                    from screening_storage import (
-                        ensure_normalized_table, persist_normalization_failure,
-                        compute_report_hash,
-                    )
-                    ensure_normalized_table(db)
-                    persist_normalization_failure(
-                        db, app.get("client_id", ""), real_id,
-                        compute_report_hash(screening_report),
-                        type(_norm_exc).__name__,
-                    )
-                except Exception:
-                    pass  # Do not block onboarding flow
-
-            # Provider PEP detections are screening evidence. They must not
-            # mutate party-level declared/officer-confirmed PEP state.
-
             db.execute("""
                 UPDATE applications SET
                     status='submitted', submitted_at=datetime('now'),
@@ -8679,6 +9267,50 @@ class SubmitApplicationHandler(BaseHandler):
                   risk.get("elevation_reason_text", ""),
                   real_id))
 
+            try:
+                from routing_actuator import (
+                    apply_routing_decision,
+                    SOURCE_PRESCREENING_SUBMIT,
+                )
+
+                routing_app = db.execute("SELECT * FROM applications WHERE id = ?", (real_id,)).fetchone()
+                _routing_outcome = apply_routing_decision(
+                    db=db,
+                    app_row=dict(routing_app) if routing_app else app,
+                    risk_dict=risk,
+                    screening_summary={},
+                    user=user,
+                    client_ip=client_ip,
+                    source=SOURCE_PRESCREENING_SUBMIT,
+                    defer_enhanced_requirements=True,
+                )
+                if str(_routing_outcome.get("route") or "").lower() == "edd":
+                    risk["lane"] = "EDD"
+                    risk = _apply_edd_route_risk_floor(risk, _routing_outcome)
+                    db.execute("""
+                        UPDATE applications SET
+                            risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                            risk_computed_at=?, risk_config_version=?,
+                            risk_escalations=?,
+                            base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
+                            updated_at=datetime('now')
+                        WHERE id=?
+                    """, (
+                        risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"],
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        str(risk.get("_config_version", "")),
+                        json.dumps(risk.get("escalations", [])),
+                        risk.get("base_risk_level", risk["level"]),
+                        risk.get("final_risk_level", risk["level"]),
+                        risk.get("elevation_reason_text", ""),
+                        real_id,
+                    ))
+            except Exception as _routing_err:
+                logger.warning(
+                    'apply_routing_decision (prescreening_submit) failed during async submit: %s',
+                    _routing_err,
+                )
+
             # After pre-screening: ALL risk levels see pricing first
             # Routing to pre-approval (HIGH/VERY_HIGH) happens after pricing acceptance
             db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
@@ -8692,8 +9324,42 @@ class SubmitApplicationHandler(BaseHandler):
             prescreening["pricing"]["final_risk_level"] = risk.get("final_risk_level", risk["level"])
             prescreening["pricing"]["base_risk_level"] = risk.get("base_risk_level", risk["level"])
             prescreening["pricing"]["elevation_reason_text"] = risk.get("elevation_reason_text", "")
+
+            job_result = enqueue_screening_job(
+                db,
+                dict(app),
+                user,
+                submit_attempt_id=submit_attempt_id,
+                provider="complyadvantage",
+                request_id=self.request.headers.get("X-Request-ID", "") if hasattr(self, "request") else "",
+                ip_address=client_ip,
+                metadata={
+                    "application_ref": app.get("ref", ""),
+                    "submitted_status": "pricing_review",
+                    "risk_level": risk.get("level"),
+                    "final_risk_level": risk.get("final_risk_level", risk.get("level")),
+                    "onboarding_lane": risk.get("lane"),
+                },
+            )
+            screening_job = job_result.get("job") if isinstance(job_result, dict) else None
+            screening_report = _build_async_screening_report(
+                app,
+                scoring_input,
+                directors,
+                ubos,
+                intermediaries,
+                submit_attempt_id=submit_attempt_id,
+                job=screening_job,
+                status=SCREENING_JOB_PENDING,
+                state="pending_provider",
+                evidence_quality="partial",
+            )
+            prescreening["screening_report"] = screening_report
+            prescreening["screening_async"] = screening_report.get("screening_async", {})
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                        (json.dumps(prescreening, default=str), real_id))
+            if not store_screening_mode(db, real_id, "pending"):
+                logger.warning("store_screening_mode returned False: app_id=%s mode=pending", real_id)
 
             # HIGH/EDD enhanced requirements are generated after the durable
             # submit commit. They are not needed to tell the client that the
@@ -8709,7 +9375,7 @@ class SubmitApplicationHandler(BaseHandler):
                 or bool((_routing_outcome or {}).get("enhanced_requirements_deferred"))
             )
 
-            flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
+            flags_summary = ", Screening: pending background provider check"
             elevation_summary = (
                 f", Floor/Elevation: {risk.get('elevation_reason_text')}"
                 if risk.get("elevation_reason_text")
@@ -8725,6 +9391,8 @@ class SubmitApplicationHandler(BaseHandler):
                 "risk_escalations": risk.get("escalations", []),
                 "elevation_reason_text": risk.get("elevation_reason_text", ""),
                 "onboarding_lane": risk["lane"],
+                "screening_async": screening_report.get("screening_async", {}),
+                "screening_job_created": bool((job_result or {}).get("created")),
             }
             self.log_audit(
                 user,
@@ -8736,11 +9404,34 @@ class SubmitApplicationHandler(BaseHandler):
                 after_state=_after,
                 commit=False,
             )
+            self.log_audit(
+                user,
+                "Screening Job Enqueued",
+                app["ref"],
+                json.dumps({
+                    "event": "async_screening_job_enqueued",
+                    "application_id": real_id,
+                    "application_ref": app["ref"],
+                    "submit_attempt_id": submit_attempt_id,
+                    "job_id": (screening_job or {}).get("id"),
+                    "job_created": bool((job_result or {}).get("created")),
+                    "provider": "complyadvantage",
+                    "status": "pending",
+                }, default=str, sort_keys=True),
+                db=db,
+                after_state={"screening_job": screening_job},
+                commit=False,
+            )
             db.commit()
-            _log_submit_timing(submit_timing, "db_commit_end", requires_enhanced_generation=requires_enhanced_generation)
+            _log_submit_timing(
+                submit_timing,
+                "db_commit_end",
+                requires_enhanced_generation=requires_enhanced_generation,
+                screening_job_id=(screening_job or {}).get("id"),
+            )
         except Exception as db_exc:
             logger.error(
-                "DB write failed after screening: app_id=%s ref=%s user=%s stage=post_screening_db_write error=%s",
+                "DB write failed during async submit: app_id=%s ref=%s user=%s stage=async_submit_db_write error=%s",
                 real_id, app.get("ref", ""), user.get("sub", ""), str(db_exc)[:300],
                 exc_info=True,
             )
@@ -8749,7 +9440,7 @@ class SubmitApplicationHandler(BaseHandler):
             except Exception:
                 pass
             return self.error(
-                "Failed to save screening results. Please retry your submission.", 500
+                "Failed to save submitted application state. Please retry your submission.", 500
             )
 
         # Notify compliance after durable state is committed. Notification
@@ -8778,31 +9469,7 @@ class SubmitApplicationHandler(BaseHandler):
             _log_submit_timing(submit_timing, "notification_schedule_end")
 
         result_status = "pricing_review"
-        payload = {
-            "ref": app["ref"],
-            "risk_score": risk["score"],
-            "risk_level": risk["level"],
-            "base_risk_score": risk.get("base_risk_score"),
-            "base_risk_level": risk.get("base_risk_level", risk["level"]),
-            "final_risk_level": risk.get("final_risk_level", risk["level"]),
-            "risk_escalations": risk.get("escalations", []),
-            "elevation_reason_text": risk.get("elevation_reason_text", ""),
-            "risk_dimensions": risk["dimensions"],
-            "onboarding_lane": risk["lane"],
-            "status": result_status,
-            "requires_pre_approval": risk["level"] in ("HIGH", "VERY_HIGH") or risk.get("lane") == "EDD",
-            "pricing": pricing,
-            "screening": {
-                "total_hits": screening_report["total_hits"],
-                "flags": screening_report["overall_flags"],
-                "degraded_sources": screening_report.get("degraded_sources", []),
-                "api_sources": {
-                    "sanctions": screening_report.get("director_screenings", [{}])[0].get("screening", {}).get("source", "none") if screening_report.get("director_screenings") else "none",
-                    "corporate_registry": screening_report["company_screening"].get("source", "none"),
-                    "ip_geolocation": screening_report["ip_geolocation"].get("source", "none") if screening_report.get("ip_geolocation") else "none",
-                }
-            }
-        }
+        payload = _submit_response_payload(app, prescreening, risk, pricing, screening_report, result_status=result_status)
         _log_submit_timing(submit_timing, "response_write_start")
         self.success(payload)
         _log_submit_timing(submit_timing, "response_write_end", status=result_status)
