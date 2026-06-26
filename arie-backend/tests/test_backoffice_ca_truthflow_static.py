@@ -268,7 +268,7 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     categories_region = _function_region(html, "evidenceCategories", "evidenceGroupedIdentifiers")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
 
-    assert "Unclassified Provider Risk" in categories_region
+    assert "Provider risk match - review context" in categories_region
     assert "Potential provider match" not in categories_region
     assert "Unclassified provider hit" not in categories_region
     assert "key === 'other'" in category_region
@@ -325,10 +325,10 @@ def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
     assert "function evidenceReviewRationale" in html
     assert "return 'PEP';" in category_label_region
     assert "return 'adverse media';" in category_label_region
-    assert "return 'unclassified provider risk';" in category_label_region
+    assert "return 'provider risk match';" in category_label_region
     assert "found a potential PEP match" in rationale_region
     assert "found potential adverse media" in rationale_region
-    assert "returned an unresolved unclassified provider risk" in rationale_region
+    assert "returned provider risk context" in rationale_region
     assert "var reviewRationale = evidenceReviewRationale(provider, categories, hit, matchedName);" in drawer_region
     assert "escapeHtml(reviewRationale)" in drawer_region
 
