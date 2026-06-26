@@ -380,6 +380,66 @@ class TestPeriodicReviewAttestationHandlers(_PeriodicReviewAttestationBase):
         assert detail["periodic_review_id"] == self._owned_review_id
         assert detail["submitted_at"] == body["attestation"]["submitted_at"]
 
+    def test_completed_review_rejects_portal_attestation_mutations_without_mutation(self):
+        self._conn.execute(
+            "UPDATE periodic_reviews SET status = 'completed' WHERE id = ?",
+            (self._owned_review_id,),
+        )
+        self._conn.commit()
+        before = dict(self._conn.execute(
+            "SELECT status, client_attestation_status, client_attestation_payload, "
+            "client_attestation_saved_at, client_attestation_submitted_at, "
+            "client_attestation_submitted_by FROM periodic_reviews WHERE id = ?",
+            (self._owned_review_id,),
+        ).fetchone())
+        audit_before = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log"
+        ).fetchone()["c"]
+
+        draft_resp = self._post(
+            "/api/portal/applications/app-owned/periodic-review/save-draft",
+            {
+                "answers": {
+                    "directors_changed": {"answer": "no", "comment": ""},
+                    "shareholders_changed": {"answer": "no", "comment": ""},
+                },
+                "declaration_accepted": False,
+            },
+            self.client_token,
+        )
+        assert draft_resp.code == 409
+
+        submit_resp = self._post(
+            "/api/portal/applications/app-owned/periodic-review/submit",
+            {
+                "answers": {
+                    "directors_changed": {"answer": "no", "comment": ""},
+                    "shareholders_changed": {"answer": "no", "comment": ""},
+                    "ubos_changed": {"answer": "no", "comment": ""},
+                    "business_activity_changed": {"answer": "no", "comment": ""},
+                    "jurisdictions_changed": {"answer": "no", "comment": ""},
+                    "transaction_volume_changed": {"answer": "no", "comment": ""},
+                    "licence_regulatory_status_changed": {"answer": "no", "comment": ""},
+                    "company_contact_details_correct": {"answer": "yes", "comment": ""},
+                },
+                "declaration_accepted": True,
+            },
+            self.client_token,
+        )
+        assert submit_resp.code == 409
+
+        after = dict(self._conn.execute(
+            "SELECT status, client_attestation_status, client_attestation_payload, "
+            "client_attestation_saved_at, client_attestation_submitted_at, "
+            "client_attestation_submitted_by FROM periodic_reviews WHERE id = ?",
+            (self._owned_review_id,),
+        ).fetchone())
+        assert after == before
+        audit_after = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log"
+        ).fetchone()["c"]
+        assert audit_after == audit_before
+
 
 def test_prepare_attestation_submission_update_serializes_datetime_saved_at_from_existing_draft():
     draft_ts = datetime(2026, 6, 5, 14, 34, 15, 394102, tzinfo=timezone.utc)

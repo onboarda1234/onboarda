@@ -34188,6 +34188,27 @@ def _load_portal_owned_application_and_active_review(handler, db, user, app_id):
     return app, dict(review), projection
 
 
+def _load_portal_owned_application_and_review_for_attestation_mutation(handler, db, user, app_id):
+    app, review, projection = _load_portal_owned_application_and_active_review(handler, db, user, app_id)
+    if review is not None:
+        return app, review, projection
+    if not app:
+        return app, review, projection
+    terminal_review = db.execute(
+        """
+        SELECT * FROM periodic_reviews
+         WHERE application_id = ?
+           AND LOWER(COALESCE(status, '')) IN ('completed', 'cancelled', 'canceled')
+         ORDER BY id DESC
+         LIMIT 1
+        """,
+        (app["id"],),
+    ).fetchone()
+    if terminal_review:
+        return app, dict(terminal_review), None
+    return app, review, projection
+
+
 class PortalApplicationPeriodicReviewAttestationHandler(BaseHandler):
     """GET /api/portal/applications/:id/periodic-review."""
 
@@ -34220,14 +34241,16 @@ class PortalApplicationPeriodicReviewAttestationDraftHandler(BaseHandler):
 
         db = get_db()
         try:
-            app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
-            if not app or not review or not projection:
+            app, review, projection = _load_portal_owned_application_and_review_for_attestation_mutation(self, db, user, app_id)
+            if not app or not review:
                 return
             import periodic_review_engine as pre
             try:
                 pre.require_review_not_terminal(review, action="attestation updated")
             except pre.ReviewClosedError as exc:
                 return self.error(str(exc), 409)
+            if not projection:
+                return self.error("No active periodic review task found", 404)
             before_snapshot = _attestation_snapshot_from_review(review)
             data = self.get_json() or {}
             try:
@@ -34313,14 +34336,16 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
 
         db = get_db()
         try:
-            app, review, projection = _load_portal_owned_application_and_active_review(self, db, user, app_id)
-            if not app or not review or not projection:
+            app, review, projection = _load_portal_owned_application_and_review_for_attestation_mutation(self, db, user, app_id)
+            if not app or not review:
                 return
             import periodic_review_engine as pre
             try:
                 pre.require_review_not_terminal(review, action="attestation submitted")
             except pre.ReviewClosedError as exc:
                 return self.error(str(exc), 409)
+            if not projection:
+                return self.error("No active periodic review task found", 404)
             before_snapshot = _attestation_snapshot_from_review(review)
             data = self.get_json() or {}
             try:
