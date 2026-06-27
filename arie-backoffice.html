@@ -18384,24 +18384,97 @@ function periodicReviewBaselineRiskDefaultMonths(reviewDetail) {
   return { LOW: 36, MEDIUM: 24, HIGH: 12, VERY_HIGH: 6 }[risk] || 24;
 }
 
+function periodicReviewBaselineDateOnly(value) {
+  var text = String(value || '').trim();
+  if (!text) return '';
+  return text.split('T')[0].split(' ')[0];
+}
+
+function periodicReviewBaselineStatus(detail) {
+  return String((detail && (detail.statusRaw || detail.status_raw || detail.status)) || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function periodicReviewBaselineIsApproved(detail) {
+  return ['approved', 'onboarded', 'active', 'live'].indexOf(periodicReviewBaselineStatus(detail)) >= 0;
+}
+
+function periodicReviewBaselineIsRejected(detail) {
+  return ['rejected', 'declined'].indexOf(periodicReviewBaselineStatus(detail)) >= 0;
+}
+
+function periodicReviewBaselineBackendDue(detail) {
+  var baseline = (detail && detail.periodic_review_baseline) || {};
+  return periodicReviewBaselineDateOnly(
+    baseline.next_review_due ||
+    baseline.next_review_date ||
+    baseline.due_date ||
+    (detail && detail.periodic_review_next_review_due)
+  );
+}
+
+function periodicReviewBaselineApprovalAnchor(detail) {
+  var baseline = (detail && detail.periodic_review_baseline) || {};
+  return periodicReviewBaselineDateOnly(
+    (detail && (
+      detail.first_approved_at ||
+      detail.approved_at ||
+      detail.decided_at ||
+      detail.completed_at
+    )) ||
+    baseline.anchor_date ||
+    baseline.date
+  );
+}
+
+function periodicReviewBaselineCadenceMonths(detail) {
+  var baseline = (detail && detail.periodic_review_baseline) || {};
+  var months = Number(
+    baseline.derived_cadence_months ||
+    baseline.cadence_months ||
+    baseline.frequency_months ||
+    baseline.baseline_cadence_months
+  );
+  return months || periodicReviewBaselineRiskDefaultMonths(detail);
+}
+
+function periodicReviewBaselineNoScheduleText(detail) {
+  if (periodicReviewBaselineIsRejected(detail)) return 'No review scheduled';
+  if (periodicReviewBaselineIsApproved(detail)) return 'Approval date missing - cannot calculate next review due';
+  return 'Scheduled after onboarding approval';
+}
+
+function periodicReviewBaselineDisabledMessage(detail, eligibility) {
+  if (periodicReviewBaselineIsRejected(detail)) return 'No review scheduled for rejected applications.';
+  if (periodicReviewBaselineIsApproved(detail) && !periodicReviewBaselineBackendDue(detail) && !periodicReviewBaselineApprovalAnchor(detail)) {
+    return 'Approval date missing - cannot calculate next review due.';
+  }
+  return (eligibility && eligibility.message) || 'Periodic review baseline can be configured after onboarding approval.';
+}
+
+function periodicReviewBaselinePreviewForState(reviewDetail, legacyFile, dateValue) {
+  legacyFile = String(legacyFile || 'no').toLowerCase();
+  dateValue = periodicReviewBaselineDateOnly(dateValue);
+  if (legacyFile === 'n/a') return { value: '', placeholder: 'Not applicable - no periodic-review baseline will be scheduled' };
+  if (legacyFile === 'yes' && !dateValue) return { value: '', placeholder: 'Last review date required' };
+  var months = periodicReviewBaselineCadenceMonths(reviewDetail);
+  if (legacyFile === 'yes') {
+    return { value: periodicReviewBaselineAddMonths(dateValue, months), placeholder: '' };
+  }
+  if (periodicReviewBaselineIsRejected(reviewDetail)) return { value: '', placeholder: periodicReviewBaselineNoScheduleText(reviewDetail) };
+  var backendDue = periodicReviewBaselineBackendDue(reviewDetail);
+  if (backendDue) return { value: backendDue, placeholder: '' };
+  var anchorDate = periodicReviewBaselineApprovalAnchor(reviewDetail);
+  if (anchorDate) return { value: periodicReviewBaselineAddMonths(anchorDate, months), placeholder: '' };
+  return { value: '', placeholder: periodicReviewBaselineNoScheduleText(reviewDetail) };
+}
+
 function periodicReviewBaselinePreview(reviewId) {
   var legacyEl = document.getElementById('overview-periodic-review-baseline-legacy-' + reviewId);
   var dateEl = document.getElementById('overview-periodic-review-baseline-last-review-' + reviewId);
   var reviewDetail = window._overviewPeriodicReviewBaselineDetail || null;
-  var eligibility = (reviewDetail && reviewDetail.periodic_review_baseline_eligibility) || {};
   var legacyFile = legacyEl ? legacyEl.value : 'no';
   var dateValue = dateEl ? dateEl.value : '';
-  if (legacyFile === 'n/a') return { value: '', placeholder: 'Not applicable - no periodic-review baseline will be scheduled' };
-  if (legacyFile === 'yes' && !dateValue) return { value: '', placeholder: 'Last review date required' };
-  var anchorDate = legacyFile === 'yes'
-    ? dateValue
-    : String(((reviewDetail || {}).periodic_review_baseline || {}).anchor_date || '');
-  if (!anchorDate) {
-    if (eligibility && eligibility.enabled === false) return { value: '', placeholder: eligibility.message || 'Awaiting onboarding approval' };
-    return { value: '', placeholder: 'Awaiting onboarding approval' };
-  }
-  var months = periodicReviewBaselineRiskDefaultMonths(reviewDetail);
-  return { value: periodicReviewBaselineAddMonths(anchorDate, months), placeholder: '' };
+  return periodicReviewBaselinePreviewForState(reviewDetail, legacyFile, dateValue);
 }
 
 function refreshOverviewPeriodicReviewBaselinePreview(reviewId) {
@@ -18444,10 +18517,12 @@ function renderOverviewPeriodicReviewBaseline(detail) {
   var baselineDate = baseline.last_review_date || '';
   var note = baseline.officer_note || '';
   var cadenceLabel = baseline.derived_cadence_label || ((baseline.derived_cadence_months || 'Risk') + ' months');
-  var nextDue = baseline.next_review_due || (canEdit ? 'Not scheduled yet' : (eligibility.message || 'Awaiting onboarding approval'));
+  var nextPreview = periodicReviewBaselinePreviewForState(detail, legacyFile, baselineDate);
+  var nextDue = nextPreview.value || nextPreview.placeholder || 'Not scheduled yet';
+  var disabledMessage = periodicReviewBaselineDisabledMessage(detail, eligibility);
   container.innerHTML =
     '<div class="periodic-baseline-compact">' +
-      (!canEdit ? '<div style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);line-height:1.35;">' + escapeHtml(String(eligibility.message || 'Periodic review baseline can be configured after onboarding approval.')) + '</div>' : '') +
+      (!canEdit ? '<div style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);line-height:1.35;">' + escapeHtml(String(disabledMessage)) + '</div>' : '') +
       '<div class="periodic-baseline-row">' +
         '<div class="periodic-baseline-field"><div class="periodic-baseline-label">Is this a legacy file?</div><select id="overview-periodic-review-baseline-legacy-' + detail.id + '" class="form-select" onchange="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + '>' + periodicReviewBaselineLegacyOptions(legacyFile) + '</select></div>' +
         '<div class="periodic-baseline-field" id="overview-periodic-review-baseline-last-review-wrap-' + detail.id + '"><div class="periodic-baseline-label">Last review date</div><input id="overview-periodic-review-baseline-last-review-' + detail.id + '" class="form-input" type="date" value="' + escapeHtml(String(baselineDate || '')) + '" oninput="refreshOverviewPeriodicReviewBaselinePreview(\'' + detail.id + '\')"' + disabled + ' /></div>' +
