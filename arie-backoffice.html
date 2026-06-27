@@ -179,6 +179,10 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .badge.edd { background:rgba(124,58,237,0.1); color:#7c3aed; }
 .badge.sar-draft { background:rgba(251,146,60,0.1); color:#fb923c; }
 .badge.sar-filed { background:rgba(239,68,68,0.1); color:#ef4444; }
+.fixture-record-toggle { display:inline-flex; align-items:center; gap:7px; border:1px solid rgba(217,119,6,0.28); border-radius:999px; padding:5px 10px; background:rgba(217,119,6,0.08); color:#92400e; font-size:11px; font-weight:800; white-space:nowrap; }
+.fixture-record-toggle input { margin:0; accent-color:#d97706; }
+.fixture-record-badge { display:inline-flex; align-items:center; width:max-content; max-width:100%; margin-top:4px; padding:2px 7px; border-radius:999px; border:1px solid rgba(217,119,6,0.28); background:rgba(217,119,6,0.08); color:#92400e; font-size:10px; font-weight:850; letter-spacing:0.01em; white-space:nowrap; vertical-align:middle; }
+.fixture-record-summary { display:inline-flex; align-items:center; gap:6px; color:#92400e; font-size:11px; font-weight:700; }
 
 /* ── Buttons ── */
 .btn { padding:9px 18px; border-radius:var(--radius-sm); font-size:13px; font-weight:600; cursor:pointer; border:none; transition:all 0.2s var(--ease); display:inline-flex; align-items:center; gap:6px; }
@@ -1239,6 +1243,10 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
   <div class="topbar-actions">
     <input type="text" class="topbar-search" placeholder="Search applications, clients..." id="global-search" oninput="handleGlobalSearch(this.value)" />
+    <label class="fixture-record-toggle" id="fixture-record-toggle-wrap" style="display:none;" title="Internal QA visibility toggle">
+      <input type="checkbox" id="show-fixture-records-toggle" onchange="setShowTestSmokeRecords(this.checked)" />
+      <span>Show test/smoke records</span>
+    </label>
     <button class="theme-toggle" id="theme-toggle" onclick="toggleDarkMode()" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
     <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;">0</span></button>
     <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="login-as-select" onchange="switchUser(this.value)">
@@ -1517,6 +1525,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm" id="tab-alerts" onclick="switchDetailTab('alerts')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Alerts</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
+  <div id="detail-fixture-record-label" style="display:none;margin:-6px 0 14px;"></div>
 
   <!-- Tab: Overview (full width) -->
   <div id="detail-tab-overview">
@@ -3730,6 +3739,142 @@ function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 
+var TEST_SMOKE_RECORD_TOGGLE_STORAGE_KEY = 'regmind.backoffice.showTestSmokeRecords';
+var SHOW_TEST_SMOKE_RECORDS = (function() {
+  try { return window.sessionStorage && window.sessionStorage.getItem(TEST_SMOKE_RECORD_TOGGLE_STORAGE_KEY) === 'true'; }
+  catch (e) { return false; }
+})();
+var TEST_SMOKE_REF_PATTERNS = [
+  /^f1xed/i,
+  /\be2e\b/i,
+  /\bsmoke\b/i,
+  /prs-a1/i,
+  /\bprpr\b/i,
+  /cme2e/i,
+  /pr310/i,
+  /^arf-2026-9000/i
+];
+var TEST_SMOKE_TEXT_PATTERNS = [
+  /\be2e\b/i,
+  /\bsmoke\b/i,
+  /\bfixture\b/i,
+  /\bsafe staging\b/i,
+  /\bregmind full audit\b/i,
+  /\bportal sidebar closure\b/i,
+  /\bprs a1\b/i,
+  /\bcme2e\b/i,
+  /@example\.test/i,
+  /@onboarda\.internal/i,
+  /browser-smoke/i,
+  /\baudit-/i
+];
+
+function fixtureTruthy(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') return ['1','true','yes','y'].indexOf(value.trim().toLowerCase()) >= 0;
+  return false;
+}
+
+function canToggleTestSmokeRecords() {
+  var role = String((currentUser && currentUser.role) || (BO_AUTH_USER && BO_AUTH_USER.role) || '').toLowerCase();
+  return role === 'admin' || role === 'sco';
+}
+
+function showTestSmokeRecordsEnabled() {
+  return !!(canToggleTestSmokeRecords() && SHOW_TEST_SMOKE_RECORDS);
+}
+
+function refreshTestSmokeRecordToggleControl() {
+  var wrap = document.getElementById('fixture-record-toggle-wrap');
+  var input = document.getElementById('show-fixture-records-toggle');
+  var allowed = canToggleTestSmokeRecords();
+  if (wrap) wrap.style.display = allowed ? 'inline-flex' : 'none';
+  if (!allowed) SHOW_TEST_SMOKE_RECORDS = false;
+  if (input) input.checked = showTestSmokeRecordsEnabled();
+}
+
+function appendFixtureVisibilityParam(path) {
+  if (!showTestSmokeRecordsEnabled()) return path;
+  var joiner = path.indexOf('?') >= 0 ? (/[?&]$/.test(path) ? '' : '&') : '?';
+  return path + joiner + 'show_fixtures=true';
+}
+
+function activeBackofficeViewName() {
+  var active = document.querySelector('.view.active');
+  return active && active.id ? active.id.replace(/^view-/, '') : '';
+}
+
+function setShowTestSmokeRecords(checked) {
+  SHOW_TEST_SMOKE_RECORDS = !!checked && canToggleTestSmokeRecords();
+  try {
+    if (window.sessionStorage) window.sessionStorage.setItem(TEST_SMOKE_RECORD_TOGGLE_STORAGE_KEY, SHOW_TEST_SMOKE_RECORDS ? 'true' : 'false');
+  } catch (e) { /* storage may be unavailable */ }
+  if (typeof refreshTestSmokeRecordToggleControl === 'function') refreshTestSmokeRecordToggleControl();
+  APPLICATIONS_LOAD_STATE = 'idle';
+  APPLICATIONS_LAST_QUERY_KEY = '';
+  APPLICATIONS_REQUEST_QUERY_KEY = '';
+  var viewName = activeBackofficeViewName();
+  if (viewName === 'dashboard') {
+    refreshDashboardData().then(function() { renderDashboardRecent(); });
+  }
+  if (viewName === 'applications') {
+    filterApplications();
+  }
+  if (viewName === 'periodic-review-signals') {
+    MONITORING_DATA_STATE = 'idle';
+    PERIODIC_REVIEWS = [];
+    ensureMonitoringDataLoaded({ force: true }).then(function() { renderPeriodicReviewQueue(); });
+  }
+  if (viewName === 'change-mgmt') {
+    loadChangeManagementWorkspace({ force: true });
+  }
+  if (currentApp && typeof renderAuthoritativeAppDetail === 'function' && viewName === 'app-detail') {
+    renderAuthoritativeAppDetail(currentApp, {});
+  }
+  showToast(SHOW_TEST_SMOKE_RECORDS ? 'Showing test/smoke records.' : 'Showing pilot records only.');
+}
+
+function fixtureRecordInfo(record) {
+  record = record || {};
+  var projection = record.projection || {};
+  var raw = record.raw || {};
+  var flagCandidates = [
+    record.isFixture, record.is_fixture, record.fixture, record.is_test_record,
+    projection.isFixture, projection.is_fixture,
+    raw.isFixture, raw.is_fixture, raw.fixture
+  ];
+  if (flagCandidates.some(fixtureTruthy)) return { isFixture: true, label: 'Test / Smoke' };
+  var refValues = [
+    record.id, record.applicationId, record.application_id, record.ref, record.application_ref,
+    record.reviewReference, record.review_reference, projection.application_id, projection.application_ref,
+    raw.application_id, raw.application_ref, raw.id
+  ].filter(Boolean).map(String);
+  if (refValues.some(function(value) { return TEST_SMOKE_REF_PATTERNS.some(function(pattern) { return pattern.test(value); }); })) {
+    return { isFixture: true, label: 'Test / Smoke' };
+  }
+  var textValues = [
+    record.company, record.company_name, record.client, record.client_name, record.primary,
+    record.secondary, record.email, record.source, record.source_reference, record.summary,
+    record.reason, record.trigger, projection.client_name, raw.company_name, raw.client_name,
+    raw.email, raw.summary, raw.source_reference
+  ].filter(Boolean).map(String);
+  if (textValues.some(function(value) { return TEST_SMOKE_TEXT_PATTERNS.some(function(pattern) { return pattern.test(value); }); })) {
+    return { isFixture: true, label: 'Test / Smoke' };
+  }
+  return { isFixture: false, label: '' };
+}
+
+function fixtureRecordBadgeHtml(record) {
+  var info = fixtureRecordInfo(record);
+  return info.isFixture ? '<span class="fixture-record-badge">' + escapeHtml(info.label || 'Test / Smoke') + '</span>' : '';
+}
+
+function looksLikeTestSmokeRecordSearch(query) {
+  var text = String(query || '').trim();
+  if (!text) return false;
+  return TEST_SMOKE_REF_PATTERNS.concat(TEST_SMOKE_TEXT_PATTERNS).some(function(pattern) { return pattern.test(text); });
+}
+
 // ═══════════════════════════════════════════════════════════
 // LINE-BY-LINE SUB-CRITERIA RISK COMPUTATION ENGINE
 // Derives every sub-criterion score deterministically from application data
@@ -4262,6 +4407,7 @@ function setBoAuth(token, user) {
       status: user.status || 'active'
     };
   }
+  if (typeof refreshTestSmokeRecordToggleControl === 'function') refreshTestSmokeRecordToggleControl();
   // Auth token kept in memory only; httpOnly session cookie set by server
 }
 
@@ -4287,6 +4433,7 @@ function syncCurrentUserUI() {
     avatarEl.textContent = avatarSource.split(/\s+/).filter(Boolean).map(function(part) { return part.charAt(0); }).join('').slice(0, 3).toUpperCase() || 'SU';
   }
   setAuthenticatedBodyState(true, user.role || 'admin');
+  refreshTestSmokeRecordToggleControl();
 }
 
 function resetBackofficeSessionData() {
@@ -4634,6 +4781,7 @@ function reviewTriggerText(raw, payload) {
 function normalizePeriodicReview(raw) {
   var projection = raw.projection || {};
   var status = reviewStatusFromRaw(raw || {});
+  var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(raw || {}) : { isFixture: false, label: '' };
   var reviewId = projection.review_id || raw.id;
   var triggerSource = projection.trigger_source || raw.trigger_source || raw.trigger_type || '';
   var triggerSourceLabel = projection.trigger_source_label || raw.trigger_source_label || (triggerSource ? String(triggerSource).replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); }) : 'Periodic review');
@@ -4681,6 +4829,8 @@ function normalizePeriodicReview(raw) {
     clientActionRequiredLabel: notificationSummary.client_action_required_label || projection.client_action_required_label || raw.client_action_required_label || '',
     primaryActionLabel: projection.primary_action_label || raw.primary_action_label || 'Open review case',
     canTakeAction: projection.can_take_action !== false && raw.can_take_action !== false,
+    isFixture: fixtureInfo.isFixture,
+    fixtureLabel: fixtureInfo.label,
     fixture_payload: status.payload
   };
 }
@@ -4703,10 +4853,12 @@ function mergePeriodicReviewRowsInto(target, rows) {
 
 async function loadPeriodicReviewQueueRows(options) {
   var rows = [];
-  var reviewsResp = await boApiCall('GET', '/monitoring/reviews', null, options);
+  var reviewsPath = typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam('/monitoring/reviews') : '/monitoring/reviews';
+  var reviewsResp = await boApiCall('GET', reviewsPath, null, options);
   mergePeriodicReviewRowsInto(rows, reviewsResp.reviews || []);
   try {
-    var heldResp = await boApiCall('GET', '/monitoring/reviews?status=completion_pending_memo', null, options);
+    var heldPath = typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam('/monitoring/reviews?status=completion_pending_memo') : '/monitoring/reviews?status=completion_pending_memo';
+    var heldResp = await boApiCall('GET', heldPath, null, options);
     mergePeriodicReviewRowsInto(rows, heldResp.reviews || []);
   } catch (e) {
     console.warn('Could not load pending-memo periodic reviews:', e);
@@ -4728,7 +4880,8 @@ async function onPeriodicReviewStatusFilterChange(value) {
   var needsCompleted = (v === 'completed' || v === '');
   if (needsCompleted && !PERIODIC_REVIEWS_COMPLETED_LOADED) {
     try {
-      var resp = await boApiCall('GET', '/monitoring/reviews?status=completed', null,
+      var completedPath = typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam('/monitoring/reviews?status=completed') : '/monitoring/reviews?status=completed';
+      var resp = await boApiCall('GET', completedPath, null,
         { suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
       mergePeriodicReviewRowsInto(PERIODIC_REVIEWS, resp.reviews || []);
       PERIODIC_REVIEWS_COMPLETED_LOADED = true;
@@ -4782,6 +4935,7 @@ function mapApplicationFromApi(a) {
   var dims = {};
   try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
   var riskState = buildRiskDisplayState(a);
+  var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(a || {}) : { isFixture: false, label: '' };
   var backendDocuments = (a.documents || []).map(function(d) {
     return {
       id: d.id,
@@ -4819,6 +4973,8 @@ function mapApplicationFromApi(a) {
   return {
     id: a.id,
     ref: a.ref,
+    isFixture: fixtureInfo.isFixture,
+    fixtureLabel: fixtureInfo.label,
     company: a.company_name,
     sector: a.sector || 'Unknown',
     entityType: a.entity_type || '',
@@ -5132,7 +5288,8 @@ function applicationsQueryKey() {
   return JSON.stringify({
     limit: applicationsPageSize,
     offset: applicationsPageOffset,
-    filters: filters
+    filters: filters,
+    showTestSmokeRecords: typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()
   });
 }
 
@@ -5145,7 +5302,8 @@ function buildApplicationsApiPath() {
   Object.keys(filters).forEach(function(key) {
     if (filters[key]) params.set(key, filters[key]);
   });
-  return '/applications?' + params.toString();
+  var path = '/applications?' + params.toString();
+  return typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam(path) : path;
 }
 
 function mergeApplicationsIntoCache(items) {
@@ -5613,7 +5771,9 @@ function ensureRolePermissionsLoaded(options) {
 
 async function refreshDashboardData() {
   try {
-    var dashboardResp = await boApiCall('GET', '/dashboard');
+    // var dashboardResp = await boApiCall('GET', '/dashboard');
+    var dashboardPath = typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam('/dashboard') : '/dashboard';
+    var dashboardResp = await boApiCall('GET', dashboardPath);
     setDashboardStatusContract(dashboardResp);
     setDashboardData(dashboardResp);
     return true;
@@ -5768,6 +5928,7 @@ function switchUser(role) {
   if (nameEl) nameEl.textContent = currentUser.name;
   if (roleEl) roleEl.textContent = formatRoleLabel(role);
   if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
+  if (typeof refreshTestSmokeRecordToggleControl === 'function') refreshTestSmokeRecordToggleControl();
   showView('dashboard');
   showToast('Switched to ' + formatRoleLabel(role));
 }
@@ -6668,8 +6829,9 @@ function renderDashboardRecent() {
   }
   recentApps.forEach(function(app) {
     var tr = document.createElement('tr');
+    var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(app) : '';
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + fixtureBadge + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
   updateOnboardingLanes();
@@ -6695,7 +6857,8 @@ function updateDashboardStats() {
   setDashboardStatValue('dash-stat-rejected', rejectedMetric ? String(rejectedMetric.value) : (dashboardLoading ? '...' : '—'));
   setDashboardStatValue('dash-stat-edd', eddMetric ? String(eddMetric.value) : (dashboardLoading ? '...' : '—'));
   setDashboardStatValue('dash-stat-avgtime', avgMetric ? String(avgMetric.display || '—') : (dashboardLoading ? '...' : '—'));
-  setDashboardStatNote('dash-stat-total-change', totalMetric ? 'Non-fixture applications' : (dashboardLoading ? 'Loading canonical dashboard data...' : 'Canonical dashboard metrics unavailable'));
+  var fixtureVisibilityEnabled = typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled();
+  setDashboardStatNote('dash-stat-total-change', totalMetric ? (fixtureVisibilityEnabled ? 'Includes test/smoke records' : 'Pilot records only; test records hidden') : (dashboardLoading ? 'Loading canonical dashboard data...' : 'Canonical dashboard metrics unavailable'));
   setDashboardStatNote('dash-stat-early-stage-change', inProgressMetric ? 'Canonical pending status bucket' : 'Canonical dashboard metrics unavailable');
   setDashboardStatNote('dash-stat-approved-change', approvedMetric ? 'Approved by decided date this month' : (dashboardLoading ? 'Loading canonical dashboard data...' : 'Canonical dashboard metrics unavailable'));
   setDashboardStatNote('dash-stat-rejected-change', rejectedMetric ? 'Terminal rejected / declined applications' : (dashboardLoading ? 'Loading canonical dashboard data...' : 'Canonical dashboard metrics unavailable'));
@@ -7885,6 +8048,19 @@ function openApplicationsEnhancedReview(filterValue) {
   }
 }
 
+function applicationsEmptyStateMessage() {
+  var query = getApplicationsSearchText();
+  var fixtureVisibilityEnabled = typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled();
+  var canToggleFixtureRecords = typeof canToggleTestSmokeRecords === 'function' && canToggleTestSmokeRecords();
+  if (!fixtureVisibilityEnabled && canToggleFixtureRecords && query) {
+    var looksLikeFixture = typeof looksLikeTestSmokeRecordSearch === 'function' && looksLikeTestSmokeRecordSearch(query);
+    return looksLikeFixture
+      ? 'This looks like a test/smoke record. Turn on "Show test/smoke records" to view it.'
+      : 'No pilot application matches. Test/smoke records are hidden by default; turn on "Show test/smoke records" if you are looking for an internal fixture.';
+  }
+  return 'No applications match the current filters.';
+}
+
 function renderApplications() {
   var tbody = document.getElementById('applications-body');
   var summary = document.getElementById('applications-pagination-summary');
@@ -7913,13 +8089,14 @@ function renderApplications() {
   tbody.innerHTML = '';
   if (!APPLICATIONS_LIST_ROWS.length) {
     var empty = document.createElement('tr');
-    empty.innerHTML = '<td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">No applications match the current filters.</td>';
+    empty.innerHTML = '<td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">' + escapeHtml(applicationsEmptyStateMessage()) + '</td>';
     tbody.appendChild(empty);
   }
   APPLICATIONS_LIST_ROWS.forEach(function(app) {
     var tr = document.createElement('tr');
+    var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(app) : '';
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(app)) + '</td><td style="font-size:12px;">' + escapeHtml(applicationReviewRouteLabel(app)) + '</td><td>' + applicationEnhancedStatusBadge(app) + '</td><td style="font-size:12px;max-width:210px;white-space:normal;">' + escapeHtml(applicationEnhancedNextAction(app)) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + fixtureBadge + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(app)) + '</td><td style="font-size:12px;">' + escapeHtml(applicationReviewRouteLabel(app)) + '</td><td>' + applicationEnhancedStatusBadge(app) + '</td><td style="font-size:12px;max-width:210px;white-space:normal;">' + escapeHtml(applicationEnhancedNextAction(app)) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
   updateApplicationsPagination(totalPages);
@@ -7948,8 +8125,8 @@ function updateApplicationsPagination(totalPages) {
   var end = returned ? (applicationsPageOffset + returned) : 0;
   if (summary) {
     summary.textContent = returned
-      ? ('Showing ' + start + '-' + end + ' of ' + totalSource + ' applications')
-      : 'No applications match the current filters.';
+      ? ('Showing ' + start + '-' + end + ' of ' + totalSource + ' applications' + ((typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) ? ' including test/smoke records' : ' (test records hidden)'))
+      : applicationsEmptyStateMessage();
   }
   if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of ' + totalPages;
   if (prev) prev.disabled = applicationsCurrentPage <= 1;
@@ -10135,10 +10312,13 @@ async function fetchApplicationDetail(ref) {
     };
   });
   var riskState = buildRiskDisplayState(detail);
+  var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(detail || {}) : { isFixture: false, label: '' };
 
   return {
     id: detail.id,
     ref: detail.ref,
+    isFixture: fixtureInfo.isFixture,
+    fixtureLabel: fixtureInfo.label,
     company: detail.company_name || psData.registered_entity_name || '—',
     sector: detail.sector || psData.sector || 'Unknown',
     risk: riskState.level,
@@ -10842,7 +11022,14 @@ function renderAuthoritativeAppDetail(app, options) {
   if (detailCompanyName) detailCompanyName.textContent = app.company;
   var detailBadges = document.getElementById('detail-badges');
   if (detailBadges) {
-    detailBadges.innerHTML = riskBadgeForRecord(app) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + renderIncompleteSubmissionBadge(documentReadiness);
+    var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(app) : '';
+    detailBadges.innerHTML = riskBadgeForRecord(app) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + fixtureBadge + renderIncompleteSubmissionBadge(documentReadiness);
+  }
+  var fixtureDetailLabel = document.getElementById('detail-fixture-record-label');
+  if (fixtureDetailLabel) {
+    var fixtureDetailBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(app) : '';
+    fixtureDetailLabel.innerHTML = fixtureDetailBadge;
+    fixtureDetailLabel.style.display = fixtureDetailBadge ? 'block' : 'none';
   }
 
   document.getElementById('detail-entity-info').innerHTML =
@@ -17005,6 +17192,7 @@ function cmNormalizeRequestWorkItem(req) {
   var readiness = cmRequestReadinessMeta(req);
   var customer = cmCustomerApplicationLabel(req);
   var status = String((req && req.status) || '').toLowerCase();
+  var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(req || {}) : { isFixture: false, label: '' };
   return {
     kind: 'request',
     id: req && req.id,
@@ -17023,6 +17211,8 @@ function cmNormalizeRequestWorkItem(req) {
     actionLabel: cmRequestPrimaryActionLabel(req),
     closed: cmRequestIsClosed(status),
     blocked: (cmApprovalBlockers(req).length + cmImplementationBlockers(req).length) > 0,
+    isFixture: fixtureInfo.isFixture,
+    fixtureLabel: fixtureInfo.label,
     my: cmWorkOwnedByCurrentUser(req)
   };
 }
@@ -17032,6 +17222,7 @@ function cmNormalizeAlertWorkItem(alert) {
   var readiness = cmAlertReadinessMeta(alert);
   var customer = cmAlertCustomerApplicationLabel(alert);
   var status = String((alert && alert.status) || '').toLowerCase();
+  var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(alert || {}) : { isFixture: false, label: '' };
   return {
     kind: 'alert',
     id: alert && alert.id,
@@ -17050,6 +17241,8 @@ function cmNormalizeAlertWorkItem(alert) {
     actionLabel: cmAlertPrimaryActionLabel(alert),
     closed: cmAlertIsTerminal(status),
     blocked: status === 'escalated',
+    isFixture: fixtureInfo.isFixture,
+    fixtureLabel: fixtureInfo.label,
     my: cmWorkOwnedByCurrentUser(alert)
   };
 }
@@ -17160,11 +17353,12 @@ function cmWorkItemRowHtml(item) {
     ? 'openChangeRequestFromApplication(' + cmJsAttrArg(item.raw.converted_request_id) + ')'
     : 'cmOpenWorkItem(' + cmJsAttrArg(item.kind) + ',' + cmJsAttrArg(item.id) + ')';
   var typeLabel = item.kind === 'alert' ? 'Alert' : 'Request';
+  var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(item) : '';
   return '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' +
       '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(typeLabel) + '</div>' +
       '<div>' + escapeHtml(String(item.id || '').substring(0, 12)) + '</div>' +
     '</td>' +
-    '<td style="padding:10px 14px;min-width:180px;"><div style="font-weight:700;color:var(--text1);">' + escapeHtml(item.primary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.secondary || '') + '</div></td>' +
+    '<td style="padding:10px 14px;min-width:180px;"><div style="font-weight:700;color:var(--text1);">' + escapeHtml(item.primary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.secondary || '') + '</div>' + fixtureBadge + '</td>' +
     '<td style="padding:10px 14px;font-size:12px;">' + cmChip(item.source, item.sourceColor) + '</td>' +
     '<td style="padding:10px 14px;max-width:280px;"><div style="font-size:12px;font-weight:700;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(item.summary) + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(item.reason) + '</div></td>' +
     '<td style="padding:10px 14px;"><div style="display:grid;gap:5px;">' + cmChip(item.stage.label, item.stage.tone) + cmMaterialityBadge(item.materiality) + '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(cmStatusLabel(item.status)) + '</span></div></td>' +
@@ -17216,8 +17410,8 @@ function loadChangeManagementWorkspace(options) {
   CM_WORKSPACE_STATE.error = '';
   cmRenderWorkQueue();
   return Promise.all([
-    apiFetch('/api/change-management/requests?'),
-    apiFetch('/api/change-management/alerts'),
+    apiFetch('/api' + (typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam('/change-management/requests?') : '/change-management/requests?')),
+    apiFetch('/api' + (typeof appendFixtureVisibilityParam === 'function' ? appendFixtureVisibilityParam('/change-management/alerts') : '/change-management/alerts')),
     apiFetch('/api/change-management/stats').catch(function() { return null; })
   ]).then(function(results) {
     CM_WORKSPACE_STATE.requests = Array.isArray(results[0] && results[0].requests) ? results[0].requests : [];
@@ -22726,9 +22920,10 @@ function renderPeriodicReviews() {
     var statusBadge = monitoringReviewSignalBadgeClass(review);
     var riskClass = review.risk.toLowerCase().replace(' ','-');
     var owner = review.assignedOfficerName || review.assignedOfficerId || 'Unassigned';
+    var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(review) : '';
     tr.onclick = function() { openMonitoringReviewLifecycle(review.ref, review.id); };
     tr.innerHTML = '<td><div>' + escapeHtml(review.client) + '</div>' +
-      '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(review.ref || review.reviewReference || '') + '</div></td>' +
+      '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(review.ref || review.reviewReference || '') + '</div>' + fixtureBadge + '</td>' +
       '<td><span class="badge ' + riskClass + '" style="font-size:11px;">' + escapeHtml(review.risk) + '</span></td>' +
       '<td style="font-size:12px;">' + escapeHtml(reviewQueueDateLabel(review.nextDue)) + '</td>' +
       '<td><span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(queueLabel) + '</span>' +
@@ -29441,6 +29636,7 @@ function applyAuthenticatedShellState() {
   if (roleEl) roleEl.textContent = formatRoleLabel(currentUser.role);
   if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){ return w[0]; }).join('');
   setAuthenticatedBodyState(true, currentUser && currentUser.role);
+  if (typeof refreshTestSmokeRecordToggleControl === 'function') refreshTestSmokeRecordToggleControl();
 }
 
 function makeAuthError(kind, message, status) {

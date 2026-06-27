@@ -2962,7 +2962,7 @@ def _enrich_change_request_records(db, requests: List[Dict[str, Any]]) -> List[D
     if app_ids:
         placeholders = ",".join(["?"] * len(app_ids))
         app_rows = db.execute(
-            f"SELECT id, ref, company_name FROM applications WHERE id IN ({placeholders})",
+            f"SELECT id, ref, company_name, is_fixture FROM applications WHERE id IN ({placeholders})",
             tuple(app_ids),
         ).fetchall()
         app_lookup = {row["id"]: dict(row) for row in app_rows}
@@ -3001,11 +3001,39 @@ def _enrich_change_request_records(db, requests: List[Dict[str, Any]]) -> List[D
         app_meta = app_lookup.get(record.get("application_id")) or {}
         record["application_ref"] = app_meta.get("ref")
         record["company_name"] = app_meta.get("company_name")
+        record["is_fixture"] = bool(app_meta.get("is_fixture")) or str(record.get("application_id") or "").startswith("f1xed")
         record["changed_fields_count"] = item_counts.get(record.get("id"), len(record.get("items") or []))
         record["preview_items"] = preview_items.get(record.get("id"), [])
         record["downstream_obligations"] = _change_request_downstream_obligations(record)
         enriched.append(record)
     return enriched
+
+
+def _enrich_change_alert_records(db, alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not alerts:
+        return alerts
+
+    app_ids = sorted({alert.get("application_id") for alert in alerts if alert.get("application_id")})
+    app_lookup: Dict[str, Dict[str, Any]] = {}
+    if app_ids:
+        placeholders = ",".join(["?"] * len(app_ids))
+        app_rows = db.execute(
+            f"SELECT id, ref, company_name, is_fixture FROM applications WHERE id IN ({placeholders})",
+            tuple(app_ids),
+        ).fetchall()
+        app_lookup = {row["id"]: dict(row) for row in app_rows}
+
+    enriched: List[Dict[str, Any]] = []
+    for alert in alerts:
+        record = dict(alert)
+        app_meta = app_lookup.get(record.get("application_id")) or {}
+        if app_meta:
+            record["application_ref"] = app_meta.get("ref")
+            record["company_name"] = app_meta.get("company_name")
+        record["is_fixture"] = bool(app_meta.get("is_fixture")) or str(record.get("application_id") or "").startswith("f1xed")
+        enriched.append(record)
+    return enriched
+
 
 def list_change_alerts(
     db,
@@ -3013,6 +3041,8 @@ def list_change_alerts(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    fixture_filter_sql: Optional[str] = None,
+    fixture_filter_params: Optional[List[Any]] = None,
 ) -> List[Dict]:
     """List change alerts with optional filters."""
     query = "SELECT * FROM change_alerts WHERE 1=1"
@@ -3024,6 +3054,9 @@ def list_change_alerts(
     if status:
         query += " AND status = ?"
         params.append(status)
+    if fixture_filter_sql:
+        query += f" AND {fixture_filter_sql}"
+        params.extend(fixture_filter_params or [])
 
     query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
@@ -3044,7 +3077,7 @@ def list_change_alerts(
                 except (json.JSONDecodeError, TypeError):
                     pass
             results.append(d)
-        return results
+        return _enrich_change_alert_records(db, results)
     except Exception as e:
         logger.error("Failed to list change alerts: %s", e)
         return []
@@ -3058,6 +3091,8 @@ def list_change_requests(
     source: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    fixture_filter_sql: Optional[str] = None,
+    fixture_filter_params: Optional[List[Any]] = None,
 ) -> List[Dict]:
     """List change requests with optional filters."""
     query = "SELECT * FROM change_requests WHERE 1=1"
@@ -3075,6 +3110,9 @@ def list_change_requests(
     if source:
         query += " AND source = ?"
         params.append(source)
+    if fixture_filter_sql:
+        query += f" AND {fixture_filter_sql}"
+        params.extend(fixture_filter_params or [])
 
     query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
