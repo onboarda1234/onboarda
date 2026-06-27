@@ -2083,6 +2083,46 @@ def _implementation_requires_risk(db, request: Dict[str, Any]) -> bool:
     return any(key in _IMPLEMENTATION_RISK_CHANGE_KEYS for key in _request_change_keys(db, request))
 
 
+_APPLICATION_FIELD_IMPLEMENTATION_CHANGE_TYPES = frozenset({
+    "company_details",
+    "address_change",
+    "business_activity_change",
+    "licensing_change",
+    "contact_update",
+    "contact_detail_update",
+    "other",
+})
+
+
+def _unsupported_field_implementation_blockers(db, request: Dict[str, Any]) -> List[Dict[str, Any]]:
+    blockers: List[Dict[str, Any]] = []
+    for item in _request_items_for_gate(db, request):
+        change_type = item.get("change_type") or ""
+        if change_type not in _APPLICATION_FIELD_IMPLEMENTATION_CHANGE_TYPES:
+            continue
+
+        field_name = item.get("field_name")
+        if field_name is None or item.get("new_value") is None:
+            continue
+
+        field_name = str(field_name)
+        if field_name in SAFE_ENTITY_FIELDS:
+            continue
+
+        blockers.append(_implementation_blocker(
+            "unsupported_field_for_change_management",
+            "Unsupported field for Change Management implementation",
+            "Create a supported Change Request for a safe profile field; internal/security fields cannot be implemented through Change Management",
+            details={
+                "item_id": item.get("id"),
+                "change_type": change_type,
+                "field_name": field_name,
+                "allowed_fields": sorted(SAFE_ENTITY_FIELDS),
+            },
+        ))
+    return blockers
+
+
 def _risk_escalation_handled(risk_result: Dict[str, Any]) -> bool:
     for key in (
         "edd_review_completed", "edd_completed", "senior_approval",
@@ -2118,6 +2158,8 @@ def implementation_blockers(db, request: Dict[str, Any]) -> List[Dict[str, Any]]
             "Approve the Change Request before implementation",
             details={"status": status},
         )]
+
+    blockers.extend(_unsupported_field_implementation_blockers(db, request))
 
     application_id = request.get("application_id")
     current_version_id = _get_current_profile_version_id(db, application_id) if application_id else None

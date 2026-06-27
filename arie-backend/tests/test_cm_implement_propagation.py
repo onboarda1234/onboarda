@@ -137,6 +137,10 @@ class TestFullLifecyclePropagation:
         # Move through workflow
         _approve_request(cm, wdb, req["id"])
 
+        detail = cm.get_change_request_detail(wdb, req["id"])
+        assert detail["implementation"]["can_implement"] is True
+        assert detail["implementation"]["blockers"] == []
+
         # Verify live data unchanged before implement
         still_old = db.execute(
             "SELECT company_name FROM applications WHERE id = ?", (app_id,)
@@ -232,10 +236,32 @@ class TestTransactionalFailure:
         )
         _approve_request(cm, wdb, req["id"])
 
-        success, err, version_id = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
+        detail = cm.get_change_request_detail(wdb, req["id"])
+        blockers = detail["implementation"]["blockers"]
+        assert detail["implementation"]["can_implement"] is False
+        assert any(b["code"] == "unsupported_field_for_change_management" for b in blockers)
+        unsafe_blocker = next(b for b in blockers if b["code"] == "unsupported_field_for_change_management")
+        assert unsafe_blocker["details"]["field_name"] == "password_hash"
+        assert "password_hash" not in unsafe_blocker["details"]["allowed_fields"]
+
+        audit_events = []
+
+        def capture_audit(user, action, entity_id, details, **kwargs):
+            audit_events.append({
+                "action": action,
+                "entity_id": entity_id,
+                "details": details,
+                "after_state": kwargs.get("after_state"),
+            })
+
+        success, err, version_id = cm.implement_change_request(
+            wdb, req["id"], ADMIN_USER, log_audit_fn=capture_audit
+        )
         assert not success
-        assert "Unsupported" in err or "unsafe" in err.lower() or "Implementation failed" in err
+        assert "Implementation blocked" in err
+        assert "unsupported_field_for_change_management" in err
         assert version_id is None
+        assert any(event["action"] == "CM Implementation Blocked" for event in audit_events)
 
         # CR status must NOT be implemented
         cr = db.execute(
