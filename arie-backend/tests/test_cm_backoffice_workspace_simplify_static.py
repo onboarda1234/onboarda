@@ -173,6 +173,17 @@ def test_unknown_implementation_readiness_is_not_presented_as_green_ready():
     assert "Ready for backend validation" not in implementation_readiness
 
 
+def test_request_detail_gates_active_implement_action_on_readiness():
+    html = _html()
+    detail_region = _function_region(html, "viewRequestDetail", "cmAuditTimelinePreview")
+
+    assert "r.implementation && r.implementation.can_implement === true" in detail_region
+    assert "!(implementationState.blockers || []).length" in detail_region
+    assert "Implement Changes" in detail_region
+    assert "Implementation blocked" in detail_region
+    assert "Resolve implementation blockers before applying changes" in detail_region
+
+
 def test_backend_detail_exposes_read_only_implementation_readiness():
     backend = CM_BACKEND.read_text(encoding="utf-8")
 

@@ -17511,8 +17511,10 @@ function viewRequestDetail(reqId) {
       actions.push('<button class="btn" style="font-size:12px;background:#198754;" onclick="approveRequest(' + cmJsAttrArg(r.id) + ')">Approve</button>');
       actions.push('<button class="btn" style="font-size:12px;background:#dc3545;" onclick="rejectRequest(' + cmJsAttrArg(r.id) + ')">Reject</button>');
     }
-    if (r.status === 'approved' && !isAnalyst) {
+    if (r.status === 'approved' && !isAnalyst && r.implementation && r.implementation.can_implement === true && !(implementationState.blockers || []).length) {
       actions.push('<button class="btn" style="font-size:12px;background:#20c997;" onclick="implementRequest(' + cmJsAttrArg(r.id) + ')">Implement Changes</button>');
+    } else if (r.status === 'approved' && !isAnalyst) {
+      actions.push('<button class="btn btn-outline" style="font-size:12px;" disabled title="Resolve implementation blockers before applying changes">Implementation blocked</button>');
     }
 
     if (actions.length > 0) {
