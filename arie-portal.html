@@ -5492,6 +5492,7 @@ let currentEnhancedRequirements = [];
 let portalEnhancedRequirementBusy = {};
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
+var portalSidebarApplications = [];
 var portalPeriodicReviewTasks = [];
 var currentPortalPeriodicReviewTask = null;
 var PRESCREENING_FIELD_BINDINGS = {
@@ -6412,6 +6413,7 @@ async function loadMyApplications() {
   try {
     var resp = await apiCall('GET', '/portal/applications');
     var apps = resp.applications || [];
+    portalSidebarApplications = apps.slice();
     var activeDrafts = [];
     try {
       var draftResp = await apiCall('GET', '/save-resume/active');
@@ -6496,6 +6498,51 @@ async function loadMyApplications() {
       tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
     }
     renderPeriodicReviewTasks([]);
+  }
+}
+
+function portalAppIdentifiersMatch(app, applicationId) {
+  var target = String(applicationId || '').trim();
+  if (!target || !app) return false;
+  return [app.id, app.ref].some(function(value) {
+    return String(value || '').trim() === target;
+  });
+}
+
+function patchPortalSidebarApplicationStatus(applicationId, status, patch) {
+  var normalizedStatus = normalizePortalStatus(status || currentApplicationStatus || 'draft');
+  var target = applicationId || currentApplicationId || appRef;
+  if (!target || !normalizedStatus) return false;
+  var updated = false;
+  portalSidebarApplications = (portalSidebarApplications || []).map(function(app) {
+    if (!portalAppIdentifiersMatch(app, target)) return app;
+    updated = true;
+    return Object.assign({}, app, patch || {}, { status: normalizedStatus });
+  });
+  if (updated) renderSidebarApps(portalSidebarApplications);
+  return updated;
+}
+
+async function refreshPortalSidebarApplications(options) {
+  if (!AUTH_TOKEN) return;
+  options = options || {};
+  var applicationId = options.applicationId || currentApplicationId || appRef;
+  var status = options.status || currentApplicationStatus;
+  var patch = options.patch || {};
+  if (status) patchPortalSidebarApplicationStatus(applicationId, status, patch);
+  try {
+    var resp = await apiCall('GET', '/portal/applications');
+    var apps = Array.isArray(resp && resp.applications) ? resp.applications : [];
+    if (status && applicationId) {
+      apps = apps.map(function(app) {
+        if (!portalAppIdentifiersMatch(app, applicationId)) return app;
+        return Object.assign({}, app, patch, { status: normalizePortalStatus(status) });
+      });
+    }
+    portalSidebarApplications = apps.slice();
+    renderSidebarApps(portalSidebarApplications);
+  } catch (err) {
+    console.warn('Sidebar application status refresh failed:', err);
   }
 }
 
@@ -7775,6 +7822,11 @@ async function submitPrescreening(e) {
     if (submitResp.pricing) serverPricing = submitResp.pricing;
     if (submitResp.screening) serverScreening = submitResp.screening;
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
+    refreshPortalSidebarApplications({
+      applicationId: currentApplicationId,
+      status: submitResp.status,
+      patch: { ref: appRef }
+    });
     routePortalByBackendStatus(submitResp.status, {
       pricingMessage: 'Please review and accept the pricing to continue.'
     });
@@ -8119,6 +8171,10 @@ async function acceptPricing() {
     reviewMessage: 'Pricing accepted. Application under compliance review.',
     approvedMessage: 'Pricing accepted. Your application has been approved and activation is in progress.',
     rmiMessage: 'Pricing accepted. Additional information is required to complete your application.'
+  });
+  refreshPortalSidebarApplications({
+    applicationId: currentApplicationId,
+    status: result.status
   });
 }
 
@@ -10557,6 +10613,10 @@ async function finalSubmitFromReview() {
   generateComplianceMemo();
   updateDocsReviewMessaging(lastReviewSummaryState);
   currentApplicationStatus = 'kyc_submitted';
+  refreshPortalSidebarApplications({
+    applicationId: currentApplicationId,
+    status: currentApplicationStatus
+  });
   showView('docs-review');
   showToast('info', 'Submitted for Compliance Review', 'Your KYC documents have been submitted. A compliance officer will review your application and you will be notified by email.');
   // Clear the draft
@@ -10753,6 +10813,10 @@ function handleUpload(docId, input) {
       } else {
         showToast('success', 'File Uploaded', 'Verified: ' + names);
       }
+      refreshPortalSidebarApplications({
+        applicationId: currentApplicationId,
+        status: currentApplicationStatus || 'kyc_documents'
+      });
     }).catch(function(err) {
       console.error('API upload failed for', docId, err);
       label.textContent = 'Click to upload';
@@ -13872,6 +13936,15 @@ async function resumeApplication(ref, stage) {
       appRef = app.ref || ref;
       currentApplicationStatus = normalizePortalStatus(app.status || stage || 'draft');
       var projection = getPortalStatusProjection(currentApplicationStatus, app);
+      refreshPortalSidebarApplications({
+        applicationId: currentApplicationId || appRef,
+        status: currentApplicationStatus,
+        patch: {
+          id: currentApplicationId,
+          ref: appRef,
+          company_name: app.company_name || ''
+        }
+      });
       setCurrentRiskFromApp(app);
       if (app.risk_dimensions) dimScores = app.risk_dimensions;
       var psDataForPricing = app.prescreening_data || {};
