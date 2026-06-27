@@ -11339,6 +11339,10 @@ function enhancedRequirementControlId(requirementId) {
   return String(requirementId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+function enhancedRequirementDomId(requirementId) {
+  return 'enhanced-requirement-row-' + enhancedRequirementControlId(requirementId);
+}
+
 function enhancedRequirementDocumentLabel(doc) {
   if (!doc) return 'Unknown document';
   return (doc.doc_name || doc.doc_type || doc.id || 'Document') +
@@ -11779,12 +11783,14 @@ function renderEnhancedEvidenceDocumentsGroupHtml(requirements) {
     );
     return;
   }
-  var rows = evidence.map(function(req) {
+  var rows = evidence.map(function(req, idx) {
     var doc = enhancedRequirementLinkedDocument(req);
     var filename = doc ? (doc.doc_name || doc.id || 'Document') : 'No uploaded file yet';
     var reviewStatus = doc ? normalizeDetailValue(doc.review_status || 'pending') : 'pending';
     var verification = doc ? enhancedRequirementVerificationBadge(req) : enhancedRequirementDetailBadge('Verification pending upload', 'amber');
-    return '<div style="border:1px solid var(--border1);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--surface);">' +
+    var requirementDomId = enhancedRequirementDomId(req.id || req.requirement_key || ('evidence_' + idx));
+    var linkedDocumentAttr = req.linked_document_id ? ' data-linked-document-id="' + escapeHtml(String(req.linked_document_id)) + '"' : '';
+    return '<div id="' + escapeHtml(requirementDomId) + '" data-enhanced-requirement-id="' + escapeHtml(String(req.id || '')) + '"' + linkedDocumentAttr + ' style="border:1px solid var(--border1);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--surface);">' +
       '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
         '<div style="min-width:0;flex:1;">' +
           '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Enhanced evidence document') + '</div>' +
@@ -19154,7 +19160,18 @@ function lifecycleLinkedEvidenceDocs(requirementId, evidenceLinks, documents) {
   return (Array.isArray(evidenceLinks) ? evidenceLinks : []).filter(function(link) {
     return String((link && link.requirement_id) || '') === reqId;
   }).map(function(link) {
-    var doc = docsById[String(link.document_id)] || null;
+    var doc = docsById[String(link.document_id)] || {
+      id: link.document_id,
+      doc_name: link.document_name,
+      doc_type: link.document_type,
+      verification_status: link.document_verification_status,
+      review_status: link.document_review_status,
+      review_comment: link.document_review_comment,
+      reviewer_role: link.document_reviewer_role,
+      reviewed_at: link.document_reviewed_at,
+      verified_at: link.document_verified_at,
+      is_current: link.document_is_current
+    };
     return { link: link, doc: doc };
   });
 }
@@ -19916,60 +19933,266 @@ async function saveLifecycleRiskChange(reviewId) {
   }
 }
 
-function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail) {
+function periodicReviewKycFallbackAnchor(anchorId) {
+  if (anchorId && document.getElementById(anchorId)) return anchorId;
+  if (anchorId && String(anchorId).indexOf('enhanced-requirement-row-') === 0 && document.getElementById('detail-enhanced-evidence-documents-group')) {
+    return 'detail-enhanced-evidence-documents-group';
+  }
+  return document.getElementById('detail-kyc-documents-panel') ? 'detail-kyc-documents-panel' : 'detail-tab-kyc-docs';
+}
+
+function focusPeriodicReviewKycTarget(anchorId) {
+  var targetId = periodicReviewKycFallbackAnchor(anchorId);
+  var target = document.getElementById(targetId);
+  if (!target) return;
+  var ancestor = target.parentElement;
+  while (ancestor) {
+    if (ancestor.tagName && ancestor.tagName.toLowerCase() === 'details' && !ancestor.open) ancestor.open = true;
+    ancestor = ancestor.parentElement;
+  }
+  try { target.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  catch (err) { try { target.scrollIntoView(); } catch (_) {} }
+  var previousOutline = target.style.outline;
+  var previousShadow = target.style.boxShadow;
+  target.style.outline = '2px solid #7c3aed';
+  target.style.boxShadow = '0 0 0 4px rgba(124,58,237,0.12)';
+  setTimeout(function() {
+    target.style.outline = previousOutline;
+    target.style.boxShadow = previousShadow;
+  }, 2600);
+}
+
+function openPeriodicReviewKycDocuments(anchorId, contextLabel) {
+  var targetId = periodicReviewKycFallbackAnchor(anchorId);
+  activateCaseCommandTarget('kyc-docs', targetId);
+  setTimeout(function() { focusPeriodicReviewKycTarget(anchorId || targetId); }, 180);
+  if (contextLabel && typeof showToast === 'function') {
+    showToast('Opened KYC Documents for ' + contextLabel + '.');
+  }
+}
+
+function periodicReviewKycDeepLinkButton(label, targetId, contextLabel) {
+  return '<button class="btn btn-outline btn-sm" data-prs-doc1-kyc-deeplink="true" onclick=\'openPeriodicReviewKycDocuments(' + cmJsAttrArg(targetId || '') + ',' + cmJsAttrArg(contextLabel || '') + ')\'>' + escapeHtml(label || 'Resolve in KYC & Documents') + '</button>';
+}
+
+function periodicReviewEvidenceBadge(text, tone) {
+  return lifecycleDetailBadge(text || '—', tone || 'slate');
+}
+
+function periodicReviewStatusTone(text) {
+  var value = String(text || '').toLowerCase();
+  if (/accepted|verified|ready|satisfied/.test(value)) return 'green';
+  if (/reject|failed|expired|blocked/.test(value)) return 'red';
+  if (/running|processing|queued/.test(value)) return 'purple';
+  if (/missing|pending|review|required|uploaded|manual/.test(value)) return 'amber';
+  return 'slate';
+}
+
+function periodicReviewDocVerificationLabel(doc) {
+  doc = doc || {};
+  var raw = String(doc.verification_status || doc.verification_state || '').toLowerCase();
+  if (doc.verification_status_label) return doc.verification_status_label;
+  if (raw === 'verified') return 'Verified';
+  if (raw === 'expired') return 'Expired';
+  if (['failed', 'rejected', 'flagged'].indexOf(raw) >= 0) return raw === 'flagged' ? 'Review required' : 'Verification failed';
+  if (['running', 'processing', 'queued', 'in_progress'].indexOf(raw) >= 0) return 'Verification running';
+  if (raw === 'skipped') return 'Manual review required';
+  if (raw === 'not_run') return 'Verification not run';
+  return raw ? raw.replace(/_/g, ' ') : 'Pending verification';
+}
+
+function periodicReviewDocOfficerLabel(doc, req) {
+  doc = doc || {};
+  var reviewStatus = String(doc.review_status || '').toLowerCase();
+  if (reviewStatus === 'accepted' || reviewStatus === 'approved') return 'Accepted';
+  if (reviewStatus === 'rejected') return 'Rejected';
+  if (reviewStatus === 'info_requested') return 'Replacement requested';
+  if (reviewStatus === 'pending') return 'Pending officer review';
+  var reqStatus = String((req && req.status) || '').toLowerCase();
+  if (reqStatus === 'accepted' || reqStatus === 'completed') return 'Accepted';
+  if (reqStatus === 'rejected') return 'Rejected';
+  if (reqStatus === 'waived') return 'Waived';
+  return 'No officer decision';
+}
+
+function periodicReviewRequestBlocker(req, blockers) {
+  blockers = Array.isArray(blockers) ? blockers : [];
+  var label = String((req && (req.requirement_label || req.requirement_key)) || '').trim().toLowerCase();
+  if (!label) return '';
+  return blockers.find(function(blocker) {
+    return String(blocker || '').toLowerCase().indexOf(label) >= 0;
+  }) || '';
+}
+
+function periodicReviewItemBlocker(item, blockers) {
+  blockers = Array.isArray(blockers) ? blockers : [];
+  var candidates = [
+    item && item.label,
+    item && item.item_type,
+    item && item.code,
+    item && item.id
+  ].map(function(value) { return String(value || '').trim().toLowerCase(); }).filter(Boolean);
+  return blockers.find(function(blocker) {
+    var text = String(blocker || '').toLowerCase();
+    return candidates.some(function(candidate) { return text.indexOf(candidate) >= 0; });
+  }) || '';
+}
+
+function periodicReviewRequiredItemId(item) {
+  return String((item && (item.id || item.code || item.item_type)) || '');
+}
+
+function periodicReviewDocumentActionButtons(docId, kycLabel, kycTargetId, contextLabel) {
+  var buttons = [];
+  var safeDocId = docId == null ? '' : String(docId);
+  if (safeDocId && /^[A-Za-z0-9_.:\-]+$/.test(safeDocId)) {
+    buttons.push('<button class="btn btn-outline btn-sm" onclick="viewBackofficeDocument(\'' + escapeHtml(safeDocId) + '\')">View</button>');
+    buttons.push('<button class="btn btn-outline btn-sm" onclick="downloadBackofficeDocument(\'' + escapeHtml(safeDocId) + '\')">Download</button>');
+  }
+  buttons.push(periodicReviewKycDeepLinkButton(kycLabel, kycTargetId, contextLabel));
+  return '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">' + buttons.join('') + '</div>';
+}
+
+function renderPeriodicReviewDocumentRequestRow(req, blockers, isTerminal) {
+  req = req || {};
+  var trigger = enhancedRequirementTriggerReason(req) || req.trigger_label || req.trigger_key || 'Periodic review attestation';
+  var doc = enhancedRequirementLinkedDocument(req) || {};
+  var docId = doc.id || req.linked_document_id || '';
+  var hasDoc = !!docId;
+  var label = req.requirement_label || req.requirement_key || 'Requested document';
+  var requiredLabel = req.mandatory ? 'Required' : 'Optional';
+  var uploadStatus = hasDoc ? 'Uploaded' : 'Missing';
+  var uploadTone = hasDoc ? 'green' : 'amber';
+  var verificationLabel = hasDoc ? periodicReviewDocVerificationLabel(doc) : 'Evidence not linked';
+  var officerLabel = hasDoc ? periodicReviewDocOfficerLabel(doc, req) : 'No officer decision';
+  var blocker = periodicReviewRequestBlocker(req, blockers);
+  var targetId = enhancedRequirementDomId(req.id || req.requirement_id || req.requirement_key || '');
+  var kycAction = isTerminal ? 'View in KYC & Documents' : (hasDoc ? 'Review in KYC & Documents' : 'Resolve in KYC & Documents');
+  var uploadedAt = doc.uploaded_at || req.client_response_at || '';
+  var uploadedBy = doc.uploaded_by_display || doc.uploaded_by_name || doc.uploaded_by || '';
+  var meta = [
+    requiredLabel,
+    'Upload status: ' + uploadStatus,
+    uploadedAt ? 'Uploaded ' + lifecycleFormatDate(uploadedAt) : '',
+    uploadedBy ? 'Uploader: ' + uploadedBy : ''
+  ].filter(Boolean).join(' · ');
+  return '<div data-prs-doc1-row="conditional-request" data-enhanced-requirement-id="' + escapeHtml(String(req.id || '')) + '" style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+      '<div style="min-width:260px;flex:1;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(label) + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:4px;">Triggering question: ' + escapeHtml(trigger) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:5px;">' + escapeHtml(meta) + '</div>' +
+        (hasDoc ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Linked file: ' + escapeHtml(doc.doc_name || docId || 'Document') + '</div>' : '') +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
+          periodicReviewEvidenceBadge(uploadStatus, uploadTone) +
+          periodicReviewEvidenceBadge(verificationLabel, periodicReviewStatusTone(verificationLabel)) +
+          periodicReviewEvidenceBadge('Officer: ' + officerLabel, periodicReviewStatusTone(officerLabel)) +
+        '</div>' +
+        (blocker ? '<div style="margin-top:8px;padding:8px 10px;border-radius:9px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:11px;line-height:1.45;"><strong>Blocks completion:</strong> ' + escapeHtml(blocker) + '</div>' : '') +
+        (isTerminal ? '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Terminal review evidence is read-only here.</div>' : '') +
+        periodicReviewDocumentActionButtons(docId, kycAction, targetId, label) +
+      '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">' +
+        lifecycleDetailBadge(requiredLabel, req.mandatory ? 'amber' : 'slate') +
+        enhancedRequirementStatusBadge(req.status, req) +
+        enhancedRequirementTypeBadge(req) +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderPeriodicReviewRequiredEvidenceRow(item, evidenceLinks, documents, blockers, isTerminal) {
+  item = item || {};
+  var itemId = periodicReviewRequiredItemId(item);
+  var label = item.label || item.item_type || item.code || 'Evidence requirement';
+  var linkedDocs = lifecycleLinkedEvidenceDocs(itemId, evidenceLinks, documents);
+  var rawStatus = String(item.status || '').toLowerCase();
+  var satisfied = linkedDocs.some(lifecycleEvidenceLinkReady) || ['cleared', 'satisfied'].indexOf(rawStatus) >= 0;
+  var blocker = periodicReviewItemBlocker(item, blockers);
+  var statusLabel = satisfied ? 'Evidence ready' : (linkedDocs.length ? 'Linked evidence pending review' : 'Missing evidence');
+  var kycAction = isTerminal ? 'View in KYC & Documents' : (linkedDocs.length ? 'Review in KYC & Documents' : 'Resolve in KYC & Documents');
+  var linkedHtml = linkedDocs.length
+    ? linkedDocs.map(function(entry) {
+        var doc = entry.doc || {};
+        var docId = entry.link && entry.link.document_id;
+        return '<div style="margin-top:8px;padding:8px 10px;border:1px solid var(--border1);border-radius:9px;background:var(--surface);display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">' +
+          '<div><div style="font-size:12px;font-weight:700;color:var(--text1);">' + escapeHtml(lifecycleDocumentLabel(doc)) + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Document ID: ' + escapeHtml(String(docId || '')) + (entry.link && entry.link.linked_at ? ' · Linked ' + escapeHtml(lifecycleFormatDate(entry.link.linked_at)) : '') + '</div></div>' +
+          '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+            lifecycleEvidenceLinkStatusBadge(entry) +
+            (docId ? '<button class="btn btn-outline btn-sm" onclick="viewBackofficeDocument(\'' + escapeHtml(String(docId)) + '\')">View</button><button class="btn btn-outline btn-sm" onclick="downloadBackofficeDocument(\'' + escapeHtml(String(docId)) + '\')">Download</button>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('')
+    : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">No evidence document is linked to this requirement yet.</div>';
+  return '<div data-prs-doc1-row="required-item" data-required-item-id="' + escapeHtml(itemId) + '" style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+      '<div style="min-width:260px;flex:1;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);">Evidence required: ' + escapeHtml(label) + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:4px;">' + escapeHtml(item.rationale || item.reason || 'Periodic review evidence requirement.') + '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
+          periodicReviewEvidenceBadge(statusLabel, periodicReviewStatusTone(statusLabel)) +
+          lifecycleDetailBadge('Severity: ' + String(item.severity || 'medium'), String(item.severity || '').toLowerCase() === 'critical' || String(item.severity || '').toLowerCase() === 'high' ? 'red' : 'slate') +
+          lifecycleDetailBadge(String(item.status || 'open').replace(/_/g, ' '), 'slate') +
+        '</div>' +
+        linkedHtml +
+        (blocker ? '<div style="margin-top:8px;padding:8px 10px;border-radius:9px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:11px;line-height:1.45;"><strong>Blocks completion:</strong> ' + escapeHtml(blocker) + '</div>' : '') +
+        (isTerminal ? '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Terminal review evidence is read-only here.</div>' : '') +
+        '<div style="margin-top:10px;">' + periodicReviewKycDeepLinkButton(kycAction, 'detail-kyc-documents-panel', label) + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">' +
+        lifecycleDetailBadge('Required item', 'purple') +
+        lifecycleDetailBadge(lifecycleEvidenceItemType(item) || 'evidence', 'slate') +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail, requiredItems, evidenceLinks, documents) {
   var requests = Array.isArray(reviewDetail && reviewDetail.periodic_review_document_requests)
     ? reviewDetail.periodic_review_document_requests
     : [];
-  if (!requests.length) {
-    return '<div style="padding:12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No conditional periodic review document requests have been generated for this review yet.</div>';
+  requiredItems = Array.isArray(requiredItems) ? requiredItems : (Array.isArray(reviewDetail && reviewDetail.required_items) ? reviewDetail.required_items : []);
+  evidenceLinks = Array.isArray(evidenceLinks) ? evidenceLinks : (Array.isArray(reviewDetail && reviewDetail.evidence_links) ? reviewDetail.evidence_links : []);
+  documents = Array.isArray(documents) ? documents : (Array.isArray(currentApp && currentApp._documents) ? currentApp._documents : []);
+  var blockers = []
+    .concat(Array.isArray(reviewDetail && reviewDetail.blocker_summary) ? reviewDetail.blocker_summary : [])
+    .concat(Array.isArray(reviewDetail && reviewDetail.completion_blocker_summary) ? reviewDetail.completion_blocker_summary : [])
+    .concat(Array.isArray(reviewDetail && reviewDetail.periodic_review_workspace && reviewDetail.periodic_review_workspace.readiness && reviewDetail.periodic_review_workspace.readiness.blockers) ? reviewDetail.periodic_review_workspace.readiness.blockers : []);
+  blockers = blockers.filter(function(label, idx, arr) {
+    return label && arr.indexOf(label) === idx;
+  });
+  var evidenceItems = requiredItems.filter(lifecycleRequirementIsEvidenceBacked);
+  var statusKey = String((reviewDetail && reviewDetail.status) || '').toLowerCase();
+  var isTerminal = !!(reviewDetail && (reviewDetail.is_terminal || ['completed', 'cancelled', 'canceled'].indexOf(statusKey) >= 0));
+  if (!requests.length && !evidenceItems.length) {
+    return '<div style="padding:12px;border:1px dashed var(--border1);border-radius:12px;background:var(--surface2);font-size:12px;color:var(--text2);">No periodic review document or evidence requirements are active for this review.</div>';
   }
-  var rows = requests.map(function(req) {
-    var trigger = enhancedRequirementTriggerReason(req) || req.trigger_label || req.trigger_key || 'Periodic review attestation';
-    var doc = enhancedRequirementLinkedDocument(req) || {};
-    var hasDoc = !!(req.linked_document_id || doc.id);
-    var uploadStatus = hasDoc ? 'Uploaded' : 'Missing';
-    var uploadTone = hasDoc ? 'green' : 'amber';
-    var verification = hasDoc ? enhancedRequirementVerificationBadge(req) : lifecycleDetailBadge('Awaiting upload', 'amber');
-    var uploadedAt = doc.uploaded_at || req.client_response_at || '';
-    var requiredLabel = req.mandatory ? 'Required' : 'Optional';
-    return '<div style="padding:12px 0;border-bottom:1px solid var(--border1);">' +
-      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
-        '<div>' +
-          '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Requested document') + '</div>' +
-          '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:4px;">Triggering question: ' + escapeHtml(trigger) + '</div>' +
-          '<div style="font-size:11px;color:var(--text3);margin-top:5px;">' + escapeHtml(requiredLabel) + ' · Upload status: ' + escapeHtml(uploadStatus) + (uploadedAt ? ' · Uploaded ' + escapeHtml(String(uploadedAt).slice(0, 10)) : '') + '</div>' +
-          (hasDoc ? '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Uploaded file: ' + escapeHtml(doc.doc_name || doc.id || req.linked_document_id || 'Document') + '</div>' : '') +
-          '<div style="margin-top:6px;">' + verification + '</div>' +
-          // PR-PRS-F (R3): make uploaded evidence actionable — View / Download
-          // via the existing back-office document surface (was status-only).
-          // Document ids are system-generated tokens; only render the inline
-          // actions for ids safe to interpolate into the handler + download URL
-          // (the existing document endpoint does not URL-encode the id either).
-          // A pathological id is shown as non-actionable rather than risk a
-          // broken handler — no value mangling.
-          (hasDoc ? (function() {
-            var rawId = (doc.id != null ? doc.id : req.linked_document_id);
-            var docId = rawId == null ? '' : String(rawId);
-            if (!docId || !/^[A-Za-z0-9_.:\-]+$/.test(docId)) return '';
-            return '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">' +
-              '<button class="btn btn-outline btn-sm" onclick="viewBackofficeDocument(\'' + docId + '\')">View</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="downloadBackofficeDocument(\'' + docId + '\')">Download</button>' +
-            '</div>';
-          })() : '') +
-        '</div>' +
-        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
-          lifecycleDetailBadge(requiredLabel, req.mandatory ? 'amber' : 'slate') +
-          lifecycleDetailBadge(uploadStatus, uploadTone) +
-          enhancedRequirementStatusBadge(req.status, req) +
-          enhancedRequirementTypeBadge(req) +
-        '</div>' +
-      '</div>' +
-    '</div>';
+  var requestRows = requests.map(function(req) {
+    return renderPeriodicReviewDocumentRequestRow(req, blockers, isTerminal);
   }).join('');
+  var requiredRows = evidenceItems.map(function(item) {
+    return renderPeriodicReviewRequiredEvidenceRow(item, evidenceLinks, documents, blockers, isTerminal);
+  }).join('');
+  var missingCount = requests.filter(function(req) { return !(req && (req.linked_document_id || (req.linked_document && req.linked_document.id))); }).length +
+    lifecycleOpenEvidenceRequirements(evidenceItems, evidenceLinks, documents).filter(function(item) {
+      return !lifecycleLinkedEvidenceDocs(periodicReviewRequiredItemId(item), evidenceLinks, documents).length;
+    }).length;
+  var linkedCount = requests.length - requests.filter(function(req) { return !(req && (req.linked_document_id || (req.linked_document && req.linked_document.id))); }).length +
+    evidenceItems.filter(function(item) { return lifecycleLinkedEvidenceDocs(periodicReviewRequiredItemId(item), evidenceLinks, documents).length > 0; }).length;
   return '<div style="padding:14px 16px;border:1px solid var(--border1);border-radius:14px;background:var(--surface2);">' +
-    '<div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:6px;">Conditional periodic review document requests</div>' +
-    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px;">Generated follow-up evidence is shown here in review context. Uploaded documents reuse the existing repository and verification surfaces.</div>' +
-    rows +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px;">' +
+      '<div><div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:4px;">Periodic review documents and evidence</div>' +
+      '<div style="font-size:12px;color:var(--text2);line-height:1.6;">This is a review-context summary. Resolution remains in KYC Documents & Verifications.</div></div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">' +
+        lifecycleDetailBadge('Conditional requests: ' + String(requests.length), requests.length ? 'slate' : 'green') +
+        lifecycleDetailBadge('Required evidence: ' + String(evidenceItems.length), evidenceItems.length ? 'purple' : 'green') +
+        lifecycleDetailBadge('Missing: ' + String(missingCount), missingCount ? 'amber' : 'green') +
+        lifecycleDetailBadge('Linked: ' + String(linkedCount), linkedCount ? 'green' : 'slate') +
+      '</div>' +
+    '</div>' +
+    (requestRows ? '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-top:12px;">Conditional PR document requests</div>' + requestRows : '') +
+    (requiredRows ? '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-top:14px;">Required-item evidence blockers</div>' + requiredRows : '') +
   '</div>';
 }
 
@@ -20690,7 +20913,7 @@ function renderLifecycleDetailTab(context) {
     ? renderPeriodicReviewWorkspaceOverview(activeReview)
     : '<div style="font-size:12px;color:var(--text2);">No active periodic review is available for workspace review.</div>';
   var documentsBody = activeReview
-    ? renderLifecyclePeriodicReviewDocumentRequests(activeReview)
+    ? renderLifecyclePeriodicReviewDocumentRequests(activeReview, activeReview && activeReview.required_items, activeReview && activeReview.evidence_links, currentApp && currentApp._documents)
     : '<div style="font-size:12px;color:var(--text2);">No periodic review evidence requests are active.</div>';
   var readinessBody = activeReview
     ? renderPeriodicReviewWorkspaceReadiness(activeReview)
