@@ -13,6 +13,12 @@ def _read_backoffice():
         return f.read()
 
 
+def _function_region(html, start_name, next_name):
+    start = html.index(f"function {start_name}")
+    end = html.index(f"function {next_name}", start)
+    return html[start:end]
+
+
 def test_application_detail_tabs_include_periodic_reviews_and_alerts_in_required_order():
     html = _read_backoffice()
     tabs_start = html.index("<!-- Content tabs -->")
@@ -185,7 +191,7 @@ def test_periodic_reviews_tab_does_not_promote_non_review_work_without_active_re
 def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_decision_helpers():
     html = _read_backoffice()
     assert "function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection)" in html
-    assert "function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail)" in html
+    assert "function renderLifecyclePeriodicReviewDocumentRequests(reviewDetail, requiredItems, evidenceLinks, documents)" in html
     assert "function renderPeriodicReviewWorkspaceReadiness(reviewDetail)" in html
     assert "function renderPeriodicReviewWorkspaceMonitoring(reviewDetail)" in html
     assert "function renderPeriodicReviewWorkspaceDecision(reviewDetail)" in html
@@ -198,6 +204,78 @@ def test_lifecycle_workspace_renders_prs4_read_only_attestation_documents_and_de
     assert "Save draft findings" not in html
     assert "Complete periodic review" in html
     assert "Final outcome controls arrive in PRS-5." not in html
+
+
+def test_periodic_review_documents_summary_surfaces_conditional_and_required_item_evidence():
+    html = _read_backoffice()
+    section = _function_region(html, "periodicReviewKycFallbackAnchor", "renderLifecycleClientAttestationPanel")
+    detail_start = html.index("function renderLifecycleDetailTab(context)")
+    detail_end = html.index("async function loadLifecycleDetailTab(force)", detail_start)
+    detail_section = html[detail_start:detail_end]
+
+    assert "periodic_review_document_requests" in section
+    assert "required_items" in section
+    assert "evidence_links" in section
+    assert 'data-prs-doc1-row="conditional-request"' in section
+    assert 'data-prs-doc1-row="required-item"' in section
+    assert "Conditional PR document requests" in section
+    assert "Required-item evidence blockers" in section
+    assert "Evidence required:" in section
+    assert "Blocks completion:" in section
+    assert "Missing evidence" in section
+    assert "periodicReviewRequiredItemId(item)" in section
+    assert (
+        "renderLifecyclePeriodicReviewDocumentRequests(activeReview, activeReview && activeReview.required_items, "
+        "activeReview && activeReview.evidence_links, currentApp && currentApp._documents)"
+    ) in detail_section
+
+
+def test_periodic_review_documents_summary_deep_links_to_kyc_documents_without_shell_change():
+    html = _read_backoffice()
+    section = _function_region(html, "periodicReviewKycFallbackAnchor", "renderLifecycleClientAttestationPanel")
+    enhanced_section = _function_region(html, "renderEnhancedEvidenceDocumentsGroupHtml", "renderUnifiedEnhancedEvidenceDocuments")
+
+    assert "function openPeriodicReviewKycDocuments(anchorId, contextLabel)" in section
+    assert "activateCaseCommandTarget('kyc-docs', targetId)" in section
+    assert 'data-prs-doc1-kyc-deeplink="true"' in section
+    assert "Resolve in KYC & Documents" in section
+    assert "Review in KYC & Documents" in section
+    assert "View in KYC & Documents" in section
+    assert "detail-enhanced-evidence-documents-group" in section
+    assert "detail-kyc-documents-panel" in section
+    assert "enhancedRequirementDomId(req.id || req.requirement_key || ('evidence_' + idx))" in enhanced_section
+    assert 'data-enhanced-requirement-id="' in enhanced_section
+
+
+def test_periodic_review_documents_summary_keeps_mutating_document_workflow_out_of_pr_tab():
+    html = _read_backoffice()
+    section = _function_region(html, "periodicReviewKycFallbackAnchor", "renderLifecycleClientAttestationPanel")
+
+    assert "viewBackofficeDocument" in section
+    assert "downloadBackofficeDocument" in section
+    assert "Terminal review evidence is read-only here." in section
+    assert "['completed', 'cancelled', 'canceled'].indexOf(statusKey) >= 0" in section
+    assert "Review in KYC & Documents" in section
+
+    for forbidden in (
+        "submitLifecycleEvidenceUpload",
+        "linkLifecycleEvidenceDocument",
+        "addLifecycleCustomEvidenceRequirement",
+        "handleApplicationEnhancedRequirementUpload",
+        "saveApplicationEnhancedRequirement",
+        "reviewBackofficeDocument(",
+        "verifyBackofficeDocument(",
+        "triggerAgent1",
+        "Agent 1",
+        ">Upload</button>",
+        "Upload and link evidence",
+        "Accept with reason",
+        ">Accept</button>",
+        ">Reject</button>",
+        "Request replacement",
+        "Re-Verify",
+    ):
+        assert forbidden not in section
 
 
 def test_overview_periodic_review_baseline_box_is_simplified_backoffice_only_and_auditable():
