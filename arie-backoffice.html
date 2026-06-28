@@ -6576,6 +6576,7 @@ function applyAgent1PolicyPayload(payload) {
       normalized.usedIn = normalized.usedIn || normalized.used_in || [];
       normalized.status = normalized.status || normalized.active_pilot_status || 'Manual review only';
       normalized.coverageStatus = normalized.coverageStatus || normalized.status;
+      normalized.docTypes = policyDocumentTypeCandidates(normalized);
       return normalized;
     });
     window.AGENT1_DOCUMENT_POLICIES = AGENT1_DOCUMENT_POLICIES;
@@ -9060,14 +9061,71 @@ function normalizePolicyDocTypeKey(value) {
   return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
 
-function agent1PolicyForDocument(doc, linkedRequirement) {
-  var policies = (typeof window !== 'undefined' && Array.isArray(window.AGENT1_DOCUMENT_POLICIES)) ? window.AGENT1_DOCUMENT_POLICIES : (typeof AGENT1_DOCUMENT_POLICIES !== 'undefined' ? AGENT1_DOCUMENT_POLICIES : []);
-  var typeKey = normalizePolicyDocTypeKey(doc && (doc.doc_type || doc.slot_key));
+function pushPolicyLookupCandidate(candidates, value) {
+  var normalized = normalizePolicyDocTypeKey(value);
+  if (normalized && candidates.indexOf(normalized) < 0) candidates.push(normalized);
+}
+
+function policyDocumentTypeCandidates(policy) {
+  var candidates = [];
+  if (!policy) return candidates;
+  if (Array.isArray(policy.docTypes)) {
+    policy.docTypes.forEach(function(candidate) { pushPolicyLookupCandidate(candidates, candidate); });
+  }
+  pushPolicyLookupCandidate(candidates, policy.document_type);
+  pushPolicyLookupCandidate(candidates, policy.canonical_key);
+  pushPolicyLookupCandidate(candidates, policy.doc_type);
+  if (Array.isArray(policy.aliases)) {
+    policy.aliases.forEach(function(candidate) { pushPolicyLookupCandidate(candidates, candidate); });
+  }
+  return candidates;
+}
+
+function isPersonScopedPolicyLookup(doc, linkedRequirement, expectedSlot) {
+  if (doc && doc.person_id) return true;
+  if (expectedSlot && expectedSlot.person_id) return true;
+  return !!(linkedRequirement && enhancedRequirementBackOfficeGroup(linkedRequirement) === 'identity');
+}
+
+function isProofOfAddressLookupCandidate(value) {
+  return ['poa', 'poa_person', 'personal_poa', 'proof_of_address', 'residential_address_proof'].indexOf(normalizePolicyDocTypeKey(value)) >= 0;
+}
+
+function documentPolicyLookupCandidates(doc, linkedRequirement, expectedSlot) {
+  var candidates = [];
+  var typeKey = normalizePolicyDocTypeKey(doc && (doc.doc_type || doc.document_type || doc.slot_key));
+  var slotKey = String((doc && doc.slot_key) || '');
+  var slotTypeKey = normalizePolicyDocTypeKey(slotKey && slotKey.indexOf(':') >= 0 ? slotKey.split(':').pop() : '');
+  var expectedType = normalizePolicyDocTypeKey(expectedSlot && expectedSlot.doc_type);
   var labelKey = normalizePolicyDocTypeKey(kycDocumentSlotLabel(doc || {}, linkedRequirement));
+  if (expectedSlot && expectedSlot.label) pushPolicyLookupCandidate(candidates, expectedSlot.label);
+  if (linkedRequirement && (linkedRequirement.requirement_key || linkedRequirement.document_type)) {
+    pushPolicyLookupCandidate(candidates, linkedRequirement.requirement_key || linkedRequirement.document_type);
+  }
+  if (isPersonScopedPolicyLookup(doc, linkedRequirement, expectedSlot) && (
+    isProofOfAddressLookupCandidate(typeKey) ||
+    isProofOfAddressLookupCandidate(slotTypeKey) ||
+    isProofOfAddressLookupCandidate(expectedType) ||
+    isProofOfAddressLookupCandidate(labelKey)
+  )) {
+    ['poa_person', 'personal_poa', 'residential_address_proof', 'proof_of_address'].forEach(function(candidate) {
+      pushPolicyLookupCandidate(candidates, candidate);
+    });
+    return candidates;
+  }
+  pushPolicyLookupCandidate(candidates, typeKey);
+  pushPolicyLookupCandidate(candidates, slotTypeKey);
+  pushPolicyLookupCandidate(candidates, expectedType);
+  pushPolicyLookupCandidate(candidates, labelKey);
+  return candidates;
+}
+
+function agent1PolicyForDocument(doc, linkedRequirement, expectedSlot) {
+  var policies = (typeof window !== 'undefined' && Array.isArray(window.AGENT1_DOCUMENT_POLICIES)) ? window.AGENT1_DOCUMENT_POLICIES : (typeof AGENT1_DOCUMENT_POLICIES !== 'undefined' ? AGENT1_DOCUMENT_POLICIES : []);
+  var documentCandidates = documentPolicyLookupCandidates(doc, linkedRequirement, expectedSlot);
   return policies.find(function(policy) {
-    return Array.isArray(policy.docTypes) && policy.docTypes.some(function(candidate) {
-      var normalized = normalizePolicyDocTypeKey(candidate);
-      return normalized === typeKey || normalized === labelKey;
+    return policyDocumentTypeCandidates(policy).some(function(candidate) {
+      return documentCandidates.indexOf(candidate) >= 0;
     });
   }) || null;
 }
@@ -9757,7 +9815,7 @@ function documentReviewContextLine(app, doc, linkedRequirement, expectedSlot) {
 }
 
 function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot) {
-  var policy = agent1PolicyForDocument(doc, linkedRequirement);
+  var policy = agent1PolicyForDocument(doc, linkedRequirement, expectedSlot);
   var relianceState = documentRelianceDisplayState(doc, policy);
   var expectedTypeLabel = documentExpectedTypeLabel(doc, linkedRequirement, policy, expectedSlot);
   var issue = documentPrimaryIssue(doc, relianceState, policy, expectedSlot);
