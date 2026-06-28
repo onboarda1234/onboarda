@@ -133,6 +133,36 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     assert "buildPersonScreeningReviewCard(selectedSubject.person, app, selectedSubject.reviewRow, focus)" in review_region
 
 
+def test_backoffice_screening_review_omits_duplicate_document_readiness_banner():
+    html = BACKOFFICE_HTML.read_text()
+
+    review_region = _function_region(html, "renderScreeningReviewPanel", "openScreeningReview")
+    detail_region = _function_region(html, "renderAuthoritativeAppDetail", "rmiStatusBadge")
+    document_banner_region = _function_region(html, "renderDocumentReadinessBanner", "canEditPilotEvidenceClassification")
+    document_summary_region = _function_region(html, "buildKycDocumentPanelSummary", "updateKycDocumentsPanelState")
+    case_command_region = _function_region(html, "caseCommandOpenLifecycleItems", "approveApplication")
+
+    assert "function renderDocumentReadinessBanner" in html
+    assert "Incomplete / warning-state submission:" in document_banner_region
+
+    assert "renderDocumentReadinessBanner" not in review_region
+    assert "renderDocumentReadinessBanner(documentReadiness) + freshnessBanner + screeningMeta" not in detail_region
+    assert "Stored provider AML/watchlist and PEP results for this application." in review_region
+    assert "Screening Subjects" in review_region
+    assert "buildEntityScreeningReviewCard" in review_region
+    assert "buildPersonScreeningReviewCard" in review_region
+
+    assert "renderIncompleteSubmissionBadge(documentReadiness)" in detail_region
+    assert "renderStandardKycDocumentTaxonomy(app, { includeIdv:false })" in detail_region
+    assert "document.getElementById('detail-docs-with-verification').innerHTML = docsHtml" in detail_region
+    assert "'Required ' + summary.requiredCount" in document_summary_region
+    assert "'Missing ' + summary.missingCount" in document_summary_region
+    assert "'documents'" in case_command_region
+    assert "'KYC Documents'" in case_command_region
+    assert "'Review documents'" in case_command_region
+    assert "'kyc-docs'" in case_command_region
+
+
 def test_backoffice_screening_queue_sidebar_alias_and_audit_formatters_exist():
     html = BACKOFFICE_HTML.read_text()
 

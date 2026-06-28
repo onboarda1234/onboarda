@@ -11212,7 +11212,7 @@ function renderAuthoritativeAppDetail(app, options) {
     (screeningSummary.screening_freshness ? '<div><strong>Screening Age:</strong> ' + screeningSummary.screening_freshness.age_days + ' day(s)' +
     (screeningSummary.screening_valid_until ? ' — <strong>Valid Until:</strong> ' + escapeHtml(String(screeningSummary.screening_valid_until).replace('T', ' ').slice(0, 19)) : '') + '</div>' : '') +
     '</div>';
-  document.getElementById('detail-screening-review').innerHTML = renderDocumentReadinessBanner(documentReadiness) + freshnessBanner + screeningMeta;
+  document.getElementById('detail-screening-review').innerHTML = freshnessBanner + screeningMeta;
   renderScreeningReviewPanel(app, currentScreeningReviewFocus);
   renderExplainabilityPanel(app, screeningSummary);
   updateExplainabilityPanelState(app, screeningSummary);
@@ -15405,7 +15405,6 @@ function renderScreeningReviewPanel(app, focus) {
 
   SCREENING_EVIDENCE_DETAILS = {};
   var screeningSummary = getApplicationScreeningSummary(app);
-  var documentReadiness = computeDocumentReadinessSummary(app);
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
@@ -15419,7 +15418,6 @@ function renderScreeningReviewPanel(app, focus) {
   });
 
   var html = '';
-  html += renderDocumentReadinessBanner(documentReadiness);
   html += '<div class="card" style="margin-bottom:16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.03);">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
   html += '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Stored provider AML/watchlist and PEP results for this application. This is the dedicated review surface opened from the Screening Queue.</div></div>';
