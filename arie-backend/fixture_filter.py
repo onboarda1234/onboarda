@@ -52,6 +52,7 @@ Public surface
 * :data:`FIXTURE_APP_ID_PATTERN`
 * :func:`fixture_app_exclude_clause`
 * :func:`fixture_app_id_exclude_clause`
+* :func:`fixture_change_alert_exclude_clause`
 * :func:`fixture_audit_target_exclude_clause`
 * :func:`fixture_request_opt_in`
 * :func:`should_show_fixtures`
@@ -230,6 +231,40 @@ def fixture_app_id_exclude_clause(
         f"({col_name} NOT LIKE ? AND "
         f"{col_name} NOT IN (SELECT id FROM applications WHERE {fixture_match_sql})))",
         [FIXTURE_APP_ID_PATTERN, *fixture_match_params],
+    )
+
+
+def fixture_change_alert_exclude_clause(
+    application_col: str = "application_id",
+) -> Tuple[str, List[str]]:
+    """Return a read-only exclusion fragment for pilot-facing CM alerts.
+
+    Change alert rows can be linked to a pilot-looking application while their
+    own source metadata is clearly produced by an E2E/smoke harness. Keep the
+    application fixture guard, then exclude only explicit fixture source
+    markers. This helper is intentionally list-only; it must not be used by
+    mutation handlers.
+    """
+    app_clause, app_params = fixture_app_id_exclude_clause(
+        application_col,
+        include_text_patterns=True,
+    )
+    source_columns = (
+        "source_reference",
+        "detected_by",
+        "summary",
+        "reviewer_notes",
+        "source_payload",
+    )
+    clauses: List[str] = []
+    params: List[str] = []
+    for col in source_columns:
+        for pattern in (*FIXTURE_APP_REF_PATTERNS, *FIXTURE_APP_TEXT_PATTERNS):
+            clauses.append(f"LOWER(COALESCE({col}, '')) LIKE ?")
+            params.append(pattern)
+    return (
+        f"{app_clause} AND NOT (" + " OR ".join(clauses) + ")",
+        [*app_params, *params],
     )
 
 
