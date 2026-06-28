@@ -9069,14 +9069,22 @@ function documentExpectedTypeLabel(doc, linkedRequirement, policy, expectedSlot)
   return kycDocumentSlotLabel(doc || {}, linkedRequirement);
 }
 
+var KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE = 'Required document missing. Request from client or upload document before approval.';
+var KYC_VERIFICATION_POLICY_MISSING_MESSAGE = 'Verification policy missing. Admin setup is required before automated verification can run. Manual review is required before relying on this document.';
+
+function isStandaloneKycDocumentIssue(issueText) {
+  return issueText === KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE ||
+    issueText === KYC_VERIFICATION_POLICY_MISSING_MESSAGE;
+}
+
 function documentPrimaryIssue(doc, state, policy, expectedSlot) {
-  if (!doc) return 'No document uploaded.';
+  if (!doc) return KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE;
   var label = (state && state.label) || 'Review required';
   var results = doc.verification_results || {};
   var systemWarning = String(results.system_warning || results.systemWarning || '').toLowerCase();
   if (systemWarning === 'file_not_accessible') return 'System issue — document file was not accessible for analysis.';
   if (label === 'Verified' || label === 'Manual accepted') return 'None';
-  if (!policy) return expectedSlot ? 'System setup issue: verification policy missing.' : 'Document type required before reliance.';
+  if (!policy) return expectedSlot ? KYC_VERIFICATION_POLICY_MISSING_MESSAGE : 'Document type required before reliance.';
   if (label === 'Pending verification') return 'Verification not completed. Officer must review before relying on this document.';
   if (label === 'Expired') {
     var expiry = firstMeaningfulDetailValue(doc.expiry_date, doc.expires_at, doc.valid_until);
@@ -9349,9 +9357,13 @@ function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
   var stateLabel = String((state && state.label) || '').toLowerCase();
   var issueClass = stateLabel === 'system issue' ? 'system' : (issueText && issueText !== '—' && issueText !== 'None' ? 'issue' : 'ok');
   var summaryParts = [];
-  if (issueText && issueText !== '—' && issueText !== 'None') summaryParts.push(issueText);
-  if (blockerText && blockerText !== '—' && blockerText !== 'None') summaryParts.push(blockerText + '.');
-  if (nextText && nextText !== '—' && nextText !== 'No action required') summaryParts.push('Next: ' + nextText + '.');
+  if (isStandaloneKycDocumentIssue(issueText)) {
+    summaryParts.push(issueText);
+  } else {
+    if (issueText && issueText !== '—' && issueText !== 'None') summaryParts.push(issueText);
+    if (blockerText && blockerText !== '—' && blockerText !== 'None') summaryParts.push(blockerText + '.');
+    if (nextText && nextText !== '—' && nextText !== 'No action required') summaryParts.push('Next: ' + nextText + '.');
+  }
   var issueLine = summaryParts.length ? summaryParts.join(' ') : 'No action required.';
   var issueHtml = '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text">' + escapeHtml(issueLine) + '</span></div>';
   if (issueLine.length > 220) {
@@ -9790,7 +9802,7 @@ function renderMissingKycDocumentRow(app, expectedSlot) {
         renderDocumentDirectActions(app, null, 'missing', state, expectedSlot) +
       '</div>' +
     '</div>' +
-    renderDocumentCompactSummary('No document uploaded.', 'Approval', 'Request from client', state) +
+    renderDocumentCompactSummary(KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE, 'None', 'No action required', state) +
   '</div>';
 }
 

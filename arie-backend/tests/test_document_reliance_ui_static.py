@@ -47,11 +47,14 @@ def test_kyc_unaccepted_missing_policy_still_shows_setup_issue():
     html = (ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
     state_helper = _function_region(html, "documentRelianceDisplayState", "renderRelianceBadge")
     issue_helper = _function_region(html, "documentPrimaryIssue", "documentBlocksDisplay")
-    next_action_helper = _function_region(html, "documentShortNextAction", "normalizeCoverageCheckLabel")
+    summary_helper = _function_region(html, "renderDocumentCompactSummary", "renderDocumentSecondaryActions")
 
     assert "if (!policy) return { label: 'Review required', tone: 'review-required' };" in state_helper
-    assert "System setup issue: verification policy missing." in issue_helper
-    assert "Resolve setup issue" in next_action_helper
+    assert "Verification policy missing. Admin setup is required before automated verification can run. Manual review is required before relying on this document." in html
+    assert "KYC_VERIFICATION_POLICY_MISSING_MESSAGE" in issue_helper
+    assert "System setup issue: verification policy missing." not in issue_helper
+    assert "isStandaloneKycDocumentIssue(issueText)" in summary_helper
+    assert "summaryParts.push(issueText);" in summary_helper
 
 
 def test_enhanced_requirement_and_periodic_review_use_ready_manual_status_semantics():

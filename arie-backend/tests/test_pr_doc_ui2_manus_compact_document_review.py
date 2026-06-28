@@ -160,6 +160,10 @@ def test_secondary_menu_contains_view_download_and_missing_state_keeps_disabled_
     assert ">Upload</button>" in primary
     assert "Request from client" in secondary
     assert "No document uploaded" in missing_renderer
+    assert "Required document missing. Request from client or upload document before approval." in html
+    assert "KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE" in missing_renderer
+    assert "renderDocumentCompactSummary(KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE, 'None', 'No action required', state)" in missing_renderer
+    assert "renderDocumentCompactSummary('No document uploaded.', 'Approval', 'Request from client', state)" not in missing_renderer
 
 
 def test_officer_friendly_labels_replace_internal_default_row_language():
@@ -179,9 +183,28 @@ def test_officer_friendly_labels_replace_internal_default_row_language():
     ]:
         assert old_label not in default_row
 
-    assert "System setup issue: verification policy missing." in html
+    assert "Verification policy missing. Admin setup is required before automated verification can run. Manual review is required before relying on this document." in html
+    assert "System setup issue: verification policy missing." not in html
     assert "Issue" in html
     assert "<summary>Details</summary>" not in html
+
+
+def test_kyc_documents_policy_and_missing_copy_are_standalone_messages():
+    html = _backoffice_html()
+    issue_helper = _function_region(html, "documentPrimaryIssue", "documentBlocksDisplay")
+    summary = _function_region(html, "renderDocumentCompactSummary", "renderDocumentSecondaryActions")
+    missing_renderer = _function_region(html, "renderMissingKycDocumentRow", "renderDocumentActionGroupShell")
+
+    assert "KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE" in issue_helper
+    assert "KYC_VERIFICATION_POLICY_MISSING_MESSAGE" in issue_helper
+    assert "Required document missing. Request from client or upload document before approval." in html
+    assert "Verification policy missing. Admin setup is required before automated verification can run. Manual review is required before relying on this document." in html
+    assert "isStandaloneKycDocumentIssue(issueText)" in summary
+    assert "summaryParts.push(issueText);" in summary
+    assert "renderDocumentCompactSummary(KYC_MISSING_REQUIRED_DOCUMENT_MESSAGE, 'None', 'No action required', state)" in missing_renderer
+    assert "No document uploaded. Approval. Next: Request from client." not in html
+    assert "System setup issue: verification policy missing. Approval blocked. Next: Request replacement or reject." not in html
+    assert "Approval. Next:" not in html
 
 
 def test_show_more_is_available_for_long_issue_copy_only_inside_compact_summary():
