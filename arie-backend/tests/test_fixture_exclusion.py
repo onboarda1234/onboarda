@@ -54,6 +54,8 @@ class _FixtureExclusionBase(unittest.TestCase):
     REAL_APP_REF = "ARF-2025-100001"
     FIX_APP_ID = "f1xed00000000001"    # reserved fixture namespace
     FIX_APP_REF = "ARF-2026-900001"
+    TEXT_FIX_APP_ID = "smoke0000000001"  # historical smoke row, not flagged
+    TEXT_FIX_APP_REF = "ARF-SMOKE-002"
 
     def setUp(self):
         self._db_path = os.path.join(
@@ -120,6 +122,16 @@ class _FixtureExclusionBase(unittest.TestCase):
              "company", "in_review", "HIGH", 72.0),
         )
 
+        # Historical smoke row: normal ID and is_fixture=0, but clearly a
+        # smoke/E2E fixture by ref/name. These must be hidden by default too.
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, country, sector, "
+            "entity_type, status, risk_level, risk_score, is_fixture) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+            (self.TEXT_FIX_APP_ID, self.TEXT_FIX_APP_REF, None,
+             "RegMind Browser Smoke Ltd", "Mauritius", "fintech",
+             "company", "pricing_review", "LOW", 12.0),
+        )
+
         # Seed a monitoring alert for the REAL application
         conn.execute(
             "INSERT INTO monitoring_alerts (application_id, client_name, alert_type, "
@@ -140,6 +152,15 @@ class _FixtureExclusionBase(unittest.TestCase):
              "FIX_SCEN01_ALERT", "open"),
         )
 
+        conn.execute(
+            "INSERT INTO monitoring_alerts (application_id, client_name, alert_type, "
+            "severity, detected_by, summary, source_reference, status) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (self.TEXT_FIX_APP_ID, "RegMind Browser Smoke Ltd",
+             "profile_change", "medium", "smoke_seed",
+             "Smoke monitoring trigger", "SMOKE_ALERT_001", "open"),
+        )
+
         # Seed a periodic review for the REAL application
         conn.execute(
             "INSERT INTO periodic_reviews (application_id, client_name, risk_level, "
@@ -153,6 +174,13 @@ class _FixtureExclusionBase(unittest.TestCase):
             "trigger_type, status) VALUES (?,?,?,?,?)",
             (self.FIX_APP_ID, "FIX-SCEN01 Alert-to-Memo Holdings Ltd",
              "HIGH", "fixture_completed", "completed"),
+        )
+
+        conn.execute(
+            "INSERT INTO periodic_reviews (application_id, client_name, risk_level, "
+            "trigger_type, status) VALUES (?,?,?,?,?)",
+            (self.TEXT_FIX_APP_ID, "RegMind Browser Smoke Ltd",
+             "LOW", "scheduled", "pending"),
         )
 
         # Seed an EDD case for the REAL application
@@ -169,6 +197,13 @@ class _FixtureExclusionBase(unittest.TestCase):
             "stage, trigger_source) VALUES (?,?,?,?,?,?)",
             (self.FIX_APP_ID, "FIX-SCEN01 Alert-to-Memo Holdings Ltd",
              "HIGH", 72.0, "information_gathering", "fixture_seed"),
+        )
+
+        conn.execute(
+            "INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, "
+            "stage, trigger_source) VALUES (?,?,?,?,?,?)",
+            (self.TEXT_FIX_APP_ID, "RegMind Browser Smoke Ltd",
+             "LOW", 12.0, "information_gathering", "smoke_seed"),
         )
 
         conn.commit()
@@ -206,6 +241,16 @@ class TestFixtureFilterModule(unittest.TestCase):
         self.assertIn("NOT LIKE", sql)
         self.assertIn("is_fixture", sql)
         self.assertEqual(params, ["f1xed%"])
+        self.assertNotIn("%smoke%", params)
+
+    def test_fixture_app_exclude_clause_text_pattern_opt_in(self):
+        from fixture_filter import fixture_app_exclude_clause
+        sql, params = fixture_app_exclude_clause(include_text_patterns=True)
+        self.assertIn("a.ref", sql)
+        self.assertIn("a.company_name", sql)
+        self.assertEqual(params[0], "f1xed%")
+        self.assertIn("%smoke%", params)
+        self.assertIn("%e2e%", params)
 
     def test_fixture_app_exclude_clause_no_alias(self):
         from fixture_filter import fixture_app_exclude_clause
@@ -227,6 +272,15 @@ class TestFixtureFilterModule(unittest.TestCase):
         self.assertIn("is_fixture", sql)
         self.assertIn("SELECT id FROM applications", sql)
         self.assertEqual(params, ["f1xed%"])
+        self.assertNotIn("%smoke%", params)
+
+    def test_fixture_app_id_exclude_clause_text_pattern_opt_in(self):
+        from fixture_filter import fixture_app_id_exclude_clause
+        sql, params = fixture_app_id_exclude_clause(include_text_patterns=True)
+        self.assertIn("ref", sql)
+        self.assertIn("company_name", sql)
+        self.assertEqual(params[0], "f1xed%")
+        self.assertIn("%smoke%", params)
 
     def test_fixture_app_id_exclude_clause_custom_col(self):
         from fixture_filter import fixture_app_id_exclude_clause
@@ -241,7 +295,8 @@ class TestFixtureFilterModule(unittest.TestCase):
         self.assertIn("SELECT id FROM applications", sql)
         self.assertIn("SELECT ref FROM applications", sql)
         self.assertIn("'application:' || ref", sql)
-        self.assertEqual(params, ["f1xed%", "f1xed%", "f1xed%"])
+        self.assertEqual(params[0], "f1xed%")
+        self.assertGreater(params.count("%smoke%"), 1)
 
     def test_fixture_request_opt_in_accepts_include_alias(self):
         from fixture_filter import fixture_request_opt_in
@@ -314,6 +369,8 @@ class TestLifecycleQueueFixtureExclusion(_FixtureExclusionBase):
                       "Real alert must be present in default queue")
         self.assertNotIn(self.FIX_APP_ID, app_ids,
                          "Fixture alert must NOT appear in default queue")
+        self.assertNotIn(self.TEXT_FIX_APP_ID, app_ids,
+                         "Unflagged smoke alert must NOT appear in default queue")
 
     def test_default_reviews_excludes_fixtures(self):
         result = self._queue(include="all", types=("review",))
@@ -322,6 +379,8 @@ class TestLifecycleQueueFixtureExclusion(_FixtureExclusionBase):
                       "Real review must be present in default queue")
         self.assertNotIn(self.FIX_APP_ID, app_ids,
                          "Fixture review must NOT appear in default queue")
+        self.assertNotIn(self.TEXT_FIX_APP_ID, app_ids,
+                         "Unflagged smoke review must NOT appear in default queue")
 
     def test_default_edd_excludes_fixtures(self):
         result = self._queue(include="all", types=("edd",))
@@ -330,6 +389,8 @@ class TestLifecycleQueueFixtureExclusion(_FixtureExclusionBase):
                       "Real EDD must be present in default queue")
         self.assertNotIn(self.FIX_APP_ID, app_ids,
                          "Fixture EDD must NOT appear in default queue")
+        self.assertNotIn(self.TEXT_FIX_APP_ID, app_ids,
+                         "Unflagged smoke EDD must NOT appear in default queue")
 
     def test_show_fixtures_restores_fixture_rows(self):
         """exclude_fixtures=False (admin show_fixtures opt-in) reveals fixtures."""
@@ -338,6 +399,8 @@ class TestLifecycleQueueFixtureExclusion(_FixtureExclusionBase):
         self.assertIn(self.REAL_APP_ID, app_ids)
         self.assertIn(self.FIX_APP_ID, app_ids,
                       "Fixture rows must appear when exclude_fixtures=False")
+        self.assertIn(self.TEXT_FIX_APP_ID, app_ids,
+                      "Unflagged smoke rows must appear when exclude_fixtures=False")
 
     def test_real_rows_not_over_filtered(self):
         """Real rows must always appear regardless of fixture filtering."""
@@ -358,9 +421,9 @@ class TestLifecycleQueueFixtureExclusion(_FixtureExclusionBase):
 
     def test_counts_with_fixtures_included(self):
         result = self._queue(include="all", exclude_fixtures=False)
-        self.assertEqual(result["counts"]["alert"], 2)
-        self.assertEqual(result["counts"]["review"], 2)
-        self.assertEqual(result["counts"]["edd"], 2)
+        self.assertEqual(result["counts"]["alert"], 3)
+        self.assertEqual(result["counts"]["review"], 3)
+        self.assertEqual(result["counts"]["edd"], 3)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -380,6 +443,7 @@ class TestFetchFunctionFixtureExclusion(_FixtureExclusionBase):
         app_ids = self._app_ids_from_rows(rows)
         self.assertIn(self.REAL_APP_ID, app_ids)
         self.assertNotIn(self.FIX_APP_ID, app_ids)
+        self.assertNotIn(self.TEXT_FIX_APP_ID, app_ids)
 
     def test_fetch_alerts_includes_fixtures_when_requested(self):
         from lifecycle_queue import _fetch_alerts
@@ -387,6 +451,7 @@ class TestFetchFunctionFixtureExclusion(_FixtureExclusionBase):
         app_ids = self._app_ids_from_rows(rows)
         self.assertIn(self.REAL_APP_ID, app_ids)
         self.assertIn(self.FIX_APP_ID, app_ids)
+        self.assertIn(self.TEXT_FIX_APP_ID, app_ids)
 
     def test_fetch_reviews_excludes_fixtures_by_default(self):
         from lifecycle_queue import _fetch_reviews
@@ -394,6 +459,7 @@ class TestFetchFunctionFixtureExclusion(_FixtureExclusionBase):
         app_ids = self._app_ids_from_rows(rows)
         self.assertIn(self.REAL_APP_ID, app_ids)
         self.assertNotIn(self.FIX_APP_ID, app_ids)
+        self.assertNotIn(self.TEXT_FIX_APP_ID, app_ids)
 
     def test_fetch_edd_excludes_fixtures_by_default(self):
         from lifecycle_queue import _fetch_edd
@@ -440,7 +506,10 @@ class TestApplicationsQueryFixtureExclusion(_FixtureExclusionBase):
 
     def test_exclude_clause_filters_fixture(self):
         from fixture_filter import fixture_app_exclude_clause
-        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        fx_excl, fx_params = fixture_app_exclude_clause(
+            table_alias="",
+            include_text_patterns=True,
+        )
         rows = self._db.execute(
             f"SELECT id FROM applications WHERE {fx_excl}",
             fx_params,
@@ -448,10 +517,14 @@ class TestApplicationsQueryFixtureExclusion(_FixtureExclusionBase):
         ids = [r["id"] for r in rows]
         self.assertIn(self.REAL_APP_ID, ids)
         self.assertNotIn(self.FIX_APP_ID, ids)
+        self.assertNotIn(self.TEXT_FIX_APP_ID, ids)
 
     def test_count_excludes_fixture(self):
         from fixture_filter import fixture_app_exclude_clause
-        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        fx_excl, fx_params = fixture_app_exclude_clause(
+            table_alias="",
+            include_text_patterns=True,
+        )
         count = self._db.execute(
             f"SELECT COUNT(*) as c FROM applications WHERE {fx_excl}",
             fx_params,
@@ -462,7 +535,7 @@ class TestApplicationsQueryFixtureExclusion(_FixtureExclusionBase):
         count = self._db.execute(
             "SELECT COUNT(*) as c FROM applications"
         ).fetchone()["c"]
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 3)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -474,7 +547,10 @@ class TestEDDQueryFixtureExclusion(_FixtureExclusionBase):
 
     def test_edd_count_excludes_fixtures(self):
         from fixture_filter import fixture_app_id_exclude_clause
-        fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_params = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=True,
+        )
         count = self._db.execute(
             f"SELECT COUNT(*) as c FROM edd_cases WHERE {fx_excl}",
             fx_params,
@@ -483,7 +559,10 @@ class TestEDDQueryFixtureExclusion(_FixtureExclusionBase):
 
     def test_edd_active_count_excludes_fixtures(self):
         from fixture_filter import fixture_app_id_exclude_clause
-        fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_params = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=True,
+        )
         count = self._db.execute(
             f"SELECT COUNT(*) as c FROM edd_cases "
             f"WHERE stage NOT IN ('edd_approved','edd_rejected') AND {fx_excl}",
@@ -495,7 +574,7 @@ class TestEDDQueryFixtureExclusion(_FixtureExclusionBase):
         count = self._db.execute(
             "SELECT COUNT(*) as c FROM edd_cases"
         ).fetchone()["c"]
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 3)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -507,7 +586,10 @@ class TestMonitoringAlertsQueryFixtureExclusion(_FixtureExclusionBase):
 
     def test_alerts_count_excludes_fixtures(self):
         from fixture_filter import fixture_app_id_exclude_clause
-        fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_params = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=True,
+        )
         count = self._db.execute(
             f"SELECT COUNT(*) as c FROM monitoring_alerts WHERE {fx_excl}",
             fx_params,
@@ -518,7 +600,7 @@ class TestMonitoringAlertsQueryFixtureExclusion(_FixtureExclusionBase):
         count = self._db.execute(
             "SELECT COUNT(*) as c FROM monitoring_alerts"
         ).fetchone()["c"]
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 3)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -530,7 +612,10 @@ class TestPeriodicReviewsQueryFixtureExclusion(_FixtureExclusionBase):
 
     def test_reviews_count_excludes_fixtures(self):
         from fixture_filter import fixture_app_id_exclude_clause
-        fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_params = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=True,
+        )
         count = self._db.execute(
             f"SELECT COUNT(*) as c FROM periodic_reviews WHERE {fx_excl}",
             fx_params,
@@ -548,7 +633,10 @@ class TestMonitoringDashboardFixtureExclusion(_FixtureExclusionBase):
     def test_high_risk_count_excludes_fixtures(self):
         """Fixture HIGH-risk app must not be counted in monitoring KPIs."""
         from fixture_filter import fixture_app_exclude_clause
-        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        fx_excl, fx_params = fixture_app_exclude_clause(
+            table_alias="",
+            include_text_patterns=True,
+        )
         count = self._db.execute(
             f"SELECT COUNT(*) as c FROM applications "
             f"WHERE risk_level IN ('HIGH','VERY_HIGH') AND {fx_excl}",

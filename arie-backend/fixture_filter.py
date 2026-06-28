@@ -69,6 +69,32 @@ from typing import List, Optional, Tuple
 # *reserved namespace*.
 FIXTURE_APP_ID_PATTERN: str = "f1xed%"
 
+# Conservative read-only list filters for historical smoke/E2E rows that were
+# created before they were reliably marked with ``is_fixture``. These mirror
+# the Back Office display classifier and deliberately avoid a generic "test"
+# match to reduce false positives.
+FIXTURE_APP_REF_PATTERNS: tuple = (
+    "%e2e%",
+    "%smoke%",
+    "%prs-a1%",
+    "%prpr%",
+    "%cme2e%",
+    "%pr310%",
+    "arf-2026-9000%",
+)
+FIXTURE_APP_TEXT_PATTERNS: tuple = (
+    "%e2e%",
+    "%smoke%",
+    "%fixture%",
+    "%safe staging%",
+    "%regmind full audit%",
+    "%portal sidebar closure%",
+    "%prs a1%",
+    "%cme2e%",
+    "%browser-smoke%",
+    "%audit-%",
+)
+
 # Stable ``ref`` values of historical test rows that pre-date the
 # ``f1xed`` namespace or were created by smoke/QA probes before the Day 1
 # data-hygiene backfill. These rows are marked ``is_fixture = 1`` by
@@ -112,7 +138,13 @@ ROGUE_FIXTURE_REFS: tuple = (
     "ARF-2026-100422",  # Staging E2E Corp
 )
 
-def fixture_app_exclude_clause(table_alias: str = "a") -> Tuple[str, List[str]]:
+def fixture_app_exclude_clause(
+    table_alias: str = "a",
+    *,
+    include_text_patterns: bool = False,
+    ref_column: Optional[str] = None,
+    name_column: Optional[str] = None,
+) -> Tuple[str, List[str]]:
     """Return ``(sql_fragment, params)`` that excludes fixture applications.
 
     For use in queries on the ``applications`` table where the table is
@@ -136,14 +168,27 @@ def fixture_app_exclude_clause(table_alias: str = "a") -> Tuple[str, List[str]]:
     """
     id_col = f"{table_alias}.id" if table_alias else "id"
     fix_col = f"{table_alias}.is_fixture" if table_alias else "is_fixture"
+    if not include_text_patterns:
+        return (
+            f"{id_col} NOT LIKE ? AND ({fix_col} IS NULL OR NOT {fix_col})",
+            [FIXTURE_APP_ID_PATTERN],
+        )
+    fixture_match_sql, fixture_match_params = _fixture_application_match_clause(
+        table_alias,
+        ref_column=ref_column,
+        name_column=name_column,
+    )
     return (
-        f"{id_col} NOT LIKE ? AND ({fix_col} IS NULL OR NOT {fix_col})",
-        [FIXTURE_APP_ID_PATTERN],
+        f"{id_col} NOT LIKE ? AND ({fix_col} IS NULL OR NOT {fix_col}) "
+        f"AND NOT ({fixture_match_sql})",
+        [FIXTURE_APP_ID_PATTERN, *fixture_match_params],
     )
 
 
 def fixture_app_id_exclude_clause(
     col_name: str = "application_id",
+    *,
+    include_text_patterns: bool = False,
 ) -> Tuple[str, List[str]]:
     """Return ``(sql_fragment, params)`` that excludes fixture-linked rows.
 
@@ -172,11 +217,19 @@ def fixture_app_id_exclude_clause(
         query += f" AND {excl}"
         params.extend(excl_params)
     """
+    if not include_text_patterns:
+        return (
+            f"({col_name} IS NULL OR "
+            f"({col_name} NOT LIKE ? AND "
+            f"{col_name} NOT IN (SELECT id FROM applications WHERE is_fixture)))",
+            [FIXTURE_APP_ID_PATTERN],
+        )
+    fixture_match_sql, fixture_match_params = _fixture_application_match_clause("")
     return (
         f"({col_name} IS NULL OR "
         f"({col_name} NOT LIKE ? AND "
-        f"{col_name} NOT IN (SELECT id FROM applications WHERE is_fixture)))",
-        [FIXTURE_APP_ID_PATTERN],
+        f"{col_name} NOT IN (SELECT id FROM applications WHERE {fixture_match_sql})))",
+        [FIXTURE_APP_ID_PATTERN, *fixture_match_params],
     )
 
 
@@ -195,20 +248,48 @@ def fixture_audit_target_exclude_clause(
     This helper keeps list and export endpoints on the same fixture policy as
     the rest of the back-office query layer.
     """
-    fixture_predicate = "(id LIKE ? OR is_fixture)"
+    fixture_predicate, fixture_params = _fixture_application_match_clause("")
     return (
         f"({target_col} IS NULL OR ("
         f"{target_col} NOT LIKE ? AND "
-        f"{target_col} NOT IN (SELECT id FROM applications WHERE is_fixture) AND "
+        f"{target_col} NOT IN (SELECT id FROM applications WHERE {fixture_predicate}) AND "
         f"{target_col} NOT IN (SELECT ref FROM applications WHERE ref IS NOT NULL AND {fixture_predicate}) AND "
         f"{target_col} NOT IN (SELECT 'application:' || ref FROM applications WHERE ref IS NOT NULL AND {fixture_predicate})"
         f"))",
         [
             FIXTURE_APP_ID_PATTERN,
-            FIXTURE_APP_ID_PATTERN,
-            FIXTURE_APP_ID_PATTERN,
+            *fixture_params,
+            *fixture_params,
+            *fixture_params,
         ],
     )
+
+
+def _fixture_application_match_clause(
+    table_alias: str = "a",
+    *,
+    ref_column: Optional[str] = None,
+    name_column: Optional[str] = None,
+) -> Tuple[str, List[str]]:
+    """Return a positive fixture predicate for an applications table alias."""
+    id_col = f"{table_alias}.id" if table_alias else "id"
+    fix_col = f"{table_alias}.is_fixture" if table_alias else "is_fixture"
+    ref_name = ref_column or "ref"
+    name_name = name_column or "company_name"
+    ref_col = f"{table_alias}.{ref_name}" if table_alias and "." not in ref_name else ref_name
+    name_col = f"{table_alias}.{name_name}" if table_alias and "." not in name_name else name_name
+    clauses = [
+        f"{id_col} LIKE ?",
+        f"{fix_col}",
+    ]
+    params: List[str] = [FIXTURE_APP_ID_PATTERN]
+    for pattern in FIXTURE_APP_REF_PATTERNS:
+        clauses.append(f"LOWER(COALESCE({ref_col}, '')) LIKE ?")
+        params.append(pattern)
+    for pattern in FIXTURE_APP_TEXT_PATTERNS:
+        clauses.append(f"LOWER(COALESCE({name_col}, '')) LIKE ?")
+        params.append(pattern)
+    return "(" + " OR ".join(clauses) + ")", params
 
 
 _FIXTURE_TRUE_VALUES = ("true", "1", "yes", "on")

@@ -740,6 +740,20 @@ def _python_filter_alert_rows(rows: List[Any], include: str) -> List[Any]:
     return [row for row in rows if _row_matches_alert_include(row, include)]
 
 
+def _supports_application_fixture_text_filter(db) -> bool:
+    """Return true when the applications table has fields needed by text filters."""
+    if getattr(db, "is_postgres", False):
+        return True
+    try:
+        columns = {
+            str(row["name"] if hasattr(row, "keys") else row[1]).lower()
+            for row in db.execute("PRAGMA table_info(applications)").fetchall()
+        }
+    except Exception:
+        return False
+    return {"ref", "company_name"}.issubset(columns)
+
+
 def _fetch_alerts(db, *, application_id=None, include="active",
                   exclude_fixtures=True) -> List[Any]:
     from lifecycle_quarantine import (
@@ -755,7 +769,10 @@ def _fetch_alerts(db, *, application_id=None, include="active",
     # Fixture exclusion: omit rows linked to fixture applications.
     # Applied to base_sql so it is also honoured in the fallback path.
     if exclude_fixtures:
-        fx_excl, fx_p = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_p = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=_supports_application_fixture_text_filter(db),
+        )
         base_sql += f" AND {fx_excl}"
         base_params.extend(fx_p)
     sql = base_sql
@@ -803,7 +820,10 @@ def _fetch_reviews(db, *, application_id=None, include="active",
         sql += " AND application_id = ?"
         params.append(application_id)
     if exclude_fixtures:
-        fx_excl, fx_p = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_p = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=_supports_application_fixture_text_filter(db),
+        )
         sql += f" AND {fx_excl}"
         params.extend(fx_p)
     sql += " ORDER BY created_at DESC"
@@ -826,7 +846,10 @@ def _fetch_edd(db, *, application_id=None, include="active",
     if exclude_fixtures:
         # edd_cases.application_id is NOT NULL but use the shared NULL-safe
         # helper for uniformity (the IS NULL guard is a no-op here).
-        fx_excl, fx_p = fixture_app_id_exclude_clause("application_id")
+        fx_excl, fx_p = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=_supports_application_fixture_text_filter(db),
+        )
         sql += f" AND {fx_excl}"
         params.extend(fx_p)
     sql += " ORDER BY triggered_at DESC"
