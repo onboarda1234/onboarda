@@ -25,31 +25,84 @@ def _free_port():
     return port
 
 
+def _patch_attr(module, name, value, restore):
+    sentinel = object()
+    old_value = getattr(module, name, sentinel)
+    restore.append((module, name, old_value, sentinel))
+    setattr(module, name, value)
+
+
+def _restore_attrs(restore):
+    for module, name, old_value, sentinel in reversed(restore):
+        if old_value is sentinel:
+            try:
+                delattr(module, name)
+            except AttributeError:
+                pass
+        else:
+            setattr(module, name, old_value)
+
+
+def _configure_isolated_sqlite(db_path):
+    import config as config_module
+    import db as db_module
+
+    restore = []
+    _patch_attr(config_module, "DATABASE_URL", "", restore)
+    _patch_attr(config_module, "DB_PATH", db_path, restore)
+    _patch_attr(config_module, "ENVIRONMENT", "testing", restore)
+    _patch_attr(db_module, "DATABASE_URL", "", restore)
+    _patch_attr(db_module, "DB_PATH", db_path, restore)
+    _patch_attr(db_module, "USE_POSTGRESQL", False, restore)
+    _patch_attr(db_module, "_CFG_ENVIRONMENT", "testing", restore)
+
+    server_module = sys.modules.get("server")
+    if server_module is not None:
+        _patch_attr(server_module, "DATABASE_URL", "", restore)
+        _patch_attr(server_module, "DB_PATH", db_path, restore)
+        _patch_attr(server_module, "USE_POSTGRES", False, restore)
+        _patch_attr(server_module, "USE_POSTGRESQL", False, restore)
+        _patch_attr(server_module, "db_get_db", db_module.get_db, restore)
+        _patch_attr(server_module, "db_init_db", db_module.init_db, restore)
+    return db_module, restore
+
+
 @pytest.fixture(scope="module")
 def monitoring_list_server():
     db_path = os.path.join(
         tempfile.gettempdir(),
         f"onboarda_monitoring_list_contract_{os.getpid()}_{time.time_ns()}.db",
     )
+    restore = []
+    db_module = None
+    thread = None
+    server_ref = {}
+    previous_env = {
+        "DB_PATH": os.environ.get("DB_PATH"),
+        "DATABASE_URL": os.environ.get("DATABASE_URL"),
+    }
     os.environ["DB_PATH"] = db_path
     os.environ["DATABASE_URL"] = ""
 
-    import importlib
-    import db as db_module
-
-    importlib.reload(db_module)
-    db_module._DB_PATH = db_path
+    db_module, restore = _configure_isolated_sqlite(db_path)
     db_module.init_db()
     conn = db_module.get_db()
     _seed_users_applications_and_alerts(conn)
     conn.commit()
     conn.close()
 
+    import server as server_module
+
+    _patch_attr(server_module, "DATABASE_URL", "", restore)
+    _patch_attr(server_module, "DB_PATH", db_path, restore)
+    _patch_attr(server_module, "USE_POSTGRES", False, restore)
+    _patch_attr(server_module, "USE_POSTGRESQL", False, restore)
+    _patch_attr(server_module, "db_get_db", db_module.get_db, restore)
+    _patch_attr(server_module, "db_init_db", db_module.init_db, restore)
     from server import make_app
 
     app = make_app()
     port = _free_port()
-    server_ref = {}
     started = threading.Event()
 
     def run_server():
@@ -65,18 +118,33 @@ def monitoring_list_server():
         started.set()
         io_loop.start()
 
-    thread = threading.Thread(target=run_server, daemon=True)
-    thread.start()
-    started.wait(timeout=3)
-    time.sleep(0.2)
-    yield f"http://127.0.0.1:{port}", db_module
-
-    loop = server_ref.get("loop")
-    server = server_ref.get("server")
-    if loop and server:
-        loop.add_callback(server.stop)
-        loop.add_callback(loop.stop)
-    thread.join(timeout=2)
+    try:
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+        started.wait(timeout=3)
+        time.sleep(0.2)
+        yield f"http://127.0.0.1:{port}", db_module
+    finally:
+        loop = server_ref.get("loop")
+        server = server_ref.get("server")
+        if loop and server:
+            loop.add_callback(server.stop)
+            loop.add_callback(loop.stop)
+        if thread:
+            thread.join(timeout=2)
+        if previous_env["DB_PATH"] is None:
+            os.environ.pop("DB_PATH", None)
+        else:
+            os.environ["DB_PATH"] = previous_env["DB_PATH"]
+        if previous_env["DATABASE_URL"] is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous_env["DATABASE_URL"]
+        _restore_attrs(restore)
+        try:
+            os.unlink(db_path)
+        except FileNotFoundError:
+            pass
 
 
 def _seed_users_applications_and_alerts(conn):
