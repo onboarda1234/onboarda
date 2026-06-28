@@ -2054,7 +2054,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
     <div>
       <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Monitoring Alerts</h3>
-      <p style="font-size:13px;color:var(--text3);">Track monitoring alerts, document expiry, risk drift, and regulatory impact.</p>
+      <p style="font-size:13px;color:var(--text3);">Active monitoring alerts requiring officer review.</p>
     </div>
   </div>
 
@@ -2070,53 +2070,58 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="stat-card"><div class="stat-card-label">Open Alerts</div><div class="stat-card-value" style="color:var(--amber);" id="mon-stat-open">0</div></div>
       <div class="stat-card"><div class="stat-card-label">High / Critical</div><div class="stat-card-value" style="color:var(--red);" id="mon-stat-high-critical">0</div></div>
       <div class="stat-card"><div class="stat-card-label">Document Expiry</div><div class="stat-card-value" style="color:var(--blue);" id="mon-stat-document-expiry">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Risk Drift</div><div class="stat-card-value" style="color:var(--green);" id="mon-stat-risk-drift">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Results</div><div class="stat-card-value" style="color:var(--green);" id="mon-stat-total">0</div></div>
       <div class="stat-card"><div class="stat-card-label">Escalated</div><div class="stat-card-value" style="color:#7c3aed;" id="mon-stat-escalated">0</div></div>
     </div>
 
     <div class="tab-bar" style="margin-bottom:16px;">
-      <div class="tab active" data-monitoring-alert-tab="all" onclick="setMonitoringAlertSubtab('all',this)">All Alerts</div>
+      <div class="tab active" data-monitoring-alert-tab="all" onclick="setMonitoringAlertSubtab('all',this)">All Active Alerts</div>
       <div class="tab" data-monitoring-alert-tab="screening" onclick="setMonitoringAlertSubtab('screening',this)">Adverse Media / Screening Changes</div>
       <div class="tab" data-monitoring-alert-tab="document_expiry" onclick="setMonitoringAlertSubtab('document_expiry',this)">Document Expiry</div>
-      <div class="tab" data-monitoring-alert-tab="risk_drift" onclick="setMonitoringAlertSubtab('risk_drift',this)">Risk Drift</div>
+      <div class="tab" data-monitoring-alert-tab="missing_document_refresh" onclick="setMonitoringAlertSubtab('missing_document_refresh',this)">Missing Document Refresh</div>
       <div class="tab" data-monitoring-alert-tab="escalated" onclick="setMonitoringAlertSubtab('escalated',this)">Escalated</div>
     </div>
 
     <div id="monitoring-alert-context-banner" style="display:none;margin-bottom:12px;padding:10px 12px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#153a7d;font-size:12px;"></div>
 
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-      <select class="form-select" style="width:auto;" id="alert-severity-filter" onchange="renderMonitoringAlerts()">
+      <input class="form-input" style="width:240px;" id="monitoring-alert-search" placeholder="Search client, ref, case" onkeydown="if(event.key==='Enter'){ reloadMonitoringAlertsFromFilters(); }" />
+      <select class="form-select" style="width:auto;" id="alert-severity-filter" onchange="reloadMonitoringAlertsFromFilters()">
         <option value="">All Severities</option>
         <option value="critical">Critical</option>
         <option value="high">High</option>
         <option value="medium">Medium</option>
         <option value="low">Low</option>
       </select>
-      <select class="form-select" style="width:auto;" id="alert-type-filter" onchange="renderMonitoringAlerts()">
+      <select class="form-select" style="width:auto;" id="alert-type-filter" onchange="reloadMonitoringAlertsFromFilters()">
         <option value="">All Alert Types</option>
         <option value="adverse_media">Adverse Media</option>
         <option value="pep_change">PEP Change</option>
         <option value="sanctions_change">Sanctions Change</option>
         <option value="document_expiry">Document Expiry</option>
         <option value="missing_document_refresh">Missing Document Refresh</option>
-        <option value="risk_drift">Risk Drift</option>
-        <option value="unusual_activity">Unusual Activity</option>
-        <option value="regulatory_impact">Regulatory Impact</option>
         <option value="other">Other</option>
       </select>
-      <select class="form-select" style="width:auto;" id="alert-status-filter" onchange="renderMonitoringAlerts()">
-        <option value="">All Statuses</option>
+      <select class="form-select" style="width:auto;" id="alert-status-filter" onchange="reloadMonitoringAlertsFromFilters()">
+        <option value="">All Active Statuses</option>
         <option value="open">Open</option>
         <option value="in_review">In Review</option>
         <option value="assigned">Assigned</option>
         <option value="document_requested">Document Requested</option>
         <option value="client_uploaded">Client Uploaded</option>
+        <option value="under_review">Under Review</option>
         <option value="escalated">Escalated</option>
         <option value="routed_to_edd">Routed to EDD</option>
+        <option value="routed_to_review">Routed to Review</option>
         <option value="dismissed">Dismissed</option>
         <option value="resolved">Resolved</option>
         <option value="waived">Waived</option>
       </select>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);padding:8px 10px;border:1px solid var(--border1);border-radius:6px;background:var(--surface);">
+        <input type="checkbox" id="alert-include-closed" onchange="reloadMonitoringAlertsFromFilters()" />
+        Include closed
+      </label>
+      <button class="btn btn-sm btn-outline" type="button" onclick="reloadMonitoringAlertsFromFilters()">Search</button>
     </div>
 
     <div class="card" style="padding:0;overflow:hidden;">
@@ -2127,6 +2132,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <tbody id="monitoring-alerts-body"></tbody>
       </table>
     </div>
+    <div id="monitoring-alerts-pagination" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--text2);"></div>
   </div>
 
   <!-- Agents Tab -->
@@ -3825,6 +3831,10 @@ function setShowTestSmokeRecords(checked) {
     PERIODIC_REVIEWS = [];
     ensureMonitoringDataLoaded({ force: true }).then(function() { renderPeriodicReviewQueue(); });
   }
+  if (viewName === 'monitoring') {
+    MONITORING_ALERTS_FILTERS.page = 1;
+    reloadMonitoringAlertsFromFilters(1);
+  }
   if (viewName === 'change-mgmt') {
     loadChangeManagementWorkspace({ force: true });
   }
@@ -4472,6 +4482,8 @@ function resetBackofficeSessionData() {
   MONITORING_ALERTS = [];
   MONITORING_ALERTS_LOAD_ERROR = null;
   MONITORING_ALERT_SUBTAB = 'all';
+  MONITORING_ALERTS_META = { page: 1, page_size: 25, total: 0, total_pages: 0, has_next: false, has_previous: false, counts: {}, filters: {} };
+  MONITORING_ALERTS_FILTERS = { page: 1, pageSize: 25, severity: '', type: '', status: '', search: '', includeClosed: false };
   window._monitoringAlertsApplicationContext = null;
   MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [], loading: false, error: '' };
   MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = false;
@@ -4540,6 +4552,7 @@ var MONITORING_ALERT_STATUS_LABELS = {
   under_review: 'Under Review',
   escalated: 'Escalated',
   routed_to_edd: 'Routed to EDD',
+  routed_to_review: 'Routed to Review',
   dismissed: 'Dismissed',
   resolved: 'Resolved',
   waived: 'Waived'
@@ -4599,8 +4612,8 @@ function normalizeAlertStatus(status) {
     reviewed: 'resolved',
     inreview: 'in_review',
     in_review: 'in_review',
-    routed_to_review: 'in_review',
-    route_to_review: 'in_review',
+    routed_to_review: 'routed_to_review',
+    route_to_review: 'routed_to_review',
     assigned: 'assigned',
     assignee: 'assigned',
     document_requested: 'document_requested',
@@ -4668,8 +4681,8 @@ function monitoringAlertClientDisplay(alertLike) {
   alertLike = alertLike || {};
   var app = findApplicationForMonitoringAlert(alertLike);
   var candidates = app
-    ? [app.company, app.companyName, app.client, alertLike.company_name, alertLike.client_company_name, alertLike.clientName, alertLike.client_name]
-    : [alertLike.company_name, alertLike.client_company_name, alertLike.clientName, alertLike.client_name];
+    ? [alertLike.client_display_name, app.company, app.companyName, app.client, alertLike.application_company_name, alertLike.company_name, alertLike.client_company_name, alertLike.clientName, alertLike.client_name]
+    : [alertLike.client_display_name, alertLike.application_company_name, alertLike.company_name, alertLike.client_company_name, alertLike.clientName, alertLike.client_name];
   for (var i = 0; i < candidates.length; i++) {
     var value = String(candidates[i] || '').trim();
     if (value && !isMonitoringUuidLike(value)) return value;
@@ -4705,7 +4718,7 @@ function monitoringStatusBadgeClass(statusKey) {
   if (statusKey === 'open' || statusKey === 'in_review' || statusKey === 'assigned' || statusKey === 'document_requested' || statusKey === 'client_uploaded' || statusKey === 'under_review') return 'pending';
   if (statusKey === 'escalated') return 'high';
   if (statusKey === 'dismissed' || statusKey === 'waived') return 'draft';
-  if (statusKey === 'resolved' || statusKey === 'routed_to_edd') return 'approved';
+  if (statusKey === 'resolved' || statusKey === 'routed_to_edd' || statusKey === 'routed_to_review') return 'approved';
   return 'in-review';
 }
 
@@ -4719,7 +4732,7 @@ function normalizeMonitoringAlert(raw) {
     id: raw.id,
     applicationId: raw.application_id || raw.applicationId || '',
     date: (raw.created_at || '').split('T')[0].split(' ')[0],
-    client: monitoringAlertClientDisplay(raw || {}),
+    client: raw.client_display_name || monitoringAlertClientDisplay(raw || {}),
     clientTitle: monitoringAlertClientTitle(raw || {}),
     typeKey: type,
     type: monitoringAlertTypeLabel(type),
@@ -4730,6 +4743,7 @@ function normalizeMonitoringAlert(raw) {
     owner: raw.assigned_officer_name || raw.owner_name || raw.assigned_name || raw.owner_email || raw.assigned_officer || raw.assigned_to || 'Unassigned',
     applicationRef: raw.application_ref || raw.ref || '',
     applicationCompanyName: raw.application_company_name || '',
+    mappingStatus: raw.mapping_status || '',
     rawStatusKey: monitoringCanonicalToken(raw.status || 'open'),
     statusKey: statusKey,
     status: monitoringAlertStatusLabel(statusKey),
@@ -5183,10 +5197,7 @@ async function loadFromAPI() {
   var monitoringAlertsLoaded = await safeLoadModule('Monitoring alerts', async function() {
     MONITORING_ALERTS = [];
     MONITORING_ALERTS_LOAD_ERROR = null;
-    var alertsResp = await boApiCall('GET', '/monitoring/alerts');
-    if (alertsResp.alerts) {
-      MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
-    }
+    await loadMonitoringAlertsFromAPI({ suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
   }, failures);
   if (!monitoringAlertsLoaded) {
     MONITORING_ALERTS_LOAD_ERROR = new Error('Monitoring alerts failed to load during dashboard bootstrap');
@@ -5584,17 +5595,106 @@ function ensureScreeningQueueLoaded(options) {
   return SCREENING_QUEUE_LOAD_PROMISE;
 }
 
+function monitoringAlertActiveFiltersFromControls() {
+  var searchEl = document.getElementById('monitoring-alert-search');
+  var severityEl = document.getElementById('alert-severity-filter');
+  var typeEl = document.getElementById('alert-type-filter');
+  var statusEl = document.getElementById('alert-status-filter');
+  var includeClosedEl = document.getElementById('alert-include-closed');
+  MONITORING_ALERTS_FILTERS.search = searchEl ? searchEl.value.trim() : (MONITORING_ALERTS_FILTERS.search || '');
+  MONITORING_ALERTS_FILTERS.severity = severityEl ? severityEl.value : (MONITORING_ALERTS_FILTERS.severity || '');
+  MONITORING_ALERTS_FILTERS.type = typeEl ? typeEl.value : (MONITORING_ALERTS_FILTERS.type || '');
+  MONITORING_ALERTS_FILTERS.status = statusEl ? statusEl.value : (MONITORING_ALERTS_FILTERS.status || '');
+  MONITORING_ALERTS_FILTERS.includeClosed = !!(includeClosedEl && includeClosedEl.checked);
+  return MONITORING_ALERTS_FILTERS;
+}
+
+function monitoringAlertQueryForSubtab(baseFilters) {
+  var params = Object.assign({}, baseFilters || {});
+  if (MONITORING_ALERT_SUBTAB === 'screening') params.type = 'screening';
+  if (MONITORING_ALERT_SUBTAB === 'document_expiry') params.type = 'document_expiry';
+  if (MONITORING_ALERT_SUBTAB === 'missing_document_refresh') params.type = 'missing_document_refresh';
+  if (MONITORING_ALERT_SUBTAB === 'escalated') params.status = 'escalated';
+  return params;
+}
+
+function buildMonitoringAlertsApiPath() {
+  var filters = monitoringAlertQueryForSubtab(MONITORING_ALERTS_FILTERS);
+  var params = new URLSearchParams('');
+  params.set('page', String(filters.page || 1));
+  params.set('page_size', String(filters.pageSize || 25));
+  if (filters.severity) params.set('severity', filters.severity);
+  if (filters.type) params.set('type', filters.type);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.search) params.set('q', filters.search);
+  if (filters.includeClosed) params.set('include_closed', 'true');
+  if (typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) params.set('show_fixtures', 'true');
+  var context = window._monitoringAlertsApplicationContext || null;
+  if (context && context.applicationId) params.set('client', context.applicationId);
+  else if (context && context.applicationRef && !filters.search) params.set('q', context.applicationRef);
+  return '/monitoring/alerts?' + params.toString();
+}
+
+function applyMonitoringAlertsPayload(alertsResp) {
+  alertsResp = alertsResp || {};
+  MONITORING_ALERTS = (alertsResp.alerts || []).filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
+  MONITORING_ALERTS_META = {
+    page: alertsResp.page || 1,
+    page_size: alertsResp.page_size || MONITORING_ALERTS_FILTERS.pageSize || 25,
+    total: alertsResp.total || 0,
+    total_pages: alertsResp.total_pages || 0,
+    has_next: !!alertsResp.has_next,
+    has_previous: !!alertsResp.has_previous,
+    counts: alertsResp.counts || {},
+    filters: alertsResp.filters || {},
+    show_fixtures: !!alertsResp.show_fixtures
+  };
+  MONITORING_ALERTS_FILTERS.page = MONITORING_ALERTS_META.page || MONITORING_ALERTS_FILTERS.page || 1;
+  MONITORING_ALERTS_FILTERS.pageSize = MONITORING_ALERTS_META.page_size || MONITORING_ALERTS_FILTERS.pageSize || 25;
+}
+
+function loadMonitoringAlertsFromAPI(options) {
+  MONITORING_ALERTS_LOAD_ERROR = null;
+  return boApiCall('GET', buildMonitoringAlertsApiPath(), null, options).then(function(alertsResp) {
+    applyMonitoringAlertsPayload(alertsResp);
+    return alertsResp;
+  }).catch(function(e) {
+    MONITORING_ALERTS = [];
+    MONITORING_ALERTS_LOAD_ERROR = e;
+    console.warn('Could not load monitoring alerts:', e);
+    throw e;
+  });
+}
+
+async function reloadMonitoringAlertsFromFilters(page) {
+  monitoringAlertActiveFiltersFromControls();
+  MONITORING_ALERTS_FILTERS.page = page || 1;
+  MONITORING_DATA_STATE = 'loading';
+  MONITORING_ALERTS_LOAD_ERROR = null;
+  renderMonitoringAlerts();
+  try {
+    await loadMonitoringAlertsFromAPI({ suppressAuthReset: true, sessionId: getCurrentBoSessionId(), force: true });
+    MONITORING_DATA_STATE = 'ready';
+  } catch(e) {
+    MONITORING_DATA_STATE = 'failed';
+  }
+  updateMonitoringAlertStats();
+  updateDashboardMonitoringStats();
+  renderMonitoringAlerts();
+}
+
+function setMonitoringAlertsPage(page) {
+  page = Math.max(1, parseInt(page, 10) || 1);
+  var totalPages = MONITORING_ALERTS_META && MONITORING_ALERTS_META.total_pages ? MONITORING_ALERTS_META.total_pages : page;
+  if (totalPages) page = Math.min(page, totalPages);
+  reloadMonitoringAlertsFromFilters(page);
+}
+
 function loadMonitoringDataFromAPI(options) {
   MONITORING_DATA_STATE = 'loading';
   MONITORING_ALERTS_LOAD_ERROR = null;
   return Promise.all([
-    boApiCall('GET', '/monitoring/alerts', null, options).then(function(alertsResp) {
-      MONITORING_ALERTS = (alertsResp.alerts || []).filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
-    }).catch(function(e) {
-      MONITORING_ALERTS = [];
-      MONITORING_ALERTS_LOAD_ERROR = e;
-      console.warn('Could not load monitoring alerts:', e);
-    }),
+    loadMonitoringAlertsFromAPI(options).catch(function() {}),
     loadPeriodicReviewQueueRows(options).then(function(reviews) {
       PERIODIC_REVIEWS = reviews;
     }).catch(function(e) {
@@ -6135,6 +6235,8 @@ var MONITORING_ALERTS = [];
 // Populated from API or left empty until monitoring data loads.
 var MONITORING_ALERTS_LOAD_ERROR = null;
 var MONITORING_ALERT_SUBTAB = 'all';
+var MONITORING_ALERTS_META = { page: 1, page_size: 25, total: 0, total_pages: 0, has_next: false, has_previous: false, counts: {}, filters: {} };
+var MONITORING_ALERTS_FILTERS = { page: 1, pageSize: 25, severity: '', type: '', status: '', search: '', includeClosed: false };
 var MONITORING_ALERT_DETAIL = { alert: null, normalized: null, auditHistory: [], loading: false, error: '' };
 var MONITORING_ALERT_ASSIGNMENT_USERS_LOADED = false;
 
@@ -6917,9 +7019,12 @@ function updateDashboardMonitoringStats() {
     });
     return;
   }
-  var openAlerts = MONITORING_ALERTS.filter(function(a) {
-    return a.statusKey === 'open' || normalizeStatusKey(a.status) === 'open';
-  }).length;
+  var metaCounts = (MONITORING_ALERTS_META && MONITORING_ALERTS_META.counts) || {};
+  var openAlerts = metaCounts.open != null
+    ? metaCounts.open
+    : MONITORING_ALERTS.filter(function(a) {
+        return a.statusKey === 'open' || normalizeStatusKey(a.status) === 'open';
+      }).length;
   var filesDue = MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.files_due === 'number'
     ? MONITORING_DASHBOARD.files_due
     : PERIODIC_REVIEWS.filter(function(r) {
@@ -21879,19 +21984,23 @@ function renderPrcEDDDetailSection(eddCase, materialised) {
     '</div>';
 }
 
-function renderMonitoring() {
-  var openAlerts = MONITORING_ALERTS.filter(function(a) { return a.statusKey === 'open'; }).length;
-  var highCriticalAlerts = MONITORING_ALERTS.filter(function(a) { return a.severityKey === 'high' || a.severityKey === 'critical'; }).length;
-  var documentExpiryAlerts = MONITORING_ALERTS.filter(function(a) { return a.typeKey === 'document_expiry' || a.typeKey === 'missing_document_refresh'; }).length;
-  var riskDriftAlerts = MONITORING_ALERTS.filter(function(a) { return a.typeKey === 'risk_drift'; }).length;
-  var escalatedAlerts = MONITORING_ALERTS.filter(function(a) { return a.statusKey === 'escalated'; }).length;
-
+function updateMonitoringAlertStats() {
+  var counts = (MONITORING_ALERTS_META && MONITORING_ALERTS_META.counts) || {};
+  var openAlerts = counts.open != null ? counts.open : MONITORING_ALERTS.filter(function(a) { return a.statusKey === 'open'; }).length;
+  var highCriticalAlerts = counts.high_critical != null ? counts.high_critical : MONITORING_ALERTS.filter(function(a) { return a.severityKey === 'high' || a.severityKey === 'critical'; }).length;
+  var documentExpiryAlerts = counts.document != null ? counts.document : MONITORING_ALERTS.filter(function(a) { return a.typeKey === 'document_expiry' || a.typeKey === 'missing_document_refresh'; }).length;
+  var totalResults = MONITORING_ALERTS_META && MONITORING_ALERTS_META.total != null ? MONITORING_ALERTS_META.total : MONITORING_ALERTS.length;
+  var escalatedAlerts = counts.escalated != null ? counts.escalated : MONITORING_ALERTS.filter(function(a) { return a.statusKey === 'escalated'; }).length;
   var el;
   el = document.getElementById('mon-stat-open'); if (el) el.textContent = openAlerts;
   el = document.getElementById('mon-stat-high-critical'); if (el) el.textContent = highCriticalAlerts;
   el = document.getElementById('mon-stat-document-expiry'); if (el) el.textContent = documentExpiryAlerts;
-  el = document.getElementById('mon-stat-risk-drift'); if (el) el.textContent = riskDriftAlerts;
+  el = document.getElementById('mon-stat-total'); if (el) el.textContent = totalResults;
   el = document.getElementById('mon-stat-escalated'); if (el) el.textContent = escalatedAlerts;
+}
+
+function renderMonitoring() {
+  updateMonitoringAlertStats();
   updateDashboardMonitoringStats();
 
   renderMonitoringAlerts();
@@ -22013,7 +22122,7 @@ function setMonitoringAlertSubtab(tab, btn) {
     host.querySelectorAll('[data-monitoring-alert-tab]').forEach(function(t) { t.classList.remove('active'); });
   }
   if (btn) btn.classList.add('active');
-  renderMonitoringAlerts();
+  reloadMonitoringAlertsFromFilters(1);
 }
 
 function monitoringAlertMatchesSubtab(alert) {
@@ -22021,9 +22130,9 @@ function monitoringAlertMatchesSubtab(alert) {
     return ['adverse_media','pep_change','sanctions_change'].indexOf(alert.typeKey) >= 0;
   }
   if (MONITORING_ALERT_SUBTAB === 'document_expiry') {
-    return alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh';
+    return alert.typeKey === 'document_expiry';
   }
-  if (MONITORING_ALERT_SUBTAB === 'risk_drift') return alert.typeKey === 'risk_drift';
+  if (MONITORING_ALERT_SUBTAB === 'missing_document_refresh') return alert.typeKey === 'missing_document_refresh';
   if (MONITORING_ALERT_SUBTAB === 'escalated') return alert.statusKey === 'escalated';
   return true;
 }
@@ -22846,9 +22955,6 @@ async function saveMonitoringAlertAssignment() {
 function renderMonitoringAlerts() {
   var tbody = document.getElementById('monitoring-alerts-body');
   if (!tbody) return;
-  var severityFilter = document.getElementById('alert-severity-filter').value;
-  var typeFilter = document.getElementById('alert-type-filter').value;
-  var statusFilter = document.getElementById('alert-status-filter').value;
   var contextLabel = monitoringAlertsContextLabel();
   var contextBanner = document.getElementById('monitoring-alert-context-banner');
   if (contextBanner) {
@@ -22867,10 +22973,12 @@ function renderMonitoringAlerts() {
   tbody.innerHTML = '';
   if (MONITORING_DATA_STATE === 'loading' && !MONITORING_ALERTS.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">Loading monitoring alerts...</td></tr>';
+    renderMonitoringAlertsPagination();
     return;
   }
   if (MONITORING_ALERTS_LOAD_ERROR) {
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#991b1b;padding:18px;">Monitoring alerts could not be loaded. Retry the page or contact support if this continues.</td></tr>';
+    renderMonitoringAlertsPagination();
     return;
   }
   var rendered = 0;
@@ -22879,9 +22987,6 @@ function renderMonitoringAlerts() {
     alert.clientTitle = monitoringAlertClientTitle(alert.raw || alert);
     if (!monitoringAlertMatchesApplicationContext(alert)) return;
     if (!monitoringAlertMatchesSubtab(alert)) return;
-    if (severityFilter && alert.severityKey !== severityFilter) return;
-    if (typeFilter && alert.typeKey !== typeFilter) return;
-    if (statusFilter && alert.statusKey !== statusFilter) return;
 
     var tr = document.createElement('tr');
     var severityColor = monitoringSeverityBadgeClass(alert.severityKey);
@@ -22909,11 +23014,46 @@ function renderMonitoringAlerts() {
     rendered++;
   });
   if (!rendered) {
+    var metaFilters = (MONITORING_ALERTS_META && MONITORING_ALERTS_META.filters) || {};
+    var defaultEmpty = metaFilters.include_closed
+      ? 'No monitoring alerts match the current filters.'
+      : 'No active alerts requiring review.';
     var msg = contextLabel
       ? 'No monitoring alerts match the current filters for ' + contextLabel + '.'
-      : (MONITORING_ALERTS.length ? 'No monitoring alerts match the current filters.' : 'No monitoring alerts found.');
+      : (MONITORING_ALERTS.length ? 'No monitoring alerts match the current filters.' : defaultEmpty);
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">' + escapeHtml(msg) + '</td></tr>';
   }
+  renderMonitoringAlertsPagination();
+}
+
+function renderMonitoringAlertsPagination() {
+  var host = document.getElementById('monitoring-alerts-pagination');
+  if (!host) return;
+  var meta = MONITORING_ALERTS_META || {};
+  if (MONITORING_DATA_STATE === 'loading') {
+    host.innerHTML = '<span>Loading page...</span>';
+    return;
+  }
+  var total = meta.total || 0;
+  var page = meta.page || 1;
+  var pageSize = meta.page_size || MONITORING_ALERTS_FILTERS.pageSize || 25;
+  var totalPages = meta.total_pages || 0;
+  var start = total ? ((page - 1) * pageSize + 1) : 0;
+  var end = total ? Math.min(total, start + MONITORING_ALERTS.length - 1) : 0;
+  var fixtureNote = meta.show_fixtures ? ' including test/smoke records' : '';
+  var summary = total
+    ? ('Showing ' + start + '-' + end + ' of ' + total + ' alerts' + fixtureNote)
+    : ('Showing 0 alerts' + fixtureNote);
+  var prevDisabled = !meta.has_previous ? ' disabled' : '';
+  var nextDisabled = !meta.has_next ? ' disabled' : '';
+  host.innerHTML =
+    '<span>' + escapeHtml(summary) + '</span>' +
+    '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      '<button class="btn btn-sm btn-outline" type="button" onclick="setMonitoringAlertsPage(1)"' + prevDisabled + '>Page 1</button>' +
+      '<button class="btn btn-sm btn-outline" type="button" onclick="setMonitoringAlertsPage(' + String(Math.max(1, page - 1)) + ')"' + prevDisabled + '>Previous</button>' +
+      '<span>Page ' + escapeHtml(String(totalPages ? page : 0)) + ' of ' + escapeHtml(String(totalPages || 0)) + '</span>' +
+      '<button class="btn btn-sm btn-outline" type="button" onclick="setMonitoringAlertsPage(' + String(page + 1) + ')"' + nextDisabled + '>Next</button>' +
+    '</div>';
 }
 
 function renderPeriodicReviews() {
@@ -23109,10 +23249,7 @@ async function triggerAgentRun(agentId) {
     showToast('Agent run triggered successfully');
     // Refresh monitoring data
     try {
-      var alertsResp = await boApiCall('GET', '/monitoring/alerts');
-      if (alertsResp.alerts) {
-        MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
-      }
+      await loadMonitoringAlertsFromAPI({ force: true });
     } catch(e) {}
     try {
       var agentsResp = await boApiCall('GET', '/monitoring/agents');

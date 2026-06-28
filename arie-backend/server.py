@@ -25385,17 +25385,39 @@ class MonitoringAlertCreateHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import fixture_app_id_exclude_clause
+        from fixture_filter import fixture_app_id_exclude_clause, fixture_request_opt_in, should_show_fixtures
 
-        severity = self.get_argument("severity", None)
-        alert_type = self.get_argument("type", None)
-        status_filter = self.get_argument("status", None)
+        severity_filter = _monitoring_list_canonical_severity(self.get_argument("severity", None))
+        if self.get_argument("severity", None) in (None, ""):
+            severity_filter = ""
+        type_filter = _monitoring_list_token(self.get_argument("type", None))
+        status_filter_raw = self.get_argument("status", None)
+        status_filter = _monitoring_list_canonical_status(status_filter_raw) if status_filter_raw else ""
+        search = str(self.get_argument("q", self.get_argument("search", "")) or "").strip()
         client_id = self.get_argument("client", None)
+        owner_filter = str(self.get_argument("owner", self.get_argument("assignee", "")) or "").strip()
+        page_size_default = self.get_argument("limit", "25")
+        page_size = _bounded_int(self.get_argument("page_size", page_size_default), 25, min_value=1, max_value=100)
+        page = _bounded_int(self.get_argument("page", "1"), 1, min_value=1, max_value=1000000)
+        if self.get_argument("offset", None) is not None and self.get_argument("page", None) is None:
+            offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
+            page = max(1, (offset // page_size) + 1)
+        else:
+            offset = (page - 1) * page_size
+        include_closed_requested = _monitoring_list_truthy(self.get_argument("include_closed", None))
+        include_closed = include_closed_requested or status_filter in _MONITORING_LIST_TERMINAL_STATUSES or status_filter == "all"
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        include_internal_types = (
+            _monitoring_list_truthy(self.get_argument("include_internal_types", None))
+            and str(user.get("role") or user.get("type") or "").lower() in {"admin", "sco"}
+        )
+        include_unmapped = (
+            _monitoring_list_truthy(self.get_argument("include_unmapped", None))
+            and str(user.get("role") or user.get("type") or "").lower() in {"admin", "sco"}
+        )
 
         db = get_db()
         try:
-            # Exclude fixture-linked alerts by default (application_id NOT LIKE 'f1xed%')
-            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
             query = f"""
                 SELECT ma.*,
                        u.full_name AS owner_name,
@@ -25405,28 +25427,86 @@ class MonitoringAlertCreateHandler(BaseHandler):
                   FROM monitoring_alerts ma
              LEFT JOIN users u ON ma.reviewed_by = u.id
              LEFT JOIN applications app ON ma.application_id = app.id
-                 WHERE {fx_excl.replace("application_id", "ma.application_id")}
+                 WHERE 1=1
             """
-            params = list(fx_params)
+            params = []
+            if not show_fx:
+                fx_excl, fx_params = fixture_app_id_exclude_clause(
+                    "ma.application_id",
+                    include_text_patterns=True,
+                )
+                query += f" AND {fx_excl}"
+                params.extend(fx_params)
+                extra_fx_sql, extra_fx_params = _monitoring_list_extra_fixture_clause()
+                query += extra_fx_sql
+                params.extend(extra_fx_params)
 
-            if severity:
-                query += " AND ma.severity = ?"
-                params.append(severity)
-            if alert_type:
-                query += " AND ma.alert_type = ?"
-                params.append(alert_type)
-            if status_filter:
-                query += " AND ma.status = ?"
-                params.append(status_filter)
             if client_id:
                 query += " AND ma.application_id = ?"
                 params.append(client_id)
+            if owner_filter:
+                if owner_filter.lower() == "unassigned":
+                    query += " AND (ma.reviewed_by IS NULL OR ma.reviewed_by = '')"
+                else:
+                    query += " AND ma.reviewed_by = ?"
+                    params.append(owner_filter)
 
             query += " ORDER BY ma.created_at DESC"
-            alerts = db.execute(query, params).fetchall()
+            raw_alerts = db.execute(query, params).fetchall()
 
-            result = [dict(a) for a in alerts]
-            self.success({"alerts": result, "total": len(result)})
+            projected = [_monitoring_list_project_row(row) for row in raw_alerts]
+            filtered = []
+            for item in projected:
+                if not include_closed and item["is_terminal"]:
+                    continue
+                if status_filter and status_filter != "all" and item["canonical_status"] != status_filter:
+                    continue
+                if severity_filter and item["canonical_severity"] != severity_filter:
+                    continue
+                if type_filter:
+                    if type_filter in _MONITORING_LIST_INTERNAL_TYPES and not include_internal_types:
+                        continue
+                    if type_filter == "screening":
+                        if item["canonical_type"] not in {"adverse_media", "pep_change", "sanctions_change"}:
+                            continue
+                    elif item["canonical_type"] != type_filter:
+                        continue
+                elif item["is_internal_type"] and not include_internal_types:
+                    continue
+                if not item["is_supported_pilot_type"] and not item["is_internal_type"]:
+                    continue
+                if not item.get("client_display_name") and not include_unmapped:
+                    continue
+                if not _monitoring_list_matches_search(item, search):
+                    continue
+                filtered.append(item)
+
+            total = len(filtered)
+            page_items = filtered[offset:offset + page_size]
+            total_pages = max(1, math.ceil(total / page_size)) if total else 0
+            self.success({
+                "alerts": page_items,
+                "page": page,
+                "page_size": page_size,
+                "offset": offset,
+                "total": total,
+                "total_pages": total_pages,
+                "has_next": offset + len(page_items) < total,
+                "has_previous": page > 1 and total > 0,
+                "filters": {
+                    "include_closed": include_closed,
+                    "show_fixtures": show_fx,
+                    "status": status_filter if status_filter_raw else "",
+                    "severity": severity_filter,
+                    "type": type_filter,
+                    "search": search,
+                    "owner": owner_filter,
+                    "include_internal_types": include_internal_types,
+                    "include_unmapped": include_unmapped,
+                },
+                "counts": _monitoring_list_counts(filtered),
+                "show_fixtures": show_fx,
+            })
         finally:
             db.close()
 
@@ -29671,6 +29751,284 @@ class ClientStatusLookupHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 # MONITORING ENDPOINTS (Ongoing Monitoring)
 # ══════════════════════════════════════════════════════════
+
+_MONITORING_LIST_ACTIVE_STATUSES = {
+    "open",
+    "assigned",
+    "in_review",
+    "document_requested",
+    "client_uploaded",
+    "under_review",
+    "awaiting_review",
+    "escalated",
+    "notification_failed",
+}
+
+_MONITORING_LIST_TERMINAL_STATUSES = {
+    "resolved",
+    "closed",
+    "dismissed",
+    "waived",
+    "cancelled",
+    "routed_to_edd",
+    "routed_to_review",
+}
+
+_MONITORING_LIST_SUPPORTED_TYPES = {
+    "document_expiry",
+    "missing_document_refresh",
+    "adverse_media",
+    "pep_change",
+    "sanctions_change",
+    "other",
+}
+
+_MONITORING_LIST_INTERNAL_TYPES = {
+    "risk_drift",
+    "unusual_activity",
+    "regulatory_impact",
+}
+
+_MONITORING_LIST_SEVERITIES = {"critical", "high", "medium", "low", "unknown"}
+
+_MONITORING_LIST_EXTRA_FIXTURE_PATTERNS = (
+    "%approval audit%",
+    "%regmind approval audit%",
+    "%manual_ge2e%",
+    "%manual_pr%",
+    "%pr290%",
+    "%periodic_review_demo%",
+    "%browser-smoke%",
+)
+
+
+def _monitoring_list_token(value):
+    return re.sub(r"[^a-z0-9_]+", "", str(value or "").strip().lower().replace("-", "_").replace(" ", "_"))
+
+
+def _monitoring_list_truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _monitoring_list_canonical_status(value):
+    token = _monitoring_list_token(value or "open")
+    aliases = {
+        "": "open",
+        "new": "open",
+        "opened": "open",
+        "open": "open",
+        "triaged": "in_review",
+        "review": "in_review",
+        "inreview": "in_review",
+        "in_review": "in_review",
+        "assigned": "assigned",
+        "document_requested": "document_requested",
+        "documents_requested": "document_requested",
+        "client_document_requested": "document_requested",
+        "requested": "document_requested",
+        "client_uploaded": "client_uploaded",
+        "uploaded": "client_uploaded",
+        "under_review": "under_review",
+        "underreview": "under_review",
+        "awaiting_review": "awaiting_review",
+        "awaitingreview": "awaiting_review",
+        "notification_failed": "notification_failed",
+        "notificationfailed": "notification_failed",
+        "escalated": "escalated",
+        "escalated_to_edd": "routed_to_edd",
+        "routed_edd": "routed_to_edd",
+        "routed_to_edd": "routed_to_edd",
+        "route_to_edd": "routed_to_edd",
+        "routed_to_review": "routed_to_review",
+        "route_to_review": "routed_to_review",
+        "dismissed": "dismissed",
+        "closed_dismissed": "dismissed",
+        "resolved": "resolved",
+        "resolved_no_change": "resolved",
+        "closed": "closed",
+        "waived": "waived",
+        "waiver": "waived",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+    }
+    return aliases.get(token, token or "open")
+
+
+def _monitoring_list_canonical_severity(value):
+    token = _monitoring_list_token(value)
+    aliases = {
+        "urgent": "critical",
+        "very_high": "critical",
+        "veryhigh": "critical",
+        "critical": "critical",
+        "high": "high",
+        "medium": "medium",
+        "med": "medium",
+        "low": "low",
+        "info": "low",
+        "informational": "low",
+        "unknown": "unknown",
+    }
+    return aliases.get(token, "unknown" if token else "medium")
+
+
+def _monitoring_list_canonical_type(row):
+    raw = dict(row or {})
+    direct = _monitoring_list_token(raw.get("alert_type") or raw.get("type") or raw.get("alertType") or "")
+    summary = str(raw.get("summary") or raw.get("detail") or "").lower()
+    source = direct
+    if source == "fixture":
+        source = _monitoring_list_token(summary)
+    if source in {"media", "adversemedia", "adverse_media", "adverse_media_alert", "negative_news", "news"} or "adverse media" in summary:
+        return "adverse_media"
+    if source in {"pep", "pep_change", "pep_status_change", "pep_monitoring", "pep_status"} or "pep" in summary:
+        return "pep_change"
+    if "sanction" in source or "watchlist" in source or "sanction" in summary:
+        return "sanctions_change"
+    if source in {"document_expiry", "document_expired", "document_expiring", "document_expiring_soon", "document_stale", "document_health", "expiry", "expired"} or "document expir" in summary:
+        return "document_expiry"
+    if source in {"document_expiry_missing", "missing_document", "missing_document_refresh", "document_refresh", "document_refresh_due", "missing_docs", "kyc_refresh_missing"} or "missing document" in summary or "document refresh" in summary:
+        return "missing_document_refresh"
+    if "risk_drift" in source or "drift" in source or "risk drift" in summary or "outstanding alert" in summary:
+        return "risk_drift"
+    if "unusual" in source or "activity" in source or "transaction" in source or "velocity" in source:
+        return "unusual_activity"
+    if "regulatory" in source or "regulation" in source or "reg_intel" in source:
+        return "regulatory_impact"
+    return "other"
+
+
+def _monitoring_list_is_uuid_like(value):
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(
+        re.fullmatch(r"[0-9a-f]{16,32}", text, flags=re.IGNORECASE)
+        or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text, flags=re.IGNORECASE)
+        or text.lower().startswith("f1xed")
+    )
+
+
+def _monitoring_list_client_display(row):
+    candidates = (
+        row.get("application_company_name"),
+        row.get("company_name"),
+        row.get("client_company_name"),
+        row.get("client_name"),
+        row.get("application_ref"),
+        row.get("application_id"),
+    )
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text and not _monitoring_list_is_uuid_like(text):
+            if row.get("application_id"):
+                return text, "mapped"
+            return text, "legacy_named"
+    if row.get("application_id"):
+        return "", "mapped_without_display_name"
+    return "", "unmapped_legacy"
+
+
+def _monitoring_list_is_terminal(row, status_key):
+    if row.get("resolved_at") not in (None, ""):
+        return True
+    return status_key in _MONITORING_LIST_TERMINAL_STATUSES
+
+
+def _monitoring_list_project_row(row):
+    item = dict(row)
+    status_key = _monitoring_list_canonical_status(item.get("status"))
+    severity_key = _monitoring_list_canonical_severity(item.get("severity"))
+    type_key = _monitoring_list_canonical_type(item)
+    client_display, mapping_status = _monitoring_list_client_display(item)
+    is_terminal = _monitoring_list_is_terminal(item, status_key)
+    is_supported_type = type_key in _MONITORING_LIST_SUPPORTED_TYPES
+    is_internal_type = type_key in _MONITORING_LIST_INTERNAL_TYPES
+    item.update({
+        "status_key": status_key,
+        "canonical_status": status_key,
+        "severity_key": severity_key,
+        "canonical_severity": severity_key,
+        "type_key": type_key,
+        "canonical_type": type_key,
+        "client_display_name": client_display or None,
+        "mapping_status": mapping_status,
+        "is_terminal": is_terminal,
+        "is_supported_pilot_type": is_supported_type,
+        "is_internal_type": is_internal_type,
+    })
+    return item
+
+
+def _monitoring_list_matches_search(item, search):
+    if not search:
+        return True
+    haystack = " ".join(
+        str(item.get(key) or "")
+        for key in (
+            "id",
+            "application_id",
+            "application_ref",
+            "application_company_name",
+            "client_display_name",
+            "client_name",
+            "alert_type",
+            "canonical_type",
+            "severity",
+            "canonical_severity",
+            "status",
+            "canonical_status",
+            "provider",
+            "case_identifier",
+            "source_reference",
+            "summary",
+            "owner_name",
+            "owner_email",
+        )
+    ).lower()
+    return search.lower() in haystack
+
+
+def _monitoring_list_counts(items):
+    return {
+        "active": sum(1 for item in items if not item.get("is_terminal")),
+        "closed": sum(1 for item in items if item.get("is_terminal")),
+        "open": sum(1 for item in items if item.get("canonical_status") == "open"),
+        "high_critical": sum(1 for item in items if item.get("canonical_severity") in {"high", "critical"}),
+        "document": sum(1 for item in items if item.get("canonical_type") in {"document_expiry", "missing_document_refresh"}),
+        "escalated": sum(1 for item in items if item.get("canonical_status") == "escalated"),
+    }
+
+
+def _monitoring_list_extra_fixture_clause():
+    columns = (
+        "ma.source_reference",
+        "ma.detected_by",
+        "ma.summary",
+        "ma.client_name",
+        "ma.alert_type",
+        "ma.case_identifier",
+        "app.ref",
+        "app.company_name",
+    )
+    patterns = []
+    try:
+        from fixture_filter import FIXTURE_APP_REF_PATTERNS, FIXTURE_APP_TEXT_PATTERNS
+        patterns.extend(FIXTURE_APP_REF_PATTERNS)
+        patterns.extend(FIXTURE_APP_TEXT_PATTERNS)
+    except Exception:
+        pass
+    patterns.extend(_MONITORING_LIST_EXTRA_FIXTURE_PATTERNS)
+    clauses = []
+    params = []
+    for column in columns:
+        for pattern in patterns:
+            clauses.append(f"LOWER(COALESCE({column}, '')) LIKE ?")
+            params.append(pattern)
+    if not clauses:
+        return "", []
+    return " AND NOT (" + " OR ".join(clauses) + ")", params
+
 
 MONITORING_DECISION_OUTCOMES = {
     "false_positive": {

@@ -31,7 +31,7 @@ def test_monitoring_alerts_cards_are_sprint1_source_of_truth_only():
         "Open Alerts",
         "High / Critical",
         "Document Expiry",
-        "Risk Drift",
+        "Results",
         "Escalated",
     ]:
         assert label in view
@@ -55,17 +55,25 @@ def test_monitoring_alerts_filters_use_canonical_backend_values():
         'value="sanctions_change"',
         'value="document_expiry"',
         'value="missing_document_refresh"',
-        'value="risk_drift"',
-        'value="regulatory_impact"',
         'value="high"',
         'value="critical"',
         'value="in_review"',
         'value="document_requested"',
         'value="client_uploaded"',
+        'value="under_review"',
         'value="routed_to_edd"',
+        'value="routed_to_review"',
         'value="waived"',
     ]:
         assert value in view
+
+    for unsupported in [
+        'value="risk_drift"',
+        'value="unusual_activity"',
+        'value="regulatory_impact"',
+        "Risk Drift</div>",
+    ]:
+        assert unsupported not in view
 
     for display_value in [
         'value="Adverse Media"',
@@ -104,12 +112,33 @@ def test_monitoring_alerts_render_uses_keys_and_has_truthful_empty_states():
     assert "Loading monitoring alerts..." in render
     assert "MONITORING_ALERTS_LOAD_ERROR" in render
     assert "Monitoring alerts could not be loaded" in render
-    assert "No monitoring alerts found." in render
+    assert "No active alerts requiring review." in render
     assert "No monitoring alerts match the current filters." in render
-    assert "alert.severityKey !== severityFilter" in render
-    assert "alert.typeKey !== typeFilter" in render
-    assert "alert.statusKey !== statusFilter" in render
+    assert "renderMonitoringAlertsPagination()" in render
+    assert "setMonitoringAlertsPage(" in render
     assert "openMonitoringAlertDetail(alert.id)" in render
+
+
+def test_monitoring_alerts_list_uses_paginated_server_filters():
+    html = _html()
+    view = _view_region(html, "view-monitoring", "view-lifecycle")
+    builder = _function_region(html, "buildMonitoringAlertsApiPath", "applyMonitoringAlertsPayload")
+    reloader = _function_region(html, "reloadMonitoringAlertsFromFilters", "setMonitoringAlertsPage")
+    pagination = _function_region(html, "renderMonitoringAlertsPagination", "renderPeriodicReviews")
+
+    assert 'id="monitoring-alert-search"' in view
+    assert 'id="alert-include-closed"' in view
+    assert 'id="monitoring-alerts-pagination"' in view
+    assert "reloadMonitoringAlertsFromFilters()" in view
+    assert "params.set('page'" in builder
+    assert "params.set('page_size'" in builder
+    assert "params.set('include_closed', 'true')" in builder
+    assert "params.set('show_fixtures', 'true')" in builder
+    assert "boApiCall('GET', buildMonitoringAlertsApiPath()" in html
+    assert "MONITORING_DATA_STATE = 'loading'" in reloader
+    assert "setMonitoringAlertsPage(1)" in pagination
+    assert "Previous" in pagination
+    assert "Next" in pagination
 
 
 def test_monitoring_alerts_client_display_does_not_primary_render_uuid():
@@ -119,6 +148,8 @@ def test_monitoring_alerts_client_display_does_not_primary_render_uuid():
 
     assert "Unmapped client" in client_display
     assert "findApplicationForMonitoringAlert" in client_display
+    assert "alertLike.client_display_name" in client_display
+    assert "alertLike.application_company_name" in client_display
     assert "!isMonitoringUuidLike(value)" in client_display
     assert "[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" in client_display
     assert "[1-5][0-9a-f]{3}" not in client_display

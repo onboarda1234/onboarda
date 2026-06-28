@@ -67,7 +67,7 @@ def test_monitoring_alerts_view_keeps_agents_and_drops_review_signals_tab():
     lifecycle_region = _function_region(html, "lifecycleSourceModuleLabel", "lifecycleObjectLabel")
 
     assert "Monitoring Alerts</h3>" in view_region
-    assert "Track monitoring alerts, document expiry, risk drift, and regulatory impact." in view_region
+    assert "Active monitoring alerts requiring officer review." in view_region
     assert "switchMonitoringTab('alerts',this)" in view_region
     assert "switchMonitoringTab('agents',this)" in view_region
     assert "switchMonitoringTab('reviews',this)" not in view_region
