@@ -60,7 +60,10 @@ def _cm_db() -> sqlite3.Connection:
             source_channel TEXT,
             summary TEXT,
             detected_changes TEXT,
+            source_reference TEXT,
             source_payload TEXT,
+            detected_by TEXT,
+            reviewer_notes TEXT,
             created_at TEXT
         );
         """
@@ -84,12 +87,13 @@ def _cm_db() -> sqlite3.Connection:
         ],
     )
     db.executemany(
-        "INSERT INTO change_alerts (id, application_id, status, alert_type, source_channel, summary, detected_changes, source_payload, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO change_alerts (id, application_id, status, alert_type, source_channel, summary, detected_changes, source_reference, source_payload, detected_by, reviewer_notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [
-            ("CA-PILOT", "pilot00000000001", "new", "profile_change", "system", "pilot", "{}", "{}", "2026-06-01T00:00:00Z"),
-            ("CA-FIX-ID", "f1xed00000000001", "new", "fixture", "system", "fixture id", "{}", "{}", "2026-06-02T00:00:00Z"),
-            ("CA-FIX-FLAG", "uuidfixture0001", "new", "fixture", "system", "fixture flag", "{}", "{}", "2026-06-03T00:00:00Z"),
-            ("CA-FIX-TEXT", "uuidsmoke0002", "new", "fixture", "system", "fixture text", "{}", "{}", "2026-06-04T00:00:00Z"),
+            ("CA-PILOT", "pilot00000000001", "new", "profile_change", "system", "pilot", "{}", "registry-pilot", "{}", "registry", "", "2026-06-01T00:00:00Z"),
+            ("CA-FIX-ID", "f1xed00000000001", "new", "fixture", "system", "fixture id", "{}", "fixture-id", "{}", "system", "", "2026-06-02T00:00:00Z"),
+            ("CA-FIX-FLAG", "uuidfixture0001", "new", "fixture", "system", "fixture flag", "{}", "fixture-flag", "{}", "system", "", "2026-06-03T00:00:00Z"),
+            ("CA-FIX-TEXT", "uuidsmoke0002", "new", "fixture", "system", "fixture text", "{}", "fixture-text", "{}", "system", "", "2026-06-04T00:00:00Z"),
+            ("CA-FIX-SOURCE", "pilot00000000001", "new", "profile_change", "registry_api", "CME2E harness alert", "{}", "CME2E-20260626-smoke", "{\"fixture\": true}", "cm-e2e-harness", "", "2026-06-05T00:00:00Z"),
         ],
     )
     db.commit()
@@ -98,7 +102,7 @@ def _cm_db() -> sqlite3.Connection:
 
 def test_cm_broad_lists_hide_fixture_records_by_default_filter():
     import change_management as cm
-    from fixture_filter import fixture_app_id_exclude_clause
+    from fixture_filter import fixture_app_id_exclude_clause, fixture_change_alert_exclude_clause
 
     db = _cm_db()
     try:
@@ -106,6 +110,7 @@ def test_cm_broad_lists_hide_fixture_records_by_default_filter():
             "application_id",
             include_text_patterns=True,
         )
+        alert_fixture_sql, alert_fixture_params = fixture_change_alert_exclude_clause("application_id")
 
         requests = cm.list_change_requests(
             db,
@@ -114,8 +119,8 @@ def test_cm_broad_lists_hide_fixture_records_by_default_filter():
         )
         alerts = cm.list_change_alerts(
             db,
-            fixture_filter_sql=fixture_sql,
-            fixture_filter_params=fixture_params,
+            fixture_filter_sql=alert_fixture_sql,
+            fixture_filter_params=alert_fixture_params,
         )
 
         assert [row["id"] for row in requests] == ["CR-PILOT"]
@@ -133,7 +138,7 @@ def test_cm_toggle_on_lists_include_fixture_records_with_labels():
         alerts = cm.list_change_alerts(db)
 
         assert {row["id"] for row in requests} == {"CR-PILOT", "CR-FIX-ID", "CR-FIX-FLAG", "CR-FIX-TEXT"}
-        assert {row["id"] for row in alerts} == {"CA-PILOT", "CA-FIX-ID", "CA-FIX-FLAG", "CA-FIX-TEXT"}
+        assert {row["id"] for row in alerts} == {"CA-PILOT", "CA-FIX-ID", "CA-FIX-FLAG", "CA-FIX-TEXT", "CA-FIX-SOURCE"}
         assert {row["id"]: row["is_fixture"] for row in requests}["CR-FIX-ID"] is True
         assert {row["id"]: row["is_fixture"] for row in requests}["CR-FIX-FLAG"] is True
         assert {row["id"]: row["is_fixture"] for row in alerts}["CA-FIX-ID"] is True

@@ -34178,7 +34178,7 @@ class ChangeAlertsListHandler(BaseHandler):
             return
 
         from fixture_filter import (
-            fixture_app_id_exclude_clause,
+            fixture_change_alert_exclude_clause,
             fixture_request_opt_in,
             should_show_fixtures,
         )
@@ -34191,10 +34191,7 @@ class ChangeAlertsListHandler(BaseHandler):
         fixture_filter_sql = None
         fixture_filter_params = []
         if not show_fx and not application_id:
-            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause(
-                "application_id",
-                include_text_patterns=True,
-            )
+            fixture_filter_sql, fixture_filter_params = fixture_change_alert_exclude_clause("application_id")
 
         db = get_db()
         try:
