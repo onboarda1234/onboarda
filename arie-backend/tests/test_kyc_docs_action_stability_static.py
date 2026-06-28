@@ -35,6 +35,58 @@ def test_kyc_document_actions_refresh_back_to_documents_tab():
         assert stale_refresh not in upload + reverify + review
 
 
+def test_backoffice_upload_has_progress_phases_and_duplicate_click_guard():
+    html = _read("arie-backoffice.html")
+
+    panel = _region(html, '<div id="bo-doc-upload-panel"', '<div id="detail-docs-with-verification">')
+    helpers = _region(html, "function setBoDocUploadStatus", "async function refreshCurrentKycDocumentsDetail")
+    upload = _region(html, "async function submitBoDocUpload", "async function viewBackofficeDocument")
+
+    assert 'id="bo-upload-submit-btn"' in panel
+    assert 'id="bo-upload-cancel-btn"' in panel
+    assert "var BO_DOC_UPLOAD_IN_FLIGHT = false;" in html
+    assert "var BO_DOC_UPLOAD_PHASE = 'idle';" in html
+    assert "var BO_DOC_UPLOAD_RUN_ID = 0;" in html
+    assert "function beginBoDocUploadInFlight" in helpers
+    assert "function completeBoDocUploadPhase" in helpers
+    assert "setBoDocUploadControlsDisabled(disabled)" in helpers
+    assert "submitBtn.setAttribute('aria-busy', disabled ? 'true' : 'false')" in helpers
+
+    assert "if (BO_DOC_UPLOAD_IN_FLIGHT)" in upload
+    assert "Upload already in progress. Duplicate clicks are ignored." in upload
+    assert "var uploadRunId = beginBoDocUploadInFlight('Uploading document...')" in upload
+    assert "setBoDocUploadPhase('uploaded', 'Upload saved. Verifying document...')" in upload
+    assert "setBoDocUploadPhase('verifying', 'Upload saved. Verifying document...')" in upload
+    assert "setBoDocUploadPhase('refreshing_status'" in upload
+    assert "completeBoDocUploadPhase('complete', 'Upload saved and document status refreshed.')" in upload
+    assert "completeBoDocUploadPhase('upload_error'" in upload
+
+
+def test_backoffice_upload_preserves_verification_but_separates_downstream_failures():
+    html = _read("arie-backoffice.html")
+
+    upload = _region(html, "async function submitBoDocUpload", "async function viewBackofficeDocument")
+
+    assert "await boApiCall('POST', '/documents/' + uploadedDocId + '/verify')" in upload
+    assert "postUploadWarning = 'Upload saved, but verification/status refresh could not complete. Refresh this section.'" in upload
+    assert "completeBoDocUploadPhase('post_upload_warning'" in upload
+    assert "showToast('Document uploaded. Verification/status refresh needs attention.', 'warn')" in upload
+    assert "if (uploadAccepted)" in upload
+    assert "resetBoDocUploadState({ reason: 'upload_failed' })" not in upload
+
+
+def test_backoffice_upload_does_not_block_success_on_broad_application_refresh():
+    html = _read("arie-backoffice.html")
+
+    helpers = _region(html, "function refreshBackOfficeUploadBackgroundState", "function resetBoDocUploadState")
+    upload = _region(html, "async function submitBoDocUpload", "async function viewBackofficeDocument")
+
+    assert "refreshBackOfficeUploadBackgroundState();" in upload
+    assert "loadFromAPI().catch(function(loadErr)" in helpers
+    assert "refreshAdminAuditEvidence();" in helpers
+    assert "await loadFromAPI();" not in upload
+
+
 def test_rejection_reason_is_required_in_officer_modal():
     html = _read("arie-backoffice.html")
     modal = _region(html, '<div class="modal-overlay" id="modal-document-review">', '<div class="modal-overlay" id="modal-officer-correction">')

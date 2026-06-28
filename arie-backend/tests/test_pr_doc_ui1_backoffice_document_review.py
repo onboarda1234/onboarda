@@ -116,10 +116,16 @@ def test_backoffice_upload_state_is_session_bound_and_reset_on_navigation():
     assert 'id="bo-upload-session-app-id"' in html
     assert 'id="bo-upload-session-app-ref"' in html
     assert "var BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };" in html
+    assert "var BO_DOC_UPLOAD_IN_FLIGHT = false;" in html
+    assert "var BO_DOC_UPLOAD_RUN_ID = 0;" in html
     assert "function resetBoDocUploadState" in upload_helpers
     assert "function beginBoDocUploadSession" in upload_helpers
+    assert "function beginBoDocUploadInFlight" in upload_helpers
     assert "function isBoDocUploadSessionBoundToActiveApp" in upload_helpers
     assert "BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };" in upload_helpers
+    assert "BO_DOC_UPLOAD_IN_FLIGHT = false;" in upload_helpers
+    assert "BO_DOC_UPLOAD_RUN_ID += 1;" in upload_helpers
+    assert "setBoDocUploadPhase('idle', '')" in upload_helpers
     assert "bo-upload-file" in upload_helpers
     assert "bo-upload-doc-type" in upload_helpers
     assert "bo-upload-notes" in upload_helpers
@@ -133,6 +139,7 @@ def test_backoffice_upload_state_is_session_bound_and_reset_on_navigation():
     assert "if (name !== 'app-detail' && typeof resetBoDocUploadState === 'function') resetBoDocUploadState({ reason: 'view_changed' });" in show_view
     assert "Upload cancelled because the active application changed. Please reopen upload for this application." in submit
     assert "if (!isBoDocUploadSessionBoundToActiveApp())" in submit
+    assert "if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;" in submit
     assert "formData.append('upload_session_app_id', sessionAppId || '')" in submit
     assert "formData.append('upload_session_app_ref', sessionAppRef || '')" in submit
 

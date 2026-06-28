@@ -1730,8 +1730,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         </div>
         <div id="bo-doc-upload-status" style="display:none;margin-top:10px;font-size:12px;color:#92400e;"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
-          <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()">Cancel</button>
-          <button class="btn btn-primary btn-sm" onclick="submitBoDocUpload()">Upload to Record</button>
+          <button class="btn btn-outline btn-sm" id="bo-upload-cancel-btn" onclick="toggleBoDocUpload()">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="bo-upload-submit-btn" onclick="submitBoDocUpload()">Upload to Record</button>
         </div>
           </div>
           <div id="detail-docs-with-verification"></div>
@@ -6441,6 +6441,9 @@ function syncApplicationActionPermissions(app) {
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
 var currentApp = null;
 var BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };
+var BO_DOC_UPLOAD_IN_FLIGHT = false;
+var BO_DOC_UPLOAD_PHASE = 'idle';
+var BO_DOC_UPLOAD_RUN_ID = 0;
 var currentScreeningReviewFocus = null;
 var detailLifecycleSummaryOverview = null;
 
@@ -30727,10 +30730,89 @@ async function handleResourceUpload(input) {
 // ═══════════════════════════════════════════════════════════
 // ── Back-office Document Upload ──
 function setBoDocUploadStatus(message) {
+  var tone = arguments.length > 1 ? arguments[1] : '';
   var statusEl = document.getElementById('bo-doc-upload-status');
   if (!statusEl) return;
   statusEl.textContent = message || '';
   statusEl.style.display = message ? '' : 'none';
+  statusEl.dataset.phase = tone || '';
+  if (tone === 'error') statusEl.style.color = '#991b1b';
+  else if (tone === 'success') statusEl.style.color = '#166534';
+  else statusEl.style.color = '#92400e';
+}
+
+function setBoDocUploadControlsDisabled(disabled) {
+  [
+    'bo-upload-submit-btn',
+    'bo-upload-cancel-btn',
+    'btn-bo-upload-toggle-top',
+    'bo-upload-doc-type',
+    'bo-upload-file',
+    'bo-upload-notes'
+  ].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = !!disabled;
+  });
+}
+
+function setBoDocUploadPhase(phase, message) {
+  BO_DOC_UPLOAD_PHASE = phase || 'idle';
+  var disabled = ['uploading', 'uploaded', 'verifying', 'refreshing_status'].indexOf(BO_DOC_UPLOAD_PHASE) >= 0;
+  var submitBtn = document.getElementById('bo-upload-submit-btn');
+  var tone = '';
+  if (BO_DOC_UPLOAD_PHASE === 'complete') tone = 'success';
+  else if (BO_DOC_UPLOAD_PHASE === 'upload_error') tone = 'error';
+  else if (BO_DOC_UPLOAD_PHASE === 'post_upload_warning') tone = 'warning';
+  setBoDocUploadStatus(message || '', tone);
+  setBoDocUploadControlsDisabled(disabled);
+  if (submitBtn) {
+    submitBtn.textContent = disabled ? 'Working...' : 'Upload to Record';
+    submitBtn.setAttribute('aria-busy', disabled ? 'true' : 'false');
+  }
+}
+
+function beginBoDocUploadInFlight(message) {
+  BO_DOC_UPLOAD_IN_FLIGHT = true;
+  BO_DOC_UPLOAD_RUN_ID += 1;
+  setBoDocUploadPhase('uploading', message || 'Uploading document...');
+  return BO_DOC_UPLOAD_RUN_ID;
+}
+
+function completeBoDocUploadPhase(phase, message) {
+  BO_DOC_UPLOAD_IN_FLIGHT = false;
+  setBoDocUploadPhase(phase, message);
+}
+
+function clearBoDocUploadAcceptedForm() {
+  [
+    'bo-upload-doc-type',
+    'bo-upload-file',
+    'bo-upload-notes',
+    'bo-upload-person-id',
+    'bo-upload-person-type'
+  ].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  var context = document.getElementById('bo-doc-upload-context');
+  var contextCopy = document.getElementById('bo-doc-upload-context-copy');
+  if (context) context.style.display = 'none';
+  if (contextCopy) contextCopy.textContent = '';
+}
+
+function refreshBackOfficeUploadBackgroundState() {
+  try {
+    refreshAdminAuditEvidence();
+  } catch (auditErr) {
+    console.warn('Background audit refresh after upload failed:', auditErr);
+  }
+  try {
+    loadFromAPI().catch(function(loadErr) {
+      console.warn('Background data refresh after upload failed:', loadErr);
+    });
+  } catch (loadStartErr) {
+    console.warn('Background data refresh after upload could not start:', loadStartErr);
+  }
 }
 
 function resetBoDocUploadState(options) {
@@ -30753,9 +30835,12 @@ function resetBoDocUploadState(options) {
     if (el) el.value = '';
   });
   BO_DOC_UPLOAD_SESSION = { appId: '', appRef: '' };
+  BO_DOC_UPLOAD_IN_FLIGHT = false;
+  BO_DOC_UPLOAD_PHASE = 'idle';
+  BO_DOC_UPLOAD_RUN_ID += 1;
   if (context) context.style.display = 'none';
   if (contextCopy) contextCopy.textContent = '';
-  setBoDocUploadStatus('');
+  setBoDocUploadPhase('idle', '');
   if (panel) panel.style.display = 'none';
   if (btn) btn.textContent = '📤 Upload Document';
   refreshBoDocUploadLimitCopy();
@@ -30772,7 +30857,7 @@ function beginBoDocUploadSession(app) {
   var refEl = document.getElementById('bo-upload-session-app-ref');
   if (idEl) idEl.value = BO_DOC_UPLOAD_SESSION.appId;
   if (refEl) refEl.value = BO_DOC_UPLOAD_SESSION.appRef;
-  setBoDocUploadStatus('');
+  setBoDocUploadPhase('idle', '');
 }
 
 function isBoDocUploadSessionBoundToActiveApp() {
@@ -30802,6 +30887,10 @@ function updateBoDocUploadAvailability(app) {
     disabledCopy.textContent = reason;
     disabledCopy.style.display = reason ? '' : 'none';
   }
+  if (BO_DOC_UPLOAD_IN_FLIGHT) {
+    setBoDocUploadControlsDisabled(true);
+    return;
+  }
   if (!allowed) resetBoDocUploadState({ skipAvailability: true, reason: 'upload_not_allowed' });
 }
 
@@ -30809,6 +30898,10 @@ function toggleBoDocUpload() {
   var panel = document.getElementById('bo-doc-upload-panel');
   var btn = document.getElementById('btn-bo-upload-toggle-top');
   if (!panel) return;
+  if (BO_DOC_UPLOAD_IN_FLIGHT) {
+    setBoDocUploadStatus('Upload already in progress. Wait for it to finish before closing this panel.', 'warning');
+    return;
+  }
   if (!isBoOrdinaryKycUploadAllowed(currentApp)) {
     resetBoDocUploadState({ reason: 'upload_not_allowed' });
     showToast(boOrdinaryKycUploadDisabledReason(currentApp), 'warn');
@@ -30862,6 +30955,10 @@ async function refreshCurrentKycDocumentsDetail(appRef) {
 async function submitBoDocUpload() {
   if (!currentApp) { showToast('No application selected'); return; }
   if (!BO_AUTH_TOKEN) { showToast('Back-office upload requires a live authenticated backend session'); return; }
+  if (BO_DOC_UPLOAD_IN_FLIGHT) {
+    setBoDocUploadStatus('Upload already in progress. Duplicate clicks are ignored.', 'warning');
+    return;
+  }
   if (!isBoOrdinaryKycUploadAllowed(currentApp)) {
     var disabledReason = boOrdinaryKycUploadDisabledReason(currentApp);
     resetBoDocUploadState({ reason: 'upload_not_allowed' });
@@ -30884,17 +30981,20 @@ async function submitBoDocUpload() {
   var sessionAppRef = document.getElementById('bo-upload-session-app-ref').value;
   var file = fileInput.files && fileInput.files[0];
 
-  if (!docType) { resetBoDocUploadState({ reason: 'missing_doc_type' }); showToast('Please select a document type'); return; }
-  if (!file) { resetBoDocUploadState({ reason: 'missing_file' }); showToast('Please select a file to upload'); return; }
+  if (!docType) { setBoDocUploadStatus('Select a document type before uploading.', 'warning'); showToast('Please select a document type'); return; }
+  if (!file) { setBoDocUploadStatus('Select a file before uploading.', 'warning'); showToast('Please select a file to upload'); return; }
 
   if (file.size > boDocUploadMaxBytes()) {
-    resetBoDocUploadState({ reason: 'file_too_large' });
+    setBoDocUploadStatus('File too large — maximum ' + boDocUploadMaxLabel() + '.', 'error');
     showToast('File too large — maximum ' + boDocUploadMaxLabel());
     return;
   }
 
   var uploadAppRef = currentApp.ref;
   var uploadAppTarget = currentApp.id || currentApp.ref;
+  var uploadRunId = beginBoDocUploadInFlight('Uploading document...');
+  var uploadAccepted = false;
+  var postUploadWarning = '';
   try {
     var formData = new FormData();
     formData.append('file', file);
@@ -30905,23 +31005,55 @@ async function submitBoDocUpload() {
     if (personId) query += '&person_id=' + encodeURIComponent(personId);
     if (personType) query += '&person_type=' + encodeURIComponent(personType);
     var resp = await boApiCall('POST', '/applications/' + uploadAppTarget + '/documents' + query, formData);
+    uploadAccepted = true;
+    if (uploadRunId === BO_DOC_UPLOAD_RUN_ID) {
+      setBoDocUploadPhase('uploaded', 'Upload saved. Verifying document...');
+    }
     var uploadedDocId = resp && (resp.id || (resp.data && resp.data.id));
     if (uploadedDocId) {
       try {
+        if (uploadRunId === BO_DOC_UPLOAD_RUN_ID) {
+          setBoDocUploadPhase('verifying', 'Upload saved. Verifying document...');
+        }
         await boApiCall('POST', '/documents/' + uploadedDocId + '/verify');
+        if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;
       } catch (verifyErr) {
+        if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;
         console.warn('Post-upload verification failed:', verifyErr);
+        postUploadWarning = 'Upload saved, but verification/status refresh could not complete. Refresh this section.';
       }
     }
-    await loadFromAPI();
-    refreshAdminAuditEvidence();
-    resetBoDocUploadState({ reason: 'upload_success' });
-    await refreshCurrentKycDocumentsDetail(uploadAppRef);
-    showToast('Document uploaded to the application record.');
+    if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;
+    clearBoDocUploadAcceptedForm();
+    setBoDocUploadPhase('refreshing_status', postUploadWarning || 'Verification completed. Refreshing document status...');
+    try {
+      await refreshCurrentKycDocumentsDetail(uploadAppRef);
+      if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;
+    } catch (refreshErr) {
+      if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;
+      console.warn('Post-upload KYC document refresh failed:', refreshErr);
+      postUploadWarning = 'Upload saved, but verification/status refresh could not complete. Refresh this section.';
+    }
+    if (uploadRunId === BO_DOC_UPLOAD_RUN_ID) {
+      refreshBackOfficeUploadBackgroundState();
+      if (postUploadWarning) {
+        completeBoDocUploadPhase('post_upload_warning', postUploadWarning);
+        showToast('Document uploaded. Verification/status refresh needs attention.', 'warn');
+      } else {
+        completeBoDocUploadPhase('complete', 'Upload saved and document status refreshed.');
+        showToast('Document uploaded to the application record.');
+      }
+    }
   } catch(e) {
     console.warn('Back-office document upload failed:', e);
-    resetBoDocUploadState({ reason: 'upload_failed' });
-    showToast(e.message || 'Document upload failed');
+    if (uploadRunId !== BO_DOC_UPLOAD_RUN_ID) return;
+    if (uploadAccepted) {
+      completeBoDocUploadPhase('post_upload_warning', 'Upload saved, but verification/status refresh could not complete. Refresh this section.');
+      showToast('Document uploaded. Verification/status refresh needs attention.', 'warn');
+    } else {
+      completeBoDocUploadPhase('upload_error', 'Upload failed: ' + (e.message || 'Document upload failed'));
+      showToast(e.message || 'Document upload failed');
+    }
     return;
   }
 }
