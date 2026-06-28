@@ -783,6 +783,156 @@ def test_screening_queue_summary_payload_omits_heavy_evidence_until_requested(db
     assert full_row["screening_evidence"]["technical_details"]
 
 
+def test_screening_queue_summary_defers_monitoring_evidence_hydration(db, temp_db, monkeypatch):
+    import server
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_sq4c_summary_perf",
+        ref="ARF-SQ4C-SUMMARY-PERF",
+        case_id="case-sq4c-summary-perf",
+        alert_id="alert-sq4c-summary-perf",
+        risk_id="risk-sq4c-summary-perf",
+        profile_id="profile-sq4c-summary-perf",
+    )
+    _insert_sq2_ca_evidence(
+        db,
+        monitoring_id=19411,
+        app_id="app_sq4c_summary_perf",
+        case_id="case-sq4c-summary-perf",
+        alert_id="alert-sq4c-summary-perf",
+        risk_id="risk-sq4c-summary-perf",
+        profile_id="profile-sq4c-summary-perf",
+        evidence_hash="hash-sq4c-summary-perf",
+    )
+    db.commit()
+
+    def fail_monitoring_evidence_load(*args, **kwargs):
+        raise AssertionError("summary queue list must not hydrate monitoring evidence")
+
+    def fail_evidence_enrichment(*args, **kwargs):
+        raise AssertionError("summary queue list must not run detail evidence enrichment")
+
+    monkeypatch.setattr(server, "_load_monitoring_evidence_batch", fail_monitoring_evidence_load)
+    monkeypatch.setattr(server, "_enrich_screening_queue_evidence", fail_evidence_enrichment)
+
+    payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": "ARF-SQ4C-SUMMARY-PERF"},
+        include_evidence=False,
+    )
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ4C-SUMMARY-PERF" and r["subject_type"] == "director")
+
+    assert payload["evidence_mode"] == "summary"
+    assert row["status_key"] == "review_required"
+    assert row["screening_truth_state"] == "completed_match"
+    assert "provider_evidence" not in row
+    assert "items" not in row["screening_evidence"]
+    assert row["evidence_detail_available"] is True
+    assert row["evidence_summary"]["provider_risk_ids"] == ["risk-sq4c-summary-perf"]
+
+
+def test_screening_queue_full_evidence_still_hydrates_monitoring_evidence(db, temp_db, monkeypatch):
+    import server
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_sq4c_full_perf",
+        ref="ARF-SQ4C-FULL-PERF",
+        case_id="case-sq4c-full-perf",
+        alert_id="alert-sq4c-full-perf",
+        risk_id="risk-sq4c-full-perf",
+        profile_id="profile-sq4c-full-perf",
+    )
+    _insert_sq2_ca_evidence(
+        db,
+        monitoring_id=19412,
+        app_id="app_sq4c_full_perf",
+        case_id="case-sq4c-full-perf",
+        alert_id="alert-sq4c-full-perf",
+        risk_id="risk-sq4c-full-perf",
+        profile_id="profile-sq4c-full-perf",
+        evidence_hash="hash-sq4c-full-perf",
+    )
+    db.commit()
+
+    original_loader = server._load_monitoring_evidence_batch
+    calls = []
+
+    def recording_loader(loader_db, app_ids):
+        calls.append(list(app_ids))
+        return original_loader(loader_db, app_ids)
+
+    monkeypatch.setattr(server, "_load_monitoring_evidence_batch", recording_loader)
+
+    payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": "ARF-SQ4C-FULL-PERF"},
+        include_evidence=True,
+    )
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SQ4C-FULL-PERF" and r["subject_type"] == "director")
+
+    assert payload["evidence_mode"] == "full"
+    assert calls
+    assert row["provider_evidence"]
+    assert row["screening_evidence"]["items"]
+    assert row["screening_evidence"]["technical_details"]["linked_ca_1b_evidence_count"] == 1
+
+
+def test_screening_queue_summary_read_is_read_only_and_does_not_call_providers(db, temp_db, monkeypatch):
+    import server
+    from server import _build_screening_queue_payload
+
+    app_id = "app_sq4c_read_only_perf"
+    app_ref = "ARF-SQ4C-READ-ONLY-PERF"
+    _insert_sq2_screened_director(
+        db,
+        app_id=app_id,
+        ref=app_ref,
+        case_id="case-sq4c-read-only-perf",
+        alert_id="alert-sq4c-read-only-perf",
+        risk_id="risk-sq4c-read-only-perf",
+        profile_id="profile-sq4c-read-only-perf",
+    )
+    db.commit()
+
+    before_app = dict(db.execute(
+        "SELECT ref, status, prescreening_data FROM applications WHERE id = ?",
+        (app_id,),
+    ).fetchone())
+    before_jobs = db.execute(
+        "SELECT COUNT(*) AS c FROM screening_jobs WHERE application_id = ?",
+        (app_id,),
+    ).fetchone()["c"]
+
+    def fail_provider_call(*args, **kwargs):
+        raise AssertionError("screening queue read must not call provider screening")
+
+    monkeypatch.setattr(server, "run_full_screening", fail_provider_call)
+    monkeypatch.setattr(server, "screen_sumsub_aml", fail_provider_call)
+
+    payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        filters={"search": app_ref},
+        include_evidence=False,
+    )
+
+    assert any(row["application_ref"] == app_ref for row in payload["rows"])
+    assert dict(db.execute(
+        "SELECT ref, status, prescreening_data FROM applications WHERE id = ?",
+        (app_id,),
+    ).fetchone()) == before_app
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM screening_jobs WHERE application_id = ?",
+        (app_id,),
+    ).fetchone()["c"] == before_jobs
+
+
 def test_screening_queue_universal_search_matches_application_subject_company_and_mesh_refs(db, temp_db):
     from server import _build_screening_queue_payload
 
