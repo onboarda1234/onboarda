@@ -21587,6 +21587,41 @@ def _screening_queue_summary_row(row):
         if isinstance(item, dict)
     ] if isinstance(screening_evidence, dict) else []
     summary = summary_row.get("evidence_summary") or {}
+    if not summary and provider_evidence:
+        summary_items = [
+            _normalise_screening_evidence_item(summary_row, item, source="screening_result", link_strategy="stored_screening_result")
+            for item in provider_evidence
+        ]
+        provider_refs = _screening_evidence_reference_summary(summary_items, summary_row)
+        categories = sorted({item.get("category") for item in summary_items if item.get("category")})
+        providers = sorted({item.get("provider") for item in summary_items if item.get("provider")})
+        summary = {
+            "evidence_status": "summary_deferred",
+            "evidence_quality": "deferred",
+            "evidence_quality_label": "Deferred",
+            "evidence_count": len(summary_items),
+            "source_url_count": sum(1 for item in summary_items if item.get("source_url")),
+            "source_url_unavailable_count": sum(1 for item in summary_items if not item.get("source_url")),
+            "source_url_unavailable_message": "",
+            "partial_evidence_message": "",
+            "evidence_quality_reason": "Detailed provider evidence is loaded when the screening row is opened.",
+            "evidence_failure_reason": "",
+            "missing_reason": "",
+            "missing_reason_label": "",
+            "next_action": "",
+            "linking_method": "stored_screening_result",
+            "categories": categories,
+            "providers": providers,
+            "provider_case_ids": provider_refs.get("case_ids") or [],
+            "provider_alert_ids": provider_refs.get("alert_ids") or [],
+            "provider_risk_ids": provider_refs.get("risk_ids") or [],
+            "provider_profile_ids": provider_refs.get("profile_ids") or [],
+            "provider_customer_ids": provider_refs.get("customer_ids") or [],
+            "provider_workflow_ids": provider_refs.get("workflow_ids") or [],
+            "provider_references": provider_refs,
+            "officer_disposition": summary_row.get("review_disposition"),
+            "review_history_summary": _screening_review_summary(summary_row),
+        }
     summary_screening_evidence = {
         key: value
         for key, value in (screening_evidence.items() if isinstance(screening_evidence, dict) else [])
@@ -21604,7 +21639,12 @@ def _screening_queue_summary_row(row):
 
 
 def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None, include_evidence=True):
-    query = "SELECT * FROM applications WHERE 1=1"
+    filters = filters or {}
+    query = """
+        SELECT id, ref, client_id, company_name, prescreening_data, created_at, is_fixture
+        FROM applications
+        WHERE 1=1
+    """
     params = []
     if user["type"] == "client":
         query += " AND client_id = ?"
@@ -21615,6 +21655,10 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
         query += f" AND {fx_excl}"
         params.extend(fx_params)
+    app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
+    if app_ref_filter:
+        query += " AND lower(ref) LIKE ?"
+        params.append(f"%{app_ref_filter}%")
     query += " ORDER BY created_at DESC LIMIT 200"
 
     apps = [dict(r) for r in db.execute(query, params).fetchall()]
@@ -21623,7 +21667,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
     reviews_by_app = _load_screening_reviews_for_truth_batch(db, app_ref_by_id) if app_ids else {}
     monitoring_alerts_by_app = _load_application_monitoring_alerts_batch(db, app_ids) if app_ids else {}
-    monitoring_evidence_by_app = _load_monitoring_evidence_batch(db, app_ids) if app_ids else {}
+    monitoring_evidence_by_app = _load_monitoring_evidence_batch(db, app_ids) if include_evidence and app_ids else {}
     rows = []
     metrics = {
         "applications_awaiting_screening": 0,
@@ -22140,15 +22184,21 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         if application_requires_review:
             metrics["applications_requiring_review"] += 1
 
-    rows = [
-        _apply_screening_queue_canonical_state(
-            _enrich_screening_queue_evidence(
-                _apply_screening_queue_canonical_state(row),
-                monitoring_evidence_by_app.get(row.get("application_id"), []),
+    if include_evidence:
+        rows = [
+            _apply_screening_queue_canonical_state(
+                _enrich_screening_queue_evidence(
+                    _apply_screening_queue_canonical_state(row),
+                    monitoring_evidence_by_app.get(row.get("application_id"), []),
+                )
             )
-        )
-        for row in rows
-    ]
+            for row in rows
+        ]
+    else:
+        rows = [
+            _apply_screening_queue_canonical_state(row)
+            for row in rows
+        ]
     metrics["applications_requiring_review"] = len({
         row.get("application_id")
         for row in rows
@@ -22208,7 +22258,7 @@ class ScreeningQueueHandler(BaseHandler):
         offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
         include_evidence = self.get_argument("include_evidence", "false").strip().lower() in {"1", "true", "yes", "full"}
         filters = {
-            "search": self.get_argument("search", "").strip(),
+            "search": (self.get_argument("search", "").strip() or self.get_argument("q", "").strip()),
             "status": self.get_argument("status", "").strip(),
             "type": self.get_argument("type", "").strip(),
             "provider": self.get_argument("provider", "").strip(),
