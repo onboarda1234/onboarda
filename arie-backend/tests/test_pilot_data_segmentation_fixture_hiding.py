@@ -71,6 +71,7 @@ def _cm_db() -> sqlite3.Connection:
             ("pilot00000000001", "ARF-PILOT-001", "Pilot Client Ltd", 0),
             ("f1xed00000000001", "ARF-E2E-001", "Smoke Fixture Ltd", 1),
             ("uuidfixture0001", "ARF-SMOKE-002", "Historical Smoke Ltd", 1),
+            ("uuidsmoke0002", "ARF-SMOKE-003", "Historical Smoke Unflagged Ltd", 0),
         ],
     )
     db.executemany(
@@ -79,6 +80,7 @@ def _cm_db() -> sqlite3.Connection:
             ("CR-PILOT", "pilot00000000001", "draft", "tier3", "manual", "pilot", "2026-06-01T00:00:00Z"),
             ("CR-FIX-ID", "f1xed00000000001", "draft", "tier3", "manual", "fixture id", "2026-06-02T00:00:00Z"),
             ("CR-FIX-FLAG", "uuidfixture0001", "draft", "tier3", "manual", "fixture flag", "2026-06-03T00:00:00Z"),
+            ("CR-FIX-TEXT", "uuidsmoke0002", "draft", "tier3", "manual", "fixture text", "2026-06-04T00:00:00Z"),
         ],
     )
     db.executemany(
@@ -87,6 +89,7 @@ def _cm_db() -> sqlite3.Connection:
             ("CA-PILOT", "pilot00000000001", "new", "profile_change", "system", "pilot", "{}", "{}", "2026-06-01T00:00:00Z"),
             ("CA-FIX-ID", "f1xed00000000001", "new", "fixture", "system", "fixture id", "{}", "{}", "2026-06-02T00:00:00Z"),
             ("CA-FIX-FLAG", "uuidfixture0001", "new", "fixture", "system", "fixture flag", "{}", "{}", "2026-06-03T00:00:00Z"),
+            ("CA-FIX-TEXT", "uuidsmoke0002", "new", "fixture", "system", "fixture text", "{}", "{}", "2026-06-04T00:00:00Z"),
         ],
     )
     db.commit()
@@ -99,7 +102,10 @@ def test_cm_broad_lists_hide_fixture_records_by_default_filter():
 
     db = _cm_db()
     try:
-        fixture_sql, fixture_params = fixture_app_id_exclude_clause("application_id")
+        fixture_sql, fixture_params = fixture_app_id_exclude_clause(
+            "application_id",
+            include_text_patterns=True,
+        )
 
         requests = cm.list_change_requests(
             db,
@@ -126,8 +132,8 @@ def test_cm_toggle_on_lists_include_fixture_records_with_labels():
         requests = cm.list_change_requests(db)
         alerts = cm.list_change_alerts(db)
 
-        assert {row["id"] for row in requests} == {"CR-PILOT", "CR-FIX-ID", "CR-FIX-FLAG"}
-        assert {row["id"] for row in alerts} == {"CA-PILOT", "CA-FIX-ID", "CA-FIX-FLAG"}
+        assert {row["id"] for row in requests} == {"CR-PILOT", "CR-FIX-ID", "CR-FIX-FLAG", "CR-FIX-TEXT"}
+        assert {row["id"] for row in alerts} == {"CA-PILOT", "CA-FIX-ID", "CA-FIX-FLAG", "CA-FIX-TEXT"}
         assert {row["id"]: row["is_fixture"] for row in requests}["CR-FIX-ID"] is True
         assert {row["id"]: row["is_fixture"] for row in requests}["CR-FIX-FLAG"] is True
         assert {row["id"]: row["is_fixture"] for row in alerts}["CA-FIX-ID"] is True

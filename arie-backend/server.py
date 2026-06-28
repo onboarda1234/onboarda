@@ -4765,7 +4765,7 @@ class ApplicationsHandler(BaseHandler):
             query += " AND a.client_id = ?"
             params.append(user["sub"])
         if not show_fx:
-            fx_excl, fx_params = fixture_app_exclude_clause()
+            fx_excl, fx_params = fixture_app_exclude_clause(include_text_patterns=True)
             query += f" AND {fx_excl}"
             params.extend(fx_params)
 
@@ -15591,7 +15591,7 @@ def _report_scope_from_request(handler, user):
     params = []
     show_fixtures = should_show_fixtures(user, fixture_request_opt_in(handler))
     if not show_fixtures:
-        fx_excl, fx_params = fixture_app_exclude_clause()
+        fx_excl, fx_params = fixture_app_exclude_clause(include_text_patterns=True)
         conditions.append(fx_excl)
         params.extend(fx_params)
 
@@ -15685,7 +15685,7 @@ def _dashboard_application_scope(user, *, show_fixtures=False):
         where.append("a.client_id = ?")
         params.append(user["sub"])
     if not show_fixtures:
-        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="a")
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="a", include_text_patterns=True)
         where.append(fx_excl)
         params.extend(fx_params)
     return " AND ".join(where), params
@@ -16281,7 +16281,7 @@ class ReportAnalyticsHandler(BaseHandler):
                 edd_params = []
                 # Fixture exclusion (mirrors the main conditions block)
                 if not show_fx:
-                    fx_excl2, fx_params2 = fixture_app_exclude_clause()
+                    fx_excl2, fx_params2 = fixture_app_exclude_clause(include_text_patterns=True)
                     edd_conditions.append(fx_excl2)
                     edd_params.extend(fx_params2)
                 if date_from:
@@ -16845,8 +16845,13 @@ def _directors_ubos_report_scope_from_request(handler, user):
     params = []
 
     if not show_fixtures:
-        fx_excl, fx_params = fixture_app_exclude_clause()
-        conditions.append(fx_excl.replace("a.", "report_rows."))
+        fx_excl, fx_params = fixture_app_exclude_clause(
+            table_alias="report_rows",
+            include_text_patterns=True,
+            ref_column="application_ref",
+            name_column="company_name",
+        )
+        conditions.append(fx_excl)
         params.extend(fx_params)
 
     view = str(filters.get("view") or "").strip().lower()
@@ -25220,7 +25225,7 @@ class MonitoringDashboardHandler(BaseHandler):
             "periodic_review_due": 0
         }
 
-        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="", include_text_patterns=True)
 
         # Count applications pending compliance review (excluding fixtures)
         compliance_review = db.execute(
@@ -25245,7 +25250,7 @@ class MonitoringDashboardHandler(BaseHandler):
         """, fx_params).fetchall()
         stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
 
-        review_fx_excl, review_fx_params = fixture_app_exclude_clause(table_alias="a")
+        review_fx_excl, review_fx_params = fixture_app_exclude_clause(table_alias="a", include_text_patterns=True)
         review_stats = _periodic_review_canonical_stats(
             db,
             app_where=review_fx_excl,
@@ -25272,7 +25277,7 @@ class MonitoringClientsHandler(BaseHandler):
         db = get_db()
 
         # Get all applications grouped by status/stage (excluding fixtures)
-        fx_excl, fx_params = fixture_app_exclude_clause()
+        fx_excl, fx_params = fixture_app_exclude_clause(include_text_patterns=True)
         applications = db.execute(f"""
             SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score,
                    a.created_at, u.full_name as assigned_to
@@ -30667,7 +30672,10 @@ class PeriodicReviewsListHandler(BaseHandler):
         params = []
 
         if not show_fx:
-            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+            fx_excl, fx_params = fixture_app_id_exclude_clause(
+                "application_id",
+                include_text_patterns=True,
+            )
             query += f" AND {fx_excl}"
             params.extend(fx_params)
 
@@ -34133,7 +34141,10 @@ class ChangeAlertsListHandler(BaseHandler):
         fixture_filter_sql = None
         fixture_filter_params = []
         if not show_fx and not application_id:
-            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause("application_id")
+            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause(
+                "application_id",
+                include_text_patterns=True,
+            )
 
         db = get_db()
         try:
@@ -34302,7 +34313,10 @@ class ChangeRequestsListHandler(BaseHandler):
         fixture_filter_sql = None
         fixture_filter_params = []
         if not show_fx and not application_id:
-            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause("application_id")
+            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause(
+                "application_id",
+                include_text_patterns=True,
+            )
 
         db = get_db()
         try:
