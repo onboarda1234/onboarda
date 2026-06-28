@@ -4747,6 +4747,7 @@ class ApplicationsHandler(BaseHandler):
                 a.assigned_to,
                 a.created_at,
                 a.brn,
+                a.is_fixture,
                 u.full_name AS assigned_name
             """
         query = f"""
@@ -4877,6 +4878,7 @@ class ApplicationsHandler(BaseHandler):
                 "limit": limit,
                 "offset": offset,
                 "view": "list",
+                "show_fixtures": show_fx,
                 "pagination": {
                     "limit": limit,
                     "offset": offset,
@@ -30705,8 +30707,33 @@ class PeriodicReviewsListHandler(BaseHandler):
             if not _periodic_review_projection_matches_queue_filter(payload.get("projection") or {}, queue_filter):
                 continue
             result.append(payload)
+        if show_fx and result:
+            app_ids = sorted(
+                {
+                    str(row.get("application_id") or ((row.get("projection") or {}).get("application_id")) or "")
+                    for row in result
+                    if row.get("application_id") or ((row.get("projection") or {}).get("application_id"))
+                }
+            )
+            if app_ids:
+                placeholders = ",".join("?" for _ in app_ids)
+                app_rows = db.execute(
+                    f"SELECT id, is_fixture FROM applications WHERE id IN ({placeholders})",
+                    app_ids,
+                ).fetchall()
+                fixture_by_app_id = {
+                    row["id"]: bool(row["is_fixture"]) or str(row["id"]).startswith("f1xed")
+                    for row in app_rows
+                }
+                for row in result:
+                    app_id = str(row.get("application_id") or ((row.get("projection") or {}).get("application_id")) or "")
+                    is_fixture = bool(fixture_by_app_id.get(app_id)) or app_id.startswith("f1xed")
+                    row["is_fixture"] = is_fixture
+                    projection = row.get("projection")
+                    if isinstance(projection, dict):
+                        projection["is_fixture"] = is_fixture
         db.close()
-        self.success({"reviews": result})
+        self.success({"reviews": result, "show_fixtures": show_fx})
 
 
 class PeriodicReviewDetailHandler(BaseHandler):
@@ -34092,16 +34119,29 @@ class ChangeAlertsListHandler(BaseHandler):
             self.error("Change management module not available", 503)
             return
 
+        from fixture_filter import (
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
         application_id = self.get_argument("application_id", None)
         status = self.get_argument("status", None)
         limit = int(self.get_argument("limit", "50"))
         offset = int(self.get_argument("offset", "0"))
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        fixture_filter_sql = None
+        fixture_filter_params = []
+        if not show_fx and not application_id:
+            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause("application_id")
 
         db = get_db()
         try:
             alerts = cm.list_change_alerts(db, application_id=application_id,
-                                           status=status, limit=limit, offset=offset)
-            self.success({"alerts": alerts, "total": len(alerts)})
+                                           status=status, limit=limit, offset=offset,
+                                           fixture_filter_sql=fixture_filter_sql,
+                                           fixture_filter_params=fixture_filter_params)
+            self.success({"alerts": alerts, "total": len(alerts), "show_fixtures": show_fx})
         finally:
             db.close()
 
@@ -34246,12 +34286,23 @@ class ChangeRequestsListHandler(BaseHandler):
             self.error("Change management module not available", 503)
             return
 
+        from fixture_filter import (
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
+
         application_id = self.get_argument("application_id", None)
         status = self.get_argument("status", None)
         materiality = self.get_argument("materiality", None)
         source = self.get_argument("source", None)
         limit = int(self.get_argument("limit", "50"))
         offset = int(self.get_argument("offset", "0"))
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        fixture_filter_sql = None
+        fixture_filter_params = []
+        if not show_fx and not application_id:
+            fixture_filter_sql, fixture_filter_params = fixture_app_id_exclude_clause("application_id")
 
         db = get_db()
         try:
@@ -34259,8 +34310,10 @@ class ChangeRequestsListHandler(BaseHandler):
                 db, application_id=application_id, status=status,
                 materiality=materiality, source=source,
                 limit=limit, offset=offset,
+                fixture_filter_sql=fixture_filter_sql,
+                fixture_filter_params=fixture_filter_params,
             )
-            self.success({"requests": requests_list, "total": len(requests_list)})
+            self.success({"requests": requests_list, "total": len(requests_list), "show_fixtures": show_fx})
         finally:
             db.close()
 
