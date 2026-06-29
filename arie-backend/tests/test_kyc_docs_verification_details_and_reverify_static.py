@@ -186,6 +186,7 @@ def test_reverify_visibility_uses_existing_handler_for_eligible_uploaded_documen
     functions = "\n\n".join(
         _extract_function(html, name)
         for name in [
+            "documentReadyDisplayState",
             "documentHasUploadedFile",
             "documentCanShowReverifyAction",
             "renderDocumentSecondaryActions",
