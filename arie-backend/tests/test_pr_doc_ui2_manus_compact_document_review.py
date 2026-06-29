@@ -210,10 +210,12 @@ def test_kyc_documents_policy_and_missing_copy_are_standalone_messages():
 def test_show_more_is_available_for_long_issue_copy_only_inside_compact_summary():
     html = _backoffice_html()
     summary = _function_region(html, "renderDocumentCompactSummary", "renderDocumentSecondaryActions")
+    finding_helpers = _function_region(html, "collapseDocumentReviewFindingText", "renderDocumentCompactSummary")
+    compact_summary_surface = finding_helpers + summary
 
-    assert "Show more" in summary
-    assert "document-review-issue-text clamped" in summary
-    assert "document-review-issue-more" in summary
+    assert "Show more" in compact_summary_surface
+    assert "document-review-issue-text clamped" in compact_summary_surface
+    assert "document-review-issue-more" in compact_summary_surface
 
 
 def test_system_file_access_issue_is_marked_as_system_issue_not_document_failure():
