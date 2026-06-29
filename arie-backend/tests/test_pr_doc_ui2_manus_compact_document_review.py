@@ -70,7 +70,7 @@ def test_details_are_collapsed_by_default_and_retain_technical_audit_fields_only
     ]:
         assert audit_field in details or audit_field in technical
     assert "More ▾" in secondary
-    assert "Re-Verify" in secondary
+    assert "Re-verify" in secondary
     assert "Technical audit details" not in secondary
     assert "Technical audit details" in audit_toggle
     assert 'aria-expanded="false"' in audit_toggle

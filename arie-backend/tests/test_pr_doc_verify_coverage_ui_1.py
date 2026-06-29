@@ -93,7 +93,7 @@ def test_row_actions_keep_one_visible_primary_action_and_move_secondary_actions_
         "Accept with reason",
         "Request replacement",
         "Reject",
-        "Re-Verify",
+        "Re-verify",
         "More ▾",
     ]:
         assert expected in secondary
@@ -113,15 +113,16 @@ def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_
     html = _backoffice_html()
     details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
+    check_row = _function_region(html, "renderDocumentVerificationCheckRow", "buildVerificationResultsHtml")
 
     assert "buildVerificationResultsHtml(doc.verification_results, coverage, auditContext)" in details
     assert "Technical audit details" in technical
-    assert "Passed technical checks" in technical
+    assert "Completed checks" in technical
     assert "Portal slot/source" not in technical
     assert "Lifecycle context" not in technical
     assert "Policy ID/version" not in technical
     assert "Document type" not in technical
-    assert "Check ID:" in technical
+    assert "Check ID:" in check_row
     assert "Warnings:" not in technical
     assert "Issues:" not in technical
     assert "Material findings" not in technical
@@ -130,16 +131,14 @@ def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_
     assert "Technical audit details</summary>" not in technical
 
 
-def test_three_routine_passed_checks_are_hidden_but_other_passed_checks_remain():
+def test_passed_checks_render_in_completed_checks_section_when_stored():
     html = _backoffice_html()
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
     for expected in [
-        "normalizedLabel === 'file format'",
-        "normalizedLabel === 'file size'",
-        "normalizedLabel === 'duplicate detection'",
-        "hideRoutinePass",
-        "Passed technical checks",
+        "passedCheckRows.push(rendered.html)",
+        "Completed checks",
+        "Verification completed. No failed or warning checks were stored. Detailed passed-check evidence is not available for this document.",
     ]:
         assert expected in technical
 

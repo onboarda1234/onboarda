@@ -155,7 +155,7 @@ def test_technical_audit_details_and_document_actions_remain_available():
     assert "Accept with reason" in secondary
     assert "Request replacement" in secondary
     assert "Reject" in secondary
-    assert "Re-Verify" in secondary
+    assert "Re-verify" in secondary
     assert ">Upload</button>" in primary
 
 

@@ -273,7 +273,7 @@ def test_periodic_review_documents_summary_keeps_mutating_document_workflow_out_
         ">Accept</button>",
         ">Reject</button>",
         "Request replacement",
-        "Re-Verify",
+        "Re-verify",
     ):
         assert forbidden not in section
 
