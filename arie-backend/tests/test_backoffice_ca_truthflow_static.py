@@ -494,16 +494,38 @@ def test_backoffice_screening_queue_hides_individual_filter_until_backend_report
     assert "item.value === 'individual'" in type_region
 
 
-def test_backoffice_screening_queue_lazy_loads_full_evidence_before_detail_view():
+def test_backoffice_screening_queue_lazy_loads_full_evidence_without_blocking_detail_view():
     html = BACKOFFICE_HTML.read_text()
 
     lazy_region = _function_region(html, "screeningQueueRowHasFullEvidence", "screeningDispositionLabel")
+    open_region = _function_region(html, "openScreeningReviewByRow", "screeningDispositionLabel")
 
     assert "function ensureScreeningQueueRowEvidence" in lazy_region
     assert "include_evidence=1" in lazy_region
+    assert "application_ref=' + encodeURIComponent(row.application_ref)" in lazy_region
+    assert "search=' + encodeURIComponent(row.subject_name || row.company_name || '')" in lazy_region
     assert "screeningQueueRowsMatch(candidate, row)" in lazy_region
-    assert "SCREENING_REVIEW_ROWS[rowKey] = Object.assign({}, row, fullRow)" in lazy_region
-    assert "row = await ensureScreeningQueueRowEvidence(rowKey)" in lazy_region
+    assert "mergeScreeningQueueRowState(rowKey, Object.assign({}, fullRow" in lazy_region
+    assert "refreshOpenScreeningReviewForRow(updated)" in lazy_region
+    assert "function renderScreeningReviewOpeningShell" in lazy_region
+    assert "function openScreeningReviewByRow" in lazy_region
+    assert "async function openScreeningReviewByRow" not in lazy_region
+    assert "row = await ensureScreeningQueueRowEvidence(rowKey)" not in lazy_region
+    assert "ensureScreeningQueueRowEvidence(rowKey);" in open_region
+    assert "renderScreeningReviewOpeningShell(row);" in open_region
+    assert "openScreeningReview(row.application_ref, row.subject_type, row.subject_name);" in open_region
+    assert open_region.index("ensureScreeningQueueRowEvidence(rowKey);") < open_region.index("openScreeningReview(row.application_ref")
+
+
+def test_backoffice_screening_evidence_panel_has_loading_and_error_states():
+    html = BACKOFFICE_HTML.read_text()
+
+    panel_region = _function_region(html, "screeningQueueEvidenceReadinessPanel", "providerIndicatorDetails")
+
+    assert "data-screening-evidence-loading" in panel_region
+    assert "Detailed provider evidence is loading." in panel_region
+    assert "data-screening-evidence-error" in panel_region
+    assert "Summary evidence remains available." in panel_region
 
 
 def test_backoffice_person_review_prefers_screening_declared_pep_truth():
