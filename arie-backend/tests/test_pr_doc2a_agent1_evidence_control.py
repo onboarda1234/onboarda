@@ -27,9 +27,9 @@ def test_doc2a_default_document_verification_ui_is_decision_first():
 
     assert "Technical audit details" in renderer
     assert "Checks requiring attention" in renderer
-    assert "Passed technical checks" in renderer
+    assert "Completed checks" in renderer
     assert "Verification timestamp" in renderer
-    assert "Expected checks missing" in renderer
+    assert "Expected checks missing" not in renderer
     assert "Failed or warning checks" not in renderer
     assert "Overall Result" not in renderer
     assert "Show technical verification checks" not in renderer
