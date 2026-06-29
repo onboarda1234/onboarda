@@ -9523,6 +9523,57 @@ function renderVerificationCoverageSummary(doc, policy) {
   '</div>';
 }
 
+function collapseDocumentReviewFindingText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeDocumentReviewFindingText(value) {
+  return collapseDocumentReviewFindingText(value)
+    .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+    .replace(/[\s.,;:!?-]+$/g, '')
+    .toLowerCase();
+}
+
+function compactDocumentReviewFindingSummary(value, maxLength) {
+  var text = collapseDocumentReviewFindingText(value);
+  var limit = maxLength || 220;
+  if (!text || text.length <= limit) return { summary: text, truncated: false };
+  var boundary = text.lastIndexOf('. ', limit);
+  if (boundary < Math.floor(limit * 0.55)) boundary = text.lastIndexOf(' ', limit);
+  if (boundary < Math.floor(limit * 0.55)) boundary = limit;
+  var summary = text.slice(0, boundary).replace(/[\s.,;:!?-]+$/g, '').trim();
+  if (!summary) summary = text.slice(0, limit).trim();
+  return { summary: summary, truncated: normalizeDocumentReviewFindingText(summary) !== normalizeDocumentReviewFindingText(text) };
+}
+
+function documentReviewNonDuplicateFindingDetail(summaryText, expandedText) {
+  var summary = collapseDocumentReviewFindingText(summaryText);
+  var expanded = collapseDocumentReviewFindingText(expandedText);
+  if (!expanded) return '';
+  if (!summary) return expanded;
+  if (normalizeDocumentReviewFindingText(summary) === normalizeDocumentReviewFindingText(expanded)) return '';
+  if (expanded.toLowerCase().indexOf(summary.toLowerCase()) === 0) {
+    var remainder = expanded.slice(summary.length).replace(/^[\s.,;:!?-]+/g, '').trim();
+    return normalizeDocumentReviewFindingText(remainder) ? remainder : '';
+  }
+  return expanded;
+}
+
+function renderDocumentFindingSummaryHtml(issueLine, issueClass, showMoreLabel) {
+  var compact = compactDocumentReviewFindingSummary(issueLine, 220);
+  var summaryLine = compact.summary || collapseDocumentReviewFindingText(issueLine);
+  var moreCopy = compact.truncated ? documentReviewNonDuplicateFindingDetail(summaryLine, issueLine) : '';
+  var displaySummary = summaryLine + (moreCopy ? '...' : '');
+  var detailsLabel = showMoreLabel || 'Show more';
+  if (moreCopy) {
+    return '<div class="document-review-issue-stack">' +
+      '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text clamped">' + escapeHtml(displaySummary) + '</span></div>' +
+      '<details class="document-review-issue-more"><summary>' + escapeHtml(detailsLabel) + '</summary><div class="document-review-issue-more-copy ' + issueClass + '">' + escapeHtml(moreCopy) + '</div></details>' +
+    '</div>';
+  }
+  return '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text">' + escapeHtml(summaryLine) + '</span></div>';
+}
+
 function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
   var issueText = normalizeDetailValue(issue);
   var blockerText = normalizeDetailValue(blocker);
@@ -9538,13 +9589,7 @@ function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
     if (nextText && nextText !== '—' && nextText !== 'No action required') summaryParts.push('Next: ' + nextText + '.');
   }
   var issueLine = summaryParts.length ? summaryParts.join(' ') : 'No action required.';
-  var issueHtml = '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text">' + escapeHtml(issueLine) + '</span></div>';
-  if (issueLine.length > 220) {
-    issueHtml = '<div class="document-review-issue-stack">' +
-      '<div class="document-review-issue-line ' + issueClass + '"><span class="document-review-issue-text clamped">' + escapeHtml(issueLine) + '</span></div>' +
-      '<details class="document-review-issue-more"><summary>Show more</summary><div class="document-review-issue-more-copy ' + issueClass + '">' + escapeHtml(issueLine) + '</div></details>' +
-    '</div>';
-  }
+  var issueHtml = renderDocumentFindingSummaryHtml(issueLine, issueClass, 'Show more');
   return '<div class="document-review-summary-line">' +
     issueHtml +
   '</div>';
