@@ -31648,6 +31648,43 @@ class PeriodicReviewEvidenceLinksHandler(BaseHandler):
             db.close()
 
 
+def _mark_periodic_review_memo_addendum_generated_best_effort(
+    db,
+    review_id,
+    *,
+    memo_result,
+    user,
+    audit_writer,
+    context,
+):
+    """Best-effort memo addendum status/audit update after memo generation."""
+    try:
+        import periodic_review_risk_reassessment as prr
+        try:
+            return prr.mark_memo_addendum_generated(
+                db,
+                review_id,
+                memo_result=memo_result,
+                user=user,
+                audit_writer=audit_writer,
+            )
+        except prr.ReviewClosedError as exc:
+            logger.info(
+                "Periodic review memo addendum status/audit update skipped: "
+                "review_id=%s context=%s reason=already_terminal detail=%s",
+                review_id,
+                context,
+                str(exc),
+            )
+            return {}
+    except Exception:
+        logger.exception(
+            "Periodic review memo addendum status/audit update failed: review_id=%s",
+            review_id,
+        )
+        return {}
+
+
 class PeriodicReviewDecisionHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/decision — legacy decision writer.
 
@@ -31726,20 +31763,14 @@ class PeriodicReviewDecisionHandler(BaseHandler):
                     memo_result = prm.generate_periodic_review_memo(db, review_id)
                 except Exception:
                     memo_result = {"status": "generation_failed"}
-                try:
-                    import periodic_review_risk_reassessment as prr
-                    prr.mark_memo_addendum_generated(
-                        db,
-                        review_id,
-                        memo_result=memo_result,
-                        user=user,
-                        audit_writer=self.log_audit,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Periodic review memo addendum status/audit update failed: review_id=%s",
-                        review_id,
-                    )
+                _mark_periodic_review_memo_addendum_generated_best_effort(
+                    db,
+                    review_id,
+                    memo_result=memo_result,
+                    user=user,
+                    audit_writer=self.log_audit,
+                    context="legacy_decision_completed",
+                )
 
             self.success({
                 "status": "decision_recorded",
@@ -32850,20 +32881,14 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                     # quarantine entry (C1) and overlay the completed/next-cycle
                     # fields produced by finalisation.
                     response_result = {**result, **(gate.get("completion") or {})}
-                    try:
-                        import periodic_review_risk_reassessment as prr
-                        prr.mark_memo_addendum_generated(
-                            db,
-                            review_id,
-                            memo_result=memo_result,
-                            user=user,
-                            audit_writer=self.log_audit,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Periodic review memo addendum status/audit update failed: review_id=%s",
-                            review_id,
-                        )
+                    _mark_periodic_review_memo_addendum_generated_best_effort(
+                        db,
+                        review_id,
+                        memo_result=memo_result,
+                        user=user,
+                        audit_writer=self.log_audit,
+                        context="modern_completion_finalized",
+                    )
 
             self.success({
                 "status": "periodic_review_completed" if final_status == pre.STATE_COMPLETED else final_status,
@@ -34106,20 +34131,14 @@ class EDDDetailHandler(BaseHandler):
                                     memo_result = prm.generate_periodic_review_memo(db, linked_review_id)
                                 except Exception:
                                     memo_result = {"status": "generation_failed"}
-                                try:
-                                    import periodic_review_risk_reassessment as prr
-                                    prr.mark_memo_addendum_generated(
-                                        db,
-                                        linked_review_id,
-                                        memo_result=memo_result,
-                                        user=user,
-                                        audit_writer=self.log_audit,
-                                    )
-                                except Exception:
-                                    logger.exception(
-                                        "Periodic review memo addendum status/audit update failed: review_id=%s",
-                                        linked_review_id,
-                                    )
+                                _mark_periodic_review_memo_addendum_generated_best_effort(
+                                    db,
+                                    linked_review_id,
+                                    memo_result=memo_result,
+                                    user=user,
+                                    audit_writer=self.log_audit,
+                                    context="linked_edd_approval_completed",
+                                )
                     except Exception as exc:
                         logger.exception(
                             "Failed to close periodic review after linked EDD approval: edd_case_id=%s review_id=%s",
