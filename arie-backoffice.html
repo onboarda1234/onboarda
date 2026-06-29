@@ -14930,10 +14930,14 @@ function screeningQueueEvidenceReadinessPanel(row) {
   var evidence = row.screening_evidence || {};
   var summary = row.evidence_summary || evidence || {};
   var items = Array.isArray(evidence.items) ? evidence.items : [];
-  var qualityLabel = screeningQueueEvidenceQuality(row);
+  var isLoadingFullEvidence = !!(row.evidence_detail_available && row.evidence_detail_loading && !screeningQueueRowHasFullEvidence(row));
+  var evidenceDetailError = row.evidence_detail_error || '';
+  var qualityLabel = isLoadingFullEvidence ? 'Loading' : screeningQueueEvidenceQuality(row);
   var categories = screeningEvidenceArrayText(summary.categories);
   var providers = screeningEvidenceArrayText(summary.providers) || formatProviderName(row.provider || row.source || '');
-  var partialMessage = summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : '');
+  var partialMessage = isLoadingFullEvidence
+    ? 'Detailed provider evidence is loading.'
+    : (summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : ''));
   var missingSourceMessage = summary.source_url_unavailable_message || (items.some(function(item) { return !item.source_url; }) ? SCREENING_SOURCE_UNAVAILABLE_MESSAGE : '');
   var qualityReason = screeningQueueEvidenceQualityReason(row, qualityLabel, items);
   var summaryRows = evidenceInfoGrid([
@@ -14948,9 +14952,16 @@ function screeningQueueEvidenceReadinessPanel(row) {
     ['Duplicate provider records', row.duplicate_provider_record_count ? String(row.duplicate_provider_record_count) : ''],
     ['Stale / historical risks', (row.stale_risk_count || row.historical_risk_count) ? String(row.stale_risk_count || 0) + ' stale · ' + String(row.historical_risk_count || 0) + ' historical' : '']
   ]);
-  var evidenceCards = items.length
-    ? items.map(screeningQueueEvidenceItemCard).join('')
-    : '<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;">Detailed provider evidence is unavailable for this screening result.</div>';
+  var evidenceCards = '';
+  if (isLoadingFullEvidence) {
+    evidenceCards = '<div data-screening-evidence-loading="true" style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;padding:10px;border:1px dashed var(--border1);border-radius:8px;background:#fff;">Loading detailed provider evidence...</div>';
+  } else if (items.length) {
+    evidenceCards = items.map(screeningQueueEvidenceItemCard).join('');
+  } else if (evidenceDetailError) {
+    evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
+  } else {
+    evidenceCards = '<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;">Detailed provider evidence is unavailable for this screening result.</div>';
+  }
   var technicalRows = evidenceInfoGrid([
     ['Provider case IDs', screeningEvidenceArrayText(summary.provider_case_ids)],
     ['Provider alert IDs', screeningEvidenceArrayText(summary.provider_alert_ids)],
@@ -15797,36 +15808,117 @@ function screeningQueueRowsMatch(a, b) {
     String(a.subject_name || '') === String(b.subject_name || '');
 }
 
+function mergeScreeningQueueRowState(rowKey, patch) {
+  patch = patch || {};
+  var baseRow = SCREENING_REVIEW_ROWS[rowKey] || {};
+  var updated = Object.assign({}, baseRow, patch);
+  SCREENING_REVIEW_ROWS[rowKey] = updated;
+  if (SCREENING_QUEUE && Array.isArray(SCREENING_QUEUE.rows)) {
+    for (var i = 0; i < SCREENING_QUEUE.rows.length; i++) {
+      var queueRow = SCREENING_QUEUE.rows[i];
+      if (screeningQueueRowsMatch(queueRow, baseRow) || screeningQueueRowsMatch(queueRow, updated)) {
+        SCREENING_QUEUE.rows[i] = Object.assign({}, queueRow, updated);
+        updated = SCREENING_QUEUE.rows[i];
+        SCREENING_REVIEW_ROWS[rowKey] = updated;
+        break;
+      }
+    }
+  }
+  return updated;
+}
+
+function refreshOpenScreeningReviewForRow(row) {
+  if (!row || !currentApp || currentApp.ref !== row.application_ref) return;
+  if (typeof renderScreeningReviewPanel === 'function') {
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus || {
+      subject_type: row.subject_type || '',
+      subject_name: row.subject_name || ''
+    });
+  }
+}
+
+function renderScreeningReviewOpeningShell(row) {
+  if (!row) return;
+  var companyName = row.company_name || row.application_ref || '';
+  currentScreeningReviewFocus = {
+    subject_type: row.subject_type || '',
+    subject_name: row.subject_name || ''
+  };
+  var nameEl = document.getElementById('detail-company-name');
+  if (nameEl) nameEl.textContent = companyName || 'Loading application';
+  var badgesEl = document.getElementById('detail-badges');
+  if (badgesEl) badgesEl.innerHTML = screeningQueueStatusBadge(row.status_key, row.status_label);
+  var host = document.getElementById('detail-screening-review');
+  if (host) {
+    var evidenceState = row.evidence_detail_available
+      ? (screeningQueueRowHasFullEvidence(row) ? 'Evidence loaded' : 'Evidence loading')
+      : 'No detailed evidence required';
+    host.innerHTML =
+      '<div class="card" data-screening-detail-shell="opening" style="margin-bottom:16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.03);">' +
+        '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">' +
+          '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Loading application detail...</div></div>' +
+          '<div style="margin-left:auto;">' + screeningQueueStatusBadge(row.status_key, row.status_label) + '</div>' +
+        '</div>' +
+        '<div style="padding:0 18px 18px;font-size:12px;color:var(--text2);">' +
+          '<div><strong>Application:</strong> ' + escapeHtml(row.application_ref || '') + '</div>' +
+          '<div><strong>Subject:</strong> ' + escapeHtml(row.subject_name || '') + ' (' + escapeHtml(String(row.subject_type || '').replace('_', ' ')) + ')</div>' +
+          '<div><strong>Total Hits:</strong> ' + escapeHtml(String(row.total_hits || 0)) + '</div>' +
+          '<div' + (row.evidence_detail_available && !screeningQueueRowHasFullEvidence(row) ? ' data-screening-evidence-loading="true"' : '') + '><strong>Evidence:</strong> ' + escapeHtml(evidenceState) + '</div>' +
+        '</div>' +
+      '</div>';
+  }
+  showView('app-detail');
+  switchDetailTab('screening');
+  var title = document.getElementById('topbar-title');
+  if (title) title.textContent = 'Application Review - ' + (row.application_ref || companyName || 'Loading');
+}
+
 async function ensureScreeningQueueRowEvidence(rowKey) {
   var row = SCREENING_REVIEW_ROWS[rowKey];
   if (!row || screeningQueueRowHasFullEvidence(row) || !row.evidence_detail_available) return row;
+  if (row.evidence_detail_loading) return row;
   if (!BO_AUTH_TOKEN) return row;
+  row = mergeScreeningQueueRowState(rowKey, { evidence_detail_loading: true, evidence_detail_error: '' });
   try {
     var params = [
       'limit=100',
       'offset=0',
-      'include_evidence=1',
-      'search=' + encodeURIComponent(row.application_ref || row.subject_name || row.company_name || '')
+      'include_evidence=1'
     ];
+    if (row.application_ref) {
+      params.push('application_ref=' + encodeURIComponent(row.application_ref));
+    } else {
+      params.push('search=' + encodeURIComponent(row.subject_name || row.company_name || ''));
+    }
     if (row.subject_type) params.push('type=' + encodeURIComponent(row.subject_type));
     var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, { suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
     var rows = (payload && payload.rows) || [];
     var fullRow = rows.find(function(candidate) { return screeningQueueRowsMatch(candidate, row); }) || null;
     if (fullRow) {
-      SCREENING_REVIEW_ROWS[rowKey] = Object.assign({}, row, fullRow);
-      return SCREENING_REVIEW_ROWS[rowKey];
+      var updated = mergeScreeningQueueRowState(rowKey, Object.assign({}, fullRow, { evidence_detail_loading: false, evidence_detail_error: '' }));
+      refreshOpenScreeningReviewForRow(updated);
+      return updated;
     }
+    row = mergeScreeningQueueRowState(rowKey, { evidence_detail_loading: false, evidence_detail_error: 'not_found' });
+    refreshOpenScreeningReviewForRow(row);
+    return row;
   } catch(e) {
     console.warn('Could not lazy-load screening evidence details:', e);
-    showToast('Detailed screening evidence could not be loaded. Opening summary view.', 'warning');
+    row = mergeScreeningQueueRowState(rowKey, { evidence_detail_loading: false, evidence_detail_error: (e && e.message) || 'load_failed' });
+    refreshOpenScreeningReviewForRow(row);
+    showToast('Detailed screening evidence could not be loaded. Summary view remains available.', 'warning');
   }
   return row;
 }
 
-async function openScreeningReviewByRow(rowKey) {
+function openScreeningReviewByRow(rowKey) {
   var row = SCREENING_REVIEW_ROWS[rowKey];
   if (!row) { showToast('Screening row is no longer available', 'error'); return; }
-  row = await ensureScreeningQueueRowEvidence(rowKey);
+  if (row.evidence_detail_available && !screeningQueueRowHasFullEvidence(row)) {
+    ensureScreeningQueueRowEvidence(rowKey);
+    row = SCREENING_REVIEW_ROWS[rowKey] || row;
+  }
+  renderScreeningReviewOpeningShell(row);
   openScreeningReview(row.application_ref, row.subject_type, row.subject_name);
 }
 
