@@ -19140,6 +19140,37 @@ function periodicReviewReadinessChecklistRow(label, status, detail, tone) {
   '</div>';
 }
 
+function periodicReviewDecisionReadinessBlockers(reviewDetail, draft) {
+  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
+  var decision = workspace.decision || {};
+  var readiness = workspace.readiness || {};
+  var blockers = Array.isArray(decision.readiness_blockers)
+    ? decision.readiness_blockers.slice()
+    : (Array.isArray(readiness.blockers) ? readiness.blockers.slice() : []);
+  blockers = blockers.filter(function(label) {
+    var text = String(label || '');
+    if (text === 'Officer rationale is required') return false;
+    if (text === 'Review outcome is required before completion') return false;
+    return !!text;
+  });
+  return Array.from(new Set(blockers));
+}
+
+function periodicReviewDecisionFieldBlockers(draft) {
+  draft = draft || {};
+  var blockers = [];
+  if (!draft.outcome) blockers.push('Select a final outcome');
+  if (!draft.rationale) blockers.push('Rationale is required');
+  if (draft.risk_changed && !draft.new_risk_level) blockers.push('New risk level is required when risk changed');
+  if (draft.risk_changed && !draft.risk_impact) blockers.push('Risk impact explanation is required when risk changed');
+  if (draft.edd_required && !draft.risk_impact) blockers.push('EDD rationale is required when EDD is required');
+  if (draft.follow_up_required && !draft.follow_up_notes) blockers.push('Follow-up note is required when client follow-up is required');
+  if (draft.follow_up_required) blockers.push('Client follow-up required must be resolved before closure');
+  if (draft.exit_recommended && !draft.risk_impact) blockers.push('Exit/offboarding rationale is required when exit is recommended');
+  if (!draft.officer_acknowledgement) blockers.push('Officer acknowledgement is required');
+  return blockers;
+}
+
 function periodicReviewRiskNeedsAttention(reviewDetail) {
   var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
   var risk = workspace.risk_reassessment || reviewDetail.risk_reassessment || {};
@@ -20702,7 +20733,7 @@ function renderLifecycleClientAttestationPanel(reviewDetail, reviewProjection) {
       '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);"><div style="font-size:11px;color:var(--text3);margin-bottom:3px;">Unanswered</div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(String(unansweredCount)) + '</div></div>' +
       '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);"><div style="font-size:11px;color:var(--text3);margin-bottom:3px;">Declaration accepted</div><div style="font-size:13px;font-weight:800;color:' + (attestation.declaration_accepted ? 'var(--green)' : 'var(--amber)') + ';">' + (attestation.declaration_accepted ? 'Yes' : 'No') + '</div></div>' +
     '</div>' +
-    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;">Client-facing periodic review attestations are read-only in back office. Highlighted answers indicate declared material changes or incorrect company/contact details. Questions with declared changes appear first when expanded.</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;">Client attestation: ' + escapeHtml(statusLabel) + '. Client-facing periodic review attestations are read-only in back office. Full questions/details remain available below. Highlighted answers indicate declared material changes or incorrect company/contact details. Questions with declared changes appear first when expanded.</div>' +
     '<div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Declared material-change keys: ' + (materialKeys.length ? materialKeys.map(escapeHtml).join(', ') : 'none') + '</div>' +
     questionDetails;
 }
@@ -20784,11 +20815,11 @@ function renderPeriodicReviewWorkspaceReadiness(reviewDetail) {
   var monitoringBlockers = Array.isArray(monitoring.blockers) ? monitoring.blockers : [];
   var riskReady = !!(risk.officer_risk_decision && risk.risk_reassessment_rationale);
   var checklist = [
-    periodicReviewReadinessChecklistRow('Client attestation', attestationStatus, attestationStatus === 'Submitted' ? 'Client response is available.' : 'Client response is not fully submitted yet.', attestationStatus === 'Submitted' ? 'green' : 'amber'),
-    periodicReviewReadinessChecklistRow('Required documents', docsMissing ? 'Missing' : (docsReview ? 'Review needed' : 'Ready'), docsMissing ? String(docsMissing) + ' evidence item(s) missing.' : (docsReview ? String(docsReview) + ' uploaded item(s) need review.' : 'No document blocker shown.'), docsMissing || docsReview ? 'amber' : 'green'),
-    periodicReviewReadinessChecklistRow('Screening / monitoring alerts', monitoringBlockers.length || Number(monitoring.open_alerts_count || 0) ? 'Review needed' : 'Clear', monitoringBlockers.length ? monitoringBlockers[0] : 'No monitoring or screening blocker shown.', monitoringBlockers.length || Number(monitoring.open_alerts_count || 0) ? 'amber' : 'green'),
-    periodicReviewReadinessChecklistRow('Risk reassessment', riskReady ? 'Ready' : 'Officer action', riskReady ? 'Risk judgement is recorded.' : 'Officer risk judgement or rationale is not complete.', riskReady ? 'green' : 'amber'),
-    periodicReviewReadinessChecklistRow('Officer decision', blockers.length ? 'Blocked' : 'Ready to assess', blockers.length ? blockers[0] : 'Decision controls remain subject to completion gates.', blockers.length ? 'red' : 'green'),
+    periodicReviewReadinessChecklistRow('Client attestation', attestationStatus === 'Submitted' ? 'Submitted' : 'Pending', attestationStatus === 'Submitted' ? 'Response available' : 'Awaiting client', attestationStatus === 'Submitted' ? 'green' : 'amber'),
+    periodicReviewReadinessChecklistRow('Required documents', docsMissing ? 'Missing' : (docsReview ? 'Review needed' : 'Ready'), docsMissing ? String(docsMissing) + ' missing' : (docsReview ? String(docsReview) + ' pending review' : 'Ready'), docsMissing || docsReview ? 'amber' : 'green'),
+    periodicReviewReadinessChecklistRow('Screening / monitoring alerts', monitoringBlockers.length || Number(monitoring.open_alerts_count || 0) ? 'Review needed' : 'Clear', monitoringBlockers.length || Number(monitoring.open_alerts_count || 0) ? String(monitoringBlockers.length || Number(monitoring.open_alerts_count || 0)) + ' open' : 'Clear', monitoringBlockers.length || Number(monitoring.open_alerts_count || 0) ? 'amber' : 'green'),
+    periodicReviewReadinessChecklistRow('Risk reassessment', riskReady ? 'Ready' : 'Officer action', riskReady ? 'Ready' : 'Action required', riskReady ? 'green' : 'amber'),
+    periodicReviewReadinessChecklistRow('Officer decision', blockers.length ? 'Blocked' : 'Ready to assess', blockers.length ? String(blockers.length) + ' blocker(s)' : 'Ready when fields are complete', blockers.length ? 'red' : 'green'),
   ].join('');
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
       lifecycleDetailBadge(readiness.label || 'Not ready', blockers.length ? 'amber' : 'green') +
@@ -20796,7 +20827,7 @@ function renderPeriodicReviewWorkspaceReadiness(reviewDetail) {
     '</div>' +
     '<div data-prs-ux1-readiness-checklist="true" style="border-top:1px solid var(--border1);">' + checklist + '</div>' +
     (blockers.length
-      ? '<div style="margin-top:12px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:12px;line-height:1.45;"><strong>Completion blockers:</strong><ul style="margin:8px 0 0 18px;padding:0;">' + blockers.map(function(label) { return '<li>' + escapeHtml(label) + '</li>'; }).join('') + '</ul></div>'
+      ? '<div data-prs-ux1b-blocker-summary="true" style="margin-top:12px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:12px;line-height:1.45;"><strong>Completion blockers:</strong> ' + String(blockers.length) + ' open. Use the next action above and checklist statuses here before completing.</div>'
       : '<div style="font-size:12px;color:var(--text2);">No active blockers are currently preventing the officer from progressing this review.</div>');
 }
 
@@ -20849,28 +20880,9 @@ function periodicReviewDecisionDraft(reviewId) {
 }
 
 function periodicReviewDecisionBlockers(reviewDetail, draft) {
-  var workspace = (reviewDetail && reviewDetail.periodic_review_workspace) || {};
-  var decision = workspace.decision || {};
-  var readiness = workspace.readiness || {};
-  var blockers = Array.isArray(decision.readiness_blockers)
-    ? decision.readiness_blockers.slice()
-    : (Array.isArray(readiness.blockers) ? readiness.blockers.slice() : []);
-  blockers = blockers.filter(function(label) {
-    var text = String(label || '');
-    if (text === 'Officer rationale is required' && draft.rationale) return false;
-    if (text === 'Review outcome is required before completion' && draft.outcome) return false;
-    return !!text;
-  });
-  if (!draft.outcome) blockers.push('Select a final outcome');
-  if (!draft.rationale) blockers.push('Rationale is required');
-  if (draft.risk_changed && !draft.new_risk_level) blockers.push('New risk level is required when risk changed');
-  if (draft.risk_changed && !draft.risk_impact) blockers.push('Risk impact explanation is required when risk changed');
-  if (draft.edd_required && !draft.risk_impact) blockers.push('EDD rationale is required when EDD is required');
-  if (draft.follow_up_required && !draft.follow_up_notes) blockers.push('Follow-up note is required when client follow-up is required');
-  if (draft.follow_up_required) blockers.push('Client follow-up required must be resolved before closure');
-  if (draft.exit_recommended && !draft.risk_impact) blockers.push('Exit/offboarding rationale is required when exit is recommended');
-  if (!draft.officer_acknowledgement) blockers.push('Officer acknowledgement is required');
-  return Array.from(new Set(blockers));
+  var readinessBlockers = periodicReviewDecisionReadinessBlockers(reviewDetail, draft);
+  var fieldBlockers = periodicReviewDecisionFieldBlockers(draft);
+  return Array.from(new Set(readinessBlockers.concat(fieldBlockers)));
 }
 
 function refreshPeriodicReviewDecisionActions(reviewId) {
@@ -20878,7 +20890,9 @@ function refreshPeriodicReviewDecisionActions(reviewId) {
   var reviewDetail = context && context.reviewDetail;
   if (!reviewDetail || String(reviewDetail.id) !== String(reviewId)) return;
   var draft = periodicReviewDecisionDraft(reviewId);
-  var blockers = periodicReviewDecisionBlockers(reviewDetail, draft);
+  var readinessBlockers = periodicReviewDecisionReadinessBlockers(reviewDetail, draft);
+  var fieldBlockers = periodicReviewDecisionFieldBlockers(draft);
+  var blockers = Array.from(new Set(readinessBlockers.concat(fieldBlockers)));
   var blockerEl = document.getElementById('periodic-review-decision-blockers-' + reviewId);
   var btn = document.getElementById('periodic-review-decision-complete-btn-' + reviewId);
   var riskGroup = document.getElementById('periodic-review-decision-risk-group-' + reviewId);
@@ -20890,9 +20904,13 @@ function refreshPeriodicReviewDecisionActions(reviewId) {
     followGroup.style.display = draft.follow_up_required ? '' : 'none';
   }
   if (blockerEl) {
-    blockerEl.innerHTML = blockers.length
-      ? '<div style="padding:10px 12px;border-radius:12px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);font-size:12px;color:#92400e;"><strong>Completion blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' + blockers.map(function(label) { return '<li>' + escapeHtml(label) + '</li>'; }).join('') + '</ul></div>'
-      : '<div style="padding:10px 12px;border-radius:12px;background:rgba(5,150,105,0.10);border:1px solid rgba(5,150,105,0.22);font-size:12px;color:#047857;"><strong>Ready for closure:</strong> completion gates will be rechecked before completion.</div>';
+    if (readinessBlockers.length) {
+      blockerEl.innerHTML = '<div data-prs-ux1b-decision-blocked="true" style="padding:10px 12px;border-radius:12px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);font-size:12px;color:#92400e;"><strong>Officer decision blocked:</strong> ' + String(readinessBlockers.length) + ' readiness item(s) remain. Resolve the checklist above before completion.</div>';
+    } else if (fieldBlockers.length) {
+      blockerEl.innerHTML = '<div style="padding:10px 12px;border-radius:12px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.25);font-size:12px;color:#92400e;"><strong>Decision fields needed:</strong><ul style="margin:8px 0 0 18px;padding:0;">' + fieldBlockers.map(function(label) { return '<li>' + escapeHtml(label) + '</li>'; }).join('') + '</ul></div>';
+    } else {
+      blockerEl.innerHTML = '<div style="padding:10px 12px;border-radius:12px;background:rgba(5,150,105,0.10);border:1px solid rgba(5,150,105,0.22);font-size:12px;color:#047857;"><strong>Ready for closure:</strong> completion gates will be rechecked before completion.</div>';
+    }
   }
   if (btn) btn.disabled = blockers.length > 0;
 }
@@ -20931,7 +20949,12 @@ function renderPeriodicReviewWorkspaceDecision(reviewDetail) {
     var selected = String(decision.outcome || reviewDetail.outcome || '') === pair[0] ? ' selected' : '';
     return '<option value="' + escapeHtml(pair[0]) + '"' + selected + '>' + escapeHtml(pair[1]) + '</option>';
   }).join('');
-  var blockers = Array.isArray(decision.readiness_blockers) ? decision.readiness_blockers : [];
+  var persistedDraft = {
+    outcome: decision.outcome || reviewDetail.outcome || '',
+    rationale: decision.rationale || reviewDetail.officer_rationale || reviewDetail.outcome_reason || ''
+  };
+  var readinessBlockers = periodicReviewDecisionReadinessBlockers(reviewDetail, persistedDraft);
+  var decisionControlsOpen = readinessBlockers.length ? '' : ' open';
   return '<div style="display:grid;gap:14px;">' +
     '<div style="display:flex;flex-wrap:wrap;gap:14px;">' +
       lifecycleDetailMeta('Current review', decision.review_reference || ('Review #' + String(reviewId).slice(0, 8))) +
@@ -20941,8 +20964,13 @@ function renderPeriodicReviewWorkspaceDecision(reviewDetail) {
       lifecycleDetailMeta('Risk level', decision.risk_level || reviewDetail.risk_level || '—') +
       lifecycleDetailMeta('Attestation', decision.attestation_status || reviewDetail.client_attestation_status || 'not_started') +
     '</div>' +
-    (blockers.length ? '<div style="font-size:12px;color:var(--text2);">Completion blockers currently shown: ' + blockers.map(escapeHtml).join(' • ') + '</div>' : '<div style="font-size:12px;color:var(--text2);">No completion blockers are currently shown.</div>') +
+    (readinessBlockers.length
+      ? '<div data-prs-ux1b-decision-blocked="true" style="font-size:12px;color:var(--text2);">Officer decision unavailable until readiness blockers clear. Resolve the checklist above before completing this review.</div>'
+      : '<div style="font-size:12px;color:var(--text2);">Officer decision controls are available. Completion gates are still rechecked before closure.</div>') +
     '<div id="periodic-review-decision-blockers-' + reviewId + '"></div>' +
+    '<details class="lifecycle-inline-details" data-prs-ux1b-decision-controls="true"' + decisionControlsOpen + '>' +
+      '<summary><span>Decision draft controls</span><span style="font-size:11px;color:var(--text3);">' + (readinessBlockers.length ? 'Blocked' : 'Actionable') + '</span></summary>' +
+      '<div class="lifecycle-inline-details-body" style="display:grid;gap:14px;">' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">' +
       '<div><label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Final outcome</label><select id="periodic-review-decision-outcome-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' + optionHtml + '</select></div>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);padding-top:28px;"><input type="checkbox" id="periodic-review-decision-risk-changed-' + reviewId + '" onchange="refreshPeriodicReviewDecisionActions(\'' + reviewId + '\')"> Risk changed</label>' +
@@ -20962,6 +20990,8 @@ function renderPeriodicReviewWorkspaceDecision(reviewDetail) {
     '<div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">' +
       '<button class="btn btn-primary btn-sm" id="periodic-review-decision-complete-btn-' + reviewId + '" onclick="completePeriodicReviewDecision(\'' + reviewId + '\')" disabled>Complete periodic review</button>' +
     '</div>' +
+      '</div>' +
+    '</details>' +
   '</div>';
 }
 

@@ -137,6 +137,7 @@ def test_periodic_review_tab_ux1_summary_next_action_and_readiness_checklist():
     assert "Due date" in overview_section
     assert "Owner" in overview_section
     assert "data-prs-ux1-readiness-checklist" in readiness_section
+    assert "data-prs-ux1b-blocker-summary" in readiness_section
     for checklist_label in (
         "Client attestation",
         "Required documents",
@@ -145,7 +146,35 @@ def test_periodic_review_tab_ux1_summary_next_action_and_readiness_checklist():
         "Officer decision",
     ):
         assert checklist_label in readiness_section
-    assert "Decision controls remain subject to completion gates." in readiness_section
+    assert "Awaiting client" in readiness_section
+    assert "pending review" in readiness_section
+    assert "blocker(s)" in readiness_section
+    assert "Decision controls remain subject to completion gates." not in readiness_section
+    assert "blockers.map(function(label)" not in readiness_section
+
+
+def test_periodic_review_tab_ux1b_deduplicates_decision_blockers_without_removing_controls():
+    html = BACKOFFICE_HTML.read_text()
+    decision_start = html.index("function renderPeriodicReviewWorkspaceDecision(reviewDetail)")
+    decision_end = html.index("async function completePeriodicReviewDecision(reviewId)", decision_start)
+    decision_section = html[decision_start:decision_end]
+    refresh_start = html.index("function refreshPeriodicReviewDecisionActions(reviewId)")
+    refresh_end = html.index("function renderPeriodicReviewWorkspaceDecision(reviewDetail)", refresh_start)
+    refresh_section = html[refresh_start:refresh_end]
+
+    assert "function periodicReviewDecisionReadinessBlockers(reviewDetail, draft)" in html
+    assert "function periodicReviewDecisionFieldBlockers(draft)" in html
+    assert "data-prs-ux1b-decision-blocked" in decision_section
+    assert "data-prs-ux1b-decision-controls" in decision_section
+    assert "Decision draft controls" in decision_section
+    assert "Officer decision unavailable until readiness blockers clear." in decision_section
+    assert "Completion blockers currently shown:" not in decision_section
+    assert "Completion blocked:</strong><ul" not in refresh_section
+    assert "Officer decision blocked:" in refresh_section
+    assert "Decision fields needed:" in refresh_section
+    assert "periodic-review-decision-outcome-" in decision_section
+    assert "periodic-review-decision-complete-btn-" in decision_section
+    assert "completePeriodicReviewDecision" in decision_section
 
 
 def test_periodic_review_tab_ux1_collapses_long_context_without_removing_sections():
