@@ -9612,6 +9612,8 @@ function documentCanShowReverifyAction(doc, state) {
     (typeof window !== 'undefined' && typeof window.verifyBackofficeDocument === 'function');
   if (!hasReverifyHandler) return false;
   var label = String((state && state.label) || '').toLowerCase();
+  if (label === 'verified' || label === 'manual accepted') return false;
+  if (documentReadyDisplayState(doc)) return false;
   if (['pending verification', 'failed', 'stale', 'system issue'].indexOf(label) >= 0) return true;
   var verificationState = String((doc.verification_state || doc.verification_status || '')).toLowerCase();
   var relianceState = String((doc.document_reliance_state || doc.document_reliance_status || '')).toLowerCase();
