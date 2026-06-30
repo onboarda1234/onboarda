@@ -1,0 +1,139 @@
+{
+  "alignment": {
+    "aligned": true,
+    "backend_env_git_sha": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "backend_env_image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "backend_env_matches_expected": true,
+    "backend_image_matches_expected": true,
+    "backend_image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "backend_service_healthy": true,
+    "expected_sha": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "worker_env_git_sha": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "worker_env_image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "worker_env_matches_expected": true,
+    "worker_image_matches_expected": true,
+    "worker_image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "worker_service_healthy": true
+  },
+  "backend_service_name": "regmind-backend",
+  "cluster": "regmind-staging",
+  "failures": [],
+  "region": "af-south-1",
+  "services": [
+    {
+      "desiredCount": 2,
+      "pendingCount": 0,
+      "primaryRolloutState": "COMPLETED",
+      "primaryTaskDefinition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581",
+      "runningCount": 2,
+      "serviceName": "regmind-backend",
+      "status": "ACTIVE",
+      "taskDefinition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581"
+    },
+    {
+      "desiredCount": 6,
+      "pendingCount": 0,
+      "primaryRolloutState": "COMPLETED",
+      "primaryTaskDefinition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:30",
+      "runningCount": 6,
+      "serviceName": "regmind-verification-worker",
+      "status": "ACTIVE",
+      "taskDefinition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:30"
+    }
+  ],
+  "task_definitions": {
+    "backend": {
+      "containers": [
+        {
+          "command": null,
+          "env_provenance": {
+            "BUILD_TIME": "2026-06-15T08:12:29Z",
+            "ENVIRONMENT": "staging",
+            "FF_ASYNC_VERIFY": "true",
+            "GIT_SHA": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+            "IMAGE_TAG": "6e44c13d79066fa4751cf2050e61bc009d7f9356"
+          },
+          "essential": true,
+          "image": "782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:6e44c13d79066fa4751cf2050e61bc009d7f9356",
+          "image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+          "log_group": "/ecs/regmind-staging",
+          "log_stream_prefix": "backend",
+          "name": "regmind-backend",
+          "secret_names": [
+            "ANTHROPIC_API_KEY",
+            "DATABASE_URL",
+            "JWT_SECRET",
+            "PII_ENCRYPTION_KEY",
+            "SUMSUB_APP_TOKEN",
+            "SUMSUB_SECRET_KEY",
+            "SUMSUB_WEBHOOK_SECRET",
+            "COMPLYADVANTAGE_REALM",
+            "COMPLYADVANTAGE_USERNAME",
+            "COMPLYADVANTAGE_PASSWORD",
+            "COMPLYADVANTAGE_WEBHOOK_SECRET",
+            "METRICS_TOKEN",
+            "ADMIN_CLIENT_RESET_CONFIRMATION",
+            "ADMIN_OFFICER_RESET_CONFIRMATION"
+          ]
+        }
+      ],
+      "cpu": "1024",
+      "executionRoleArn": "arn:aws:iam::782913119880:role/regmind-staging-execution-role",
+      "family": "regmind-staging",
+      "memory": "3072",
+      "networkMode": "awsvpc",
+      "revision": 581,
+      "taskDefinitionArn": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581",
+      "taskRoleArn": "arn:aws:iam::782913119880:role/regmind-staging-task-role"
+    },
+    "worker": {
+      "containers": [
+        {
+          "command": [
+            "python",
+            "verification_worker.py",
+            "--poll-interval",
+            "1"
+          ],
+          "env_provenance": {
+            "BUILD_TIME": "2026-06-15T08:12:29Z",
+            "ENVIRONMENT": "staging",
+            "GIT_SHA": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+            "IMAGE_TAG": "6e44c13d79066fa4751cf2050e61bc009d7f9356"
+          },
+          "essential": true,
+          "image": "782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:6e44c13d79066fa4751cf2050e61bc009d7f9356",
+          "image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+          "log_group": "/ecs/regmind-staging",
+          "log_stream_prefix": "worker",
+          "name": "regmind-backend",
+          "secret_names": [
+            "ANTHROPIC_API_KEY",
+            "DATABASE_URL",
+            "JWT_SECRET",
+            "PII_ENCRYPTION_KEY",
+            "SUMSUB_APP_TOKEN",
+            "SUMSUB_SECRET_KEY",
+            "SUMSUB_WEBHOOK_SECRET",
+            "COMPLYADVANTAGE_REALM",
+            "COMPLYADVANTAGE_USERNAME",
+            "COMPLYADVANTAGE_PASSWORD",
+            "COMPLYADVANTAGE_WEBHOOK_SECRET",
+            "METRICS_TOKEN",
+            "ADMIN_CLIENT_RESET_CONFIRMATION",
+            "ADMIN_OFFICER_RESET_CONFIRMATION"
+          ]
+        }
+      ],
+      "cpu": "1024",
+      "executionRoleArn": "arn:aws:iam::782913119880:role/regmind-staging-execution-role",
+      "family": "regmind-verification-worker",
+      "memory": "3072",
+      "networkMode": "awsvpc",
+      "revision": 30,
+      "taskDefinitionArn": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:30",
+      "taskRoleArn": "arn:aws:iam::782913119880:role/regmind-staging-task-role"
+    }
+  },
+  "worker_service_name": "regmind-verification-worker"
+}

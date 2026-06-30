@@ -1,0 +1,83 @@
+{
+  "api_credential_mode_inference": "production_domain",
+  "base_url": "https://staging.regmind.co/api",
+  "ca_config_presence": {
+    "COMPLYADVANTAGE_PASSWORD": true,
+    "COMPLYADVANTAGE_REALM": true,
+    "COMPLYADVANTAGE_SCREENING_CONFIG_ID": false,
+    "COMPLYADVANTAGE_USERNAME": true,
+    "COMPLYADVANTAGE_WEBHOOK_SECRET": false
+  },
+  "ca_config_presence_note": "Runtime presence is derived from ECS task-definition env/secret names only; values are not exposed.",
+  "ca_runtime_config_presence": {
+    "COMPLYADVANTAGE_API_BASE_URL": true,
+    "COMPLYADVANTAGE_AUTH_URL": true,
+    "COMPLYADVANTAGE_PASSWORD": true,
+    "COMPLYADVANTAGE_REALM": true,
+    "COMPLYADVANTAGE_SCREENING_CONFIG_ID": true,
+    "COMPLYADVANTAGE_USERNAME": true,
+    "COMPLYADVANTAGE_WEBHOOK_SECRET": true
+  },
+  "ca_url_hosts": {
+    "COMPLYADVANTAGE_API_BASE_URL": "api.mesh.complyadvantage.com",
+    "COMPLYADVANTAGE_AUTH_URL": "api.mesh.complyadvantage.com"
+  },
+  "captured_at": "2026-06-15T09:43:56Z",
+  "dashboard_visual_mode": "not_independently_confirmed_in_this_run",
+  "login_status": 200,
+  "qa_credential_keys_present": {
+    "email": true,
+    "password": true
+  },
+  "runtime_task_definition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:581",
+  "screening_requests_sent_by_this_preflight": 0,
+  "screening_status_projection": {
+    "active_aml_screening_provider": null,
+    "active_provider": null,
+    "aml_provider": null,
+    "complyadvantage": {
+      "abstraction_enabled": true,
+      "active": true,
+      "blockers": [],
+      "configured": true,
+      "description": "ComplyAdvantage Mesh AML, sanctions, PEP/RCA, adverse-media, and monitoring integration",
+      "fallback_mode": "disabled",
+      "implementation_status": "active",
+      "provider_display_name": "ComplyAdvantage Mesh",
+      "requested_provider": "complyadvantage",
+      "requested_provider_label": "ComplyAdvantage Mesh",
+      "role": "AML sanctions, PEP/RCA, adverse-media screening, and ongoing monitoring",
+      "simulation_fallback_enabled": false,
+      "status": "live"
+    },
+    "fallback": null,
+    "mode": null,
+    "opencorporates": {
+      "configured": false,
+      "description": "Company registry verification and enrichment",
+      "role": "Registry/KYB enrichment provider",
+      "status": "simulated"
+    },
+    "providers": null,
+    "screening_abstraction": null,
+    "sumsub": {
+      "configured": true,
+      "description": "Individual identity verification and KYC (document + selfie + liveness)",
+      "provider_scope": "individual_kyc_identity_verification",
+      "role": "Identity Verification Provider",
+      "status": "live"
+    }
+  },
+  "screening_status_status": 200,
+  "stop_condition": "dashboard/account mode remains unverified against prior Sandbox screenshot; no runtime screening sent until resolved",
+  "token_obtained": true,
+  "version": {
+    "build_time": "2026-06-15T08:12:29Z",
+    "environment": "staging",
+    "git_sha": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "git_sha_short": "6e44c13",
+    "image_tag": "6e44c13d79066fa4751cf2050e61bc009d7f9356",
+    "service": "regmind-backend"
+  },
+  "version_status": 200
+}
