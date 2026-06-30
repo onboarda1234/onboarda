@@ -11290,6 +11290,17 @@ class DocumentVerifyHandler(BaseHandler):
             if close_db:
                 db.close()
             return self.error("Application not found for document", 404)
+        if not _a1f_authorize_application_row(
+            self,
+            user,
+            app,
+            resource_id=doc_id,
+            resource_type="document",
+            reason="document_verify_owner_mismatch",
+        ):
+            if close_db:
+                db.close()
+            return
 
         if agent1 and not agent1["enabled"]:
             skip_results = {
@@ -11775,6 +11786,211 @@ class DocumentVerifyHandler(BaseHandler):
             "verification_results": layered_results,
             "verified_at": layered_results.get("verified_at"),
         })
+
+
+def _a1f_row_get(row, key, default=""):
+    if row is None:
+        return default
+    try:
+        return row.get(key, default)
+    except AttributeError:
+        try:
+            return row[key]
+        except Exception:
+            return default
+
+
+def _a1f_is_client_user(user):
+    return str((user or {}).get("type") or "").strip().lower() == "client"
+
+
+def _a1f_deny_object_access(
+    handler,
+    user,
+    resource_id,
+    *,
+    actual_owner="",
+    resource_type="object",
+    application_id="",
+    application_ref="",
+    reason="object_owner_mismatch",
+):
+    handler.log_authz_denial(
+        user,
+        "authz_denied_not_owner",
+        str(resource_id or "unknown"),
+        {
+            "actual_owner": actual_owner or "",
+            "resource_type": resource_type,
+            "application_id": application_id or "",
+            "application_ref": application_ref or "",
+            "reason": reason,
+        },
+    )
+    handler.error("Unauthorized", 403)
+    return False
+
+
+def _a1f_load_application_by_identifier(db, application_id):
+    identifier = str(application_id or "").strip()
+    if not identifier:
+        return None
+    return db.execute(
+        "SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?",
+        (identifier, identifier),
+    ).fetchone()
+
+
+def _a1f_authorize_application_row(
+    handler,
+    user,
+    app,
+    *,
+    resource_id=None,
+    resource_type="application",
+    reason="application_owner_mismatch",
+    deny_missing=False,
+):
+    if not _a1f_is_client_user(user):
+        return True
+    target = resource_id or _a1f_row_get(app, "id", "")
+    if not app:
+        if not deny_missing:
+            return True
+        return _a1f_deny_object_access(
+            handler,
+            user,
+            target,
+            resource_type=resource_type,
+            reason="object_not_found_or_unscoped",
+        )
+
+    owner = _a1f_row_get(app, "client_id", "")
+    if owner != user.get("sub"):
+        return _a1f_deny_object_access(
+            handler,
+            user,
+            target,
+            actual_owner=owner,
+            resource_type=resource_type,
+            application_id=_a1f_row_get(app, "id", ""),
+            application_ref=_a1f_row_get(app, "ref", ""),
+            reason=reason,
+        )
+    return True
+
+
+def _a1f_authorize_application_identifier(
+    handler,
+    db,
+    user,
+    application_id,
+    *,
+    resource_type="application",
+    reason="application_owner_mismatch",
+    deny_missing_for_client=False,
+):
+    if not _a1f_is_client_user(user):
+        return True
+    identifier = str(application_id or "").strip()
+    if not identifier:
+        if not deny_missing_for_client:
+            return True
+        return _a1f_deny_object_access(
+            handler,
+            user,
+            "missing_application_id",
+            resource_type=resource_type,
+            reason="missing_application_scope",
+        )
+    app = _a1f_load_application_by_identifier(db, identifier)
+    return _a1f_authorize_application_row(
+        handler,
+        user,
+        app,
+        resource_id=identifier,
+        resource_type=resource_type,
+        reason=reason,
+        deny_missing=deny_missing_for_client,
+    )
+
+
+def _a1f_authorize_document_identifier(handler, db, user, doc_id):
+    if not _a1f_is_client_user(user):
+        return True
+    identifier = str(doc_id or "").strip()
+    if not identifier:
+        return True
+    doc = db.execute(
+        "SELECT id, application_id FROM documents WHERE id=?",
+        (identifier,),
+    ).fetchone()
+    if not doc:
+        return True
+    app = db.execute(
+        "SELECT id, ref, client_id FROM applications WHERE id=?",
+        (_a1f_row_get(doc, "application_id", ""),),
+    ).fetchone()
+    return _a1f_authorize_application_row(
+        handler,
+        user,
+        app,
+        resource_id=identifier,
+        resource_type="document",
+        reason="document_owner_mismatch",
+        deny_missing=True,
+    )
+
+
+def _a1f_authorize_sumsub_mapping(handler, db, user, lookup_column, lookup_value, resource_type):
+    if not _a1f_is_client_user(user):
+        return True
+    if lookup_column not in {"external_user_id", "applicant_id"}:
+        raise ValueError("Unsupported Sumsub mapping lookup")
+    identifier = str(lookup_value or "").strip()
+    if not identifier:
+        return True
+
+    rows = db.execute(
+        f"""
+        SELECT
+            sam.application_id AS mapping_application_id,
+            sam.applicant_id,
+            sam.external_user_id,
+            app.id AS app_id,
+            app.ref AS app_ref,
+            app.client_id AS client_id
+        FROM sumsub_applicant_mappings sam
+        LEFT JOIN applications app
+          ON app.id = sam.application_id OR app.ref = sam.application_id
+        WHERE sam.{lookup_column}=?
+        """,
+        (identifier,),
+    ).fetchall()
+    if not rows:
+        return _a1f_deny_object_access(
+            handler,
+            user,
+            identifier,
+            resource_type=resource_type,
+            reason="sumsub_mapping_missing",
+        )
+
+    for row in rows:
+        if _a1f_row_get(row, "client_id", "") == user.get("sub"):
+            return True
+
+    first = rows[0]
+    return _a1f_deny_object_access(
+        handler,
+        user,
+        identifier,
+        actual_owner=_a1f_row_get(first, "client_id", ""),
+        resource_type=resource_type,
+        application_id=_a1f_row_get(first, "app_id", "") or _a1f_row_get(first, "mapping_application_id", ""),
+        application_ref=_a1f_row_get(first, "app_ref", ""),
+        reason="sumsub_mapping_owner_mismatch",
+    )
 
 
 class DocumentVerificationStatusHandler(BaseHandler):
@@ -12326,6 +12542,23 @@ class DocumentAIVerifyHandler(BaseHandler):
         doc_type, doc_type_error = _validate_document_type(doc_type, allow_general=False)
         if doc_type_error:
             return self.error(doc_type_error, 400)
+
+        if doc_id or app_id:
+            auth_db = get_db()
+            try:
+                if not _a1f_authorize_document_identifier(self, auth_db, user, doc_id):
+                    return
+                if not _a1f_authorize_application_identifier(
+                    self,
+                    auth_db,
+                    user,
+                    app_id,
+                    resource_type="application",
+                    reason="ai_verify_application_owner_mismatch",
+                ):
+                    return
+            finally:
+                auth_db.close()
 
         # If pre-screening context not provided in request, look it up from the application
         if (not entity_name or not directors) and app_id:
@@ -24695,6 +24928,23 @@ class SumsubApplicantHandler(BaseHandler):
         external_user_id = data.get("external_user_id", "").strip()
         if not external_user_id:
             return self.error("external_user_id is required")
+        application_id = str(data.get("application_id", "") or "").strip()
+
+        if _a1f_is_client_user(user):
+            auth_db = get_db()
+            try:
+                if not _a1f_authorize_application_identifier(
+                    self,
+                    auth_db,
+                    user,
+                    application_id,
+                    resource_type="sumsub_applicant",
+                    reason="sumsub_applicant_application_owner_mismatch",
+                    deny_missing_for_client=True,
+                ):
+                    return
+            finally:
+                auth_db.close()
 
         result = sumsub_create_applicant(
             external_user_id=external_user_id,
@@ -24709,7 +24959,6 @@ class SumsubApplicantHandler(BaseHandler):
 
         # Finding 12: Store applicant→application mapping for deterministic webhook linking
         applicant_id = result.get("applicant_id", "")
-        application_id = data.get("application_id", "")
         if applicant_id and application_id:
             db = get_db()
             try:
@@ -24864,6 +25113,21 @@ class SumsubAccessTokenHandler(BaseHandler):
         if not external_user_id:
             return self.error("external_user_id is required")
 
+        if _a1f_is_client_user(user):
+            auth_db = get_db()
+            try:
+                if not _a1f_authorize_sumsub_mapping(
+                    self,
+                    auth_db,
+                    user,
+                    "external_user_id",
+                    external_user_id,
+                    "sumsub_access_token",
+                ):
+                    return
+            finally:
+                auth_db.close()
+
         result = sumsub_generate_access_token(
             external_user_id=external_user_id,
             level_name=data.get("level_name"),
@@ -24911,6 +25175,21 @@ class SumsubDocumentHandler(BaseHandler):
 
         if not applicant_id:
             return self.error("applicant_id is required")
+
+        if _a1f_is_client_user(user):
+            auth_db = get_db()
+            try:
+                if not _a1f_authorize_sumsub_mapping(
+                    self,
+                    auth_db,
+                    user,
+                    "applicant_id",
+                    applicant_id,
+                    "sumsub_document",
+                ):
+                    return
+            finally:
+                auth_db.close()
 
         # Support base64 file data or a reference to an uploaded file
         file_data = data.get("file_data")

@@ -1,9 +1,4 @@
-"""A1F object-level authorization characterization tests.
-
-These tests are intentionally preparation-only. Cross-object client tests assert
-the target 403 behavior and remain strict xfail until A1F-1 adds the production
-object-authorization checks.
-"""
+"""A1F object-level authorization regression tests."""
 
 import json
 import socket
@@ -16,9 +11,6 @@ import pytest
 import requests as http_requests
 import tornado.httpserver
 import tornado.ioloop
-
-
-A1F_XFAIL_REASON = "object-level authorization fix pending A1F-1"
 
 
 def _find_free_port():
@@ -165,6 +157,23 @@ def _seed_sumsub_mapping(conn, *, app_id, client_id, external_user_id, applicant
     conn.commit()
 
 
+def _assert_authz_denial_logged(conn, *, user_id, target, resource_type):
+    row = conn.execute(
+        """
+        SELECT action, target, detail FROM audit_log
+        WHERE user_id=? AND action='authz_denied_not_owner' AND target=?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (user_id, target),
+    ).fetchone()
+    assert row is not None
+    detail = json.loads(row["detail"])
+    assert detail["event"] == "authz_denied_not_owner"
+    assert detail["client_id"] == user_id
+    assert detail["attempted_resource_id"] == target
+    assert detail["resource_type"] == resource_type
+
+
 class _FakeClaudeClient:
     def __init__(self, *args, **kwargs):
         pass
@@ -253,7 +262,6 @@ def test_documents_ai_verify_officer_success_path(a1f_api_server, db):
     assert body["authoritative"] is False
 
 
-@pytest.mark.xfail(strict=True, reason=A1F_XFAIL_REASON)
 def test_documents_ai_verify_cross_object_client_expected_403(a1f_api_server, db):
     _seed_application_with_document(
         db,
@@ -264,7 +272,7 @@ def test_documents_ai_verify_cross_object_client_expected_403(a1f_api_server, db
     )
 
     token = _token("a1f_client_ai_a", "client", "A1F Client A", "client")
-    with patch("server.HAS_CLAUDE_CLIENT", True), patch("server.ClaudeClient", _FakeClaudeClient):
+    with patch("server.HAS_CLAUDE_CLIENT", True), patch("server.ClaudeClient") as claude_client:
         resp = http_requests.post(
             f"{a1f_api_server}/api/documents/ai-verify",
             headers={**_headers(token), "Content-Type": "application/json"},
@@ -279,6 +287,13 @@ def test_documents_ai_verify_cross_object_client_expected_403(a1f_api_server, db
         )
 
     assert resp.status_code == 403, resp.text
+    claude_client.assert_not_called()
+    _assert_authz_denial_logged(
+        db,
+        user_id="a1f_client_ai_a",
+        target="a1f_doc_ai_b",
+        resource_type="document",
+    )
 
 
 def test_sumsub_applicant_officer_success_path_records_mapping(a1f_api_server, db):
@@ -324,7 +339,6 @@ def test_sumsub_applicant_officer_success_path_records_mapping(a1f_api_server, d
     assert row["applicant_id"] == "a1f_applicant_success"
 
 
-@pytest.mark.xfail(strict=True, reason=A1F_XFAIL_REASON)
 def test_sumsub_applicant_cross_object_client_expected_403(a1f_api_server, db):
     _seed_application(
         db,
@@ -343,7 +357,7 @@ def test_sumsub_applicant_cross_object_client_expected_403(a1f_api_server, db):
             "source": "sumsub-test",
             "api_status": "mocked",
         },
-    ):
+    ) as create_applicant:
         resp = http_requests.post(
             f"{a1f_api_server}/api/kyc/applicant",
             headers={**_headers(token), "Content-Type": "application/json"},
@@ -358,6 +372,13 @@ def test_sumsub_applicant_cross_object_client_expected_403(a1f_api_server, db):
         )
 
     assert resp.status_code == 403, resp.text
+    create_applicant.assert_not_called()
+    _assert_authz_denial_logged(
+        db,
+        user_id="a1f_sumsub_client_a",
+        target="a1f_app_sumsub_b",
+        resource_type="sumsub_applicant",
+    )
 
 
 def test_document_verify_officer_success_path_agent_disabled(a1f_api_server, db):
@@ -383,7 +404,6 @@ def test_document_verify_officer_success_path_agent_disabled(a1f_api_server, db)
     assert body["requires_review"] is True
 
 
-@pytest.mark.xfail(strict=True, reason=A1F_XFAIL_REASON)
 def test_document_verify_cross_object_client_expected_403(a1f_api_server, db):
     _seed_application_with_document(
         db,
@@ -402,6 +422,12 @@ def test_document_verify_cross_object_client_expected_403(a1f_api_server, db):
     )
 
     assert resp.status_code == 403, resp.text
+    _assert_authz_denial_logged(
+        db,
+        user_id="a1f_docverify_client_a",
+        target="a1f_docverify_b",
+        resource_type="document",
+    )
 
 
 def test_sumsub_access_token_owning_client_success_path(a1f_api_server, db):
@@ -433,7 +459,6 @@ def test_sumsub_access_token_owning_client_success_path(a1f_api_server, db):
     assert resp.json()["token"] == "mocked-owner-token"
 
 
-@pytest.mark.xfail(strict=True, reason=A1F_XFAIL_REASON)
 def test_sumsub_access_token_cross_object_client_expected_403(a1f_api_server, db):
     _seed_sumsub_mapping(
         db,
@@ -451,7 +476,7 @@ def test_sumsub_access_token_cross_object_client_expected_403(a1f_api_server, db
             "external_user_id": "a1f_external_token_b",
             "source": "sumsub-test",
         },
-    ):
+    ) as generate_token:
         resp = http_requests.post(
             f"{a1f_api_server}/api/kyc/token",
             headers={**_headers(token), "Content-Type": "application/json"},
@@ -460,6 +485,13 @@ def test_sumsub_access_token_cross_object_client_expected_403(a1f_api_server, db
         )
 
     assert resp.status_code == 403, resp.text
+    generate_token.assert_not_called()
+    _assert_authz_denial_logged(
+        db,
+        user_id="a1f_token_client_a",
+        target="a1f_external_token_b",
+        resource_type="sumsub_access_token",
+    )
 
 
 def test_sumsub_document_officer_success_path(a1f_api_server):
@@ -489,7 +521,6 @@ def test_sumsub_document_officer_success_path(a1f_api_server):
     assert resp.json()["status"] == "uploaded"
 
 
-@pytest.mark.xfail(strict=True, reason=A1F_XFAIL_REASON)
 def test_sumsub_document_cross_object_client_expected_403(a1f_api_server, db):
     _seed_sumsub_mapping(
         db,
@@ -507,7 +538,7 @@ def test_sumsub_document_cross_object_client_expected_403(a1f_api_server, db):
             "status": "uploaded",
             "source": "sumsub-test",
         },
-    ):
+    ) as add_document:
         resp = http_requests.post(
             f"{a1f_api_server}/api/kyc/document",
             headers={**_headers(token), "Content-Type": "application/json"},
@@ -522,3 +553,10 @@ def test_sumsub_document_cross_object_client_expected_403(a1f_api_server, db):
         )
 
     assert resp.status_code == 403, resp.text
+    add_document.assert_not_called()
+    _assert_authz_denial_logged(
+        db,
+        user_id="a1f_sumsub_doc_client_a",
+        target="a1f_applicant_sumsub_doc_b",
+        resource_type="sumsub_document",
+    )
