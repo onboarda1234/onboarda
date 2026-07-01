@@ -10743,6 +10743,8 @@ async function fetchApplicationDetail(ref) {
 	    gateBlockers: detail.gate_blockers || [],
     gateBlockerCount: detail.gate_blocker_count || 0,
     screeningReviews: detail.screening_reviews || [],
+    agent3ScreeningInterpretation: detail.agent3_screening_interpretation || null,
+    agent3_screening_interpretation: detail.agent3_screening_interpretation || null,
     _raw_prescreening: psData,
     prescreeningData: psData,
     officerCorrectionDisplayValues: detail.officer_correction_display_values || {},
@@ -15785,6 +15787,133 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
   return subjects;
 }
 
+var AGENT3_SCREENING_INTERPRETATION_BUSY = false;
+
+function getAgent3ScreeningInterpretation(app) {
+  app = app || currentApp || {};
+  return app.agent3ScreeningInterpretation || app.agent3_screening_interpretation || null;
+}
+
+function agent3ScreeningListHtml(items, emptyText) {
+  items = Array.isArray(items) ? items.filter(function(item) { return item != null && String(item).trim() !== ''; }) : [];
+  if (!items.length) return '<div style="font-size:12px;color:var(--text3);">' + escapeHtml(emptyText || 'Not available') + '</div>';
+  return '<ul style="margin:0;padding-left:18px;font-size:12px;color:var(--text2);line-height:1.6;">' +
+    items.map(function(item) { return '<li>' + escapeHtml(String(item)) + '</li>'; }).join('') +
+    '</ul>';
+}
+
+function agent3ScreeningFieldHtml(label, value) {
+  var body = '';
+  if (Array.isArray(value)) {
+    body = agent3ScreeningListHtml(value, 'No items reported.');
+  } else {
+    body = '<div style="font-size:12px;color:var(--text2);line-height:1.6;">' + escapeHtml(value || 'Not available') + '</div>';
+  }
+  return '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">' +
+    '<div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;margin-bottom:6px;">' + escapeHtml(label) + '</div>' +
+    body +
+    '</div>';
+}
+
+function agent3EvidenceText(item) {
+  if (item == null) return '';
+  if (typeof item === 'string') return item;
+  if (typeof item !== 'object') return String(item);
+  var parts = [];
+  if (item.source) parts.push(item.source);
+  if (item.subject_type || item.subject_name) parts.push([item.subject_type, item.subject_name].filter(Boolean).join(': '));
+  if (item.matched_name) parts.push('matched ' + item.matched_name);
+  if (Array.isArray(item.categories) && item.categories.length) parts.push(item.categories.join(', '));
+  if (item.match_score != null && item.match_score !== '') parts.push('score ' + item.match_score);
+  if (item.total_hits != null) parts.push(item.total_hits + ' hit(s)');
+  if (item.screened_at) parts.push('screened ' + String(item.screened_at).replace('T', ' ').slice(0, 19));
+  if (item.review_count != null) parts.push(item.review_count + ' review row(s)');
+  return parts.join(' | ') || JSON.stringify(item);
+}
+
+function agent3EvidenceHtml(evidence) {
+  evidence = Array.isArray(evidence) ? evidence.map(agent3EvidenceText).filter(Boolean) : [];
+  return agent3ScreeningListHtml(evidence, 'No evidence references available.');
+}
+
+function renderAgent3ScreeningInterpretationPanel(app) {
+  var output = getAgent3ScreeningInterpretation(app);
+  var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
+  var buttonLabel = AGENT3_SCREENING_INTERPRETATION_BUSY ? 'Generating...' : 'Generate interpretation';
+  var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
+  var html = '';
+  html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #0f766e;background:rgba(15,118,110,0.035);">';
+  html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
+  html += '<div><div class="card-title">Agent 3 Screening Interpretation</div>';
+  html += '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Generate an AI-assisted interpretation from stored screening results. This does not re-run screening or change the officer decision.</div></div>';
+  html += '<button class="btn btn-primary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button>';
+  html += '</div>';
+  html += '<div style="padding:0 18px 12px;font-size:12px;color:#92400e;font-weight:700;">Officer decision required. Agent 3 does not approve, reject, or close screening reviews.</div>';
+
+  if (!output) {
+    html += '<div style="padding:0 18px 18px;font-size:12px;color:var(--text2);line-height:1.6;">No Agent 3 interpretation has been generated for this screening review yet.</div>';
+    html += '</div>';
+    return html;
+  }
+
+  if (output.ai_notice) {
+    html += '<div style="margin:0 18px 12px;padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;">' + escapeHtml(output.ai_notice) + '</div>';
+  }
+  html += '<div style="padding:0 18px 18px;">';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">';
+  html += '<span class="explain-data-source">Severity: ' + escapeHtml(output.severity || 'Not available') + '</span>';
+  html += '<span class="explain-data-source">Agent recommendation: ' + escapeHtml(output.recommended_disposition || 'Not available') + '</span>';
+  if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
+  html += agent3ScreeningFieldHtml('Plain-English summary', output.summary);
+  html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
+  html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
+  html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
+  html += agent3ScreeningFieldHtml('Severity', output.severity);
+  html += agent3ScreeningFieldHtml('Recommended disposition', output.recommended_disposition);
+  html += agent3ScreeningFieldHtml('Draft audit note', output.draft_audit_note);
+  html += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);"><div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;margin-bottom:6px;">Evidence used</div>' + agent3EvidenceHtml(output.evidence_used) + '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+async function generateAgent3ScreeningInterpretation(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if (AGENT3_SCREENING_INTERPRETATION_BUSY) return;
+  if (!currentApp || !(currentApp.id || currentApp.ref)) {
+    showToast('Open a screening review first.', 'warn');
+    return;
+  }
+  AGENT3_SCREENING_INTERPRETATION_BUSY = true;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  try {
+    var appKey = encodeURIComponent(currentApp.id || currentApp.ref);
+    var resp = await boApiCall('POST', '/applications/' + appKey + '/agent3/screening-interpretation', {});
+    var interpretation = resp.interpretation || resp.agent3_screening_interpretation || null;
+    if (!interpretation) {
+      showToast(resp.message || 'Agent 3 did not return an interpretation.', 'warn');
+      return;
+    }
+    currentApp.agent3ScreeningInterpretation = interpretation;
+    currentApp.agent3_screening_interpretation = interpretation;
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    if (typeof loadActivityLog === 'function') loadActivityLog(currentApp);
+    showToast('Agent 3 interpretation generated.');
+  } catch (err) {
+    var payload = err && err.payload ? err.payload : {};
+    showToast(payload.error || (err && err.message) || 'Agent 3 interpretation could not be generated.', 'warn');
+  } finally {
+    AGENT3_SCREENING_INTERPRETATION_BUSY = false;
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  }
+}
+
 function renderScreeningReviewPanel(app, focus) {
   var host = document.getElementById('detail-screening-review');
   if (!host || !app) return;
@@ -15822,6 +15951,7 @@ function renderScreeningReviewPanel(app, focus) {
   }
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
+  html += renderAgent3ScreeningInterpretationPanel(app);
 
   var triageSubjects = buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap);
   var selectedSubject = triageSubjects.find(function(subject) {
