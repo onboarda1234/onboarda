@@ -7209,6 +7209,10 @@ class ApplicationDetailHandler(BaseHandler):
                 dict(review, **_screening_review_payload_fields(review))
                 for review in screening_reviews
             ]
+            result["agent3_screening_interpretation"] = _agent3_latest_screening_interpretation(
+                db,
+                result["id"],
+            )
         result["screening_truth_summary"] = build_screening_truth_summary(
             screening_report if isinstance(screening_report, dict) else {},
             {
@@ -23072,6 +23076,668 @@ def _ca_screening_audit_enabled():
         return False
 
 
+AGENT3_SCREENING_INTERPRETATION_NAME = "fincrime_screening_interpretation"
+AGENT3_SCREENING_INTERPRETATION_SOURCE = "stored_screening_results"
+AGENT3_SCREENING_NO_DATA_MESSAGE = (
+    "No stored screening results available for interpretation. "
+    "Run screening first through the existing screening workflow."
+)
+AGENT3_OFFICER_NOTICE = (
+    "Officer decision required. Agent 3 does not approve, reject, or close screening reviews."
+)
+AGENT3_DETERMINISTIC_NOTICE = (
+    "AI narrative unavailable; deterministic screening interpretation generated from stored results."
+)
+
+
+def _agent3_row_get(row, key, default=None):
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
+def _agent3_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    return text not in {"", "0", "false", "no", "off", "disabled"}
+
+
+def _agent3_enabled(db):
+    row = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=3").fetchone()
+    if not row:
+        return True
+    return _agent3_bool(_agent3_row_get(row, "enabled"))
+
+
+def _agent3_json_hash(payload):
+    return hashlib.sha256(
+        json.dumps(payload, default=str, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _agent3_latest_screening_interpretation(db, application_id):
+    row = db.execute(
+        """
+        SELECT *
+          FROM agent_executions
+         WHERE application_id=?
+           AND agent_number=3
+           AND status='completed'
+           AND source=?
+         ORDER BY completed_at DESC, id DESC
+         LIMIT 1
+        """,
+        (application_id, AGENT3_SCREENING_INTERPRETATION_SOURCE),
+    ).fetchone()
+    if not row:
+        return None
+    payload = parse_json_field(_agent3_row_get(row, "flags_json"), {}) or {}
+    if not isinstance(payload, dict):
+        return None
+    payload.setdefault("agent_execution_id", _agent3_row_get(row, "id"))
+    payload.setdefault("execution_id", _agent3_row_get(row, "id"))
+    payload.setdefault("generated_at", _agent3_row_get(row, "completed_at"))
+    payload.setdefault("status", _agent3_row_get(row, "status"))
+    return payload
+
+
+def _agent3_insert_execution(
+    db,
+    application_id,
+    *,
+    status,
+    checks=None,
+    flags=None,
+    requires_review=False,
+    error_message=None,
+    started_at=None,
+):
+    now = datetime.now(timezone.utc).isoformat()
+    requires_review_value = bool(requires_review) if USE_POSTGRESQL else (1 if requires_review else 0)
+    db.execute(
+        """
+        INSERT INTO agent_executions
+            (application_id, document_id, agent_name, agent_number, status,
+             checks_json, flags_json, requires_review, source, started_at,
+             completed_at, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            application_id,
+            None,
+            AGENT3_SCREENING_INTERPRETATION_NAME,
+            3,
+            status,
+            json.dumps(checks, default=str, sort_keys=True) if checks is not None else None,
+            json.dumps(flags, default=str, sort_keys=True) if flags is not None else None,
+            requires_review_value,
+            AGENT3_SCREENING_INTERPRETATION_SOURCE,
+            started_at or now,
+            now,
+            error_message,
+        ),
+    )
+
+
+def _agent3_list(value):
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    return [value]
+
+
+def _agent3_text(value, fallback=""):
+    text = str(value if value is not None else "").strip()
+    return text or fallback
+
+
+def _agent3_numeric(value):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 1:
+        parsed *= 100
+    return round(parsed, 1)
+
+
+def _agent3_categories(hit, source_hint=""):
+    categories = set()
+    source_text = source_hint.lower()
+    if "sanction" in source_text:
+        categories.add("sanctions")
+    if "pep" in source_text:
+        categories.add("pep")
+    if "adverse" in source_text or "media" in source_text:
+        categories.add("adverse_media")
+
+    if not isinstance(hit, dict):
+        return sorted(categories)
+
+    for key in ("category", "type", "hit_type", "list_type", "match_type"):
+        value = hit.get(key)
+        if isinstance(value, str):
+            value = [value]
+        for item in _agent3_list(value):
+            text = str(item or "").lower()
+            if "sanction" in text:
+                categories.add("sanctions")
+            if "pep" in text or "politically exposed" in text:
+                categories.add("pep")
+            if "adverse" in text or "media" in text:
+                categories.add("adverse_media")
+
+    for key, category in (
+        ("is_sanctioned", "sanctions"),
+        ("sanctions", "sanctions"),
+        ("sanction", "sanctions"),
+        ("is_pep", "pep"),
+        ("pep", "pep"),
+        ("politically_exposed", "pep"),
+        ("is_adverse_media", "adverse_media"),
+        ("adverse_media", "adverse_media"),
+        ("adverse", "adverse_media"),
+    ):
+        if _agent3_bool(hit.get(key)):
+            categories.add(category)
+
+    return sorted(categories)
+
+
+def _agent3_provider_results(section, source_hint=""):
+    if isinstance(section, list):
+        return [item for item in section if isinstance(item, dict)]
+    if not isinstance(section, dict):
+        return []
+
+    results = []
+    for key in (
+        "results",
+        "hits",
+        "matches",
+        "sanctions_results",
+        "pep_results",
+        "adverse_media_results",
+        "watchlist_results",
+    ):
+        for item in _agent3_list(section.get(key)):
+            if isinstance(item, dict):
+                results.append(item)
+
+    if not results and _agent3_bool(section.get("matched")):
+        results.append({
+            "name": section.get("matched_name") or section.get("name") or section.get("company_name"),
+            "match_score": section.get("match_score") or section.get("score"),
+            "category": source_hint,
+        })
+    return results
+
+
+def _agent3_screening_report_available(screening_report):
+    if not isinstance(screening_report, dict) or not screening_report:
+        return False
+    screening_keys = {
+        "company_screening",
+        "director_screenings",
+        "ubo_screenings",
+        "intermediary_screenings",
+        "total_hits",
+        "overall_flags",
+        "screened_at",
+        "provider",
+        "screening_provider",
+    }
+    return any(key in screening_report for key in screening_keys)
+
+
+def _agent3_collect_hits(screening_report, app):
+    hits = []
+
+    def add_hit(subject_type, subject_name, hit, source_hint=""):
+        categories = _agent3_categories(hit, source_hint)
+        matched_name = ""
+        if isinstance(hit, dict):
+            matched_name = (
+                hit.get("matched_name")
+                or hit.get("name")
+                or hit.get("full_name")
+                or hit.get("entity_name")
+                or hit.get("caption")
+                or hit.get("title")
+                or subject_name
+            )
+        hits.append({
+            "subject_type": subject_type,
+            "subject_name": subject_name or "Unknown subject",
+            "matched_name": _agent3_text(matched_name, "Stored hit"),
+            "categories": categories or ["watchlist"],
+            "match_score": _agent3_numeric(
+                (hit or {}).get("match_score")
+                if isinstance(hit, dict)
+                else None
+            ) or _agent3_numeric((hit or {}).get("score") if isinstance(hit, dict) else None),
+            "source": source_hint or "stored_screening_result",
+        })
+
+    company_screening = screening_report.get("company_screening")
+    if isinstance(company_screening, dict):
+        company_name = (
+            company_screening.get("company_name")
+            or _agent3_row_get(app, "company_name")
+            or _agent3_row_get(app, "ref")
+            or "Entity"
+        )
+        for hit in _agent3_provider_results(company_screening, "entity_screening"):
+            add_hit("entity", company_name, hit, "company_screening")
+
+    for collection_key, subject_type in (
+        ("director_screenings", "director"),
+        ("ubo_screenings", "ubo"),
+        ("intermediary_screenings", "intermediary"),
+    ):
+        for subject in _agent3_list(screening_report.get(collection_key)):
+            if not isinstance(subject, dict):
+                continue
+            subject_name = (
+                subject.get("name")
+                or subject.get("full_name")
+                or subject.get("entity_name")
+                or subject.get("subject_name")
+                or subject.get("person_name")
+                or "Unknown subject"
+            )
+            screening = (
+                subject.get("screening")
+                or subject.get("screening_result")
+                or subject.get("provider_result")
+                or subject
+            )
+            for hit in _agent3_provider_results(screening, collection_key):
+                add_hit(subject_type, subject_name, hit, collection_key)
+
+    for key, source_hint in (
+        ("sanctions_results", "sanctions"),
+        ("pep_results", "pep"),
+        ("adverse_media_results", "adverse_media"),
+        ("watchlist_results", "watchlist"),
+    ):
+        for hit in _agent3_provider_results(screening_report.get(key), source_hint):
+            add_hit("application", _agent3_row_get(app, "company_name") or _agent3_row_get(app, "ref"), hit, source_hint)
+
+    return hits
+
+
+def _agent3_build_screening_interpretation(app, prescreening, screening_reviews):
+    screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else None
+    if not _agent3_screening_report_available(screening_report):
+        return None
+
+    hits = _agent3_collect_hits(screening_report, app)
+    raw_total_hits = screening_report.get("total_hits")
+    try:
+        total_hits = int(raw_total_hits)
+    except (TypeError, ValueError):
+        total_hits = len(hits)
+    total_hits = max(total_hits, len(hits))
+
+    sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
+    pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
+    adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    overall_flags = [str(flag) for flag in _agent3_list(screening_report.get("overall_flags")) if str(flag or "").strip()]
+    low_confidence_hit_count = sum(
+        1
+        for hit in hits
+        if hit.get("match_score") is not None and hit.get("match_score") < 70
+    )
+
+    if sanctions_count:
+        severity = "Critical"
+        recommendation = "Reject recommended"
+    elif pep_count:
+        severity = "High"
+        recommendation = "EDD recommended"
+    elif adverse_media_count:
+        severity = "Medium"
+        recommendation = "Officer review required"
+    elif total_hits:
+        severity = "Medium"
+        recommendation = "False positive likely" if low_confidence_hit_count == len(hits) and hits else "Officer review required"
+    else:
+        severity = "Low"
+        recommendation = "Clear"
+
+    key_concerns = []
+    if sanctions_count:
+        key_concerns.append(f"{sanctions_count} stored sanctions/watchlist hit(s) require senior officer review.")
+    if pep_count:
+        key_concerns.append(f"{pep_count} stored PEP hit(s) require EDD consideration.")
+    if adverse_media_count:
+        key_concerns.append(f"{adverse_media_count} stored adverse media hit(s) require relevance and materiality review.")
+    unknown_count = max(0, total_hits - sanctions_count - pep_count - adverse_media_count)
+    if unknown_count:
+        key_concerns.append(f"{unknown_count} stored screening hit(s) need identity disambiguation.")
+    if not key_concerns:
+        key_concerns.append("No sanctions, PEP, or adverse media hits are present in stored screening results.")
+
+    if total_hits == 0:
+        false_positive_assessment = "No stored hits are present, so there are no potential false positives to clear."
+    elif low_confidence_hit_count == len(hits) and hits and not (sanctions_count or pep_count or adverse_media_count):
+        false_positive_assessment = (
+            "False positive likely based on stored low-confidence matches. "
+            "Officer should confirm against names, dates, nationality, and identifiers before closing."
+        )
+    else:
+        false_positive_assessment = (
+            "Stored matches include risk categories or insufficiently explained matches. "
+            "Officer identity disambiguation is required before disposition."
+        )
+
+    if adverse_media_count:
+        adverse_media_relevance = (
+            "Stored adverse media hit(s) are relevant enough for officer review because they are linked "
+            "to screened subject names. Assess source reliability, recency, conduct seriousness, and name match quality."
+        )
+    else:
+        adverse_media_relevance = "No stored adverse media hits were found."
+
+    app_ref = _agent3_row_get(app, "ref") or _agent3_row_get(app, "id") or "application"
+    provider = (
+        screening_report.get("provider")
+        or screening_report.get("screening_provider")
+        or "stored screening provider"
+    )
+    summary = (
+        f"Stored screening results for {app_ref} show {total_hits} hit(s): "
+        f"{sanctions_count} sanctions, {pep_count} PEP, and {adverse_media_count} adverse media. "
+        f"Agent recommendation: {recommendation}. Officer decision remains required."
+    )
+    draft_audit_note = (
+        "Agent 3 generated an advisory screening interpretation from stored "
+        "prescreening_data.screening_report only. No provider call was made. "
+        f"Severity: {severity}. Agent recommendation: {recommendation}."
+    )
+
+    evidence_used = [{
+        "source": "prescreening_data.screening_report",
+        "provider": provider,
+        "screened_at": screening_report.get("screened_at") or "",
+        "screening_mode": screening_report.get("screening_mode") or "",
+        "total_hits": total_hits,
+        "overall_flags": overall_flags[:10],
+    }]
+    if screening_reviews:
+        evidence_used.append({
+            "source": "screening_reviews",
+            "review_count": len(screening_reviews),
+        })
+    for hit in hits[:12]:
+        evidence_used.append({
+            "source": hit.get("source"),
+            "subject_type": hit.get("subject_type"),
+            "subject_name": hit.get("subject_name"),
+            "matched_name": hit.get("matched_name"),
+            "categories": hit.get("categories"),
+            "match_score": hit.get("match_score"),
+        })
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    interpretation = {
+        "agent_name": "Agent 3 Screening Interpretation",
+        "agent_number": 3,
+        "application_id": _agent3_row_get(app, "id"),
+        "application_ref": app_ref,
+        "generated_at": generated_at,
+        "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+        "provider_call_made": False,
+        "risk_or_decision_mutation": False,
+        "ai_mode": "deterministic_fallback",
+        "ai_notice": AGENT3_DETERMINISTIC_NOTICE,
+        "officer_notice": AGENT3_OFFICER_NOTICE,
+        "summary": summary,
+        "key_concerns": key_concerns,
+        "false_positive_assessment": false_positive_assessment,
+        "adverse_media_relevance": adverse_media_relevance,
+        "severity": severity,
+        "recommended_disposition": recommendation,
+        "draft_audit_note": draft_audit_note,
+        "evidence_used": evidence_used,
+        "hit_counts": {
+            "total": total_hits,
+            "sanctions": sanctions_count,
+            "pep": pep_count,
+            "adverse_media": adverse_media_count,
+            "low_confidence": low_confidence_hit_count,
+        },
+    }
+    hash_payload = dict(interpretation)
+    hash_payload.pop("generated_at", None)
+    interpretation["output_hash"] = _agent3_json_hash(hash_payload)
+    return interpretation
+
+
+def _agent3_checks_from_interpretation(interpretation):
+    if not interpretation:
+        return []
+    counts = interpretation.get("hit_counts") or {}
+    return [
+        {
+            "check": "stored_screening_results_available",
+            "result": "pass",
+            "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+        },
+        {
+            "check": "provider_call_made",
+            "result": "pass" if interpretation.get("provider_call_made") is False else "fail",
+            "provider_call_made": interpretation.get("provider_call_made"),
+        },
+        {
+            "check": "screening_hit_summary",
+            "result": "pass",
+            "hit_counts": counts,
+            "severity": interpretation.get("severity"),
+            "recommended_disposition": interpretation.get("recommended_disposition"),
+        },
+    ]
+
+
+class Agent3ScreeningInterpretationHandler(BaseHandler):
+    """GET/POST /api/applications/:id/agent3/screening-interpretation"""
+
+    def get(self, app_id):
+        user = self.require_backoffice_auth(
+            roles=["admin", "sco", "co", "analyst"],
+            resource="agent3:screening_interpretation",
+        )
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            app = db.execute("SELECT * FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            self.success({
+                "interpretation": _agent3_latest_screening_interpretation(db, app["id"]),
+                "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+            })
+        finally:
+            db.close()
+
+    def post(self, app_id):
+        user = self.require_backoffice_auth(
+            roles=["admin", "sco", "co", "analyst"],
+            resource="agent3:screening_interpretation",
+        )
+        if not user:
+            return
+        if not self.check_rate_limit("agent3_screening_interpretation", max_attempts=10, window_seconds=60):
+            return
+
+        db = get_db()
+        app = None
+        try:
+            app = db.execute("SELECT * FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+
+            if not _agent3_enabled(db):
+                detail = {
+                    "application_id": app["id"],
+                    "application_ref": app["ref"],
+                    "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+                    "reason": "agent_disabled",
+                    "provider_call_made": False,
+                }
+                self.log_audit(
+                    user,
+                    "agent3_screening_interpretation.denied",
+                    app["ref"],
+                    json.dumps(detail, default=str, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state=snapshot_app_state(app),
+                    after_state=snapshot_app_state(app),
+                )
+                db.commit()
+                return self.error("Agent 3 screening interpretation is disabled.", 409)
+
+            prescreening = parse_json_field(_agent3_row_get(app, "prescreening_data"), {}) or {}
+            screening_reviews = _load_screening_reviews_for_truth(db, app["id"], app["ref"])
+            interpretation = _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
+            if not interpretation:
+                checks = [{
+                    "check": "stored_screening_results_available",
+                    "result": "fail",
+                    "message": AGENT3_SCREENING_NO_DATA_MESSAGE,
+                    "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+                }]
+                _agent3_insert_execution(
+                    db,
+                    app["id"],
+                    status="skipped",
+                    checks=checks,
+                    flags={
+                        "message": AGENT3_SCREENING_NO_DATA_MESSAGE,
+                        "provider_call_made": False,
+                        "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+                    },
+                    requires_review=False,
+                    error_message=AGENT3_SCREENING_NO_DATA_MESSAGE,
+                )
+                self.log_audit(
+                    user,
+                    "agent3_screening_interpretation.no_data",
+                    app["ref"],
+                    json.dumps({
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+                        "provider_call_made": False,
+                        "message": AGENT3_SCREENING_NO_DATA_MESSAGE,
+                    }, default=str, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state=snapshot_app_state(app),
+                    after_state=snapshot_app_state(app),
+                )
+                db.commit()
+                self.set_status(409)
+                self.write(json.dumps({
+                    "error": AGENT3_SCREENING_NO_DATA_MESSAGE,
+                    "interpretation": None,
+                }, default=str))
+                return
+
+            requires_review = interpretation.get("recommended_disposition") in {
+                "Officer review required",
+                "EDD recommended",
+                "Reject recommended",
+            }
+            _agent3_insert_execution(
+                db,
+                app["id"],
+                status="completed",
+                checks=_agent3_checks_from_interpretation(interpretation),
+                flags=interpretation,
+                requires_review=requires_review,
+            )
+            detail = {
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "officer_id": user.get("sub"),
+                "timestamp": interpretation.get("generated_at"),
+                "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+                "provider_call_made": False,
+                "recommendation": interpretation.get("recommended_disposition"),
+                "severity": interpretation.get("severity"),
+                "output_hash": interpretation.get("output_hash"),
+                "summary": interpretation.get("summary"),
+            }
+            self.log_audit(
+                user,
+                "agent3_screening_interpretation.generated",
+                app["ref"],
+                json.dumps(detail, default=str, sort_keys=True),
+                db=db,
+                commit=False,
+                before_state=snapshot_app_state(app),
+                after_state=snapshot_app_state(app),
+            )
+            db.commit()
+            latest = _agent3_latest_screening_interpretation(db, app["id"]) or interpretation
+            self.success({
+                "interpretation": latest,
+                "agent3_screening_interpretation": latest,
+                "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+            })
+        except Exception as exc:
+            logger.exception("Agent 3 screening interpretation failed")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if app:
+                try:
+                    self.log_audit(
+                        user,
+                        "agent3_screening_interpretation.failed",
+                        app["ref"],
+                        json.dumps({
+                            "application_id": app["id"],
+                            "application_ref": app["ref"],
+                            "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
+                            "provider_call_made": False,
+                            "error_type": exc.__class__.__name__,
+                        }, default=str, sort_keys=True),
+                        db=db,
+                        commit=True,
+                        before_state=snapshot_app_state(app),
+                        after_state=snapshot_app_state(app),
+                    )
+                except Exception:
+                    logger.exception("Failed to write Agent 3 failure audit row")
+            self.error("Agent 3 screening interpretation failed", 500)
+        finally:
+            db.close()
+
+
 class ScreeningHandler(BaseHandler):
     """POST /api/screening/run — run full screening for an application"""
     def post(self):
@@ -36595,6 +37261,7 @@ def make_app():
         (r"/api/applications/([^/]+)/export-pack", ApplicationExportPackHandler),
         (r"/api/applications/([^/]+)/evidence-pack", ApplicationEvidencePackHandler),
         (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
+        (r"/api/applications/([^/]+)/agent3/screening-interpretation", Agent3ScreeningInterpretationHandler),
         (r"/api/applications/([^/]+)/officer-corrections", ControlledPrescreeningCorrectionHandler),
         (r"/api/applications/([^/]+)/corrections", ApplicationCorrectionHandler),
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
