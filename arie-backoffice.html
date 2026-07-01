@@ -15788,6 +15788,7 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
 }
 
 var AGENT3_SCREENING_INTERPRETATION_BUSY = false;
+var AGENT3_SCREENING_INTERPRETATION_COLLAPSED = {};
 
 function getAgent3ScreeningInterpretation(app) {
   app = app || currentApp || {};
@@ -15836,22 +15837,63 @@ function agent3EvidenceHtml(evidence) {
   return agent3ScreeningListHtml(evidence, 'No evidence references available.');
 }
 
+function agent3ScreeningInterpretationAppKey(app) {
+  app = app || currentApp || {};
+  return String(app.id || app.ref || 'current');
+}
+
+function isAgent3ScreeningInterpretationCollapsed(app) {
+  return !!AGENT3_SCREENING_INTERPRETATION_COLLAPSED[agent3ScreeningInterpretationAppKey(app)];
+}
+
+function toggleAgent3ScreeningInterpretation(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  var appKey = agent3ScreeningInterpretationAppKey(currentApp);
+  AGENT3_SCREENING_INTERPRETATION_COLLAPSED[appKey] = !isAgent3ScreeningInterpretationCollapsed(currentApp);
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
 function renderAgent3ScreeningInterpretationPanel(app) {
   var output = getAgent3ScreeningInterpretation(app);
   var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
   var buttonLabel = AGENT3_SCREENING_INTERPRETATION_BUSY ? 'Generating...' : 'Generate interpretation';
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
+  var collapsed = isAgent3ScreeningInterpretationCollapsed(app);
+  var toggleLabel = collapsed ? 'Expand Agent 3' : 'Collapse Agent 3';
   var html = '';
   html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #0f766e;background:rgba(15,118,110,0.035);">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
   html += '<div><div class="card-title">Agent 3 Screening Interpretation</div>';
   html += '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Generate an AI-assisted interpretation from stored screening results. This does not re-run screening or change the officer decision.</div></div>';
+  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto;">';
+  html += '<button class="btn btn-secondary btn-sm" id="agent3-toggle-screening-interpretation-btn" onclick="toggleAgent3ScreeningInterpretation(event)">' + escapeHtml(toggleLabel) + '</button>';
   html += '<button class="btn btn-primary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button>';
   html += '</div>';
-  html += '<div style="padding:0 18px 12px;font-size:12px;color:#92400e;font-weight:700;">Officer decision required. Agent 3 does not approve, reject, or close screening reviews.</div>';
+  html += '</div>';
+  html += '<div style="padding:0 18px 12px;font-size:12px;color:#92400e;font-weight:700;">Officer decision required. Agent 3 provides an advisory interpretation only.</div>';
 
   if (!output) {
+    if (collapsed) {
+      html += '<div style="padding:0 18px 18px;font-size:12px;color:var(--text2);line-height:1.6;">No Agent 3 interpretation generated.</div>';
+      html += '</div>';
+      return html;
+    }
     html += '<div style="padding:0 18px 18px;font-size:12px;color:var(--text2);line-height:1.6;">No Agent 3 interpretation has been generated for this screening review yet.</div>';
+    html += '</div>';
+    return html;
+  }
+
+  if (collapsed) {
+    html += '<div style="padding:0 18px 18px;">';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+    html += '<span class="explain-data-source">Agent recommendation: ' + escapeHtml(output.recommended_disposition || 'Not available') + '</span>';
+    html += '<span class="explain-data-source">Severity: ' + escapeHtml(output.severity || 'Not available') + '</span>';
+    if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
+    html += '</div>';
+    html += '</div>';
     html += '</div>';
     return html;
   }
