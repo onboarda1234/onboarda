@@ -560,3 +560,94 @@ def test_sumsub_document_cross_object_client_expected_403(a1f_api_server, db):
         target="a1f_applicant_sumsub_doc_b",
         resource_type="sumsub_document",
     )
+
+
+def test_sumsub_status_owning_client_success_path(a1f_api_server, db):
+    _seed_sumsub_mapping(
+        db,
+        app_id="a1f_app_sumsub_status_owner",
+        client_id="a1f_sumsub_status_owner",
+        external_user_id="a1f_external_sumsub_status_owner",
+        applicant_id="a1f_applicant_sumsub_status_owner",
+    )
+
+    token = _token("a1f_sumsub_status_owner", "client", "A1F Status Owner", "client")
+    with patch(
+        "server.sumsub_get_applicant_status",
+        return_value={
+            "applicant_id": "a1f_applicant_sumsub_status_owner",
+            "status": "completed",
+            "source": "sumsub-test",
+        },
+    ):
+        resp = http_requests.get(
+            f"{a1f_api_server}/api/kyc/status/a1f_applicant_sumsub_status_owner",
+            headers=_headers(token),
+            timeout=5,
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "completed"
+
+
+def test_sumsub_status_officer_success_path(a1f_api_server):
+    token = _token("a1f_sco_sumsub_status_success", "sco", "A1F SCO", "officer")
+    with patch(
+        "server.sumsub_get_applicant_status",
+        return_value={
+            "applicant_id": "a1f_applicant_sumsub_status_success",
+            "status": "pending",
+            "source": "sumsub-test",
+        },
+    ):
+        resp = http_requests.get(
+            f"{a1f_api_server}/api/kyc/status/a1f_applicant_sumsub_status_success",
+            headers=_headers(token),
+            timeout=5,
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "pending"
+
+
+def test_sumsub_status_cross_object_client_expected_403(a1f_api_server, db):
+    _seed_sumsub_mapping(
+        db,
+        app_id="a1f_app_sumsub_status_b",
+        client_id="a1f_sumsub_status_owner_b",
+        external_user_id="a1f_external_sumsub_status_b",
+        applicant_id="a1f_applicant_sumsub_status_b",
+    )
+    before_count = db.execute(
+        "SELECT COUNT(*) AS c FROM sumsub_applicant_mappings WHERE applicant_id=?",
+        ("a1f_applicant_sumsub_status_b",),
+    ).fetchone()["c"]
+
+    token = _token("a1f_sumsub_status_client_a", "client", "A1F Client A", "client")
+    with patch(
+        "server.sumsub_get_applicant_status",
+        return_value={
+            "applicant_id": "a1f_applicant_sumsub_status_b",
+            "status": "completed",
+            "source": "sumsub-test",
+        },
+    ) as get_status:
+        resp = http_requests.get(
+            f"{a1f_api_server}/api/kyc/status/a1f_applicant_sumsub_status_b",
+            headers=_headers(token),
+            timeout=5,
+        )
+
+    assert resp.status_code == 403, resp.text
+    get_status.assert_not_called()
+    after_count = db.execute(
+        "SELECT COUNT(*) AS c FROM sumsub_applicant_mappings WHERE applicant_id=?",
+        ("a1f_applicant_sumsub_status_b",),
+    ).fetchone()["c"]
+    assert after_count == before_count
+    _assert_authz_denial_logged(
+        db,
+        user_id="a1f_sumsub_status_client_a",
+        target="a1f_applicant_sumsub_status_b",
+        resource_type="sumsub_status",
+    )

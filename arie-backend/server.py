@@ -25142,20 +25142,20 @@ class SumsubStatusHandler(BaseHandler):
         if not user:
             return
 
-        # Ownership check: officers can query any applicant; clients can only query their own.
-        user_role = user.get("role", "client")
-        if user_role == "client":
-            db = get_db()
+        if _a1f_is_client_user(user):
+            auth_db = get_db()
             try:
-                user_id = user.get("sub", user.get("id", ""))
-                app = db.execute(
-                    "SELECT id FROM applications WHERE client_id = ? AND prescreening_data LIKE ?",
-                    (user_id, f"%{applicant_id}%")
-                ).fetchone()
-                if not app:
-                    return self.error("Not authorised to view this applicant", 403)
+                if not _a1f_authorize_sumsub_mapping(
+                    self,
+                    auth_db,
+                    user,
+                    "applicant_id",
+                    applicant_id,
+                    "sumsub_status",
+                ):
+                    return
             finally:
-                db.close()
+                auth_db.close()
 
         result = sumsub_get_applicant_status(applicant_id)
         self.success(result)
