@@ -36,7 +36,7 @@ def _prescreening_with_hits():
                 "company_name": "Hit Level Co Ltd",
                 "matched": True,
                 "results": [
-                    # sanctions, high score -> confirmed_concern
+                    # sanctions, high score -> high_confidence_match
                     {
                         "name": "Hit Level Holdings",
                         "match_score": 96,
@@ -99,7 +99,9 @@ def test_hit_row_status_classification():
     rows = _build()["hit_rows"]
     by_entity = {r["matched_entity"]: r for r in rows}
 
-    assert by_entity["Hit Level Holdings"]["suggested_status"] == server.AGENT3_HIT_STATUS_CONFIRMED
+    assert by_entity["Hit Level Holdings"]["suggested_status"] == server.AGENT3_HIT_STATUS_HIGH_CONFIDENCE
+    assert by_entity["Hit Level Holdings"]["suggested_status"] == "high_confidence_match"
+    assert "officer identity verification required" in by_entity["Hit Level Holdings"]["reason"].lower()
     assert by_entity["Hit Level Holdings"]["type"] == "sanctions"
     assert by_entity["Hit Level Holdings"]["list"] == "OFAC SDN"
     assert by_entity["Hit Level Holdings"]["evidence_ref"] == "prov-ref-1"
@@ -115,7 +117,7 @@ def test_hit_row_status_classification():
 def test_hit_row_status_counts_match_rows():
     out = _build()
     counts = out["hit_row_status_counts"]
-    assert counts[server.AGENT3_HIT_STATUS_CONFIRMED] == 1
+    assert counts[server.AGENT3_HIT_STATUS_HIGH_CONFIDENCE] == 1
     assert counts[server.AGENT3_HIT_STATUS_NEEDS_REVIEW] == 1
     assert counts[server.AGENT3_HIT_STATUS_LIKELY_FP] == 1
     assert counts[server.AGENT3_HIT_STATUS_UNAVAILABLE] == 1

@@ -23620,14 +23620,17 @@ def _agent3_collect_hits(screening_report, app):
 
 
 # Per-hit suggested-status vocabulary (deterministic, stored-data only).
+# Advisory only — these never adjudicate a match; officer verification is
+# always required. "high_confidence_match" deliberately avoids implying the
+# system has confirmed a concern.
 AGENT3_HIT_STATUS_NEEDS_REVIEW = "needs_review"
 AGENT3_HIT_STATUS_LIKELY_FP = "likely_false_positive"
-AGENT3_HIT_STATUS_CONFIRMED = "confirmed_concern"
+AGENT3_HIT_STATUS_HIGH_CONFIDENCE = "high_confidence_match"
 AGENT3_HIT_STATUS_UNAVAILABLE = "unavailable"
 
 # Thresholds mirror the panel-level interpretation policy.
 _AGENT3_HIT_LOW_CONFIDENCE = 50.0     # below → likely false positive
-_AGENT3_HIT_CONFIRMED_SANCTIONS = 90.0  # sanctions at/above → confirmed concern (pending officer verification)
+_AGENT3_HIT_HIGH_CONFIDENCE_SANCTIONS = 90.0  # sanctions at/above → high-confidence match (still officer-verified)
 
 
 def _agent3_hit_primary_type(categories):
@@ -23647,11 +23650,11 @@ def _agent3_hit_status_and_reason(primary_type, score):
             "No confidence score recorded in the stored provider result; "
             "officer review required to disambiguate.",
         )
-    if primary_type == "sanctions" and score >= _AGENT3_HIT_CONFIRMED_SANCTIONS:
+    if primary_type == "sanctions" and score >= _AGENT3_HIT_HIGH_CONFIDENCE_SANCTIONS:
         return (
-            AGENT3_HIT_STATUS_CONFIRMED,
-            f"High-confidence sanctions match ({score}%). Treat as a confirmed "
-            "concern pending officer identity verification.",
+            AGENT3_HIT_STATUS_HIGH_CONFIDENCE,
+            f"High-confidence sanctions match ({score}%); officer identity "
+            "verification required before disposition.",
         )
     if score < _AGENT3_HIT_LOW_CONFIDENCE:
         return (
