@@ -112,7 +112,7 @@ def test_monitoring_alerts_render_uses_keys_and_has_truthful_empty_states():
     assert "Loading monitoring alerts..." in render
     assert "MONITORING_ALERTS_LOAD_ERROR" in render
     assert "Monitoring alerts could not be loaded" in render
-    assert "No active alerts requiring review." in render
+    assert "No monitoring alerts found. This inbox is for document-expiry and screening/adverse-media change alerts. Periodic Review due items appear in the Periodic Review Queue." in render
     assert "No monitoring alerts match the current filters." in render
     assert "renderMonitoringAlertsPagination()" in render
     assert "setMonitoringAlertsPage(" in render
@@ -162,6 +162,8 @@ def test_dashboard_monitoring_metric_is_not_mislabelled_as_alerts():
     server = SERVER_PY.read_text()
 
     assert "High-risk applications" in html
+    assert "Periodic Review Queue" in _view_region(html, "view-dashboard", "view-kpis")
+    assert "Scheduled reviews stay separate" in _view_region(html, "view-dashboard", "view-kpis")
     assert "Active Monitoring Alerts" not in _view_region(html, "view-dashboard", "view-kpis")
     assert "high_risk_applications" in html
     assert '"high_risk_applications": 0' in server

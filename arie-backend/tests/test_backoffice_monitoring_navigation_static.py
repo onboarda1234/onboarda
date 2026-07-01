@@ -43,7 +43,8 @@ def test_periodic_review_signals_is_a_standalone_view():
     show_view_region = _function_region(html, "showView", "signOut")
     route_region = _function_region(html, "applyBackofficeHashRoute", "renderKPIDashboard")
 
-    assert "Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth." in view_region
+    assert "Scheduled review workflow for periodic and annual client reviews" in view_region
+    assert "Monitoring Alerts remains a separate event-based signal inbox" in view_region
     assert 'id="review-status-filter"' in view_region
     assert 'id="review-risk-filter"' in view_region
     assert 'id="periodic-reviews-body"' in view_region
@@ -67,9 +68,14 @@ def test_monitoring_alerts_view_keeps_agents_and_drops_review_signals_tab():
     lifecycle_region = _function_region(html, "lifecycleSourceModuleLabel", "lifecycleObjectLabel")
 
     assert "Monitoring Alerts</h3>" in view_region
-    assert "Active monitoring alerts requiring officer review." in view_region
+    assert "Track event-based monitoring alerts between formal reviews" in view_region
+    assert "document expiry and financial-crime screening changes" in view_region
+    assert "Periodic reviews are managed in the Periodic Review module" in view_region
+    assert "Client profile changes are managed in Change Management" in view_region
+    assert "Transaction monitoring is not included in this pilot scope" in view_region
     assert "switchMonitoringTab('alerts',this)" in view_region
     assert "switchMonitoringTab('agents',this)" in view_region
+    assert ">Pilot Scope</div>" in view_region
     assert "switchMonitoringTab('reviews',this)" not in view_region
     assert 'id="monitoring-reviews-tab"' not in view_region
     assert "'Monitoring Alerts'" in show_view_region
@@ -78,6 +84,33 @@ def test_monitoring_alerts_view_keeps_agents_and_drops_review_signals_tab():
     assert "if (tab === 'agents')" in switch_tab_region
     assert "reviews" not in switch_tab_region
     assert "if (type === 'alert') return 'Monitoring Alerts';" in lifecycle_region
+
+
+def test_monitoring_pilot_scope_excludes_periodic_review_transaction_and_risk_drift_sources():
+    html = BACKOFFICE_HTML.read_text()
+
+    view_region = _view_region(html, "view-monitoring", "view-lifecycle")
+    catalog_start = html.index("var MONITORING_AGENT_CATALOG")
+    catalog_end = html.index("function monitoringAgentNumberFromRuntime", catalog_start)
+    catalog_region = html[catalog_start:catalog_end]
+    render_region = _function_region(html, "renderMonitoringAgents", "triggerAgentRun")
+
+    assert "Adverse Media & PEP Monitoring Agent" in catalog_region
+    assert "Financial-crime screening change detection between formal reviews" in catalog_region
+    assert "Periodic Review Preparation Agent" not in catalog_region
+    assert "Behaviour & Risk Drift Agent" not in catalog_region
+    assert "Ongoing Compliance Review Agent" not in catalog_region
+
+    assert "Monitoring pilot scope" in render_region
+    assert "document-expiry alerts and financial-crime screening changes" in render_region
+    assert "Periodic reviews are managed in the Periodic Review module" in render_region
+    assert "client profile changes in Change Management" in render_region
+    assert "transaction monitoring or broad risk drift are not active in this pilot" in render_region
+    assert "if (isMonitoringScopeExcludedAgentId(agentNumber)) return;" in render_region
+
+    assert "Risk Drift" not in view_region
+    assert "Unusual Activity" not in view_region
+    assert "Regulatory Impact" not in view_region
 
 
 def test_agent_health_hidden_until_real_telemetry_is_active():

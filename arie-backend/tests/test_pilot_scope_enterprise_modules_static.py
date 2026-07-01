@@ -129,13 +129,25 @@ def test_ai_agents_8_9_10_are_marked_enterprise_and_not_active():
 
 def test_monitoring_agent_run_surface_blocks_enterprise_agents():
     html = BACKOFFICE_HTML.read_text()
+    catalog_start = html.index("var MONITORING_AGENT_CATALOG")
+    catalog_end = html.index("function monitoringAgentNumberFromRuntime", catalog_start)
+    catalog_region = html[catalog_start:catalog_end]
     render_region = _function_region(html, "renderMonitoringAgents", "triggerAgentRun")
     trigger_region = _function_region(html, "triggerAgentRun")
 
-    assert "Agents 8, 9, and 10 are enterprise-roadmap modules for pilot scope." in html
-    assert "enterpriseRoadmap: true" in html
-    assert "Not active in pilot" in render_region
-    assert "Future release" in render_region
+    assert "Adverse Media & PEP Monitoring Agent" in catalog_region
+    assert "Financial-crime screening change detection between formal reviews" in catalog_region
+    assert "Periodic Review Preparation Agent" not in catalog_region
+    assert "Behaviour & Risk Drift Agent" not in catalog_region
+    assert "Ongoing Compliance Review Agent" not in catalog_region
+    assert "Monitoring pilot scope" in render_region
+    assert "document-expiry alerts and financial-crime screening changes" in render_region
+    assert "Periodic reviews are managed in the Periodic Review module" in render_region
+    assert "transaction monitoring or broad risk drift are not active in this pilot" in render_region
+    assert "Periodic Review Preparation Agent" not in render_region
+    assert "Behaviour & Risk Drift Agent" not in render_region
+    assert "Ongoing Compliance Review Agent" not in render_region
+    assert "if (isMonitoringScopeExcludedAgentId(agentNumber)) return;" in render_region
     assert "isEnterpriseRoadmapAgentId(monitoringAgentNumberFromRuntime(runtimeAgent))" in trigger_region
     assert "This agent is Coming Soon and not active in pilot" in trigger_region
 

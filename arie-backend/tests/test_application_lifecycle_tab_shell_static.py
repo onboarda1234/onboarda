@@ -336,7 +336,7 @@ def test_lifecycle_workspace_uses_scrollable_responsive_layout():
 def test_ongoing_monitoring_review_rows_open_application_lifecycle_with_review_deep_link():
     html = _read_backoffice()
     start = html.index("function renderPeriodicReviews()")
-    end = html.index("// ── Monitoring-stage AI agent catalog", start)
+    end = html.index("// ── Monitoring pilot source catalog", start)
     section = html[start:end]
     assert "openMonitoringReviewLifecycle(review.ref, review.id)" in section
     assert "Open review case" in section
@@ -351,7 +351,8 @@ def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     end = html.index('<div class="view" id="view-monitoring">', start)
     section = html[start:end]
     assert "Periodic Review Queue" in section
-    assert "Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth." in section
+    assert "Scheduled review workflow for periodic and annual client reviews" in section
+    assert "Monitoring Alerts remains a separate event-based signal inbox" in section
     assert "Open Lifecycle Queue" in section
     assert "monitoring-review-due-count" in section
     assert "monitoring-review-overdue-count" in section
