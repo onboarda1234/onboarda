@@ -23526,6 +23526,8 @@ def _agent3_collect_hits(screening_report, app):
     def add_hit(subject_type, subject_name, hit, source_hint=""):
         categories = _agent3_categories(hit, source_hint)
         matched_name = ""
+        list_name = ""
+        provider_ref = ""
         if isinstance(hit, dict):
             matched_name = (
                 hit.get("matched_name")
@@ -23535,6 +23537,24 @@ def _agent3_collect_hits(screening_report, app):
                 or hit.get("caption")
                 or hit.get("title")
                 or subject_name
+            )
+            list_name = (
+                hit.get("sanctions_list")
+                or hit.get("list")
+                or hit.get("list_name")
+                or hit.get("dataset")
+                or hit.get("source_list")
+                or hit.get("watchlist")
+                or hit.get("source_name")
+                or ""
+            )
+            provider_ref = (
+                hit.get("id")
+                or hit.get("match_id")
+                or hit.get("reference")
+                or hit.get("entity_id")
+                or hit.get("hit_id")
+                or ""
             )
         hits.append({
             "subject_type": subject_type,
@@ -23546,6 +23566,8 @@ def _agent3_collect_hits(screening_report, app):
                 if isinstance(hit, dict)
                 else None
             ) or _agent3_numeric((hit or {}).get("score") if isinstance(hit, dict) else None),
+            "list_name": _agent3_text(list_name),
+            "provider_ref": _agent3_text(provider_ref),
             "source": source_hint or "stored_screening_result",
         })
 
@@ -23595,6 +23617,104 @@ def _agent3_collect_hits(screening_report, app):
             add_hit("application", _agent3_row_get(app, "company_name") or _agent3_row_get(app, "ref"), hit, source_hint)
 
     return hits
+
+
+# Per-hit suggested-status vocabulary (deterministic, stored-data only).
+# Advisory only — these never adjudicate a match; officer verification is
+# always required. "high_confidence_match" deliberately avoids implying the
+# system has confirmed a concern.
+AGENT3_HIT_STATUS_NEEDS_REVIEW = "needs_review"
+AGENT3_HIT_STATUS_LIKELY_FP = "likely_false_positive"
+AGENT3_HIT_STATUS_HIGH_CONFIDENCE = "high_confidence_match"
+AGENT3_HIT_STATUS_UNAVAILABLE = "unavailable"
+
+# Risk categories the panel always escalates (never "false positive likely").
+_AGENT3_HIT_RISK_TYPES = frozenset({"sanctions", "pep", "adverse_media"})
+
+# Thresholds kept aligned with the panel-level disposition policy so a per-hit
+# suggested_status can never contradict the overall recommendation:
+#   * the panel treats match scores < 70 as low confidence
+#     (low_confidence_hit_count) and only surfaces "False positive likely" when
+#     EVERY hit is low-confidence AND no risk category is present;
+#   * so likely-false-positive here uses the same < 70 threshold and is limited
+#     to non-risk hits — a low-score PEP/adverse/sanctions hit stays at least
+#     needs_review, matching the panel's EDD/escalation branches.
+_AGENT3_HIT_LOW_CONFIDENCE = 70.0     # below → likely false positive (non-risk hits only)
+_AGENT3_HIT_HIGH_CONFIDENCE_SANCTIONS = 90.0  # sanctions at/above → high-confidence match (still officer-verified)
+
+
+def _agent3_hit_primary_type(categories):
+    """Return the highest-priority category label for a hit."""
+    for category in ("sanctions", "pep", "adverse_media", "watchlist"):
+        if category in (categories or []):
+            return category
+    return "watchlist"
+
+
+def _agent3_hit_status_and_reason(primary_type, score):
+    """Deterministically classify a single stored hit. No provider calls.
+
+    Kept aligned with the panel-level disposition policy so a row's
+    suggested_status can never contradict the overall recommendation
+    (see the threshold comments above): only low-confidence non-risk hits
+    are marked likely false positive; risk-category hits stay at least
+    needs_review.
+    """
+    type_label = str(primary_type or "watchlist").replace("_", " ")
+    if score is None:
+        return (
+            AGENT3_HIT_STATUS_UNAVAILABLE,
+            "No confidence score recorded in the stored provider result; "
+            "officer review required to disambiguate.",
+        )
+    if primary_type == "sanctions" and score >= _AGENT3_HIT_HIGH_CONFIDENCE_SANCTIONS:
+        return (
+            AGENT3_HIT_STATUS_HIGH_CONFIDENCE,
+            f"High-confidence sanctions match ({score}%); officer identity "
+            "verification required before disposition.",
+        )
+    if score < _AGENT3_HIT_LOW_CONFIDENCE and primary_type not in _AGENT3_HIT_RISK_TYPES:
+        return (
+            AGENT3_HIT_STATUS_LIKELY_FP,
+            f"Low match confidence ({score}%) on {type_label}; likely a false "
+            "positive. Officer should confirm identifiers before clearing.",
+        )
+    return (
+        AGENT3_HIT_STATUS_NEEDS_REVIEW,
+        f"Match confidence {score}% on {type_label}; identity disambiguation "
+        "required before disposition.",
+    )
+
+
+def _agent3_build_hit_rows(hits, provider):
+    """Map internal hit dicts to structured, display-ready rows.
+
+    Reads only already-collected stored results — no provider calls, no
+    mutation. Output is deterministic for identical input (stable evidence
+    references), so it does not disturb the interpretation output_hash.
+    """
+    rows = []
+    for index, hit in enumerate(hits):
+        categories = hit.get("categories") or []
+        primary = _agent3_hit_primary_type(categories)
+        score = hit.get("match_score")
+        status, reason = _agent3_hit_status_and_reason(primary, score)
+        provider_ref = hit.get("provider_ref") or ""
+        rows.append({
+            "index": index + 1,
+            "subject_name": hit.get("subject_name") or "Unknown subject",
+            "subject_type": hit.get("subject_type") or "unknown",
+            "matched_entity": hit.get("matched_name") or "Stored hit",
+            "provider": provider,
+            "list": hit.get("list_name") or "",
+            "categories": categories,
+            "type": primary,
+            "match_score": score,
+            "suggested_status": status,
+            "reason": reason,
+            "evidence_ref": provider_ref or f"stored-hit-{index + 1}",
+        })
+    return rows
 
 
 def _agent3_build_screening_interpretation(app, prescreening, screening_reviews, declared_pep_subjects=None):
@@ -23764,6 +23884,12 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "match_score": hit.get("match_score"),
         })
 
+    hit_rows = _agent3_build_hit_rows(hits, provider)
+    hit_row_status_counts = {}
+    for row in hit_rows:
+        key = row.get("suggested_status") or AGENT3_HIT_STATUS_UNAVAILABLE
+        hit_row_status_counts[key] = hit_row_status_counts.get(key, 0) + 1
+
     generated_at = datetime.now(timezone.utc).isoformat()
     interpretation = {
         "agent_name": "Agent 3 Screening Interpretation",
@@ -23785,6 +23911,8 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         "recommended_disposition": recommendation,
         "draft_audit_note": draft_audit_note,
         "evidence_used": evidence_used,
+        "hit_rows": hit_rows,
+        "hit_row_status_counts": hit_row_status_counts,
         "hit_counts": {
             "total": total_hits,
             "sanctions": sanctions_count,
