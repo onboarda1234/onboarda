@@ -1382,17 +1382,17 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     </table>
   </div>
 
-  <!-- Ongoing Monitoring Alerts -->
+  <!-- Monitoring and review signals -->
   <div class="stats-grid" style="margin-top:24px;" id="dashboard-monitoring-stats">
     <div class="stat-card">
-      <div class="stat-card-label">Files Due for Review</div>
+      <div class="stat-card-label">Periodic Review Queue</div>
       <div class="stat-card-value" style="color:var(--text3);" id="dash-mon-files-due">0</div>
-      <div class="stat-card-change" id="dash-mon-files-due-note">From monitoring dashboard</div>
+      <div class="stat-card-change" id="dash-mon-files-due-note">Scheduled reviews stay separate</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Documents Expiring</div>
       <div class="stat-card-value" style="color:var(--text3);" id="dash-mon-docs-expiring">0</div>
-      <div class="stat-card-change" id="dash-mon-docs-expiring-note">From monitoring dashboard</div>
+      <div class="stat-card-change" id="dash-mon-docs-expiring-note">Document-expiry monitoring signal</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">High-risk applications</div>
@@ -2028,8 +2028,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;">
     <div>
       <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Periodic Review Queue</h3>
-      <p style="font-size:13px;color:var(--text3);line-height:1.6;max-width:760px;">Officer queue for canonical periodic review cases with due-date, owner, status, and trigger truth.</p>
-      <p style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:6px;max-width:760px;">Monitoring Alerts remains the signal workspace. Review execution, attestations, evidence, memo, and completion stay in the Application Lifecycle workspace.</p>
+      <p style="font-size:13px;color:var(--text3);line-height:1.6;max-width:760px;">Scheduled review workflow for periodic and annual client reviews with due-date, owner, status, and trigger truth.</p>
+      <p style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:6px;max-width:760px;">Monitoring Alerts remains a separate event-based signal inbox for document-expiry and screening/adverse-media changes between formal reviews.</p>
     </div>
     <button class="btn btn-primary btn-sm" onclick="openMonitoringLifecycleQueue()">Open Lifecycle Queue</button>
   </div>
@@ -2076,14 +2076,15 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
     <div>
       <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Monitoring Alerts</h3>
-      <p style="font-size:13px;color:var(--text3);">Active monitoring alerts requiring officer review.</p>
+      <p style="font-size:13px;color:var(--text3);line-height:1.6;max-width:820px;">Track event-based monitoring alerts between formal reviews, including document expiry and financial-crime screening changes.</p>
+      <p style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:6px;max-width:820px;">Periodic reviews are managed in the Periodic Review module. Client profile changes are managed in Change Management. Transaction monitoring is not included in this pilot scope.</p>
     </div>
   </div>
 
   <!-- Tabs for monitoring sections -->
   <div class="tab-bar" style="margin-bottom:20px;">
     <div class="tab active" onclick="switchMonitoringTab('alerts',this)">Monitoring Alerts</div>
-    <div class="tab" onclick="switchMonitoringTab('agents',this)">Monitoring Agents</div>
+    <div class="tab" onclick="switchMonitoringTab('agents',this)">Pilot Scope</div>
   </div>
 
   <!-- Alerts Tab -->
@@ -4560,9 +4561,9 @@ var MONITORING_ALERT_TYPE_LABELS = {
   sanctions_change: 'Sanctions Change',
   document_expiry: 'Document Expiry',
   missing_document_refresh: 'Missing Document Refresh',
-  risk_drift: 'Risk Drift',
-  unusual_activity: 'Unusual Activity',
-  regulatory_impact: 'Regulatory Impact',
+  risk_drift: 'Risk Drift (not in pilot)',
+  unusual_activity: 'Activity / Transaction Alert (not in pilot)',
+  regulatory_impact: 'Regulatory Impact (not in pilot)',
   other: 'Other'
 };
 var MONITORING_ALERT_STATUS_LABELS = {
@@ -4618,9 +4619,9 @@ function normalizeDetectedBy(raw, normalizedType) {
   if (normalizedType === 'sanctions_change') return 'Sanctions Screening Agent';
   if (normalizedType === 'adverse_media') return 'Adverse Media Agent';
   if (normalizedType === 'pep_change') return 'PEP Monitoring Agent';
-  if (normalizedType === 'risk_drift') return 'Behaviour & Risk Drift Agent';
+  if (normalizedType === 'risk_drift') return 'Out-of-scope Risk Drift Signal';
   if (normalizedType === 'document_expiry' || normalizedType === 'missing_document_refresh') return 'Document Monitoring Agent';
-  return 'Ongoing Compliance Review Agent';
+  return 'Monitoring Signal Source';
 }
 
 function normalizeAlertStatus(status) {
@@ -7030,8 +7031,8 @@ function updateDashboardStats() {
 function updateDashboardMonitoringStats() {
   if (MONITORING_DATA_STATE !== 'ready') {
     var loadingNote = MONITORING_DATA_STATE === 'loading'
-      ? 'Loading monitoring data...'
-      : 'Monitoring data loads on demand';
+      ? 'Loading monitoring and review data...'
+      : 'Monitoring and review data loads on demand';
     ['dash-mon-files-due', 'dash-mon-docs-expiring', 'dash-mon-alerts'].forEach(function(id) {
       var statEl = document.getElementById(id);
       if (statEl) statEl.textContent = '—';
@@ -7067,9 +7068,9 @@ function updateDashboardMonitoringStats() {
   el = document.getElementById('dash-mon-files-due'); if (el) el.textContent = filesDue;
   el = document.getElementById('dash-mon-docs-expiring'); if (el) el.textContent = docsExpiring;
   el = document.getElementById('dash-mon-alerts'); if (el) el.textContent = highRiskApplications;
-  el = document.getElementById('dash-mon-files-due-note'); if (el) el.textContent = filesDue > 0 ? 'Reviews due soon or overdue' : 'No due reviews currently loaded';
-  el = document.getElementById('dash-mon-docs-expiring-note'); if (el) el.textContent = docsExpiring > 0 ? 'Expiring documents need follow-up' : 'No expiring documents reported';
-  el = document.getElementById('dash-mon-alerts-note'); if (el) el.textContent = highRiskApplications > 0 ? 'High-risk applications; monitoring alerts open: ' + openAlerts : 'No high-risk applications reported';
+  el = document.getElementById('dash-mon-files-due-note'); if (el) el.textContent = filesDue > 0 ? 'Open Periodic Review Queue for due reviews' : 'No due reviews currently loaded';
+  el = document.getElementById('dash-mon-docs-expiring-note'); if (el) el.textContent = docsExpiring > 0 ? 'Document-expiry monitoring signal' : 'No expiring documents reported';
+  el = document.getElementById('dash-mon-alerts-note'); if (el) el.textContent = highRiskApplications > 0 ? 'Application risk metric; open Monitoring alerts: ' + openAlerts : 'No high-risk applications reported';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -22879,14 +22880,14 @@ function monitoringComplianceImpact(alert) {
   if (alert.typeKey === 'pep_change') return 'PEP changes may require senior approval, enhanced due diligence, source-of-wealth review, and risk-profile reassessment.';
   if (alert.typeKey === 'sanctions_change') return 'Sanctions or watchlist changes may require immediate escalation, account restrictions, and regulatory reporting assessment.';
   if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') return 'Expired or missing refresh evidence weakens KYC reliance and may block continued relationship approval until remediated or waived.';
-  if (alert.typeKey === 'risk_drift') return 'Risk drift indicates the existing client profile may no longer reflect current activity or control expectations.';
+  if (alert.typeKey === 'risk_drift') return 'Broad risk drift is not an active Monitoring workflow in this pilot; route material profile, ownership, business, or control changes through Change Management or Periodic Review.';
   return 'The alert should be reviewed and dispositioned with evidence so the monitoring record remains auditable.';
 }
 
 function monitoringRecommendedNextStep(alert) {
   if (!alert) return 'Start review, select an outcome, and record the decision rationale.';
   if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') return 'Request the updated document, review the client upload, then accept, reject/re-request, or waive with a documented reason.';
-  if (alert.typeKey === 'risk_drift') return 'Start review, decide whether the risk profile needs updating, and route to EDD or SCO if material.';
+  if (alert.typeKey === 'risk_drift') return 'Do not action as a Monitoring workflow; open Change Management or Periodic Review where applicable.';
   if (alert.typeKey === 'adverse_media' || alert.typeKey === 'pep_change' || alert.typeKey === 'sanctions_change') return 'Start review, inspect evidence, determine materiality, and either dismiss with rationale, route to EDD, escalate to SCO, update risk profile, or request more information.';
   return 'Start review and record a clear outcome with supporting note where material.';
 }
@@ -23508,7 +23509,7 @@ function renderMonitoringAlerts() {
     var metaFilters = (MONITORING_ALERTS_META && MONITORING_ALERTS_META.filters) || {};
     var defaultEmpty = metaFilters.include_closed
       ? 'No monitoring alerts match the current filters.'
-      : 'No active alerts requiring review.';
+      : 'No monitoring alerts found. This inbox is for document-expiry and screening/adverse-media change alerts. Periodic Review due items appear in the Periodic Review Queue.';
     var msg = contextLabel
       ? 'No monitoring alerts match the current filters for ' + contextLabel + '.'
       : (MONITORING_ALERTS.length ? 'No monitoring alerts match the current filters.' : defaultEmpty);
@@ -23584,36 +23585,16 @@ function renderPeriodicReviews() {
   }
 }
 
-// ── Monitoring-stage AI agent catalog (static, code-local) ───────
-// Mirrors arie-backend/ai_agent_catalog.py for the Monitoring-stage
-// agents. Used to populate the Monitoring Agents tab even when
-// `monitoring_agent_status` has no runtime rows yet, so Agent 6
-// (Periodic Review Preparation) and its siblings are always visible
-// to officers. Runtime fields (last_run / alerts_generated / status)
-// are left blank when not available and labelled "Not yet run" rather
-// than invented — this panel is a truthful minimal view per the
-// audit brief.
-//
-// Agents 8, 9, and 10 are enterprise-roadmap modules for pilot scope.
-// Agent 9 remains omitted from this operational monitoring tab; Agents 8
-// and 10 are visible as Coming Soon and cannot be manually run here.
+// ── Monitoring pilot source catalog (static, code-local) ───────
+// The Monitoring pilot source panel intentionally shows only the event-based
+// signals that belong in Monitoring Alerts. Periodic Review scheduling,
+// client profile changes, transaction/activity monitoring, broad risk drift,
+// and regulatory-impact automation stay outside this module.
 var MONITORING_AGENT_CATALOG = [
-  { id: 6, name: 'Periodic Review Preparation Agent', icon: '🗂️',
-    purpose: 'Prepares periodic reviews: required items, priority score, signals to feed the review.',
-    contributes: 'Periodic review preparation',
-    implementation: 'deterministic' },
   { id: 7, name: 'Adverse Media & PEP Monitoring Agent', icon: '📡',
-    purpose: 'Monitors adverse media, PEP list updates and sanctions changes for onboarded clients.',
-    contributes: 'Adverse media / PEP / sanctions signal detection',
-    implementation: 'hybrid' },
-  { id: 8, name: 'Behaviour & Risk Drift Agent', icon: '📈',
-    purpose: 'Compares activity patterns against onboarding baseline; flags velocity anomalies and drift.',
-    contributes: 'Behavioural drift & risk-profile deviation',
-    implementation: 'enterprise_roadmap', enterpriseRoadmap: true },
-  { id: 10, name: 'Ongoing Compliance Review Agent', icon: '⚖️',
-    purpose: 'Consolidates inter-agent findings; verifies document currency, condition compliance and deadlines.',
-    contributes: 'Consolidated compliance narrative & escalation / closure recommendation',
-    implementation: 'enterprise_roadmap', enterpriseRoadmap: true }
+    purpose: 'Monitors adverse media, PEP list updates, sanctions changes and watchlist changes for onboarded clients.',
+    contributes: 'Financial-crime screening change detection between formal reviews',
+    implementation: 'hybrid' }
 ];
 
 function monitoringAgentNumberFromRuntime(ag) {
@@ -23625,6 +23606,10 @@ function monitoringAgentNumberFromRuntime(ag) {
   if (text.indexOf('regulatory impact') >= 0 || text.indexOf('regulatory') >= 0) return 9;
   if (text.indexOf('ongoing compliance') >= 0 || text.indexOf('ongoing_compliance') >= 0) return 10;
   return Number(ag.id) || 0;
+}
+
+function isMonitoringScopeExcludedAgentId(id) {
+  return [6, 8, 9, 10].indexOf(Number(id)) >= 0;
 }
 
 function monitoringAgentRuntimeMatch(catalogEntry) {
@@ -23643,7 +23628,7 @@ function renderMonitoringAgents() {
   var host = document.getElementById('agents-status-list');
   if (!host) return;
   var legendHtml = '<div style="margin-bottom:12px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;color:var(--text3);">' +
-    '<strong style="color:var(--text2);">Monitoring Agents</strong> — identity, purpose and contribution are <em>static configuration</em> drawn from the AI register. Last run, status and alerts generated are <em>runtime-derived</em> when available; rows with no runtime data are labelled "Not yet run".' +
+    '<strong style="color:var(--text2);">Monitoring pilot scope</strong> — event-based monitoring covers document-expiry alerts and financial-crime screening changes between formal reviews. Periodic reviews are managed in the Periodic Review module, client profile changes in Change Management, and transaction monitoring or broad risk drift are not active in this pilot.' +
     '</div>';
   var html = legendHtml;
   MONITORING_AGENT_CATALOG.forEach(function(entry) {
@@ -23691,15 +23676,15 @@ function renderMonitoringAgents() {
       '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + escapeHtml(String(alertsGenerated)) + '</div>' +
       '</div></div>';
   });
-  // Append any runtime-only agents not covered by the static catalog
-  // (e.g. future monitoring agents wired up purely via the database
-  // seed) so the panel never hides backend-registered agents.
+  // Append runtime-only pilot monitoring sources that are not covered by the
+  // static catalog. Excluded modules remain out of this Monitoring surface.
   if (MONITORING_AGENTS && MONITORING_AGENTS.length) {
     var catalogIds = {}; MONITORING_AGENT_CATALOG.forEach(function(e) { catalogIds[e.id] = 1; });
     var catalogNames = {}; MONITORING_AGENT_CATALOG.forEach(function(e) { catalogNames[e.name.toLowerCase()] = 1; });
     MONITORING_AGENTS.forEach(function(ag) {
       if (!ag) return;
       var agentNumber = monitoringAgentNumberFromRuntime(ag);
+      if (isMonitoringScopeExcludedAgentId(agentNumber)) return;
       if (catalogIds[Number(agentNumber)] || catalogIds[Number(ag.id)]) return;
       if (ag.name && catalogNames[String(ag.name).toLowerCase()]) return;
       var enterpriseAgent = isEnterpriseRoadmapAgentId(agentNumber);
@@ -29660,19 +29645,19 @@ var AI_AGENTS = [
     description:'Unified compliance memo agent. Bridges to authoritative memo path enforcing Rules 4A-4E, computing 7 risk dimensions, and generating an 11-section memo. Classification-tagged output (rule/hybrid/ai). Includes risk-model divergence cross-check.',
     checks:['Document completeness score (rule)', 'Jurisdiction risk score (rule)', 'Industry/sector risk score (rule)', 'Product/service risk score (rule)', 'Channel/delivery risk score (rule)', 'Ownership complexity ingestion (rule)', 'Screening severity ingestion (rule)', 'Weighted total risk score (rule)', 'Risk tier bucket (rule)', 'Mandatory escalation triggers (rule)', 'Business description vs sector alignment (hybrid)', 'Transaction profile vs business scale (hybrid)', 'Recommendation narrative (hybrid)', 'Revenue model plausibility (ai)', 'Business model plausibility (ai)', 'Compliance memo drafting (ai)'] },
   { id:6, name:'Periodic Review Preparation Agent', icon:'📅', stage:'Monitoring', enabled:true,
-    description:'Rule-based review preparation with hybrid priority scoring. Scans document expiry, ownership changes, screening staleness, outstanding alerts; assembles review package with priority score. Degraded mode when no prior review history exists.',
+    description:'Periodic Review module preparation helper. Scheduled review due dates, annual reviews, attestations and review packages stay in the Periodic Review workflow, not Monitoring Alerts.',
     checks:['Review schedule compliance check (rule)', 'Risk level change detection (rule)', 'Document expiry scan (rule)', 'Ownership structure change detection (rule)', 'Screening data staleness check (rule)', 'Activity volume comparison (rule)', 'Outstanding alert aggregation (rule)', 'Regulatory requirement completeness (rule)', 'Review priority scoring (hybrid)', 'Review package assembly (hybrid)'] },
   { id:7, name:'Adverse Media & PEP Monitoring Agent', icon:'📡', stage:'Monitoring', enabled:true,
     description:'Monitoring interpreter with AI narrative. Retrieves new media/PEP/sanctions signals, deduplicates, scores severity, resolves entities; AI generates narrative summary and disposition. Degraded mode when no screening baseline exists.',
     checks:['New adverse media retrieval (rule)', 'PEP status change detection (rule)', 'Sanctions list update check (rule)', 'Media source credibility scoring (rule)', 'Alert deduplication (rule)', 'Historical media comparison (rule)', 'Media severity assessment (hybrid)', 'PEP proximity scoring (hybrid)', 'Entity resolution for media hits (hybrid)', 'Combined risk signal aggregation (hybrid)', 'Media narrative summarisation (ai)', 'Monitoring alert disposition (ai)'] },
   { id:8, name:'Behaviour & Risk Drift Agent', icon:'📈', stage:'Monitoring', enabled:true,
-    description:'Rule-based drift detection with hybrid scoring. Compares transaction volume, geographic activity, counterparty concentration, product usage against onboarding baseline; scores velocity anomalies and peer deviation. Degraded mode when no transaction data available.',
+    description:'Enterprise roadmap only. Transaction/activity monitoring and broad risk drift are not active in this pilot and are not handled in Monitoring Alerts.',
     checks:['Transaction volume baseline comparison (rule)', 'Geographic activity deviation (rule)', 'Counterparty concentration check (rule)', 'Product usage deviation (rule)', 'Dormancy/reactivation detection (rule)', 'Threshold breach detection (rule)', 'Velocity anomaly scoring (hybrid)', 'Peer group deviation analysis (hybrid)', 'Temporal pattern drift detection (hybrid)', 'Multi-dimensional risk drift scoring (hybrid)', 'Drift narrative and recommendation (hybrid)'] },
   { id:9, name:'Regulatory Impact Agent', icon:'⚖️', stage:'Monitoring', enabled:true,
     description:'Detects when regulatory changes affect existing clients.',
     checks:['Regulatory change monitoring', 'Impact assessment on client portfolio', 'Jurisdiction-specific regulation tracking', 'Compliance requirement updates', 'Client-specific regulatory alerts'] },
   { id:10, name:'Ongoing Compliance Review Agent', icon:'📋', stage:'Monitoring', enabled:true,
-    description:'Consolidation agent with AI narrative. Verifies document currency, screening recency, policy applicability, condition compliance, filing deadlines; consolidates inter-agent findings; AI generates compliance narrative and escalation/closure recommendation. Degraded mode when upstream agents have not run.',
+    description:'Enterprise roadmap only. Consolidated compliance-review automation is not active in this pilot and does not replace Periodic Review, Change Management, or Monitoring Alerts officer review.',
     checks:['Document currency verification (rule)', 'Screening recency check (rule)', 'Policy change applicability check (rule)', 'Condition compliance tracking (rule)', 'Filing deadline monitoring (rule)', 'Inter-agent finding consolidation (rule)', 'Remediation tracker status (rule)', 'Compliance risk re-scoring (hybrid)', 'Review frequency recommendation (hybrid)', 'Compliance narrative generation (ai)', 'Escalation/closure recommendation (ai)'] }
 ];
 

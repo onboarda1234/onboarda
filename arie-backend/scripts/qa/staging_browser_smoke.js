@@ -15,7 +15,7 @@ const REQUIRED_SMOKE_AREAS = [
   "Case Management",
   "Ongoing Monitoring",
   "Monitoring Alerts",
-  "Monitoring Agents",
+  "Monitoring Pilot Scope",
   "Lifecycle Queue",
   "EDD",
   "Change Management",
@@ -489,12 +489,12 @@ async function main() {
     report.checks.ongoingMonitoringLoads = await visible(page, "#view-monitoring.active");
     report.checks.monitoringAlertsLoad = await visible(page, "#monitoring-alerts-tab");
     await captureSurface(page, "ongoing-monitoring-alerts", "Monitoring Alerts");
-    await page.locator('#view-monitoring .tab:has-text("Monitoring Agents")').click();
+    await page.locator('#view-monitoring .tab:has-text("Pilot Scope")').click();
     await page.waitForFunction(() => document.getElementById("monitoring-agents-tab")?.style.display !== "none", {
       timeout: 30000,
     });
-    report.checks.monitoringAgentsLoad = await visible(page, "#monitoring-agents-tab");
-    await captureSurface(page, "ongoing-monitoring-agents", "Monitoring Agents");
+    report.checks.monitoringPilotScopeLoad = await visible(page, "#monitoring-agents-tab");
+    await captureSurface(page, "ongoing-monitoring-pilot-scope", "Monitoring Pilot Scope");
 
     await clickNav(page, "lifecycle");
     await page.waitForSelector("#lifecycle-body tr", { timeout: 30000 });
