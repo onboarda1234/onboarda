@@ -15837,6 +15837,34 @@ function agent3EvidenceHtml(evidence) {
   return agent3ScreeningListHtml(evidence, 'No evidence references available.');
 }
 
+function agent3SeverityBadge(severity) {
+  var s = String(severity || '').toLowerCase();
+  var c = { bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' };
+  if (s === 'critical') c = { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' };
+  else if (s === 'high') c = { bg: '#fff7ed', border: '#fed7aa', text: '#c2410c' };
+  else if (s === 'medium') c = { bg: '#fffbeb', border: '#fde68a', text: '#92400e' };
+  else if (s === 'low') c = { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' };
+  return '<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:4px 10px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Severity: ' + escapeHtml(severity || 'Not available') + '</span>';
+}
+
+function agent3RecommendationBadge(recommendation) {
+  return '<span style="display:inline-flex;align-items:center;font-size:12px;font-weight:800;padding:4px 12px;border-radius:14px;background:#ecfdf5;border:1px solid #99f6e4;color:#0f766e;">Agent recommendation: ' + escapeHtml(recommendation || 'Not available') + '</span>';
+}
+
+function agent3ProviderHitsHtml(output) {
+  var hc = (output && output.hit_counts) || {};
+  var total = hc.total != null ? hc.total : 0;
+  var line = 'Provider hits: ' + total + ' total — ' + (hc.sanctions || 0) + ' sanctions · ' + (hc.pep || 0) + ' PEP · ' + (hc.adverse_media || 0) + ' adverse media';
+  var html = '<span class="explain-data-source" style="font-weight:700;">' + escapeHtml(line) + '</span>';
+  if (hc.declared_pep) {
+    html += '<span class="explain-data-source" style="background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;">Declared PEP: ' + escapeHtml(String(hc.declared_pep)) + ' (officer-review signal, not a provider hit)</span>';
+  }
+  if (hc.unresolved_screening_reviews) {
+    html += '<span class="explain-data-source" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">Unresolved review items: ' + escapeHtml(String(hc.unresolved_screening_reviews)) + '</span>';
+  }
+  return html;
+}
+
 function agent3ScreeningInterpretationAppKey(app) {
   app = app || currentApp || {};
   return String(app.id || app.ref || 'current');
@@ -15859,7 +15887,7 @@ function toggleAgent3ScreeningInterpretation(event) {
 function renderAgent3ScreeningInterpretationPanel(app) {
   var output = getAgent3ScreeningInterpretation(app);
   var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
-  var buttonLabel = AGENT3_SCREENING_INTERPRETATION_BUSY ? 'Generating...' : 'Generate interpretation';
+  var buttonLabel = AGENT3_SCREENING_INTERPRETATION_BUSY ? 'Generating...' : (output ? 'Refresh interpretation' : 'Generate interpretation');
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
   var collapsed = isAgent3ScreeningInterpretationCollapsed(app);
   var toggleLabel = collapsed ? 'Expand Agent 3' : 'Collapse Agent 3';
@@ -15888,11 +15916,12 @@ function renderAgent3ScreeningInterpretationPanel(app) {
 
   if (collapsed) {
     html += '<div style="padding:0 18px 18px;">';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
-    html += '<span class="explain-data-source">Agent recommendation: ' + escapeHtml(output.recommended_disposition || 'Not available') + '</span>';
-    html += '<span class="explain-data-source">Severity: ' + escapeHtml(output.severity || 'Not available') + '</span>';
+    html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;">';
+    html += agent3RecommendationBadge(output.recommended_disposition);
+    html += agent3SeverityBadge(output.severity);
     if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
     html += '</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">' + agent3ProviderHitsHtml(output) + '</div>';
     html += '</div>';
     html += '</div>';
     return html;
@@ -15902,21 +15931,30 @@ function renderAgent3ScreeningInterpretationPanel(app) {
     html += '<div style="margin:0 18px 12px;padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;">' + escapeHtml(output.ai_notice) + '</div>';
   }
   html += '<div style="padding:0 18px 18px;">';
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">';
-  html += '<span class="explain-data-source">Severity: ' + escapeHtml(output.severity || 'Not available') + '</span>';
-  html += '<span class="explain-data-source">Agent recommendation: ' + escapeHtml(output.recommended_disposition || 'Not available') + '</span>';
+  // Recommendation / severity / timestamp hierarchy
+  html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;">';
+  html += agent3RecommendationBadge(output.recommended_disposition);
+  html += agent3SeverityBadge(output.severity);
   if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
   html += '</div>';
-  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
+  // Provider-hit clarity (declared PEP kept distinct from provider hits)
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + agent3ProviderHitsHtml(output) + '</div>';
+  // Primary view: summary + key concerns visible by default
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">';
   html += agent3ScreeningFieldHtml('Plain-English summary', output.summary);
   html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
+  html += '</div>';
+  // Detailed assessment, audit note and evidence behind an expander
+  html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
+  html += '<summary style="cursor:pointer;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text2);">Detailed assessment, audit note and evidence</summary>';
+  html += '<div style="padding:0 12px 12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
   html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
   html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
-  html += agent3ScreeningFieldHtml('Severity', output.severity);
   html += agent3ScreeningFieldHtml('Recommended disposition', output.recommended_disposition);
   html += agent3ScreeningFieldHtml('Draft audit note', output.draft_audit_note);
   html += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);"><div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;margin-bottom:6px;">Evidence used</div>' + agent3EvidenceHtml(output.evidence_used) + '</div>';
   html += '</div>';
+  html += '</details>';
   html += '</div>';
   html += '</div>';
   return html;
