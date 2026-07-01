@@ -689,3 +689,21 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "boApiCall('GET', '/applications/' + appKey + '/agent3/screening-interpretation'" not in generate_body
     assert "Agent recommendation:" in html
     assert "Decision:" not in render_body
+
+    # PR-AGENT3-HIT-LEVEL-UI-1: hit-level rendering binds to the backend output
+    # (hit_rows / hit_row_status_counts) and stays advisory + display-only.
+    assert "agent3HitRowsTableHtml" in html
+    assert "agent3HitStatusCountsHtml" in html
+    assert "output.hit_rows" in html
+    assert "output.hit_row_status_counts" in html
+    assert "Hit-by-hit review" in html
+    for _status_label in ("Needs review", "Likely false positive", "High-confidence match", "Unavailable"):
+        assert _status_label in html
+    # Copyable audit note is clipboard-only: no server call, no decision mutation.
+    copy_body = _extract_function(html, "copyAgent3AuditNote")
+    assert "navigator.clipboard" in copy_body
+    assert "boApiCall(" not in copy_body
+    assert "/agent3/screening-interpretation" not in copy_body
+    table_body = _extract_function(html, "agent3HitRowsTableHtml")
+    assert "boApiCall(" not in table_body
+    assert "/agent3/screening-interpretation" not in table_body
