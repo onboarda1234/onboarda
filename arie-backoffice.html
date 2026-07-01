@@ -15848,7 +15848,25 @@ function agent3SeverityBadge(severity) {
 }
 
 function agent3RecommendationBadge(recommendation) {
-  return '<span style="display:inline-flex;align-items:center;font-size:12px;font-weight:800;padding:4px 12px;border-radius:14px;background:#ecfdf5;border:1px solid #99f6e4;color:#0f766e;">Agent recommendation: ' + escapeHtml(recommendation || 'Not available') + '</span>';
+  var r = String(recommendation || '').toLowerCase();
+  var c = { bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' }; // neutral fallback
+  if (r === 'clear' || r === 'false positive likely') {
+    c = { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' }; // green
+  } else if (r === 'officer review required' || r === 'review required') {
+    c = { bg: '#fffbeb', border: '#fde68a', text: '#92400e' }; // amber
+  } else if (r === 'edd recommended' || r === 'escalate' || r === 'reject recommended') {
+    c = { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' }; // red / high-warning
+  }
+  return '<span style="display:inline-flex;align-items:center;font-size:12px;font-weight:800;padding:4px 12px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Agent recommendation: ' + escapeHtml(recommendation || 'Not available') + '</span>';
+}
+
+function agent3IsDeclaredPepYes(value) {
+  if (value === true) return true;
+  if (typeof value === 'number') return value > 0;
+  var s = String(value == null ? '' : value).trim().toLowerCase();
+  if (s === 'yes' || s === 'true' || s === '1') return true;
+  var n = parseFloat(s);
+  return !isNaN(n) && n > 0;
 }
 
 function agent3ProviderHitsHtml(output) {
@@ -15856,8 +15874,11 @@ function agent3ProviderHitsHtml(output) {
   var total = hc.total != null ? hc.total : 0;
   var line = 'Provider hits: ' + total + ' total — ' + (hc.sanctions || 0) + ' sanctions · ' + (hc.pep || 0) + ' PEP · ' + (hc.adverse_media || 0) + ' adverse media';
   var html = '<span class="explain-data-source" style="font-weight:700;">' + escapeHtml(line) + '</span>';
-  if (hc.declared_pep) {
-    html += '<span class="explain-data-source" style="background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;">Declared PEP: ' + escapeHtml(String(hc.declared_pep)) + ' (officer-review signal, not a provider hit)</span>';
+  var declaredPepYes = agent3IsDeclaredPepYes(hc.declared_pep);
+  if (declaredPepYes) {
+    html += '<span class="explain-data-source" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">Declared PEP: Yes — officer review required</span>';
+  } else {
+    html += '<span class="explain-data-source">Declared PEP: No</span>';
   }
   if (hc.unresolved_screening_reviews) {
     html += '<span class="explain-data-source" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">Unresolved review items: ' + escapeHtml(String(hc.unresolved_screening_reviews)) + '</span>';
