@@ -114,6 +114,25 @@ def test_hit_row_status_classification():
     assert by_entity["No Score Entity"]["evidence_ref"].startswith("stored-hit-")
 
 
+def test_status_aligned_with_panel_low_confidence_threshold():
+    # A hit in the [50, 70) band is low-confidence at the panel level, so a
+    # non-risk hit there must be likely_false_positive (not needs_review).
+    status, reason = server._agent3_hit_status_and_reason("watchlist", 60)
+    assert status == server.AGENT3_HIT_STATUS_LIKELY_FP
+    assert "60%" in reason
+    # Exactly at the threshold -> needs review.
+    assert server._agent3_hit_status_and_reason("watchlist", 70)[0] == server.AGENT3_HIT_STATUS_NEEDS_REVIEW
+
+
+def test_low_score_risk_hit_never_downgraded_to_false_positive():
+    # The panel always escalates risk categories (PEP -> EDD, adverse -> review,
+    # sanctions -> reject), so a low-score risk hit must NOT be labelled a likely
+    # false positive — that would contradict the panel disposition.
+    for risk_type in ("pep", "adverse_media", "sanctions"):
+        status, _ = server._agent3_hit_status_and_reason(risk_type, 40)
+        assert status == server.AGENT3_HIT_STATUS_NEEDS_REVIEW, risk_type
+
+
 def test_hit_row_status_counts_match_rows():
     out = _build()
     counts = out["hit_row_status_counts"]
@@ -175,9 +194,11 @@ def test_builder_is_pure_no_provider_clients(monkeypatch):
     # that would matter and confirm the build still succeeds from stored data.
     for attr in ("run_full_screening", "ComplyAdvantageClient", "SumsubClient"):
         if hasattr(server, attr):
+            # Bind attr at definition time (default arg) so the assertion
+            # message names the symbol actually invoked, not the last one.
             monkeypatch.setattr(
                 server, attr,
-                lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"{attr} must not be called")),
+                lambda *a, _name=attr, **k: (_ for _ in ()).throw(AssertionError(f"{_name} must not be called")),
                 raising=True,
             )
     out = _build()

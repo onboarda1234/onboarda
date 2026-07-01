@@ -23628,8 +23628,18 @@ AGENT3_HIT_STATUS_LIKELY_FP = "likely_false_positive"
 AGENT3_HIT_STATUS_HIGH_CONFIDENCE = "high_confidence_match"
 AGENT3_HIT_STATUS_UNAVAILABLE = "unavailable"
 
-# Thresholds mirror the panel-level interpretation policy.
-_AGENT3_HIT_LOW_CONFIDENCE = 50.0     # below → likely false positive
+# Risk categories the panel always escalates (never "false positive likely").
+_AGENT3_HIT_RISK_TYPES = frozenset({"sanctions", "pep", "adverse_media"})
+
+# Thresholds kept aligned with the panel-level disposition policy so a per-hit
+# suggested_status can never contradict the overall recommendation:
+#   * the panel treats match scores < 70 as low confidence
+#     (low_confidence_hit_count) and only surfaces "False positive likely" when
+#     EVERY hit is low-confidence AND no risk category is present;
+#   * so likely-false-positive here uses the same < 70 threshold and is limited
+#     to non-risk hits — a low-score PEP/adverse/sanctions hit stays at least
+#     needs_review, matching the panel's EDD/escalation branches.
+_AGENT3_HIT_LOW_CONFIDENCE = 70.0     # below → likely false positive (non-risk hits only)
 _AGENT3_HIT_HIGH_CONFIDENCE_SANCTIONS = 90.0  # sanctions at/above → high-confidence match (still officer-verified)
 
 
@@ -23642,7 +23652,14 @@ def _agent3_hit_primary_type(categories):
 
 
 def _agent3_hit_status_and_reason(primary_type, score):
-    """Deterministically classify a single stored hit. No provider calls."""
+    """Deterministically classify a single stored hit. No provider calls.
+
+    Kept aligned with the panel-level disposition policy so a row's
+    suggested_status can never contradict the overall recommendation
+    (see the threshold comments above): only low-confidence non-risk hits
+    are marked likely false positive; risk-category hits stay at least
+    needs_review.
+    """
     type_label = str(primary_type or "watchlist").replace("_", " ")
     if score is None:
         return (
@@ -23656,7 +23673,7 @@ def _agent3_hit_status_and_reason(primary_type, score):
             f"High-confidence sanctions match ({score}%); officer identity "
             "verification required before disposition.",
         )
-    if score < _AGENT3_HIT_LOW_CONFIDENCE:
+    if score < _AGENT3_HIT_LOW_CONFIDENCE and primary_type not in _AGENT3_HIT_RISK_TYPES:
         return (
             AGENT3_HIT_STATUS_LIKELY_FP,
             f"Low match confidence ({score}%) on {type_label}; likely a false "
