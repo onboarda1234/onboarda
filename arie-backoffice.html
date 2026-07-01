@@ -15788,7 +15788,7 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
 }
 
 var AGENT3_SCREENING_INTERPRETATION_BUSY = false;
-var AGENT3_SCREENING_INTERPRETATION_COLLAPSED = false;
+var AGENT3_SCREENING_INTERPRETATION_COLLAPSED = {};
 
 function getAgent3ScreeningInterpretation(app) {
   app = app || currentApp || {};
@@ -15837,12 +15837,22 @@ function agent3EvidenceHtml(evidence) {
   return agent3ScreeningListHtml(evidence, 'No evidence references available.');
 }
 
+function agent3ScreeningInterpretationAppKey(app) {
+  app = app || currentApp || {};
+  return String(app.id || app.ref || 'current');
+}
+
+function isAgent3ScreeningInterpretationCollapsed(app) {
+  return !!AGENT3_SCREENING_INTERPRETATION_COLLAPSED[agent3ScreeningInterpretationAppKey(app)];
+}
+
 function toggleAgent3ScreeningInterpretation(event) {
   if (event) {
     event.preventDefault();
     event.stopPropagation();
   }
-  AGENT3_SCREENING_INTERPRETATION_COLLAPSED = !AGENT3_SCREENING_INTERPRETATION_COLLAPSED;
+  var appKey = agent3ScreeningInterpretationAppKey(currentApp);
+  AGENT3_SCREENING_INTERPRETATION_COLLAPSED[appKey] = !isAgent3ScreeningInterpretationCollapsed(currentApp);
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
 }
 
@@ -15851,7 +15861,7 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
   var buttonLabel = AGENT3_SCREENING_INTERPRETATION_BUSY ? 'Generating...' : 'Generate interpretation';
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
-  var collapsed = !!AGENT3_SCREENING_INTERPRETATION_COLLAPSED;
+  var collapsed = isAgent3ScreeningInterpretationCollapsed(app);
   var toggleLabel = collapsed ? 'Expand Agent 3' : 'Collapse Agent 3';
   var html = '';
   html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #0f766e;background:rgba(15,118,110,0.035);">';

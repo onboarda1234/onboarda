@@ -23467,9 +23467,9 @@ def _agent3_collect_declared_pep_from_db(db, application_id):
                 """,
                 (application_id,),
             ).fetchall()
-        except Exception:
-            logger.warning("Agent 3 could not read %s PEP declarations", table, exc_info=True)
-            continue
+        except Exception as exc:
+            logger.exception("Agent 3 could not read %s PEP declarations", table)
+            raise RuntimeError("Agent 3 could not read stored party PEP declarations") from exc
         for row in rows:
             item = dict(row)
             if not _agent3_declared_pep_from_subject(item):

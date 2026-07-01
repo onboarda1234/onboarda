@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKOFFICE_HTML = REPO_ROOT / "arie-backoffice.html"
+
+
+def _screening_timestamps():
+    now = datetime.now(timezone.utc)
+    return (
+        (now - timedelta(days=1)).isoformat(),
+        (now + timedelta(days=89)).isoformat(),
+    )
 
 
 def _find_free_port():
@@ -74,12 +83,13 @@ def _headers(user_id="agent3-officer", role="analyst", token_type="officer"):
 
 
 def _stored_screening_prescreening():
+    screened_at, valid_until = _screening_timestamps()
     return {
         "screening_report": {
             "provider": "complyadvantage",
             "screening_provider": "complyadvantage",
             "screening_mode": "live",
-            "screened_at": "2026-06-30T10:00:00+00:00",
+            "screened_at": screened_at,
             "total_hits": 2,
             "overall_flags": ["pep", "adverse_media"],
             "company_screening": {
@@ -101,19 +111,20 @@ def _stored_screening_prescreening():
             "director_screenings": [],
             "ubo_screenings": [],
         },
-        "screening_valid_until": "2026-09-28T10:00:00+00:00",
+        "screening_valid_until": valid_until,
     }
 
 
 def _screening_prescreening(*, total_hits=0, company_results=None, director_screenings=None, overall_flags=None):
     company_results = company_results or []
     director_screenings = director_screenings or []
+    screened_at, valid_until = _screening_timestamps()
     return {
         "screening_report": {
             "provider": "complyadvantage",
             "screening_provider": "complyadvantage",
             "screening_mode": "live",
-            "screened_at": "2026-06-30T10:00:00+00:00",
+            "screened_at": screened_at,
             "total_hits": total_hits,
             "overall_flags": overall_flags or [],
             "company_screening": {
@@ -124,7 +135,7 @@ def _screening_prescreening(*, total_hits=0, company_results=None, director_scre
             "director_screenings": director_screenings,
             "ubo_screenings": [],
         },
-        "screening_valid_until": "2026-09-28T10:00:00+00:00",
+        "screening_valid_until": valid_until,
     }
 
 
@@ -226,6 +237,7 @@ def _block_provider_calls(monkeypatch):
     monkeypatch.setattr(server, "run_full_screening", _fail_provider_call)
     monkeypatch.setattr(server, "screen_sumsub_aml", _fail_provider_call)
     monkeypatch.setattr(server, "lookup_opencorporates", _fail_provider_call)
+    monkeypatch.setattr(server.BaseHandler, "check_rate_limit", lambda *_args, **_kwargs: True)
 
 
 def _post_agent3(agent3_api_server, app_id, *, user_id="agent3-officer"):
@@ -272,18 +284,43 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
 
 
 @pytest.mark.parametrize(
-    ("scenario", "prescreening_factory", "expected_recommendation", "expected_severity", "expected_text"),
+    (
+        "scenario",
+        "prescreening_factory",
+        "insert_db_declared_pep",
+        "expected_recommendation",
+        "expected_severity",
+        "expected_text",
+    ),
     [
         (
             "clean_no_hit",
             _clean_no_hit_prescreening,
+            False,
             "Clear",
             "Low",
             "No provider hits found in stored screening results",
         ),
         (
-            "declared_pep_no_provider_hit",
+            "declared_pep_prescreening_only",
             _declared_pep_no_hit_prescreening,
+            False,
+            "Officer review required",
+            "High",
+            "Stored provider screening may show no external PEP match, but the subject is marked as Declared PEP. Officer review remains required.",
+        ),
+        (
+            "declared_pep_db_only",
+            _clean_no_hit_prescreening,
+            True,
+            "Officer review required",
+            "High",
+            "Stored provider screening may show no external PEP match, but the subject is marked as Declared PEP. Officer review remains required.",
+        ),
+        (
+            "declared_pep_combined_dedup",
+            _declared_pep_no_hit_prescreening,
+            True,
             "Officer review required",
             "High",
             "Stored provider screening may show no external PEP match, but the subject is marked as Declared PEP. Officer review remains required.",
@@ -291,6 +328,7 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
         (
             "provider_pep_hit",
             lambda: _provider_hit_prescreening("pep"),
+            False,
             "EDD recommended",
             "High",
             "stored PEP hit(s) require EDD consideration",
@@ -298,6 +336,7 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
         (
             "sanctions_hit",
             lambda: _provider_hit_prescreening("sanctions"),
+            False,
             "Reject recommended",
             "Critical",
             "stored sanctions/watchlist hit(s) require senior officer review",
@@ -305,6 +344,7 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
         (
             "adverse_media_hit",
             lambda: _provider_hit_prescreening("adverse_media"),
+            False,
             "Officer review required",
             "Medium",
             "stored adverse media hit(s) require relevance and materiality review",
@@ -317,6 +357,7 @@ def test_agent3_screening_interpretation_scenarios_are_safe_and_clear(
     monkeypatch,
     scenario,
     prescreening_factory,
+    insert_db_declared_pep,
     expected_recommendation,
     expected_severity,
     expected_text,
@@ -324,7 +365,7 @@ def test_agent3_screening_interpretation_scenarios_are_safe_and_clear(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _block_provider_calls(monkeypatch)
     app_id, app_ref = _insert_application(db, prescreening_data=prescreening_factory())
-    if scenario == "declared_pep_no_provider_hit":
+    if insert_db_declared_pep:
         _insert_declared_pep_director(db, app_id)
     before = dict(db.execute(
         "SELECT status, risk_level, risk_score FROM applications WHERE id=?",
@@ -345,7 +386,7 @@ def test_agent3_screening_interpretation_scenarios_are_safe_and_clear(
     assert expected_text in rendered_text
     assert "No compliance risk exists" not in rendered_text
     assert "risk-free" not in rendered_text.lower()
-    if scenario == "declared_pep_no_provider_hit":
+    if scenario.startswith("declared_pep_"):
         assert output["hit_counts"]["total"] == 0
         assert output["hit_counts"]["pep"] == 0
         assert output["hit_counts"]["declared_pep"] == 1
@@ -522,6 +563,57 @@ def test_agent3_no_stored_screening_data_returns_clear_message_without_completed
     assert read.json()["interpretation"] is None
 
 
+def test_agent3_declared_pep_read_failure_fails_closed_without_clear_output(
+    agent3_api_server,
+    db,
+    monkeypatch,
+):
+    import server
+
+    _block_provider_calls(monkeypatch)
+    monkeypatch.setattr(
+        server,
+        "_agent3_collect_declared_pep_from_db",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("pep declaration read failed")),
+    )
+    app_id, app_ref = _insert_application(db, prescreening_data=_clean_no_hit_prescreening())
+    before = dict(db.execute(
+        "SELECT status, risk_level, risk_score FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone())
+
+    resp = _post_agent3(agent3_api_server, app_id, user_id="agent3-pep-read-failure")
+
+    assert resp.status_code == 500
+    assert resp.json()["error"] == "Agent 3 screening interpretation failed"
+    completed = db.execute(
+        """
+        SELECT COUNT(*) AS c FROM agent_executions
+         WHERE application_id=? AND agent_number=3 AND status='completed'
+        """,
+        (app_id,),
+    ).fetchone()["c"]
+    assert completed == 0
+    failed_audit = db.execute(
+        """
+        SELECT detail, before_state, after_state FROM audit_log
+         WHERE target=? AND action='agent3_screening_interpretation.failed'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (app_ref,),
+    ).fetchone()
+    assert failed_audit is not None
+    detail = json.loads(failed_audit["detail"])
+    assert detail["provider_call_made"] is False
+    assert detail["error_type"] == "RuntimeError"
+    assert json.loads(failed_audit["before_state"]) == json.loads(failed_audit["after_state"])
+    after = dict(db.execute(
+        "SELECT status, risk_level, risk_score FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone())
+    assert after == before
+
+
 def test_agent3_endpoint_is_officer_only(agent3_api_server, db):
     app_id, _app_ref = _insert_application(db, prescreening_data=_stored_screening_prescreening())
 
@@ -573,6 +665,8 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "Collapse Agent 3" in html
     assert "Expand Agent 3" in html
     assert "AGENT3_SCREENING_INTERPRETATION_COLLAPSED" in html
+    assert "agent3ScreeningInterpretationAppKey" in html
+    assert "isAgent3ScreeningInterpretationCollapsed" in html
     assert "Plain-English summary" in html
     assert "False-positive assessment" in html
     assert "Adverse media relevance" in html
@@ -584,11 +678,13 @@ def test_backoffice_agent3_screening_panel_static_contract():
     fetch_detail_body = _extract_function(html, "fetchApplicationDetail")
     generate_body = _extract_function(html, "generateAgent3ScreeningInterpretation")
     toggle_body = _extract_function(html, "toggleAgent3ScreeningInterpretation")
+    collapsed_body = _extract_function(html, "isAgent3ScreeningInterpretationCollapsed")
 
     assert "/agent3/screening-interpretation" not in render_body
     assert "/agent3/screening-interpretation" not in fetch_detail_body
     assert "/agent3/screening-interpretation" not in toggle_body
     assert "boApiCall(" not in toggle_body
+    assert "boApiCall(" not in collapsed_body
     assert "boApiCall('POST', '/applications/' + appKey + '/agent3/screening-interpretation'" in generate_body
     assert "boApiCall('GET', '/applications/' + appKey + '/agent3/screening-interpretation'" not in generate_body
     assert "Agent recommendation:" in html
