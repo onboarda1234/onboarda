@@ -23083,11 +23083,37 @@ AGENT3_SCREENING_NO_DATA_MESSAGE = (
     "Run screening first through the existing screening workflow."
 )
 AGENT3_OFFICER_NOTICE = (
-    "Officer decision required. Agent 3 does not approve, reject, or close screening reviews."
+    "Officer decision required. Agent 3 provides an advisory interpretation only."
 )
 AGENT3_DETERMINISTIC_NOTICE = (
-    "AI narrative unavailable; deterministic screening interpretation generated from stored results."
+    "Deterministic interpretation generated from stored screening results. No provider call was made."
 )
+AGENT3_DECLARED_PEP_NOTICE = (
+    "Stored provider screening may show no external PEP match, but the subject is marked as "
+    "Declared PEP. Officer review remains required."
+)
+AGENT3_PEP_TRUE_VALUES = {
+    "1",
+    "true",
+    "yes",
+    "y",
+    "declared_yes",
+    "confirmed_pep",
+    "verified_pep",
+    "screening_confirmed_pep",
+}
+AGENT3_PEP_FALSE_VALUES = {
+    "",
+    "0",
+    "false",
+    "no",
+    "n",
+    "declared_no",
+    "false_positive",
+    "not_pep",
+    "not_verified",
+    "pending_review",
+}
 
 
 def _agent3_row_get(row, key, default=None):
@@ -23110,6 +23136,19 @@ def _agent3_bool(value):
         return value != 0
     text = str(value).strip().lower()
     return text not in {"", "0", "false", "no", "off", "disabled"}
+
+
+def _agent3_pep_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in AGENT3_PEP_FALSE_VALUES:
+        return False
+    return text in AGENT3_PEP_TRUE_VALUES
 
 
 def _agent3_enabled(db):
@@ -23202,6 +23241,20 @@ def _agent3_text(value, fallback=""):
     return text or fallback
 
 
+def _agent3_subject_name(subject, fallback="Unknown subject"):
+    if not isinstance(subject, dict):
+        return fallback
+    return _agent3_text(
+        subject.get("subject_name")
+        or subject.get("person_name")
+        or subject.get("full_name")
+        or subject.get("name")
+        or subject.get("entity_name")
+        or subject.get("company_name"),
+        fallback,
+    )
+
+
 def _agent3_numeric(value):
     if value is None or value == "":
         return None
@@ -23284,6 +23337,170 @@ def _agent3_provider_results(section, source_hint=""):
             "category": source_hint,
         })
     return results
+
+
+def _agent3_declared_pep_from_subject(subject):
+    if not isinstance(subject, dict):
+        return False
+    declaration = parse_json_field(subject.get("pep_declaration"), {}) or {}
+    if not isinstance(declaration, dict):
+        declaration = {}
+    for key in (
+        "declared_pep",
+        "client_declared_pep",
+        "officer_verified_pep",
+        "verified_pep",
+        "screening_confirmed_pep",
+        "confirmed_pep",
+    ):
+        if key in subject and _agent3_pep_bool(subject.get(key)):
+            return True
+        if key in declaration and _agent3_pep_bool(declaration.get(key)):
+            return True
+    for key in ("pep_status", "pep_verification_status", "pep_screening_status"):
+        if key in subject and _agent3_pep_bool(subject.get(key)):
+            return True
+        if key in declaration and _agent3_pep_bool(declaration.get(key)):
+            return True
+    if "is_pep" in subject and _agent3_pep_bool(subject.get("is_pep")):
+        return True
+    return False
+
+
+def _agent3_add_declared_pep(subjects, *, subject_type, subject_name, source, evidence=None):
+    subject_name = _agent3_text(subject_name, "Declared PEP subject")
+    key = (str(subject_type or "").strip().lower(), subject_name.strip().lower())
+    if any((str(item.get("subject_type") or "").strip().lower(), str(item.get("subject_name") or "").strip().lower()) == key for item in subjects):
+        return
+    record = {
+        "subject_type": subject_type,
+        "subject_name": subject_name,
+        "source": source,
+    }
+    if isinstance(evidence, dict):
+        for field in ("declared_pep", "client_declared_pep", "pep_status", "is_pep"):
+            if field in evidence:
+                record[field] = evidence.get(field)
+    subjects.append(record)
+
+
+def _agent3_collect_declared_pep_from_prescreening(prescreening, screening_report):
+    subjects = []
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    screening_report = screening_report if isinstance(screening_report, dict) else {}
+
+    for collection_key, subject_type in (
+        ("director_screenings", "director"),
+        ("ubo_screenings", "ubo"),
+        ("kyc_applicants", "person"),
+        ("applicant_screenings", "person"),
+    ):
+        for subject in _agent3_list(screening_report.get(collection_key)):
+            if not isinstance(subject, dict) or not _agent3_declared_pep_from_subject(subject):
+                continue
+            _agent3_add_declared_pep(
+                subjects,
+                subject_type=subject_type,
+                subject_name=_agent3_subject_name(subject),
+                source=f"prescreening_data.screening_report.{collection_key}",
+                evidence=subject,
+            )
+
+    for collection_key, subject_type in (
+        ("directors", "director"),
+        ("ubos", "ubo"),
+        ("persons", "person"),
+        ("kyc_persons", "person"),
+    ):
+        for subject in _agent3_list(prescreening.get(collection_key)):
+            if not isinstance(subject, dict) or not _agent3_declared_pep_from_subject(subject):
+                continue
+            _agent3_add_declared_pep(
+                subjects,
+                subject_type=subject_type,
+                subject_name=_agent3_subject_name(subject),
+                source=f"prescreening_data.{collection_key}",
+                evidence=subject,
+            )
+
+    for container, source in (
+        (screening_report.get("screening_state_summary"), "prescreening_data.screening_report.screening_state_summary"),
+        (prescreening.get("screening_state_summary"), "prescreening_data.screening_state_summary"),
+    ):
+        if not isinstance(container, dict):
+            continue
+        try:
+            declared_count = int(container.get("declared_pep_count") or 0)
+        except (TypeError, ValueError):
+            declared_count = 0
+        for idx, subject in enumerate(_agent3_list(container.get("declared_pep_subjects"))):
+            if isinstance(subject, dict):
+                _agent3_add_declared_pep(
+                    subjects,
+                    subject_type=subject.get("subject_type") or subject.get("person_type") or "person",
+                    subject_name=_agent3_subject_name(subject, f"Declared PEP subject {idx + 1}"),
+                    source=source,
+                    evidence=subject,
+                )
+        while len(subjects) < declared_count:
+            _agent3_add_declared_pep(
+                subjects,
+                subject_type="person",
+                subject_name=f"Declared PEP subject {len(subjects) + 1}",
+                source=source,
+            )
+
+    return subjects
+
+
+def _agent3_collect_declared_pep_from_db(db, application_id):
+    if not db or not application_id:
+        return []
+    subjects = []
+    for table, subject_type in (("directors", "director"), ("ubos", "ubo")):
+        try:
+            rows = db.execute(
+                f"""
+                SELECT full_name, is_pep, pep_declaration
+                  FROM {table}
+                 WHERE application_id=?
+                """,
+                (application_id,),
+            ).fetchall()
+        except Exception:
+            logger.warning("Agent 3 could not read %s PEP declarations", table, exc_info=True)
+            continue
+        for row in rows:
+            item = dict(row)
+            if not _agent3_declared_pep_from_subject(item):
+                continue
+            _agent3_add_declared_pep(
+                subjects,
+                subject_type=subject_type,
+                subject_name=item.get("full_name") or "Declared PEP subject",
+                source=f"{table}.pep_declaration",
+                evidence=item,
+            )
+    return subjects
+
+
+def _agent3_unresolved_screening_review_count(screening_reviews):
+    count = 0
+    for review in screening_reviews or []:
+        if not isinstance(review, dict):
+            continue
+        fields = _screening_review_payload_fields(review)
+        if fields.get("review_resolved"):
+            continue
+        disposition = str(
+            fields.get("canonical_disposition")
+            or fields.get("review_disposition_code")
+            or fields.get("review_disposition")
+            or ""
+        ).strip()
+        if disposition or review.get("subject_name") or review.get("subject_type"):
+            count += 1
+    return count
 
 
 def _agent3_screening_report_available(screening_report):
@@ -23380,12 +23597,21 @@ def _agent3_collect_hits(screening_report, app):
     return hits
 
 
-def _agent3_build_screening_interpretation(app, prescreening, screening_reviews):
+def _agent3_build_screening_interpretation(app, prescreening, screening_reviews, declared_pep_subjects=None):
     screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else None
     if not _agent3_screening_report_available(screening_report):
         return None
 
     hits = _agent3_collect_hits(screening_report, app)
+    declared_pep_subjects = list(declared_pep_subjects or [])
+    for subject in _agent3_collect_declared_pep_from_prescreening(prescreening, screening_report):
+        _agent3_add_declared_pep(
+            declared_pep_subjects,
+            subject_type=subject.get("subject_type"),
+            subject_name=subject.get("subject_name"),
+            source=subject.get("source"),
+            evidence=subject,
+        )
     raw_total_hits = screening_report.get("total_hits")
     try:
         total_hits = int(raw_total_hits)
@@ -23396,6 +23622,8 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
     sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
     pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
     adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    declared_pep_count = len(declared_pep_subjects)
+    unresolved_review_count = _agent3_unresolved_screening_review_count(screening_reviews)
     overall_flags = [str(flag) for flag in _agent3_list(screening_report.get("overall_flags")) if str(flag or "").strip()]
     low_confidence_hit_count = sum(
         1
@@ -23409,12 +23637,18 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
     elif pep_count:
         severity = "High"
         recommendation = "EDD recommended"
+    elif declared_pep_count:
+        severity = "High"
+        recommendation = "Officer review required"
     elif adverse_media_count:
         severity = "Medium"
         recommendation = "Officer review required"
     elif total_hits:
         severity = "Medium"
         recommendation = "False positive likely" if low_confidence_hit_count == len(hits) and hits else "Officer review required"
+    elif unresolved_review_count:
+        severity = "Medium"
+        recommendation = "Officer review required"
     else:
         severity = "Low"
         recommendation = "Clear"
@@ -23424,16 +23658,34 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
         key_concerns.append(f"{sanctions_count} stored sanctions/watchlist hit(s) require senior officer review.")
     if pep_count:
         key_concerns.append(f"{pep_count} stored PEP hit(s) require EDD consideration.")
+    if declared_pep_count:
+        key_concerns.append(AGENT3_DECLARED_PEP_NOTICE)
     if adverse_media_count:
         key_concerns.append(f"{adverse_media_count} stored adverse media hit(s) require relevance and materiality review.")
     unknown_count = max(0, total_hits - sanctions_count - pep_count - adverse_media_count)
     if unknown_count:
         key_concerns.append(f"{unknown_count} stored screening hit(s) need identity disambiguation.")
+    if unresolved_review_count:
+        key_concerns.append(f"{unresolved_review_count} existing screening review item(s) are not fully resolved in stored review records.")
     if not key_concerns:
-        key_concerns.append("No sanctions, PEP, or adverse media hits are present in stored screening results.")
+        key_concerns.append("No provider hits found in stored screening results. This is not a statement that no compliance risk exists.")
 
     if total_hits == 0:
-        false_positive_assessment = "No stored hits are present, so there are no potential false positives to clear."
+        if declared_pep_count:
+            false_positive_assessment = (
+                "No provider hits found in stored screening results, so there are no provider false positives to clear. "
+                "Declared PEP status is a separate officer-review signal and must not be treated as a provider no-hit clearance."
+            )
+        elif unresolved_review_count:
+            false_positive_assessment = (
+                "No provider hits found in stored screening results, but stored screening review records remain unresolved. "
+                "Officer review remains required before relying on a clear disposition."
+            )
+        else:
+            false_positive_assessment = (
+                "No provider hits found in stored screening results, so there are no provider false positives to clear. "
+                "This does not independently prove that no compliance risk exists."
+            )
     elif low_confidence_hit_count == len(hits) and hits and not (sanctions_count or pep_count or adverse_media_count):
         false_positive_assessment = (
             "False positive likely based on stored low-confidence matches. "
@@ -23451,7 +23703,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
             "to screened subject names. Assess source reliability, recency, conduct seriousness, and name match quality."
         )
     else:
-        adverse_media_relevance = "No stored adverse media hits were found."
+        adverse_media_relevance = "No provider adverse media hits found in stored screening results."
 
     app_ref = _agent3_row_get(app, "ref") or _agent3_row_get(app, "id") or "application"
     provider = (
@@ -23459,11 +23711,22 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
         or screening_report.get("screening_provider")
         or "stored screening provider"
     )
-    summary = (
-        f"Stored screening results for {app_ref} show {total_hits} hit(s): "
-        f"{sanctions_count} sanctions, {pep_count} PEP, and {adverse_media_count} adverse media. "
-        f"Agent recommendation: {recommendation}. Officer decision remains required."
-    )
+    if total_hits:
+        hit_summary = (
+            f"show {total_hits} provider hit(s): {sanctions_count} sanctions, "
+            f"{pep_count} PEP, and {adverse_media_count} adverse media"
+        )
+    else:
+        hit_summary = "show no provider hits found"
+    summary_parts = [
+        f"Stored screening results for {app_ref} {hit_summary}.",
+    ]
+    if declared_pep_count:
+        summary_parts.append(AGENT3_DECLARED_PEP_NOTICE)
+    if unresolved_review_count:
+        summary_parts.append(f"{unresolved_review_count} screening review item(s) remain unresolved in stored review records.")
+    summary_parts.append(f"Agent recommendation: {recommendation}. Officer decision remains required.")
+    summary = " ".join(summary_parts)
     draft_audit_note = (
         "Agent 3 generated an advisory screening interpretation from stored "
         "prescreening_data.screening_report only. No provider call was made. "
@@ -23482,6 +23745,14 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
         evidence_used.append({
             "source": "screening_reviews",
             "review_count": len(screening_reviews),
+            "unresolved_review_count": unresolved_review_count,
+        })
+    for subject in declared_pep_subjects:
+        evidence_used.append({
+            "source": subject.get("source") or "declared_pep",
+            "subject_type": subject.get("subject_type"),
+            "subject_name": subject.get("subject_name"),
+            "declared_pep": True,
         })
     for hit in hits[:12]:
         evidence_used.append({
@@ -23518,8 +23789,10 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
             "total": total_hits,
             "sanctions": sanctions_count,
             "pep": pep_count,
+            "declared_pep": declared_pep_count,
             "adverse_media": adverse_media_count,
             "low_confidence": low_confidence_hit_count,
+            "unresolved_screening_reviews": unresolved_review_count,
         },
     }
     hash_payload = dict(interpretation)
@@ -23620,7 +23893,13 @@ class Agent3ScreeningInterpretationHandler(BaseHandler):
 
             prescreening = parse_json_field(_agent3_row_get(app, "prescreening_data"), {}) or {}
             screening_reviews = _load_screening_reviews_for_truth(db, app["id"], app["ref"])
-            interpretation = _agent3_build_screening_interpretation(app, prescreening, screening_reviews)
+            declared_pep_subjects = _agent3_collect_declared_pep_from_db(db, app["id"])
+            interpretation = _agent3_build_screening_interpretation(
+                app,
+                prescreening,
+                screening_reviews,
+                declared_pep_subjects=declared_pep_subjects,
+            )
             if not interpretation:
                 checks = [{
                     "check": "stored_screening_results_available",

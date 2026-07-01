@@ -105,6 +105,80 @@ def _stored_screening_prescreening():
     }
 
 
+def _screening_prescreening(*, total_hits=0, company_results=None, director_screenings=None, overall_flags=None):
+    company_results = company_results or []
+    director_screenings = director_screenings or []
+    return {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": "2026-06-30T10:00:00+00:00",
+            "total_hits": total_hits,
+            "overall_flags": overall_flags or [],
+            "company_screening": {
+                "company_name": "Agent Three Holdings Ltd",
+                "matched": bool(company_results),
+                "results": company_results,
+            },
+            "director_screenings": director_screenings,
+            "ubo_screenings": [],
+        },
+        "screening_valid_until": "2026-09-28T10:00:00+00:00",
+    }
+
+
+def _clean_no_hit_prescreening():
+    return _screening_prescreening(total_hits=0)
+
+
+def _declared_pep_no_hit_prescreening():
+    return _screening_prescreening(
+        total_hits=0,
+        director_screenings=[{
+            "person_name": "Declared PEP Director",
+            "person_type": "director",
+            "declared_pep": "Yes",
+            "screening": {
+                "matched": False,
+                "results": [],
+                "source": "complyadvantage",
+                "api_status": "live",
+            },
+        }],
+    )
+
+
+def _provider_hit_prescreening(category, *, score=0.91):
+    return _screening_prescreening(
+        total_hits=1,
+        overall_flags=[category],
+        company_results=[{
+            "name": f"Agent Three Holdings {category} hit",
+            "match_score": score,
+            "category": category,
+        }],
+    )
+
+
+def _insert_declared_pep_director(db, app_id):
+    db.execute(
+        """
+        INSERT INTO directors (application_id, full_name, nationality, is_pep, pep_declaration)
+        VALUES (?, 'Declared PEP Director', 'Mauritius', 'Yes', ?)
+        """,
+        (
+            app_id,
+            json.dumps({
+                "declared_pep": True,
+                "client_declared_pep": True,
+                "pep_status": "declared_yes",
+            }, sort_keys=True),
+        ),
+    )
+    db.commit()
+
+
 def _insert_application(db, *, prescreening_data=None, status="compliance_review", risk_level="MEDIUM", risk_score=55):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"agent3_app_{suffix}"
@@ -146,17 +220,152 @@ def _fail_provider_call(*args, **kwargs):
     raise AssertionError("Agent 3 interpretation endpoint must not call providers")
 
 
+def _block_provider_calls(monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "run_full_screening", _fail_provider_call)
+    monkeypatch.setattr(server, "screen_sumsub_aml", _fail_provider_call)
+    monkeypatch.setattr(server, "lookup_opencorporates", _fail_provider_call)
+
+
+def _post_agent3(agent3_api_server, app_id, *, user_id="agent3-officer"):
+    return http_requests.post(
+        f"{agent3_api_server}/api/applications/{app_id}/agent3/screening-interpretation",
+        headers=_headers(user_id=user_id),
+        json={},
+        timeout=5,
+    )
+
+
+def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
+    execution = db.execute(
+        """
+        SELECT * FROM agent_executions
+         WHERE application_id=? AND agent_number=3 AND status='completed'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (app_id,),
+    ).fetchone()
+    assert execution is not None
+    assert execution["source"] == "stored_screening_results"
+    persisted = json.loads(execution["flags_json"])
+    assert persisted["recommended_disposition"] == expected_recommendation
+    assert persisted["provider_call_made"] is False
+    assert persisted["risk_or_decision_mutation"] is False
+    checks = json.loads(execution["checks_json"])
+    assert any(item["check"] == "provider_call_made" and item["provider_call_made"] is False for item in checks)
+
+    audit = db.execute(
+        """
+        SELECT detail, before_state, after_state FROM audit_log
+         WHERE target=? AND action='agent3_screening_interpretation.generated'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (app_ref,),
+    ).fetchone()
+    assert audit is not None
+    audit_detail = json.loads(audit["detail"])
+    assert audit_detail["provider_call_made"] is False
+    assert audit_detail["recommendation"] == expected_recommendation
+    assert json.loads(audit["before_state"]) == json.loads(audit["after_state"])
+    return persisted
+
+
+@pytest.mark.parametrize(
+    ("scenario", "prescreening_factory", "expected_recommendation", "expected_severity", "expected_text"),
+    [
+        (
+            "clean_no_hit",
+            _clean_no_hit_prescreening,
+            "Clear",
+            "Low",
+            "No provider hits found in stored screening results",
+        ),
+        (
+            "declared_pep_no_provider_hit",
+            _declared_pep_no_hit_prescreening,
+            "Officer review required",
+            "High",
+            "Stored provider screening may show no external PEP match, but the subject is marked as Declared PEP. Officer review remains required.",
+        ),
+        (
+            "provider_pep_hit",
+            lambda: _provider_hit_prescreening("pep"),
+            "EDD recommended",
+            "High",
+            "stored PEP hit(s) require EDD consideration",
+        ),
+        (
+            "sanctions_hit",
+            lambda: _provider_hit_prescreening("sanctions"),
+            "Reject recommended",
+            "Critical",
+            "stored sanctions/watchlist hit(s) require senior officer review",
+        ),
+        (
+            "adverse_media_hit",
+            lambda: _provider_hit_prescreening("adverse_media"),
+            "Officer review required",
+            "Medium",
+            "stored adverse media hit(s) require relevance and materiality review",
+        ),
+    ],
+)
+def test_agent3_screening_interpretation_scenarios_are_safe_and_clear(
+    agent3_api_server,
+    db,
+    monkeypatch,
+    scenario,
+    prescreening_factory,
+    expected_recommendation,
+    expected_severity,
+    expected_text,
+):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _block_provider_calls(monkeypatch)
+    app_id, app_ref = _insert_application(db, prescreening_data=prescreening_factory())
+    if scenario == "declared_pep_no_provider_hit":
+        _insert_declared_pep_director(db, app_id)
+    before = dict(db.execute(
+        "SELECT status, risk_level, risk_score FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone())
+
+    resp = _post_agent3(agent3_api_server, app_id, user_id=f"agent3-{scenario}")
+
+    assert resp.status_code == 200, resp.text
+    output = resp.json()["interpretation"]
+    assert output["recommended_disposition"] == expected_recommendation
+    assert output["severity"] == expected_severity
+    assert output["provider_call_made"] is False
+    assert output["risk_or_decision_mutation"] is False
+    assert output["ai_notice"] == "Deterministic interpretation generated from stored screening results. No provider call was made."
+    assert output["officer_notice"] == "Officer decision required. Agent 3 provides an advisory interpretation only."
+    rendered_text = json.dumps(output, sort_keys=True)
+    assert expected_text in rendered_text
+    assert "No compliance risk exists" not in rendered_text
+    assert "risk-free" not in rendered_text.lower()
+    if scenario == "declared_pep_no_provider_hit":
+        assert output["hit_counts"]["total"] == 0
+        assert output["hit_counts"]["pep"] == 0
+        assert output["hit_counts"]["declared_pep"] == 1
+        assert "Clear" != output["recommended_disposition"]
+
+    after = dict(db.execute(
+        "SELECT status, risk_level, risk_score FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone())
+    assert after == before
+    _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation)
+
+
 def test_agent3_generates_from_stored_screening_without_provider_calls(
     agent3_api_server,
     db,
     monkeypatch,
 ):
-    import server
-
     monkeypatch.setenv("ANTHROPIC_API_KEY", "would-be-live-ai-key")
-    monkeypatch.setattr(server, "run_full_screening", _fail_provider_call)
-    monkeypatch.setattr(server, "screen_sumsub_aml", _fail_provider_call)
-    monkeypatch.setattr(server, "lookup_opencorporates", _fail_provider_call)
+    _block_provider_calls(monkeypatch)
 
     app_id, app_ref = _insert_application(db, prescreening_data=_stored_screening_prescreening())
     before = dict(db.execute(
@@ -180,7 +389,7 @@ def test_agent3_generates_from_stored_screening_without_provider_calls(
     assert output["provider_call_made"] is False
     assert output["risk_or_decision_mutation"] is False
     assert output["ai_mode"] == "deterministic_fallback"
-    assert "AI narrative unavailable" in output["ai_notice"]
+    assert output["ai_notice"] == "Deterministic interpretation generated from stored screening results. No provider call was made."
     assert output["summary"]
     assert output["key_concerns"]
     assert output["false_positive_assessment"]
@@ -272,7 +481,9 @@ def test_agent3_read_endpoint_returns_latest_persisted_output(agent3_api_server,
 def test_agent3_no_stored_screening_data_returns_clear_message_without_completed_output(
     agent3_api_server,
     db,
+    monkeypatch,
 ):
+    _block_provider_calls(monkeypatch)
     app_id, _app_ref = _insert_application(db, prescreening_data={})
 
     resp = http_requests.post(
@@ -358,7 +569,10 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "Generate an AI-assisted interpretation from stored screening results." in html
     assert "This does not re-run screening or change the officer decision." in html
     assert "Generate interpretation" in html
-    assert "Officer decision required. Agent 3 does not approve, reject, or close screening reviews." in html
+    assert "Officer decision required. Agent 3 provides an advisory interpretation only." in html
+    assert "Collapse Agent 3" in html
+    assert "Expand Agent 3" in html
+    assert "AGENT3_SCREENING_INTERPRETATION_COLLAPSED" in html
     assert "Plain-English summary" in html
     assert "False-positive assessment" in html
     assert "Adverse media relevance" in html
@@ -369,9 +583,12 @@ def test_backoffice_agent3_screening_panel_static_contract():
     render_body = _extract_function(html, "renderScreeningReviewPanel")
     fetch_detail_body = _extract_function(html, "fetchApplicationDetail")
     generate_body = _extract_function(html, "generateAgent3ScreeningInterpretation")
+    toggle_body = _extract_function(html, "toggleAgent3ScreeningInterpretation")
 
     assert "/agent3/screening-interpretation" not in render_body
     assert "/agent3/screening-interpretation" not in fetch_detail_body
+    assert "/agent3/screening-interpretation" not in toggle_body
+    assert "boApiCall(" not in toggle_body
     assert "boApiCall('POST', '/applications/' + appKey + '/agent3/screening-interpretation'" in generate_body
     assert "boApiCall('GET', '/applications/' + appKey + '/agent3/screening-interpretation'" not in generate_body
     assert "Agent recommendation:" in html
