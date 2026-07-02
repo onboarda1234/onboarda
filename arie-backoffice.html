@@ -23390,8 +23390,8 @@ function renderMonitoringPendingReviewSection(alert, raw) {
     controls = '<div style="display:grid;gap:8px;max-width:560px;margin-top:10px;">' +
       '<input class="form-input" id="monitoring-review-approval-note" placeholder="Approval / rejection note" />' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-        '<button class="btn btn-primary btn-sm" onclick="approveMonitoringReviewRequest(' + JSON.stringify(req.id) + ')">Approve clearance</button>' +
-        '<button class="btn btn-outline btn-sm" onclick="rejectMonitoringReviewRequest(' + JSON.stringify(req.id) + ')">Reject</button>' +
+        '<button id="monitoring-review-approve-btn" class="btn btn-primary btn-sm" onclick="approveMonitoringReviewRequest(' + JSON.stringify(req.id) + ')">Approve clearance</button>' +
+        '<button id="monitoring-review-reject-btn" class="btn btn-outline btn-sm" onclick="rejectMonitoringReviewRequest(' + JSON.stringify(req.id) + ')">Reject</button>' +
       '</div>' +
       '<span id="monitoring-review-result" style="font-size:12px;"></span>' +
     '</div>';
@@ -23851,29 +23851,50 @@ async function saveMonitoringAlertDecision() {
   }
 }
 
+var MONITORING_REVIEW_ACTION_INFLIGHT = false;
+function setMonitoringReviewButtonsDisabled(disabled) {
+  var ids = ['monitoring-review-approve-btn', 'monitoring-review-reject-btn'];
+  ids.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = !!disabled;
+  });
+}
+
 async function approveMonitoringReviewRequest(requestId) {
+  if (MONITORING_REVIEW_ACTION_INFLIGHT) return;
   var noteEl = document.getElementById('monitoring-review-approval-note');
   var resultEl = document.getElementById('monitoring-review-result');
+  MONITORING_REVIEW_ACTION_INFLIGHT = true;
+  setMonitoringReviewButtonsDisabled(true);
   try {
     await boApiCall('POST', '/monitoring/review-requests/' + requestId + '/approve', { approval_note: noteEl ? noteEl.value.trim() : '' });
     showToast('Clearance approved');
     await refreshMonitoringAlertDetail();
   } catch(err) {
     if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Approval failed') + '</span>';
+    setMonitoringReviewButtonsDisabled(false);
+  } finally {
+    MONITORING_REVIEW_ACTION_INFLIGHT = false;
   }
 }
 
 async function rejectMonitoringReviewRequest(requestId) {
+  if (MONITORING_REVIEW_ACTION_INFLIGHT) return;
   var noteEl = document.getElementById('monitoring-review-approval-note');
   var resultEl = document.getElementById('monitoring-review-result');
   var reason = noteEl ? noteEl.value.trim() : '';
   if (!reason) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">A rejection reason is required.</span>'; return; }
+  MONITORING_REVIEW_ACTION_INFLIGHT = true;
+  setMonitoringReviewButtonsDisabled(true);
   try {
     await boApiCall('POST', '/monitoring/review-requests/' + requestId + '/reject', { rejection_reason: reason });
     showToast('Clearance request rejected');
     await refreshMonitoringAlertDetail();
   } catch(err) {
     if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Rejection failed') + '</span>';
+    setMonitoringReviewButtonsDisabled(false);
+  } finally {
+    MONITORING_REVIEW_ACTION_INFLIGHT = false;
   }
 }
 

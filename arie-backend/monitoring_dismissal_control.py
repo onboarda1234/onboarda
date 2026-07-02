@@ -95,7 +95,6 @@ def classify_alert_tier(alert: Any) -> int:
         return 3
     atype = _token(_get(alert, "alert_type") or _get(alert, "type") or "")
     summary = str(_get(alert, "summary") or "").lower()
-    severity = ms.canonical_filter_status  # placeholder to avoid unused import; real severity below
     sev = _token(_get(alert, "severity"))
 
     # Tier 1 — sanctions / watchlist / PEP (reuse M1.1 helper).
@@ -237,6 +236,11 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
         raise DismissalControlError("Senior direct clearance requires an enhanced rationale.", 400)
     if tier == 1 and not (evidence_ref or "").strip():
         raise DismissalControlError("Senior direct clearance of a sanctions/PEP/watchlist/adverse-media alert requires an evidence note.", 400)
+    if has_pending_request(db, alert_id):
+        raise DismissalControlError(
+            "A review request is already pending for this alert; approve or reject it instead of clearing directly.",
+            409,
+        )
 
     request = _insert_request(
         db, alert_id=alert_id, tier=tier, requested_outcome=requested_outcome,
@@ -269,17 +273,34 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
     return request
 
 
-def approve_request(db, *, request, approver, audit_writer) -> None:
-    """Mark a pending request approved by a *different* approver. Raises on
-    self-approval or wrong role (caller maps to 403 + dismissal_blocked)."""
+def assert_can_review(request, approver) -> None:
+    """Validate approver eligibility WITHOUT mutating. Raises on wrong role or
+    self-review (four-eyes). Used before any terminal action so approval and
+    clearing can be sequenced atomically by the caller."""
     approver_id = (approver or {}).get("sub", "")
     role = str((approver or {}).get("role") or "").strip().lower()
     tier = int(request.get("tier") or 1)
     if role not in approver_roles_for_tier(tier):
-        raise DismissalControlError("Only a Senior Compliance Officer or Administrator can approve this clearance.", 403)
+        raise DismissalControlError("Only a Senior Compliance Officer or Administrator can action this clearance.", 403)
     if approver_id and approver_id == (request.get("initiated_by") or ""):
-        raise DismissalControlError("The same user cannot approve their own clearance request (four-eyes).", 403)
+        raise DismissalControlError("The same user cannot review their own clearance request (four-eyes).", 403)
 
+
+def _current_state(db, request_id):
+    row = db.execute(
+        "SELECT state FROM monitoring_alert_review_requests WHERE id = ?", (request_id,)
+    ).fetchone()
+    return (dict(row).get("state") if row else None)
+
+
+def mark_request_approved(db, *, request, approver, approval_note, audit_writer) -> None:
+    """Transition a still-pending request to approved. Verifies the row was
+    actually pending (DBConnection has no rowcount) so a race/duplicate cannot
+    record a false approval. Caller must run the terminal clear FIRST so the two
+    are sequenced together."""
+    assert_can_review(request, approver)
+    approver_id = (approver or {}).get("sub", "")
+    tier = int(request.get("tier") or 1)
     db.execute(
         """
         UPDATE monitoring_alert_review_requests
@@ -287,9 +308,11 @@ def approve_request(db, *, request, approver, audit_writer) -> None:
                approval_note = ?
          WHERE id = ? AND state = 'pending'
         """,
-        (approver_id, (request.get("_approval_note") or "approved"), request.get("id")),
+        (approver_id, (approval_note or "approved"), request.get("id")),
     )
     db.commit()
+    if _current_state(db, request.get("id")) != "approved":
+        raise DismissalControlError("This review request is no longer pending.", 409)
     audit_writer(
         dict(approver or {}),
         "monitoring.alert.dismissal_approved",
@@ -309,15 +332,10 @@ def approve_request(db, *, request, approver, audit_writer) -> None:
 
 
 def reject_request(db, *, request, approver, rejection_reason, audit_writer) -> None:
-    approver_id = (approver or {}).get("sub", "")
-    role = str((approver or {}).get("role") or "").strip().lower()
-    tier = int(request.get("tier") or 1)
-    if role not in approver_roles_for_tier(tier):
-        raise DismissalControlError("Only a Senior Compliance Officer or Administrator can reject this clearance.", 403)
-    if approver_id and approver_id == (request.get("initiated_by") or ""):
-        raise DismissalControlError("The same user cannot review their own clearance request (four-eyes).", 403)
+    assert_can_review(request, approver)
     if not (rejection_reason or "").strip():
         raise DismissalControlError("A rejection reason is required.", 400)
+    approver_id = (approver or {}).get("sub", "")
     db.execute(
         """
         UPDATE monitoring_alert_review_requests
@@ -328,6 +346,8 @@ def reject_request(db, *, request, approver, rejection_reason, audit_writer) -> 
         (approver_id, rejection_reason, request.get("id")),
     )
     db.commit()
+    if _current_state(db, request.get("id")) != "rejected":
+        raise DismissalControlError("This review request is no longer pending.", 409)
     audit_writer(
         dict(approver or {}),
         "monitoring.alert.dismissal_rejected",
@@ -386,18 +406,19 @@ def pending_requests_for_approver(db, approver, *, limit: int = 100) -> List[Dic
 __all__ = [
     "DismissalControlError",
     "TIER1_APPROVER_ROLES",
-    "classify_alert_tier",
-    "is_clearing_action",
-    "requires_control",
     "approver_roles_for_tier",
-    "is_senior",
-    "open_request_for_alert",
-    "has_pending_request",
-    "create_pending_request",
-    "record_senior_clear",
-    "approve_request",
-    "reject_request",
+    "assert_can_review",
     "audit_blocked",
+    "classify_alert_tier",
+    "create_pending_request",
     "fetch_request",
+    "has_pending_request",
+    "is_clearing_action",
+    "is_senior",
+    "mark_request_approved",
+    "open_request_for_alert",
     "pending_requests_for_approver",
+    "record_senior_clear",
+    "reject_request",
+    "requires_control",
 ]

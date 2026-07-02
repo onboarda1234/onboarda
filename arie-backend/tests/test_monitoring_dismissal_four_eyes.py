@@ -100,7 +100,7 @@ def _restore_attrs(restore):
 
 @pytest.fixture(scope="module")
 def four_eyes_server():
-    db_path = os.path.join(tempfile.gettempdir(), f"onboarda_4eyes_{os.getpid()}_{time.time_ns()}.db")
+    db_path = os.path.join(tempfile.gettempdir(), f"monitoring_4eyes_{os.getpid()}_{time.time_ns()}.db")
     restore = []
     thread = None
     server_ref = {}
@@ -166,7 +166,8 @@ def four_eyes_server():
     try:
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
-        started.wait(timeout=3)
+        if not started.wait(timeout=3):
+            raise RuntimeError("four_eyes_server test harness failed to start within 3s")
         time.sleep(0.2)
         yield f"http://127.0.0.1:{port}", db_module
     finally:
@@ -374,7 +375,7 @@ def test_escalation_on_tier1_is_single_officer(four_eyes_server):
 # ── No new stored status values ──────────────────────────────────────────────
 
 def test_no_new_monitoring_alert_status_values(four_eyes_server):
-    base, dbm = four_eyes_server
+    _base, dbm = four_eyes_server
     conn = dbm.get_db()
     try:
         rows = conn.execute("SELECT DISTINCT status FROM monitoring_alerts").fetchall()

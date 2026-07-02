@@ -14,13 +14,13 @@
 
 CREATE TABLE IF NOT EXISTS monitoring_alert_review_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    alert_id INTEGER REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+    alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
     tier INTEGER,
     requested_outcome TEXT,
     dismissal_reason TEXT,
     rationale TEXT,
     evidence_ref TEXT,
-    state TEXT NOT NULL DEFAULT 'pending',
+    state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
     initiated_by TEXT,
     initiated_at TEXT DEFAULT (datetime('now')),
     approved_by TEXT,

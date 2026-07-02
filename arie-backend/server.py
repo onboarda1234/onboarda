@@ -32119,6 +32119,13 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
     mirrors the inline execution in MonitoringAlertDetailHandler.patch)."""
     import monitoring_routing as mr
 
+    # Re-verify the alert is not already terminal before clearing — mirrors the
+    # inline save_decision/dismiss guards, so a stale/duplicate approval is a
+    # handled no-op rather than a double-clear or 500.
+    if mr.is_alert_terminal(alert_before):
+        return {"alert_id": alert_id, "status": alert_before.get("status"),
+                "outcome": requested_outcome, "already_terminal": True}
+
     if requested_outcome == "dismiss" or (dismissal_reason and requested_outcome not in MONITORING_DECISION_OUTCOMES):
         return mr.dismiss_alert(
             db, alert_id,
@@ -32222,15 +32229,21 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                         "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                         "audit_history": _monitoring_alert_audit_history(db, alert_id),
                     })
-                # approve → mark approved (self-approval/role guarded inside) then execute terminal clear
-                request["_approval_note"] = str(data.get("approval_note") or data.get("note") or "approved").strip()
-                _mdc.approve_request(db, request=request, approver=user, audit_writer=self.log_audit)
+                # approve → validate eligibility (self-approval/role) BEFORE any
+                # mutation, run the terminal clear, then record the approval last so
+                # the two steps are sequenced atomically (no approved-but-uncleared row).
+                _mdc.assert_can_review(request, user)
+                approval_note = str(data.get("approval_note") or data.get("note") or "approved").strip()
                 result = _execute_monitoring_clearing(
                     db, user, alert_id, alert_before,
                     requested_outcome=request.get("requested_outcome"),
                     dismissal_reason=request.get("dismissal_reason"),
                     note=request.get("rationale"),
                     log_audit=self.log_audit,
+                )
+                _mdc.mark_request_approved(
+                    db, request=request, approver=user,
+                    approval_note=approval_note, audit_writer=self.log_audit,
                 )
                 return self.success({
                     "status": "review_approved",

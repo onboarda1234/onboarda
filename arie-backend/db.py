@@ -1102,13 +1102,13 @@ def _get_postgres_schema() -> str:
     -- second review" is derived from an open row here, never a stored status.
     CREATE TABLE IF NOT EXISTS monitoring_alert_review_requests (
         id SERIAL PRIMARY KEY,
-        alert_id INTEGER REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
         tier INTEGER,
         requested_outcome TEXT,
         dismissal_reason TEXT,
         rationale TEXT,
         evidence_ref TEXT,
-        state TEXT NOT NULL DEFAULT 'pending',
+        state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
         initiated_by TEXT,
         initiated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         approved_by TEXT,
@@ -2277,13 +2277,13 @@ def _get_sqlite_schema() -> str:
     -- M2.2 four-eyes: maker-checker review requests for material alert clears.
     CREATE TABLE IF NOT EXISTS monitoring_alert_review_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        alert_id INTEGER REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
         tier INTEGER,
         requested_outcome TEXT,
         dismissal_reason TEXT,
         rationale TEXT,
         evidence_ref TEXT,
-        state TEXT NOT NULL DEFAULT 'pending',
+        state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
         initiated_by TEXT,
         initiated_at TEXT DEFAULT (datetime('now')),
         approved_by TEXT,
