@@ -23334,19 +23334,73 @@ function renderMonitoringDecisionSection(alert) {
   if (monitoringAlertIsTerminal(alert)) {
     return monitoringDetailCard('Officer Action', '<div style="font-size:13px;color:var(--text3);">This alert is already in a terminal or downstream-routed state. Decisions are read-only from this view.</div>');
   }
+  var raw = (alert && alert.raw) || {};
+  // M2.2 four-eyes: if a senior-approval request is pending, show the review
+  // panel instead of the decision form (prevents double-initiation).
+  if (raw.pending_second_review) {
+    return renderMonitoringPendingReviewSection(alert, raw);
+  }
+  var role = (currentUser && currentUser.role) || '';
+  var isSenior = role === 'admin' || role === 'sco';
+  var tier = Number(raw.dismissal_tier || 0);
+  var controlledTier = tier === 1 || tier === 2;
   var options = monitoringOutcomeOptions(alert).map(function(opt) {
     return '<option value="' + escapeHtml(opt[0]) + '">' + escapeHtml(opt[1]) + '</option>';
   }).join('');
+  var controlNote = controlledTier
+    ? (isSenior
+        ? 'This is a Tier-' + tier + ' material alert. You may clear it directly with an enhanced rationale (recorded as a senior clearance), or send it for a second review.'
+        : 'This is a Tier-' + tier + ' material alert. Clearing it creates a senior-approval request; a Senior Compliance Officer or Administrator must approve.')
+    : '';
+  var evidenceField = '<div id="monitoring-alert-evidence-wrap"' + (controlledTier ? '' : ' style="display:none;"') + '>' +
+      '<div class="form-label">Evidence note <span id="monitoring-alert-evidence-required" style="color:var(--red);' + (tier === 1 ? '' : 'display:none;') + '">*</span></div>' +
+      '<input class="form-input" id="monitoring-alert-evidence-ref" placeholder="e.g. DOB/nationality mismatch, provider evidence ref" /></div>';
+  var seniorSecond = (controlledTier && isSenior)
+    ? '<label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text2);"><input type="checkbox" id="monitoring-send-second-review" onchange="updateMonitoringDecisionNoteHint()" /> Send for second review instead of clearing directly</label>'
+    : '';
   return monitoringDetailCard('Officer Action',
-    '<div style="display:grid;gap:12px;">' +
+    '<div style="display:grid;gap:12px;" data-monitoring-dismissal-tier="' + tier + '">' +
       '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Suggested action: ' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>' +
+      (controlNote ? '<div style="font-size:12px;color:var(--amber);line-height:1.5;">' + escapeHtml(controlNote) + '</div>' : '') +
       '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:start;">' +
         '<div><div class="form-label">Choose Outcome</div><select class="form-select" id="monitoring-alert-outcome" onchange="updateMonitoringDecisionNoteHint()"><option value="">Select outcome</option>' + options + '</select></div>' +
         '<div><div class="form-label">Add Note <span id="monitoring-alert-note-required" style="color:var(--red);display:none;">*</span></div><textarea class="form-input" id="monitoring-alert-decision-note" rows="4" placeholder="Record the rationale, evidence considered, and next operational step."></textarea><div id="monitoring-alert-decision-hint" style="font-size:11px;color:var(--text3);margin-top:4px;">Notes are mandatory for material outcomes and high/critical alerts.</div></div>' +
       '</div>' +
+      evidenceField +
+      seniorSecond +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-save-decision-btn" onclick="saveMonitoringAlertDecision()">Save Decision</button><span id="monitoring-alert-decision-result" style="font-size:12px;"></span></div>' +
     '</div>'
   );
+}
+
+function renderMonitoringPendingReviewSection(alert, raw) {
+  var req = raw.review_request || {};
+  var role = (currentUser && currentUser.role) || '';
+  var isSenior = role === 'admin' || role === 'sco';
+  var isInitiator = req.initiated_by && currentUser && req.initiated_by === currentUser.id;
+  var lines = '<div style="font-size:12px;color:var(--text2);line-height:1.6;">' +
+    '<div><strong style="color:var(--text1);">Pending second review</strong> — Tier ' + escapeHtml(String(req.tier || raw.dismissal_tier || '')) + '</div>' +
+    '<div>Requested outcome: ' + escapeHtml(String(req.requested_outcome || '')) + (req.dismissal_reason ? ' (' + escapeHtml(String(req.dismissal_reason)) + ')' : '') + '</div>' +
+    (req.rationale ? '<div>Rationale: ' + escapeHtml(String(req.rationale)) + '</div>' : '') +
+    (req.evidence_ref ? '<div>Evidence: ' + escapeHtml(String(req.evidence_ref)) + '</div>' : '') +
+    '<div style="color:var(--text3);">Initiated by: ' + escapeHtml(String(req.initiated_by || 'unknown')) + '</div>' +
+  '</div>';
+  var controls;
+  if (isSenior && !isInitiator) {
+    controls = '<div style="display:grid;gap:8px;max-width:560px;margin-top:10px;">' +
+      '<input class="form-input" id="monitoring-review-approval-note" placeholder="Approval / rejection note" />' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="btn btn-primary btn-sm" onclick="approveMonitoringReviewRequest(' + JSON.stringify(req.id) + ')">Approve clearance</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="rejectMonitoringReviewRequest(' + JSON.stringify(req.id) + ')">Reject</button>' +
+      '</div>' +
+      '<span id="monitoring-review-result" style="font-size:12px;"></span>' +
+    '</div>';
+  } else if (isInitiator) {
+    controls = '<div style="font-size:12px;color:var(--text3);margin-top:8px;">Awaiting a different senior officer to approve — you cannot approve your own request.</div>';
+  } else {
+    controls = '<div style="font-size:12px;color:var(--text3);margin-top:8px;">Awaiting Senior Compliance Officer or Administrator approval.</div>';
+  }
+  return monitoringDetailCard('Officer Action — Awaiting Second Review', lines + controls);
 }
 
 function renderMonitoringAssignmentSection(alert) {
@@ -23743,6 +23797,23 @@ function updateMonitoringDecisionNoteHint() {
   var required = monitoringOutcomeRequiresNote(alert, outcome);
   if (requiredEl) requiredEl.style.display = required ? '' : 'none';
   if (hintEl) hintEl.textContent = required ? 'A note is required before this outcome can be saved.' : 'Notes are optional for this outcome unless additional rationale is useful.';
+  // M2.2: role-aware primary button label + evidence field for controlled clears.
+  var raw = (alert && alert.raw) || {};
+  var tier = Number(raw.dismissal_tier || 0);
+  var role = (currentUser && currentUser.role) || '';
+  var isSenior = role === 'admin' || role === 'sco';
+  var clearingOutcomes = ['false_positive', 'no_material_impact', 'waive_with_reason', 'mark_already_updated'];
+  var isControlledClear = (tier === 1 || tier === 2) && clearingOutcomes.indexOf(outcome) >= 0;
+  var secondEl = document.getElementById('monitoring-send-second-review');
+  var sendSecond = secondEl && secondEl.checked;
+  var btn = document.getElementById('monitoring-save-decision-btn');
+  if (btn) {
+    if (isControlledClear && (!isSenior || sendSecond)) btn.textContent = 'Request senior approval';
+    else if (isControlledClear && isSenior) btn.textContent = 'Clear with senior rationale';
+    else btn.textContent = 'Save Decision';
+  }
+  var evReq = document.getElementById('monitoring-alert-evidence-required');
+  if (evReq) evReq.style.display = (isControlledClear && tier === 1) ? '' : 'none';
 }
 
 async function saveMonitoringAlertDecision() {
@@ -23755,17 +23826,54 @@ async function saveMonitoringAlertDecision() {
   var note = noteEl ? noteEl.value.trim() : '';
   if (!outcome) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">Choose an outcome.</span>'; return; }
   if (monitoringOutcomeRequiresNote(alert, outcome) && !note) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">A note is required for this outcome.</span>'; return; }
+  var evidenceEl = document.getElementById('monitoring-alert-evidence-ref');
+  var secondEl = document.getElementById('monitoring-send-second-review');
+  var payload = { action: 'save_decision', outcome: outcome, note: note };
+  if (evidenceEl && evidenceEl.value.trim()) payload.evidence_ref = evidenceEl.value.trim();
+  if (secondEl && secondEl.checked) payload.send_for_second_review = true;
   var btn = document.getElementById('monitoring-save-decision-btn');
+  var origLabel = btn ? btn.textContent : 'Save Decision';
   if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
   try {
-    await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, { action: 'save_decision', outcome: outcome, note: note });
-    if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Decision saved.</span>';
-    showToast('Alert decision saved');
+    var resp = await boApiCall('PATCH', '/monitoring/alerts/' + alert.id, payload);
+    if (resp && resp.status === 'review_requested') {
+      if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Sent for senior approval.</span>';
+      showToast('Sent for senior approval');
+    } else {
+      if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Decision saved.</span>';
+      showToast('Alert decision saved');
+    }
     await refreshMonitoringAlertDetail();
   } catch(err) {
     if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Save failed') + '</span>';
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save Decision'; }
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+  }
+}
+
+async function approveMonitoringReviewRequest(requestId) {
+  var noteEl = document.getElementById('monitoring-review-approval-note');
+  var resultEl = document.getElementById('monitoring-review-result');
+  try {
+    await boApiCall('POST', '/monitoring/review-requests/' + requestId + '/approve', { approval_note: noteEl ? noteEl.value.trim() : '' });
+    showToast('Clearance approved');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Approval failed') + '</span>';
+  }
+}
+
+async function rejectMonitoringReviewRequest(requestId) {
+  var noteEl = document.getElementById('monitoring-review-approval-note');
+  var resultEl = document.getElementById('monitoring-review-result');
+  var reason = noteEl ? noteEl.value.trim() : '';
+  if (!reason) { if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">A rejection reason is required.</span>'; return; }
+  try {
+    await boApiCall('POST', '/monitoring/review-requests/' + requestId + '/reject', { rejection_reason: reason });
+    showToast('Clearance request rejected');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Rejection failed') + '</span>';
   }
 }
 

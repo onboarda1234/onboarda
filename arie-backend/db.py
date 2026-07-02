@@ -1097,6 +1097,32 @@ def _get_postgres_schema() -> str:
         status TEXT DEFAULT 'active'
     );
 
+    -- M2.2 four-eyes: maker-checker review requests for material alert clears.
+    -- Additive; the alert lifecycle status stays on monitoring_alerts. "Pending
+    -- second review" is derived from an open row here, never a stored status.
+    CREATE TABLE IF NOT EXISTS monitoring_alert_review_requests (
+        id SERIAL PRIMARY KEY,
+        alert_id INTEGER REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        tier INTEGER,
+        requested_outcome TEXT,
+        dismissal_reason TEXT,
+        rationale TEXT,
+        evidence_ref TEXT,
+        state TEXT NOT NULL DEFAULT 'pending',
+        initiated_by TEXT,
+        initiated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        approved_by TEXT,
+        approved_at TIMESTAMP,
+        approval_note TEXT,
+        rejection_reason TEXT,
+        second_review_bypassed INTEGER DEFAULT 0,
+        sampled_for_qa INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_review_requests_alert
+        ON monitoring_alert_review_requests(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_review_requests_state
+        ON monitoring_alert_review_requests(state);
+
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (
         id SERIAL PRIMARY KEY,
@@ -2247,6 +2273,30 @@ def _get_sqlite_schema() -> str:
         alerts_generated INTEGER DEFAULT 0,
         status TEXT DEFAULT 'active'
     );
+
+    -- M2.2 four-eyes: maker-checker review requests for material alert clears.
+    CREATE TABLE IF NOT EXISTS monitoring_alert_review_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id INTEGER REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        tier INTEGER,
+        requested_outcome TEXT,
+        dismissal_reason TEXT,
+        rationale TEXT,
+        evidence_ref TEXT,
+        state TEXT NOT NULL DEFAULT 'pending',
+        initiated_by TEXT,
+        initiated_at TEXT DEFAULT (datetime('now')),
+        approved_by TEXT,
+        approved_at TEXT,
+        approval_note TEXT,
+        rejection_reason TEXT,
+        second_review_bypassed INTEGER DEFAULT 0,
+        sampled_for_qa INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_review_requests_alert
+        ON monitoring_alert_review_requests(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_review_requests_state
+        ON monitoring_alert_review_requests(state);
 
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (
