@@ -15981,7 +15981,12 @@ function agent3HitRowsTableHtml(rows) {
 
 function copyAgent3AuditNote(event) {
   if (event) { event.preventDefault(); event.stopPropagation(); }
-  var el = document.getElementById('agent3-audit-note-text');
+  // Resolve the note relative to the clicked button's panel first (robust even
+  // if more than one Agent 3 panel were ever rendered), then fall back to id.
+  var btn = event && (event.currentTarget || event.target);
+  var scope = btn && btn.closest ? btn.closest('#agent3-screening-interpretation-panel') : null;
+  var el = (scope && scope.querySelector) ? scope.querySelector('#agent3-audit-note-text') : null;
+  if (!el) el = document.getElementById('agent3-audit-note-text');
   if (!el) return;
   var text = el.innerText || el.textContent || '';
   if (navigator.clipboard && navigator.clipboard.writeText) {
