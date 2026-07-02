@@ -649,6 +649,244 @@ def generate_memo_pdf(
     return pdf_bytes
 
 
+_UUID_RE = None
+
+
+def _looks_like_uuid(value: Any) -> bool:
+    """True when a value is a bare UUID (a provider profile id posing as a name)."""
+    global _UUID_RE
+    if _UUID_RE is None:
+        import re as _re
+        _UUID_RE = _re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            _re.IGNORECASE,
+        )
+    return bool(_UUID_RE.match(str(value or "").strip()))
+
+
+def _screening_report_hits(screening_report: Dict) -> list:
+    """Flatten a stored screening_report into display-ready hit rows.
+
+    Reads only already-stored provider results — no provider calls, no
+    mutation. Mirrors the back-office collection order (entity, then
+    directors/UBOs/intermediaries) so the PDF matches the panel.
+    """
+    hits = []
+
+    def _first(d, *keys):
+        for k in keys:
+            v = d.get(k)
+            if v:
+                return v
+        return ""
+
+    def add(subject_type, subject_name, results):
+        for result in (results or []):
+            if not isinstance(result, dict):
+                continue
+            raw_name = _first(
+                result, "matched_name", "name", "full_name", "entity_name",
+                "caption", "title",
+            ) or subject_name
+            categories = result.get("categories")
+            if isinstance(categories, list) and categories:
+                category = str(categories[0])
+            else:
+                category = _first(result, "category", "match_category") or "watchlist"
+            surfaced = str(result.get("surfaced_by_pass") or "").lower()
+            if surfaced == "both":
+                confidence = "High (strict + relaxed match)"
+            elif surfaced == "strict":
+                confidence = "High (strict match)"
+            elif surfaced == "relaxed":
+                confidence = "Lower (relaxed match only)"
+            else:
+                score = result.get("match_score")
+                if score is None:
+                    score = result.get("score")
+                confidence = f"{score}%" if isinstance(score, (int, float)) else "Not scored by provider"
+            evidence_url = ""
+            evidence_snippet = ""
+            for indicator in (result.get("indicators") or []):
+                value = indicator.get("value") if isinstance(indicator, dict) else None
+                if not isinstance(value, dict):
+                    continue
+                canonical = value.get("canonical_url")
+                evidence_url = (
+                    (canonical.get("url") if isinstance(canonical, dict) else "")
+                    or value.get("url") or value.get("raw_url") or ""
+                )
+                snippets = value.get("snippets")
+                if isinstance(snippets, list) and snippets and isinstance(snippets[0], dict):
+                    evidence_snippet = snippets[0].get("text") or ""
+                if evidence_url or evidence_snippet:
+                    break
+            evidence_url = evidence_url or _first(result, "media_url", "source_url", "url")
+            hits.append({
+                "subject_type": subject_type,
+                "subject_name": subject_name or "Unknown subject",
+                "matched_name": "Unnamed provider match" if _looks_like_uuid(raw_name) else raw_name,
+                "category": category,
+                "list_name": _first(
+                    result, "sanctions_list", "list", "list_name", "dataset",
+                    "source_list", "watchlist", "source_name",
+                ),
+                "reference": _first(
+                    result, "id", "profile_identifier", "match_id", "reference",
+                    "entity_id",
+                ),
+                "confidence": confidence,
+                "evidence_url": evidence_url,
+                "evidence_snippet": evidence_snippet,
+            })
+
+    if not isinstance(screening_report, dict):
+        return hits
+    company = screening_report.get("company_screening")
+    if isinstance(company, dict):
+        add("Entity", company.get("company_name") or "Entity", company.get("results"))
+    for key, label in (
+        ("director_screenings", "Director"),
+        ("ubo_screenings", "UBO"),
+        ("intermediary_screenings", "Intermediary"),
+    ):
+        for subject in (screening_report.get(key) or []):
+            if not isinstance(subject, dict):
+                continue
+            name = _first(subject, "name", "full_name", "entity_name", "subject_name", "person_name") or "Unknown subject"
+            screening = subject.get("screening") or subject.get("screening_result") or subject.get("provider_result") or subject
+            results = screening.get("results") if isinstance(screening, dict) else None
+            add(label, name, results)
+    return hits
+
+
+def build_screening_report_html(
+    application: Dict,
+    screening_report: Dict,
+    disposition_reviews: Optional[list] = None,
+) -> str:
+    """Build the screening-report HTML (separated from PDF render for testability)."""
+    screening_report = screening_report if isinstance(screening_report, dict) else {}
+    app_ref = application.get("ref", "N/A")
+    company_name = application.get("company_name", "Unknown Entity")
+    country = application.get("country", "N/A")
+
+    provider = screening_report.get("screening_provider") or screening_report.get("provider") or "Unknown"
+    mode = screening_report.get("screening_mode") or "unknown"
+    screened_at = (str(screening_report.get("screened_at") or "Not recorded")).replace("T", " ")[:19]
+    total_hits = screening_report.get("total_hits", 0)
+    overall_flags = screening_report.get("overall_flags") or []
+    flags_display = ", ".join(str(f) for f in overall_flags) if overall_flags else "None recorded"
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    content_hash = hashlib.sha256(
+        json.dumps(screening_report, sort_keys=True, default=str).encode()
+    ).hexdigest()[:16]
+
+    hits = _screening_report_hits(screening_report)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><style>{PDF_CSS}</style></head>
+<body>
+
+<h1>{_esc(BRAND['pdf_header'])} — Screening Report — {_esc(company_name)}</h1>
+
+<div class="header-block">
+<table>
+<tr><td class="label">Application Reference</td><td>{_esc(app_ref)}</td>
+    <td class="label">Entity Name</td><td>{_esc(company_name)}</td></tr>
+<tr><td class="label">Country</td><td>{_esc(country)}</td>
+    <td class="label">Screening Provider</td><td>{_esc(provider)}</td></tr>
+<tr><td class="label">Screening Mode</td><td>{_esc(mode)}</td>
+    <td class="label">Screened At</td><td>{_esc(screened_at)}</td></tr>
+<tr><td class="label">Total Provider Matches</td><td>{_esc(total_hits)}</td>
+    <td class="label">Overall Flags</td><td>{_esc(flags_display)}</td></tr>
+<tr><td class="label">Report Generated</td><td colspan="3">{_esc(now)}</td></tr>
+</table>
+</div>
+
+<p class="advisory-note">This screening report reproduces stored provider results for officer
+review. It is advisory: a screening match is not a determination. Officer disposition and, where
+required, second-reviewer sign-off remain mandatory.</p>
+
+<h2>Provider Matches ({len(hits)})</h2>
+"""
+
+    if not hits:
+        html += '<p>No provider matches are recorded in the stored screening result for this application.</p>'
+    else:
+        html += (
+            '<table class="data-table"><thead><tr>'
+            '<th>#</th><th>Subject</th><th>Matched entity</th><th>Category</th>'
+            '<th>List / source</th><th>Confidence</th>'
+            '</tr></thead><tbody>'
+        )
+        for index, hit in enumerate(hits, start=1):
+            html += (
+                f'<tr><td>{index}</td>'
+                f'<td>{_esc(hit["subject_name"])}<br><span class="muted">{_esc(hit["subject_type"])}</span></td>'
+                f'<td>{_esc(hit["matched_name"])}'
+                + (f'<br><span class="muted">ref {_esc(hit["reference"])}</span>' if hit["reference"] else '')
+                + f'</td>'
+                f'<td>{_esc(hit["category"])}</td>'
+                f'<td>{_esc(hit["list_name"] or "—")}</td>'
+                f'<td>{_esc(hit["confidence"])}</td></tr>'
+            )
+            if hit["evidence_url"] or hit["evidence_snippet"]:
+                snippet = _esc(hit["evidence_snippet"]) if hit["evidence_snippet"] else ""
+                link = (
+                    f'<a href="{_esc(hit["evidence_url"])}">{_esc(hit["evidence_url"])}</a>'
+                    if hit["evidence_url"] else "Source link not provided by provider payload."
+                )
+                html += (
+                    f'<tr class="evidence-row"><td></td><td colspan="5">'
+                    f'<span class="muted">Evidence:</span> {snippet} {link}'
+                    f'</td></tr>'
+                )
+        html += '</tbody></table>'
+
+    reviews = disposition_reviews or []
+    if reviews:
+        html += '<h2>Disposition History</h2><table class="data-table"><thead><tr>'
+        html += '<th>Reviewer</th><th>Decision</th><th>Rationale</th><th>At</th></tr></thead><tbody>'
+        for review in reviews:
+            if not isinstance(review, dict):
+                continue
+            html += (
+                f'<tr><td>{_esc(review.get("reviewer") or review.get("reviewed_by") or "N/A")}</td>'
+                f'<td>{_esc(review.get("decision") or review.get("review_disposition") or "N/A")}</td>'
+                f'<td>{_esc(review.get("rationale") or review.get("reason") or "")}</td>'
+                f'<td>{_esc((str(review.get("reviewed_at") or "")).replace("T", " ")[:19])}</td></tr>'
+            )
+        html += '</tbody></table>'
+
+    html += f"""
+<div class="footer">
+<p class="immutable-hash">Screening Content Hash: {content_hash} | Generated: {_esc(now)}</p>
+</div>
+
+</body>
+</html>"""
+    return html
+
+
+def generate_screening_report_pdf(
+    application: Dict,
+    screening_report: Dict,
+    disposition_reviews: Optional[list] = None,
+) -> bytes:
+    """Generate a regulator-grade screening report PDF from a stored screening_report."""
+    weasyprint = _get_weasyprint()
+    html = build_screening_report_html(application, screening_report, disposition_reviews)
+    pdf_bytes = weasyprint.HTML(string=html).write_pdf()
+    logger.info(
+        "Screening report PDF generated for %s — %d bytes",
+        application.get("ref", "N/A"), len(pdf_bytes),
+    )
+    return pdf_bytes
+
+
 def generate_memo_pdf_to_file(
     memo_data: Dict,
     application: Dict,

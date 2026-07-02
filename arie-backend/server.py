@@ -987,7 +987,7 @@ except ImportError:
 
 # Sprint 3: Server-side PDF generation
 try:
-    from pdf_generator import generate_memo_pdf
+    from pdf_generator import generate_memo_pdf, generate_screening_report_pdf
     HAS_PDF_GENERATOR = True
 except ImportError:
     HAS_PDF_GENERATOR = False
@@ -29657,6 +29657,72 @@ class MemoPDFDownloadHandler(BaseHandler):
         self.write(pdf_bytes)
 
 
+class ScreeningReportPDFDownloadHandler(BaseHandler):
+    """GET /api/applications/:id/screening/pdf — Generate and download the screening report as PDF.
+
+    Renders the stored screening_report (subjects, provider matches, categories,
+    evidence, refs) for officer review. Read-only: no provider calls, no mutation
+    of screening data. Advisory — the PDF states officer disposition is required.
+    """
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        if not HAS_PDF_GENERATOR:
+            return self.error("PDF generation not available. Install weasyprint.", 503)
+
+        db = get_db()
+        app = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        prescreening = safe_json_loads(app["prescreening_data"]) or {}
+        screening_report = prescreening.get("screening_report") if isinstance(prescreening, dict) else None
+        if not isinstance(screening_report, dict) or not screening_report:
+            db.close()
+            return self.error("No screening result found for this application. Run screening first.", 404)
+
+        try:
+            pdf_bytes = generate_screening_report_pdf(dict(app), screening_report)
+        except Exception as e:
+            logger.error("Screening report PDF generation failed for %s: %s", app_id, str(e))
+            db.close()
+            return self.error(f"Screening report PDF generation failed: {str(e)}", 500)
+
+        pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+        try:
+            audit_detail = json.dumps({
+                "event": "screening_report_pdf_generated",
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "pdf_sha256": pdf_sha256,
+                "pdf_bytes": len(pdf_bytes),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+                 "Download Screening Report PDF", app["ref"], audit_detail, self.get_client_ip())
+            )
+            db.commit()
+        except Exception as e:
+            logger.error("Failed to store screening report PDF audit for %s: %s", app_id, e)
+        db.close()
+
+        safe_ref = re.sub(r'[^a-zA-Z0-9_-]', '_', app.get("ref", "screening"))
+        filename = f"screening_report_{safe_ref}.pdf"
+        self.set_header("Content-Type", "application/pdf")
+        self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.set_header("Content-Length", str(len(pdf_bytes)))
+        self.set_header("X-PDF-SHA256", pdf_sha256)
+        self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.write(pdf_bytes)
+
+
 class MemoSupervisorHandler(BaseHandler):
     """POST /api/applications/:id/memo/supervisor — Run supervisor on stored memo"""
     def post(self, app_id):
@@ -38094,6 +38160,7 @@ def make_app():
         (r"/api/applications/([^/]+)/memo/approve", MemoApproveHandler),
         (r"/api/applications/([^/]+)/memo/validation", MemoValidationResultsHandler),
         (r"/api/applications/([^/]+)/memo/pdf", MemoPDFDownloadHandler),
+        (r"/api/applications/([^/]+)/screening/pdf", ScreeningReportPDFDownloadHandler),
         (r"/api/applications/([^/]+)/memo/supervisor/run", MemoSupervisorHandler),
         (r"/api/applications/([^/]+)/memo/supervisor", MemoSupervisorResultHandler),
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
