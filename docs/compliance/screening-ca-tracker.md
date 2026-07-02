@@ -59,10 +59,12 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| UI-1 | Scope the de-duplication PR (one decision banner, one hit card/match, collapse repeats) | ☐ | P2 | UI-2, BE-2 | Trace: body stacks 9 panels (arie-backoffice.html 15443–15486); CA match string prints 3×, name ~5×. Frontend-only, medium PR; static-contract test will need updates. |
+| UI-1 | Scope the de-duplication PR (one decision banner, one hit card/match, collapse repeats) | ☐ | P2 | UI-2, BE-1 | Trace: body stacks 9 panels (arie-backoffice.html 15443–15486); CA match string prints 3×, name ~5×. Frontend-only, medium PR; static-contract test will need updates. |
 | UI-2 | Extend mockup with **sanctions + PEP evidence variants** | ◐ | P2 | — | Only adverse-media drawn so far. Evidence drawer must switch fields by category (sanctions: list/authority/program/ref; PEP: position/country/class). |
 | UI-3 | Design decision: **two-tier disclosure** — substantive evidence one-click; technical UUID refs buried | ☑ | P2 | — | Locked in mockup: per-hit "View evidence" (article/source/snippet/link) separate from technical-refs disclosure. |
-| UI-4 | Sequence: **BE-2 (risk-level plumbing) before UI-1** | ☑ | — | — | So hit cards render a real risk level, not an empty score. |
+| UI-4 | Sequence: **BE-1 (match_score plumbing) before UI-1** | ☑ | — | — | So hit cards render a real match % + confidence, not an empty score. |
+| UI-5 | **Kill repetitive counts/status** (staging feedback 2026-07-02) | ☐ | P2 | — | Same facts restated 4–5×: provider-hit counts appear in the chip row **and** Plain-English summary **and** Key concerns; "Officer review required" appears in the recommendation badge, advisory line, Recommended disposition, summary **and** key concerns; the matched UUID repeats in the hit row **and** Evidence-used (2×). State each fact **once**: counts in one chip row, disposition once, matched entity once. |
+| UI-6 | **Evaluate/remove the "Draft audit note" section** (staging feedback) | ☐ | P2 | — | Officer reports it unused. Check whether the paste-ready block / Copy / "Add to audit note" feeds anything real (does it write to the audit trail or a note field, or is it copy-only?). If copy-only with no workflow use → **remove**; if it has a genuine use, keep but justify. Decide before UI-1 lands. |
 
 ---
 
@@ -84,7 +86,9 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 - ☑ Company risk model `regmind-default-risk-model-company-v1` created (v1, Active)
 - ☑ `webhook.site` webhooks set Inactive (deletion still pending — CA-4)
 - ☑ Trace: confirmed CA=screening / Sumsub=IDV responsibility split (screening_config.py)
-- ☑ Trace: CA Mesh has no numeric match score; adverse-media URL pipeline intact
+- ☑ Trace: adverse-media URL pipeline intact (`_canonicalize_article` → `canonical_url` → UI link)
+- ☑ Trace (corrected): CA Mesh **does** return a per-match `match_score` — `CAMatchDetails.match_score` (0–1 float) modeled on `CAProfile.match_details`; screening normalizer doesn't surface it → BE-1. (Supersedes earlier "no score" note.)
+- ☑ RPT-1/RPT-2 screening-report PDF — **PR #644 merged + deploying to staging** (2026-07-02)
 - ☑ CA-1 single-risk-type re-test **passed** — both subtests: Mick Davis (PEP-only) → 75 → High; DGUP Granitny (Sanctions-only) → 100 → Prohibited. Models validated; Boris 450 was a poisoned fixture.
 - ☑ CA-2 entity-level TP-marking SOP drafted (`sop-screening-true-positive-marking.md`, pending MLRO sign-off)
 - ☑ CA-5 staging CA config verified via AWS audit (webhook secret wired + signature verification active; all 9 required vars correct; SCREENING_CONFIG_ID matches; workspace=sandbox)
@@ -93,10 +97,9 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 ## Recommended next order
 
-1. **PROD-1** replication (unblocked — sandbox validated); **PROD-2/3** webhooks once prod DNS is live. MLRO sign-off on the SOP (CA-2).
-2. **CA-4, CA-5** (webhook deletion + secret) — quick P1 hygiene, independent.
-3. **BE-2** (risk-level plumbing) → **UI-2** → **UI-1** (de-dup PR).
-4. **RPT-1/RPT-2** (screening-report PDF) — independent, anytime.
-5. **CA-11 / BE-3 / BE-4 / RPT-3** — confirm on prod CA data.
+1. **BE-1** (surface `match_score`, small backend) → **UI-2** (sanctions/PEP evidence variants) → **UI-1 + UI-5 + UI-6** (de-dup PR: one hit card with real match %, collapse repeated counts/status, resolve the Draft-audit-note section). Verify `match_score` populated on a real staging response first.
+2. **PROD-0/0b** provision prod env + CA workspace → **PROD-1/2/3** replication (config validated, gated on infra + prod DNS).
+3. **CA-6/CA-7/CA-8** (2nd admin, rescreen perm, source coverage) — CA-console hygiene.
+4. **CA-11 / BE-3 / BE-4 / RPT-3** — confirm on prod CA data.
 
 _Strategic note: treat CA's risk level as a provider-side **triage** signal, not RegMind's authoritative risk grade — `rule_engine.py` owns LOW/MEDIUM/HIGH/VERY_HIGH. Don't over-fit CA's SUM scoring._
