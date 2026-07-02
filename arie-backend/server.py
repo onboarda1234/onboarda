@@ -209,6 +209,7 @@ from enhanced_requirements import (
     validate_enhanced_requirements_for_approval,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
+import monitoring_status as _monitoring_status
 from monitoring_enrollment import (
     backfill_approved_applications as _backfill_monitoring_enrollment,
     enroll_approved_application as _enroll_approved_application_for_monitoring,
@@ -31035,47 +31036,9 @@ def _monitoring_list_truthy(value):
 
 
 def _monitoring_list_canonical_status(value):
-    token = _monitoring_list_token(value or "open")
-    aliases = {
-        "": "open",
-        "new": "open",
-        "opened": "open",
-        "open": "open",
-        "triaged": "in_review",
-        "review": "in_review",
-        "inreview": "in_review",
-        "in_review": "in_review",
-        "assigned": "assigned",
-        "document_requested": "document_requested",
-        "documents_requested": "document_requested",
-        "client_document_requested": "document_requested",
-        "requested": "document_requested",
-        "client_uploaded": "client_uploaded",
-        "uploaded": "client_uploaded",
-        "under_review": "under_review",
-        "underreview": "under_review",
-        "awaiting_review": "awaiting_review",
-        "awaitingreview": "awaiting_review",
-        "notification_failed": "notification_failed",
-        "notificationfailed": "notification_failed",
-        "escalated": "escalated",
-        "escalated_to_edd": "routed_to_edd",
-        "routed_edd": "routed_to_edd",
-        "routed_to_edd": "routed_to_edd",
-        "route_to_edd": "routed_to_edd",
-        "routed_to_review": "routed_to_review",
-        "route_to_review": "routed_to_review",
-        "dismissed": "dismissed",
-        "closed_dismissed": "dismissed",
-        "resolved": "resolved",
-        "resolved_no_change": "resolved",
-        "closed": "closed",
-        "waived": "waived",
-        "waiver": "waived",
-        "cancelled": "cancelled",
-        "canceled": "cancelled",
-    }
-    return aliases.get(token, token or "open")
+    # Delegated to monitoring_status (single source of truth). Behaviour is
+    # identical to the historical inline alias map — locked by a parity test.
+    return _monitoring_status.canonical_filter_status(value)
 
 
 def _monitoring_list_canonical_severity(value):
@@ -31175,6 +31138,12 @@ def _monitoring_list_project_row(row):
         "canonical_severity": severity_key,
         "type_key": type_key,
         "canonical_type": type_key,
+        # Canonical display metadata (additive) sourced from monitoring_status.
+        # "Awaiting Client/Officer" and "Ready to Close" are derived labels only,
+        # never stored on monitoring_alerts.status.
+        "status_label": _monitoring_status.label(status_key),
+        "status_group": _monitoring_status.group(status_key),
+        "lifecycle_status": _monitoring_status.lifecycle_status(status_key),
         "client_display_name": client_display or None,
         "mapping_status": mapping_status,
         "is_terminal": is_terminal,
