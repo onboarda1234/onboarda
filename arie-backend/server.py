@@ -26807,7 +26807,8 @@ class MonitoringAlertCreateHandler(BaseHandler):
             query += " ORDER BY ma.created_at DESC"
             raw_alerts = db.execute(query, params).fetchall()
 
-            projected = [_monitoring_list_project_row(row) for row in raw_alerts]
+            refresh_status_map = _monitoring_list_refresh_status_map(db, raw_alerts)
+            projected = [_monitoring_list_project_row(row, refresh_status_map) for row in raw_alerts]
             filtered = []
             for item in projected:
                 if not include_closed and item["is_terminal"]:
@@ -31250,9 +31251,59 @@ def _monitoring_list_is_terminal(row, status_key):
     return status_key in _MONITORING_LIST_TERMINAL_STATUSES
 
 
-def _monitoring_list_project_row(row):
+def _monitoring_list_refresh_status_map(db, rows):
+    """Batch-fetch active refresh-request status per alert id.
+
+    After M1.1 decoupling the alert row stays canonical while the linked
+    application_enhanced_requirements row carries the refresh sub-state; this
+    map lets the projection compute the effective (Awaiting Client/Officer)
+    status key so filters and labels keep their historical behaviour.
+    """
+    alert_ids = [r["id"] for r in rows if r["id"] is not None]
+    if not alert_ids:
+        return {}
+    result = {}
+    # Chunked lookups keep the IN (...) parameter count well under driver
+    # limits (SQLite historically 999) no matter how large the alert list is.
+    chunk_size = 400
+    for start in range(0, len(alert_ids), chunk_size):
+        chunk = alert_ids[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        try:
+            req_rows = db.execute(
+                f"""
+                SELECT monitoring_alert_id, status
+                  FROM application_enhanced_requirements
+                 WHERE monitoring_alert_id IN ({placeholders})
+                   AND LOWER(COALESCE(status, '')) IN ('requested','uploaded','under_review','rejected')
+                 ORDER BY id ASC
+                """,
+                chunk,
+            ).fetchall()
+        except Exception:
+            # Legacy DBs may predate migration 032 (monitoring_alert_id column).
+            # Log loudly instead of silently dropping derived statuses.
+            logger.warning(
+                "monitoring list refresh-status lookup failed for %d alerts; "
+                "derived Awaiting statuses unavailable for this chunk",
+                len(chunk),
+                exc_info=True,
+            )
+            continue
+        for req in req_rows:
+            # Later rows win (highest id = most recent request state).
+            result[req["monitoring_alert_id"]] = req["status"]
+    return result
+
+
+def _monitoring_list_project_row(row, refresh_status_map=None):
     item = dict(row)
-    status_key = _monitoring_list_canonical_status(item.get("status"))
+    refresh_request_status = (refresh_status_map or {}).get(item.get("id"))
+    status_key = _monitoring_status.effective_status(
+        item.get("status"),
+        refresh_request_status,
+        resolved_at=item.get("resolved_at"),
+    )
     severity_key = _monitoring_list_canonical_severity(item.get("severity"))
     type_key = _monitoring_list_canonical_type(item)
     client_display, mapping_status = _monitoring_list_client_display(item)
@@ -31271,7 +31322,9 @@ def _monitoring_list_project_row(row):
         # never stored on monitoring_alerts.status.
         "status_label": _monitoring_status.label(status_key),
         "status_group": _monitoring_status.group(status_key),
-        "lifecycle_status": _monitoring_status.lifecycle_status(status_key),
+        # Lifecycle reflects the STORED alert status, not the refresh-derived
+        # display key — matches the detail handler's contract.
+        "lifecycle_status": _monitoring_status.lifecycle_status(item.get("status")),
         "client_display_name": client_display or None,
         "mapping_status": mapping_status,
         "is_terminal": is_terminal,
@@ -31391,7 +31444,9 @@ MONITORING_DECISION_OUTCOMES = {
         "note_required": False,
     },
     "request_updated_document": {
-        "status": "document_requested",
+        # M1.1 decoupling: the refresh request state lives on the linked
+        # enhanced-requirement row; the alert's lifecycle status is untouched.
+        "status": None,
         "officer_action": "request_updated_document",
         "audit_action": "monitoring.alert.document_update_requested",
         "note_required": False,
@@ -31541,8 +31596,70 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["provider_evidence"] = _monitoring_alert_provider_evidence(db, alert_id)
         result["document_refresh"] = _monitoring_document_refresh_context(db, result)
         result["audit_history"] = _monitoring_alert_audit_history(db, alert_id)
+        # Derived display state (M1.1): the refresh sub-state lives on the
+        # linked requirement; labels like "Awaiting Client" are derived, never
+        # stored. ui_status_label is the existing UI label-override seam.
+        refresh_ctx = result.get("document_refresh") or {}
+        effective_key = _monitoring_status.effective_status(
+            result.get("status"),
+            refresh_ctx.get("request_status") or None,
+            resolved_at=result.get("resolved_at"),
+        )
+        result["status_key"] = effective_key
+        result["canonical_status"] = effective_key
+        result["status_label"] = _monitoring_status.label(effective_key)
+        result["status_group"] = _monitoring_status.group(effective_key)
+        result["lifecycle_status"] = _monitoring_status.lifecycle_status(result.get("status"))
+        result["ui_status_label"] = result["status_label"]
         db.close()
         self.success(result)
+
+    def _block_high_risk_dismissal_if_unauthorized(self, db, user, alert_id, alert_before,
+                                                   *, dismissal_reason, note, path):
+        """Interim high-risk dismissal guard (M1.1 rider, pending M2.2 four-eyes).
+
+        Sanctions/watchlist/PEP alerts may only be dismissed as false_positive
+        by SCO/admin, and always with a note. Blocked attempts are audited as
+        monitoring.alert.high_risk_dismissal_blocked. Returns True when the
+        request was rejected (response already written), else None.
+        """
+        if not _monitoring_status.is_high_risk_screening_alert(alert_before):
+            return None
+        role = str((user or {}).get("role") or "").strip().lower()
+        blocked_reason = None
+        status_code = 403
+        if role not in ("admin", "sco"):
+            blocked_reason = (
+                "Sanctions/PEP false-positive dismissal requires senior review "
+                "(Senior Compliance Officer or Administrator). Interim control "
+                "pending full four-eyes."
+            )
+        elif not note:
+            blocked_reason = (
+                "A dismissal note is required when dismissing a sanctions/PEP "
+                "alert as a false positive."
+            )
+            status_code = 400
+        if not blocked_reason:
+            return None
+        self.log_audit(
+            user,
+            "monitoring.alert.high_risk_dismissal_blocked",
+            f"monitoring_alert:{alert_id}",
+            json.dumps({
+                "alert_id": alert_id,
+                "alert_type": alert_before.get("alert_type"),
+                "dismissal_reason": dismissal_reason,
+                "actor_role": role,
+                "path": path,
+                "blocked_reason": blocked_reason,
+            }, sort_keys=True),
+            db=db,
+            before_state={"status": alert_before.get("status")},
+            after_state={"status": alert_before.get("status"), "blocked": True},
+        )
+        self.error(blocked_reason, status_code)
+        return True
 
     def patch(self, alert_id):
         """Update alert state and route it to a downstream object.
@@ -31650,7 +31767,10 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     prior_status = alert_before.get("status") or "open"
                     if str(prior_status).lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
                         return self.error("Cannot start review for an alert that is already terminal.", 409)
-                    next_status = "under_review" if _is_document_refresh_alert(alert_before) and str(prior_status).lower() == "client_uploaded" else "in_review"
+                    # M1.1 decoupling: the refresh sub-state ('under_review')
+                    # lives on the requirement row; starting a review always
+                    # moves the alert itself to 'in_review'.
+                    next_status = "in_review"
                     note = str(data.get("note") or data.get("reason") or "").strip()
                     payload = {
                         "started_by": user.get("sub", ""),
@@ -31785,6 +31905,15 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     if _monitoring_alert_action_note_required(alert_before, outcome) and not note:
                         return self.error("A decision note is required for this alert outcome.", 400)
                     cfg = MONITORING_DECISION_OUTCOMES[outcome]
+                    if cfg.get("dismissal_reason") == "false_positive":
+                        guard_error = self._block_high_risk_dismissal_if_unauthorized(
+                            db, user, alert_id, alert_before,
+                            dismissal_reason="false_positive",
+                            note=note,
+                            path="save_decision.false_positive",
+                        )
+                        if guard_error:
+                            return
                     if cfg.get("route") == "edd":
                         result = mr.route_alert_to_edd(
                             db, alert_id,
@@ -31808,26 +31937,49 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             "decided_by": user.get("sub", ""),
                             "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         }
-                        db.execute(
-                            """
-                            UPDATE monitoring_alerts
-                               SET status = ?,
-                                   officer_action = ?,
-                                   officer_notes = ?,
-                                   reviewed_at = CURRENT_TIMESTAMP,
-                                   reviewed_by = COALESCE(reviewed_by, ?),
-                                   resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-                             WHERE id = ?
-                            """,
-                            (
-                                cfg["status"],
-                                cfg["officer_action"],
-                                json.dumps(decision_payload, sort_keys=True),
-                                user.get("sub", ""),
-                                cfg["status"],
-                                alert_id,
-                            ),
-                        )
+                        if cfg["status"] is None:
+                            # M1.1: outcome records officer bookkeeping only;
+                            # alert.status stays canonical.
+                            db.execute(
+                                """
+                                UPDATE monitoring_alerts
+                                   SET officer_action = ?,
+                                       officer_notes = ?,
+                                       reviewed_at = CURRENT_TIMESTAMP,
+                                       reviewed_by = COALESCE(reviewed_by, ?)
+                                 WHERE id = ?
+                                """,
+                                (
+                                    cfg["officer_action"],
+                                    json.dumps(decision_payload, sort_keys=True),
+                                    user.get("sub", ""),
+                                    alert_id,
+                                ),
+                            )
+                        else:
+                            db.execute(
+                                """
+                                UPDATE monitoring_alerts
+                                   SET status = ?,
+                                       officer_action = ?,
+                                       officer_notes = ?,
+                                       reviewed_at = CURRENT_TIMESTAMP,
+                                       reviewed_by = COALESCE(reviewed_by, ?),
+                                       resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
+                                 WHERE id = ?
+                                """,
+                                (
+                                    cfg["status"],
+                                    cfg["officer_action"],
+                                    json.dumps(decision_payload, sort_keys=True),
+                                    user.get("sub", ""),
+                                    cfg["status"],
+                                    alert_id,
+                                ),
+                            )
+                        decision_after_state = {"officer_action": cfg["officer_action"], "outcome": outcome}
+                        if cfg["status"] is not None:
+                            decision_after_state["status"] = cfg["status"]
                         self.log_audit(
                             user,
                             cfg["audit_action"],
@@ -31835,11 +31987,15 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             json.dumps(decision_payload, default=str, sort_keys=True),
                             db=db,
                             before_state={"status": alert_before.get("status"), "officer_action": alert_before.get("officer_action")},
-                            after_state={"status": cfg["status"], "officer_action": cfg["officer_action"], "outcome": outcome},
+                            after_state=decision_after_state,
                             commit=False,
                         )
                         db.commit()
-                        result = {"alert_id": alert_id, "status": cfg["status"], "outcome": outcome}
+                        result = {
+                            "alert_id": alert_id,
+                            "status": cfg["status"] if cfg["status"] is not None else alert_before.get("status"),
+                            "outcome": outcome,
+                        }
                 elif canonical_action == "dismiss":
                     dismissal_reason = data.get("dismissal_reason")
                     if not dismissal_reason:
@@ -31848,6 +32004,15 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             f"(one of: {', '.join(mr.VALID_DISMISSAL_REASONS)})",
                             400,
                         )
+                    if str(dismissal_reason).strip().lower() == "false_positive":
+                        guard_error = self._block_high_risk_dismissal_if_unauthorized(
+                            db, user, alert_id, alert_before,
+                            dismissal_reason="false_positive",
+                            note=str(reason or data.get("dismissal_notes") or "").strip(),
+                            path="action.dismiss",
+                        )
+                        if guard_error:
+                            return
                     result = mr.dismiss_alert(
                         db, alert_id,
                         dismissal_reason=dismissal_reason,

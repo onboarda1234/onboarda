@@ -569,11 +569,13 @@ def request_updated_document(
         "request_channel": "client_portal" if notify_client else "back_office_upload",
         "requested_by": actor_id,
     }
+    # M1.1 decoupling: the refresh sub-state lives on the enhanced-requirement
+    # row (status='requested'); the alert's own lifecycle status is not
+    # advanced by a document request. "Awaiting Client" is derived at display.
     db.execute(
         """
         UPDATE monitoring_alerts
-           SET status = 'document_requested',
-               officer_action = 'request_updated_document',
+           SET officer_action = 'request_updated_document',
                officer_notes = ?,
                reviewed_at = CURRENT_TIMESTAMP,
                reviewed_by = COALESCE(reviewed_by, ?)
@@ -589,7 +591,7 @@ def request_updated_document(
         payload,
         db=db,
         before_state=before_state,
-        after_state={"status": "document_requested", "document_request_id": request.get("id")},
+        after_state={"document_request_status": "requested", "document_request_id": request.get("id")},
     )
     _audit(
         audit_writer,
@@ -599,7 +601,7 @@ def request_updated_document(
         payload,
         db=db,
         before_state=before_state,
-        after_state={"status": "document_requested", "document_request_id": request.get("id")},
+        after_state={"document_request_status": "requested", "document_request_id": request.get("id")},
     )
 
     email_status = {"status": "not_attempted", "reason": "client_id_missing"}
@@ -687,11 +689,13 @@ def mark_client_upload_received_if_monitoring_linked(db, app, requirement, docum
         "actor": (actor or {}).get("sub", ""),
         "timestamp": _now_iso(),
     }
+    # M1.1 decoupling: requirement.status is already 'uploaded'; the alert's
+    # lifecycle status is not advanced by a client upload. "Awaiting Officer"
+    # is derived at display time from the linked requirement.
     db.execute(
         """
         UPDATE monitoring_alerts
-           SET status = 'client_uploaded',
-               officer_action = 'client_document_uploaded',
+           SET officer_action = 'client_document_uploaded',
                officer_notes = ?,
                reviewed_at = CURRENT_TIMESTAMP
          WHERE id = ?
@@ -706,7 +710,7 @@ def mark_client_upload_received_if_monitoring_linked(db, app, requirement, docum
         payload,
         db=db,
         before_state=before_state,
-        after_state={"status": "client_uploaded", "document_id": document_id},
+        after_state={"document_request_status": "uploaded", "document_id": document_id},
     )
     try:
         users = db.execute("SELECT id FROM users WHERE role IN ('admin','sco','co') AND COALESCE(status,'active') = 'active'").fetchall()
@@ -744,11 +748,12 @@ def mark_backoffice_upload_received(db, alert_id, requirement, document_id, *, s
         "actor": (actor or {}).get("sub", ""),
         "timestamp": _now_iso(),
     }
+    # M1.1 decoupling: requirement.status is already 'under_review'; the
+    # alert's lifecycle status is not advanced by a back-office upload.
     db.execute(
         """
         UPDATE monitoring_alerts
-           SET status = 'under_review',
-               officer_action = 'backoffice_replacement_uploaded',
+           SET officer_action = 'backoffice_replacement_uploaded',
                officer_notes = ?,
                reviewed_at = CURRENT_TIMESTAMP,
                reviewed_by = ?
@@ -764,7 +769,7 @@ def mark_backoffice_upload_received(db, alert_id, requirement, document_id, *, s
         payload,
         db=db,
         before_state=before_state,
-        after_state={"status": "under_review", "document_id": document_id},
+        after_state={"document_request_status": "under_review", "document_id": document_id},
     )
     return True
 
@@ -823,7 +828,9 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
         audit_action = "updated_document_accepted"
     elif outcome == "reject":
         target_status = "rejected"
-        alert_status = "document_requested"
+        # M1.1 decoupling: rejection re-opens the refresh request (requirement
+        # goes back to 'requested'); the alert's lifecycle status is untouched.
+        alert_status = None
         officer_action = "reject_updated_document"
         audit_action = "updated_document_rejected"
     elif outcome == "waive":
@@ -894,26 +901,49 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
         "actor": (user or {}).get("sub", ""),
         "timestamp": _now_iso(),
     }
-    resolved_clause = ", resolved_at = CURRENT_TIMESTAMP" if alert_status in {"resolved", "waived"} else ", resolved_at = NULL"
-    db.execute(
-        f"""
-        UPDATE monitoring_alerts
-           SET status = ?,
-               officer_action = ?,
-               officer_notes = ?,
-               reviewed_at = CURRENT_TIMESTAMP,
-               reviewed_by = ?
-               {resolved_clause}
-         WHERE id = ?
-        """,
-        (
-            alert_status,
-            officer_action,
-            json.dumps(payload, sort_keys=True),
-            (user or {}).get("sub", ""),
-            alert.get("id"),
-        ),
-    )
+    if alert_status is None:
+        # Reject: officer bookkeeping only — alert.status AND resolved_at stay
+        # untouched (the alert lifecycle neither advances nor re-opens here).
+        db.execute(
+            """
+            UPDATE monitoring_alerts
+               SET officer_action = ?,
+                   officer_notes = ?,
+                   reviewed_at = CURRENT_TIMESTAMP,
+                   reviewed_by = ?
+             WHERE id = ?
+            """,
+            (
+                officer_action,
+                json.dumps(payload, sort_keys=True),
+                (user or {}).get("sub", ""),
+                alert.get("id"),
+            ),
+        )
+    else:
+        # Accept/waive: terminal outcome — status and resolved_at always set.
+        db.execute(
+            """
+            UPDATE monitoring_alerts
+               SET status = ?,
+                   officer_action = ?,
+                   officer_notes = ?,
+                   reviewed_at = CURRENT_TIMESTAMP,
+                   reviewed_by = ?,
+                   resolved_at = CURRENT_TIMESTAMP
+             WHERE id = ?
+            """,
+            (
+                alert_status,
+                officer_action,
+                json.dumps(payload, sort_keys=True),
+                (user or {}).get("sub", ""),
+                alert.get("id"),
+            ),
+        )
+    after_state = {"document_request_status": target_status}
+    if alert_status is not None:
+        after_state["status"] = alert_status
     _audit(
         audit_writer,
         user,
@@ -922,7 +952,7 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
         payload,
         db=db,
         before_state=before_state,
-        after_state={"status": alert_status, "document_request_status": target_status},
+        after_state=after_state,
     )
     if outcome == "accept":
         _audit(
@@ -937,7 +967,9 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
         )
     return {
         "alert_id": alert.get("id"),
-        "status": alert_status,
+        # Effective flow status for API/UI consumers: rejection re-opens the
+        # document request even though the alert row stays canonical.
+        "status": alert_status if alert_status is not None else "document_requested",
         "document_request": after_req,
         "document_refresh": document_refresh_context(db, alert.get("id")),
     }
@@ -962,7 +994,8 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
         outcome = "accept"
         note = requirement.get("review_notes") or ""
     elif status == "rejected":
-        alert_status = "document_requested"
+        # M1.1 decoupling: rejection re-opens the request; alert.status untouched.
+        alert_status = None
         officer_action = "reject_updated_document"
         audit_action = "updated_document_rejected"
         outcome = "reject"
@@ -1020,26 +1053,48 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
         "timestamp": _now_iso(),
         "source_surface": "application_enhanced_requirement_review",
     }
-    resolved_clause = ", resolved_at = CURRENT_TIMESTAMP" if alert_status in {"resolved", "waived"} else ", resolved_at = NULL"
-    db.execute(
-        f"""
-        UPDATE monitoring_alerts
-           SET status = ?,
-               officer_action = ?,
-               officer_notes = ?,
-               reviewed_at = CURRENT_TIMESTAMP,
-               reviewed_by = ?
-               {resolved_clause}
-         WHERE id = ?
-        """,
-        (
-            alert_status,
-            officer_action,
-            json.dumps(payload, sort_keys=True),
-            (user or {}).get("sub", ""),
-            alert_id,
-        ),
-    )
+    if alert_status is None:
+        # Rejected: bookkeeping only — status and resolved_at untouched.
+        db.execute(
+            """
+            UPDATE monitoring_alerts
+               SET officer_action = ?,
+                   officer_notes = ?,
+                   reviewed_at = CURRENT_TIMESTAMP,
+                   reviewed_by = ?
+             WHERE id = ?
+            """,
+            (
+                officer_action,
+                json.dumps(payload, sort_keys=True),
+                (user or {}).get("sub", ""),
+                alert_id,
+            ),
+        )
+    else:
+        # Accepted/waived: terminal outcome — status and resolved_at always set.
+        db.execute(
+            """
+            UPDATE monitoring_alerts
+               SET status = ?,
+                   officer_action = ?,
+                   officer_notes = ?,
+                   reviewed_at = CURRENT_TIMESTAMP,
+                   reviewed_by = ?,
+                   resolved_at = CURRENT_TIMESTAMP
+             WHERE id = ?
+            """,
+            (
+                alert_status,
+                officer_action,
+                json.dumps(payload, sort_keys=True),
+                (user or {}).get("sub", ""),
+                alert_id,
+            ),
+        )
+    sync_after_state = {"document_request_status": status}
+    if alert_status is not None:
+        sync_after_state["status"] = alert_status
     _audit(
         audit_writer,
         user,
@@ -1048,7 +1103,7 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
         payload,
         db=db,
         before_state=before_state,
-        after_state={"status": alert_status, "document_request_status": status},
+        after_state=sync_after_state,
     )
     if outcome == "accept":
         _audit(

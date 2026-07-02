@@ -353,7 +353,12 @@ def test_client_portal_task_upload_updates_alert_without_internal_language(monit
     )
     assert detail.status_code == 200
     detail_body = detail.json()
-    assert detail_body["status"] == "client_uploaded"
+    # M1.1 decoupling: the stored alert status stays canonical; the refresh
+    # sub-state is carried by the requirement and surfaced as derived state.
+    assert detail_body["status"] == "open"
+    assert detail_body["status_key"] == "client_uploaded"
+    assert detail_body["status_label"] == "Awaiting Officer"
+    assert detail_body["document_refresh"]["request"]["status"] == "uploaded"
     assert detail_body["document_refresh"]["request"]["linked_document"]["doc_name"] == "renewed-passport.pdf"
     assert detail_body["document_refresh"]["request"]["linked_document"]["doc_type"] == "passport"
     assert detail_body["document_refresh"]["request"]["linked_document"]["upload_source"] == "client_portal"
@@ -400,7 +405,10 @@ def test_backoffice_upload_replacement_requires_note_and_links_application_docum
         headers=_auth_headers(officer_token),
         timeout=5,
     ).json()
-    assert detail["status"] == "under_review"
+    # M1.1 decoupling: stored alert status stays canonical ('open'); the
+    # requirement carries 'under_review' and drives the derived display state.
+    assert detail["status"] == "open"
+    assert detail["status_key"] == "under_review"
     assert detail["document_refresh"]["request"]["status"] == "under_review"
     assert detail["document_refresh"]["request"]["linked_document"]["upload_source"] == "back_office_upload"
     assert any(item["action"] == "backoffice_replacement_uploaded" for item in detail["audit_history"])
