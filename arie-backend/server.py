@@ -210,6 +210,7 @@ from enhanced_requirements import (
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
 import monitoring_status as _monitoring_status
+import monitoring_dismissal_control as _mdc
 from monitoring_enrollment import (
     backfill_approved_applications as _backfill_monitoring_enrollment,
     enroll_approved_application as _enroll_approved_application_for_monitoring,
@@ -26808,7 +26809,8 @@ class MonitoringAlertCreateHandler(BaseHandler):
             raw_alerts = db.execute(query, params).fetchall()
 
             refresh_status_map = _monitoring_list_refresh_status_map(db, raw_alerts)
-            projected = [_monitoring_list_project_row(row, refresh_status_map) for row in raw_alerts]
+            pending_review_ids = _monitoring_list_pending_review_ids(db, raw_alerts)
+            projected = [_monitoring_list_project_row(row, refresh_status_map, pending_review_ids) for row in raw_alerts]
             filtered = []
             for item in projected:
                 if not include_closed and item["is_terminal"]:
@@ -31296,7 +31298,32 @@ def _monitoring_list_refresh_status_map(db, rows):
     return result
 
 
-def _monitoring_list_project_row(row, refresh_status_map=None):
+def _monitoring_list_pending_review_ids(db, rows):
+    """Batch set of alert ids with an open four-eyes review request (M2.2)."""
+    alert_ids = [r["id"] for r in rows if r["id"] is not None]
+    if not alert_ids:
+        return set()
+    pending = set()
+    chunk_size = 400
+    for start in range(0, len(alert_ids), chunk_size):
+        chunk = alert_ids[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        try:
+            found = db.execute(
+                f"SELECT DISTINCT alert_id FROM monitoring_alert_review_requests "
+                f"WHERE state = 'pending' AND alert_id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+        except Exception:
+            # Table may predate migration 037 on a legacy DB — degrade quietly.
+            logger.warning("monitoring list pending-review lookup failed", exc_info=True)
+            continue
+        for r in found:
+            pending.add(r["alert_id"])
+    return pending
+
+
+def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_ids=None):
     item = dict(row)
     refresh_request_status = (refresh_status_map or {}).get(item.get("id"))
     status_key = _monitoring_status.effective_status(
@@ -31330,6 +31357,8 @@ def _monitoring_list_project_row(row, refresh_status_map=None):
         "is_terminal": is_terminal,
         "is_supported_pilot_type": is_supported_type,
         "is_internal_type": is_internal_type,
+        # M2.2 four-eyes: derived pending-second-review flag (no stored status).
+        "pending_second_review": bool(pending_review_ids and item.get("id") in pending_review_ids),
     })
     return item
 
@@ -31611,55 +31640,54 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["status_group"] = _monitoring_status.group(effective_key)
         result["lifecycle_status"] = _monitoring_status.lifecycle_status(result.get("status"))
         result["ui_status_label"] = result["status_label"]
+        # M2.2 four-eyes: derived pending-second-review + tier + the open request.
+        open_request = _mdc.open_request_for_alert(db, alert_id)
+        result["review_request"] = open_request
+        result["pending_second_review"] = bool(open_request)
+        result["dismissal_tier"] = _mdc.classify_alert_tier(result)
         db.close()
         self.success(result)
 
-    def _block_high_risk_dismissal_if_unauthorized(self, db, user, alert_id, alert_before,
-                                                   *, dismissal_reason, note, path):
-        """Interim high-risk dismissal guard (M1.1 rider, pending M2.2 four-eyes).
+    def _apply_dismissal_control(self, db, user, alert_id, alert_before, *,
+                                 action, outcome, dismissal_reason, note,
+                                 evidence_ref, send_for_second_review):
+        """M2.2 senior-override control for material alert clears.
 
-        Sanctions/watchlist/PEP alerts may only be dismissed as false_positive
-        by SCO/admin, and always with a note. Blocked attempts are audited as
-        monitoring.alert.high_risk_dismissal_blocked. Returns True when the
-        request was rejected (response already written), else None.
+        Returns a tuple ``(disposition, payload)``:
+          - ("execute", None): caller runs the terminal clear now (Tier-3, or a
+            senior direct-clear which is recorded here first).
+          - ("pending", request): a review request was created; caller responds.
+          - ("blocked", None): an error response was already written.
         """
-        if not _monitoring_status.is_high_risk_screening_alert(alert_before):
-            return None
-        role = str((user or {}).get("role") or "").strip().lower()
-        blocked_reason = None
-        status_code = 403
-        if role not in ("admin", "sco"):
-            blocked_reason = (
-                "Sanctions/PEP false-positive dismissal requires senior review "
-                "(Senior Compliance Officer or Administrator). Interim control "
-                "pending full four-eyes."
+        if not _mdc.requires_control(
+            alert_before, action=action, outcome=outcome, dismissal_reason=dismissal_reason
+        ):
+            return ("execute", None)
+
+        tier = _mdc.classify_alert_tier(alert_before)
+        requested_outcome = "dismiss" if action == "dismiss" else outcome
+        try:
+            if _mdc.is_senior(user) and not send_for_second_review:
+                # SCO/admin direct clear — record senior-clear ledger + audit,
+                # then let the caller run the existing terminal machinery.
+                _mdc.record_senior_clear(
+                    db, alert=alert_before, tier=tier,
+                    requested_outcome=requested_outcome, dismissal_reason=dismissal_reason,
+                    rationale=note, evidence_ref=evidence_ref,
+                    user=user, audit_writer=self.log_audit,
+                )
+                return ("execute", None)
+            # CO/officer (or a senior electing second review) → pending request.
+            request = _mdc.create_pending_request(
+                db, alert=alert_before, tier=tier,
+                requested_outcome=requested_outcome, dismissal_reason=dismissal_reason,
+                rationale=note, evidence_ref=evidence_ref,
+                user=user, audit_writer=self.log_audit,
             )
-        elif not note:
-            blocked_reason = (
-                "A dismissal note is required when dismissing a sanctions/PEP "
-                "alert as a false positive."
-            )
-            status_code = 400
-        if not blocked_reason:
-            return None
-        self.log_audit(
-            user,
-            "monitoring.alert.high_risk_dismissal_blocked",
-            f"monitoring_alert:{alert_id}",
-            json.dumps({
-                "alert_id": alert_id,
-                "alert_type": alert_before.get("alert_type"),
-                "dismissal_reason": dismissal_reason,
-                "actor_role": role,
-                "path": path,
-                "blocked_reason": blocked_reason,
-            }, sort_keys=True),
-            db=db,
-            before_state={"status": alert_before.get("status")},
-            after_state={"status": alert_before.get("status"), "blocked": True},
-        )
-        self.error(blocked_reason, status_code)
-        return True
+            return ("pending", request)
+        except _mdc.DismissalControlError as exc:
+            self.error(str(exc), exc.status_code)
+            return ("blocked", None)
 
     def patch(self, alert_id):
         """Update alert state and route it to a downstream object.
@@ -31905,15 +31933,29 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     if _monitoring_alert_action_note_required(alert_before, outcome) and not note:
                         return self.error("A decision note is required for this alert outcome.", 400)
                     cfg = MONITORING_DECISION_OUTCOMES[outcome]
-                    if cfg.get("dismissal_reason") == "false_positive":
-                        guard_error = self._block_high_risk_dismissal_if_unauthorized(
-                            db, user, alert_id, alert_before,
-                            dismissal_reason="false_positive",
-                            note=note,
-                            path="save_decision.false_positive",
-                        )
-                        if guard_error:
-                            return
+                    # M2.2 four-eyes senior-override control (replaces the M1.1
+                    # interim guard) for material clearing outcomes.
+                    disposition, review_request = self._apply_dismissal_control(
+                        db, user, alert_id, alert_before,
+                        action="save_decision", outcome=outcome,
+                        dismissal_reason=cfg.get("dismissal_reason"),
+                        note=note,
+                        evidence_ref=str(data.get("evidence_ref") or data.get("evidence_note") or "").strip(),
+                        send_for_second_review=bool(data.get("send_for_second_review")),
+                    )
+                    if disposition == "blocked":
+                        return
+                    if disposition == "pending":
+                        db.commit()
+                        return self.success({
+                            "status": "review_requested",
+                            "action": "request_senior_approval",
+                            "result": {"review_request_id": (review_request or {}).get("id"),
+                                       "alert_id": alert_id, "pending_second_review": True},
+                            "new_status": alert_before.get("status"),
+                            "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
+                            "audit_history": _monitoring_alert_audit_history(db, alert_id),
+                        })
                     if cfg.get("route") == "edd":
                         result = mr.route_alert_to_edd(
                             db, alert_id,
@@ -32004,15 +32046,28 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             f"(one of: {', '.join(mr.VALID_DISMISSAL_REASONS)})",
                             400,
                         )
-                    if str(dismissal_reason).strip().lower() == "false_positive":
-                        guard_error = self._block_high_risk_dismissal_if_unauthorized(
-                            db, user, alert_id, alert_before,
-                            dismissal_reason="false_positive",
-                            note=str(reason or data.get("dismissal_notes") or "").strip(),
-                            path="action.dismiss",
-                        )
-                        if guard_error:
-                            return
+                    dismiss_note = str(reason or data.get("dismissal_notes") or "").strip()
+                    disposition, review_request = self._apply_dismissal_control(
+                        db, user, alert_id, alert_before,
+                        action="dismiss", outcome=None,
+                        dismissal_reason=str(dismissal_reason).strip().lower(),
+                        note=dismiss_note,
+                        evidence_ref=str(data.get("evidence_ref") or data.get("evidence_note") or "").strip(),
+                        send_for_second_review=bool(data.get("send_for_second_review")),
+                    )
+                    if disposition == "blocked":
+                        return
+                    if disposition == "pending":
+                        db.commit()
+                        return self.success({
+                            "status": "review_requested",
+                            "action": "request_senior_approval",
+                            "result": {"review_request_id": (review_request or {}).get("id"),
+                                       "alert_id": alert_id, "pending_second_review": True},
+                            "new_status": alert_before.get("status"),
+                            "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
+                            "audit_history": _monitoring_alert_audit_history(db, alert_id),
+                        })
                     result = mr.dismiss_alert(
                         db, alert_id,
                         dismissal_reason=dismissal_reason,
@@ -32053,6 +32108,169 @@ class MonitoringAlertDetailHandler(BaseHandler):
                 "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                 "audit_history": _monitoring_alert_audit_history(db, alert_id),
             })
+        finally:
+            db.close()
+
+
+def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
+                                 requested_outcome, dismissal_reason, note, log_audit):
+    """Run the terminal clear for an approved/senior-cleared request, reusing the
+    existing dismissal/decision machinery. Used by the approver endpoint (and
+    mirrors the inline execution in MonitoringAlertDetailHandler.patch)."""
+    import monitoring_routing as mr
+
+    # Re-verify the alert is not already terminal before clearing — mirrors the
+    # inline save_decision/dismiss guards, so a stale/duplicate approval is a
+    # handled no-op rather than a double-clear or 500.
+    if mr.is_alert_terminal(alert_before):
+        return {"alert_id": alert_id, "status": alert_before.get("status"),
+                "outcome": requested_outcome, "already_terminal": True}
+
+    if requested_outcome == "dismiss" or (dismissal_reason and requested_outcome not in MONITORING_DECISION_OUTCOMES):
+        return mr.dismiss_alert(
+            db, alert_id,
+            dismissal_reason=dismissal_reason or "other",
+            dismissal_notes=note,
+            user=user, audit_writer=log_audit,
+        )
+    cfg = MONITORING_DECISION_OUTCOMES.get(requested_outcome) or {}
+    if cfg.get("dismissal_reason"):
+        return mr.dismiss_alert(
+            db, alert_id,
+            dismissal_reason=cfg["dismissal_reason"],
+            dismissal_notes=note,
+            user=user, audit_writer=log_audit,
+        )
+    decision_payload = {
+        "alert_id": alert_id,
+        "application_id": alert_before.get("application_id"),
+        "outcome": requested_outcome,
+        "note": note,
+        "decided_by": user.get("sub", ""),
+        "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    status_value = cfg.get("status") or "resolved"
+    db.execute(
+        """
+        UPDATE monitoring_alerts
+           SET status = ?,
+               officer_action = ?,
+               officer_notes = ?,
+               reviewed_at = CURRENT_TIMESTAMP,
+               reviewed_by = COALESCE(reviewed_by, ?),
+               resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
+         WHERE id = ?
+        """,
+        (status_value, cfg.get("officer_action") or requested_outcome,
+         json.dumps(decision_payload, sort_keys=True), user.get("sub", ""),
+         status_value, alert_id),
+    )
+    log_audit(
+        user,
+        cfg.get("audit_action") or "monitoring.alert.cleared",
+        f"monitoring_alert:{alert_id}",
+        json.dumps(decision_payload, default=str, sort_keys=True),
+        db=db,
+        after_state={"status": status_value, "outcome": requested_outcome},
+        commit=False,
+    )
+    db.commit()
+    return {"alert_id": alert_id, "status": status_value, "outcome": requested_outcome}
+
+
+class MonitoringReviewRequestQueueHandler(BaseHandler):
+    """GET /api/monitoring/review-requests?queue=awaiting_my_approval — approver queue (M2.2)."""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            requests = _mdc.pending_requests_for_approver(db, user)
+            can_approve = _mdc.is_senior(user)
+            self.success({
+                "requests": requests if can_approve else [],
+                "can_approve": can_approve,
+                "count": len(requests) if can_approve else 0,
+            })
+        finally:
+            db.close()
+
+
+class MonitoringReviewRequestActionHandler(BaseHandler):
+    """POST /api/monitoring/review-requests/:id/approve|reject — M2.2 checker actions."""
+    def post(self, request_id, verb):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        verb = str(verb or "").strip().lower()
+        if verb not in ("approve", "reject"):
+            return self.error("Unsupported review action.", 404)
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            request = _mdc.fetch_request(db, request_id)
+            if not request:
+                return self.error("Review request not found", 404)
+            if str(request.get("state")) != "pending":
+                return self.error("Review request is no longer pending.", 409)
+            alert_id = request.get("alert_id")
+            alert_before = dict(_monitoring_alert_get(db, alert_id) or {})
+            try:
+                if verb == "reject":
+                    _mdc.reject_request(
+                        db, request=request, approver=user,
+                        rejection_reason=str(data.get("rejection_reason") or data.get("note") or "").strip(),
+                        audit_writer=self.log_audit,
+                    )
+                    return self.success({
+                        "status": "review_rejected",
+                        "result": {"review_request_id": request_id, "alert_id": alert_id},
+                        "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
+                        "audit_history": _monitoring_alert_audit_history(db, alert_id),
+                    })
+                # approve → validate eligibility (self-approval/role) BEFORE any
+                # mutation, run the terminal clear, then record the approval last so
+                # the two steps are sequenced atomically (no approved-but-uncleared row).
+                _mdc.assert_can_review(request, user)
+                approval_note = str(data.get("approval_note") or data.get("note") or "approved").strip()
+                result = _execute_monitoring_clearing(
+                    db, user, alert_id, alert_before,
+                    requested_outcome=request.get("requested_outcome"),
+                    dismissal_reason=request.get("dismissal_reason"),
+                    note=request.get("rationale"),
+                    log_audit=self.log_audit,
+                )
+                _mdc.mark_request_approved(
+                    db, request=request, approver=user,
+                    approval_note=approval_note, audit_writer=self.log_audit,
+                )
+                return self.success({
+                    "status": "review_approved",
+                    "result": {"review_request_id": request_id, **(result or {})},
+                    "new_status": (result or {}).get("status"),
+                    "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
+                    "audit_history": _monitoring_alert_audit_history(db, alert_id),
+                })
+            except _mdc.DismissalControlError as exc:
+                # Self-approval / wrong role → audited blocked signal + error.
+                if exc.status_code == 403:
+                    _mdc.audit_blocked(
+                        db, alert_id=alert_id, user=user,
+                        reason=str(exc),
+                        detail={"request_id": request_id, "verb": verb,
+                                "actor_role": (user or {}).get("role", ""),
+                                "initiated_by": request.get("initiated_by")},
+                        audit_writer=self.log_audit,
+                    )
+                return self.error(str(exc), exc.status_code)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring review request action failed")
+            return self.error("Review request action failed.", 500)
         finally:
             db.close()
 
@@ -37999,6 +38217,8 @@ def make_app():
         (r"/api/monitoring/agents", MonitoringAgentsHandler),
         (r"/api/monitoring/automation/status", MonitoringAutomationStatusHandler),
         (r"/api/monitoring/document-health/sweep", MonitoringDocumentHealthSweepHandler),
+        (r"/api/monitoring/review-requests", MonitoringReviewRequestQueueHandler),
+        (r"/api/monitoring/review-requests/([0-9]+)/(approve|reject)", MonitoringReviewRequestActionHandler),
         # Periodic Reviews (more specific routes first)
         (r"/api/monitoring/reviews/notifications/run", PeriodicReviewNotificationsRunHandler),
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),

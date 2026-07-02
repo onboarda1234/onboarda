@@ -298,142 +298,110 @@ def _alert_status(db_module, alert_id):
         conn.close()
 
 
-def _blocked_audit_count(db_module, alert_id):
+
+def _action_count(db_module, alert_id, action):
     conn = db_module.get_db()
     try:
         return conn.execute(
-            "SELECT COUNT(*) AS c FROM audit_log WHERE action = 'monitoring.alert.high_risk_dismissal_blocked' AND target = ?",
-            (f"monitoring_alert:{alert_id}",),
+            "SELECT COUNT(*) AS c FROM audit_log WHERE action = ? AND target = ?",
+            (action, f"monitoring_alert:{alert_id}"),
         ).fetchone()["c"]
     finally:
         conn.close()
 
 
-# ── 3a. Guard: path A (action=dismiss) ──────────────────────────────────────
+# ── M2.2 senior-override behaviour (updated from the M1.1 interim guard) ─────
+# The interim high-risk guard (monitoring.alert.high_risk_dismissal_blocked,
+# 403 for CO) was replaced by the four-eyes senior-override control. These
+# tests assert the NEW behaviour on the same seeded alerts.
 
-def test_co_cannot_false_positive_dismiss_sanctions_alert_via_dismiss_action(guard_server):
+def test_co_tier1_sanctions_clear_now_creates_request_not_403(guard_server):
     base_url, db_module = guard_server
     co = _token("co_g", "co", "CO Guard")
-
-    resp = _patch_alert(base_url, co, 9501, {
-        "action": "dismiss",
-        "dismissal_reason": "false_positive",
-        "reason": "Looks like a name-only match",
+    # Without evidence, a Tier-1 request is rejected with 400 (evidence required)...
+    no_ev = _patch_alert(base_url, co, 9501, {
+        "action": "dismiss", "dismissal_reason": "false_positive",
+        "reason": "Name-only match",
     })
-    assert resp.status_code == 403
-    assert "senior review" in resp.json()["error"].lower()
+    assert no_ev.status_code == 400
+    assert "evidence" in no_ev.json()["error"].lower()
     assert _alert_status(db_module, 9501) == "open"
-    assert _blocked_audit_count(db_module, 9501) == 1
+    # ...with evidence it becomes a pending senior-approval request (not a 403).
+    with_ev = _patch_alert(base_url, co, 9501, {
+        "action": "dismiss", "dismissal_reason": "false_positive",
+        "reason": "Name-only match", "evidence_ref": "DOB mismatch",
+    })
+    assert with_ev.status_code == 200, with_ev.text
+    assert with_ev.json()["status"] == "review_requested"
+    assert _alert_status(db_module, 9501) == "open"
+    assert _action_count(db_module, 9501, "monitoring.alert.dismissal_requested") == 1
 
 
-def test_sco_false_positive_dismiss_sanctions_requires_note(guard_server):
+def test_sco_direct_clear_tier1_succeeds_with_enhanced_rationale(guard_server):
     base_url, db_module = guard_server
     sco = _token("sco_g", "sco", "SCO Guard")
-
-    no_note = _patch_alert(base_url, sco, 9505, {
-        "action": "dismiss",
-        "dismissal_reason": "false_positive",
+    # 9505 is a Tier-1 sanctions alert. Evidence required for a senior direct clear.
+    no_ev = _patch_alert(base_url, sco, 9505, {
+        "action": "save_decision", "outcome": "false_positive", "note": "mismatch",
     })
-    assert no_note.status_code == 400
-    assert "note is required" in no_note.json()["error"].lower()
+    assert no_ev.status_code == 400
     assert _alert_status(db_module, 9505) == "open"
-
-    with_note = _patch_alert(base_url, sco, 9505, {
-        "action": "dismiss",
-        "dismissal_reason": "false_positive",
-        "reason": "DOB and nationality mismatch confirmed against passport",
+    ok = _patch_alert(base_url, sco, 9505, {
+        "action": "save_decision", "outcome": "false_positive",
+        "note": "DOB and nationality mismatch confirmed", "evidence_ref": "passport p.2",
     })
-    assert with_note.status_code == 200, with_note.text
+    assert ok.status_code == 200, ok.text
     assert _alert_status(db_module, 9505) == "dismissed"
+    assert _action_count(db_module, 9505, "monitoring.alert.dismissal_senior_cleared") == 1
 
 
-def test_co_can_still_dismiss_low_risk_document_alert(guard_server):
+def test_tier2_identity_document_clear_is_controlled(guard_server):
     base_url, db_module = guard_server
     co = _token("co_g", "co", "CO Guard")
-
+    # 9503 is document_expired "Passport expired" -> Tier 2 (identity). A CO
+    # false-positive clear is now controlled (creates a request), not a silent
+    # single-officer clear. (waive_with_reason routes through the separate
+    # document-refresh workflow, so false_positive is used here.)
     resp = _patch_alert(base_url, co, 9503, {
-        "action": "dismiss",
-        "dismissal_reason": "false_positive",
-        "reason": "Document was renewed outside the portal",
+        "action": "save_decision", "outcome": "false_positive",
+        "note": "Expiry date captured wrong; passport is valid",
     })
     assert resp.status_code == 200, resp.text
-    assert _alert_status(db_module, 9503) == "dismissed"
-    assert _blocked_audit_count(db_module, 9503) == 0
+    assert resp.json()["status"] == "review_requested"
+    assert _alert_status(db_module, 9503) == "open"
 
 
-def test_adverse_media_alert_is_not_gated_by_interim_guard(guard_server):
+def test_tier3_adverse_media_medium_is_single_officer(guard_server):
     base_url, db_module = guard_server
     co = _token("co_g", "co", "CO Guard")
-
+    # 9504 adverse media at medium severity -> Tier 3 -> single-officer close.
     resp = _patch_alert(base_url, co, 9504, {
-        "action": "dismiss",
-        "dismissal_reason": "false_positive",
+        "action": "dismiss", "dismissal_reason": "false_positive",
         "reason": "Article refers to an unrelated company",
     })
     assert resp.status_code == 200, resp.text
     assert _alert_status(db_module, 9504) == "dismissed"
+    assert _action_count(db_module, 9504, "monitoring.alert.dismissal_requested") == 0
 
 
-# ── 3b. Guard: path B (save_decision / false_positive outcome) ──────────────
-
-def test_co_cannot_false_positive_outcome_pep_alert_via_save_decision(guard_server):
-    base_url, db_module = guard_server
-    co = _token("co_g", "co", "CO Guard")
-
-    resp = _patch_alert(base_url, co, 9502, {
-        "action": "save_decision",
-        "outcome": "false_positive",
-        "note": "Different individual, DOB mismatch",
-    })
-    assert resp.status_code == 403
-    assert "senior review" in resp.json()["error"].lower()
-    assert _alert_status(db_module, 9502) == "open"
-    assert _blocked_audit_count(db_module, 9502) == 1
-
-
-def test_sco_false_positive_outcome_pep_alert_succeeds_with_note(guard_server):
+def test_self_approval_blocked_and_audited(guard_server):
     base_url, db_module = guard_server
     sco = _token("sco_g", "sco", "SCO Guard")
-
-    resp = _patch_alert(base_url, sco, 9506, {
-        "action": "save_decision",
-        "outcome": "false_positive",
-        "note": "Verified against registry extract; different person",
+    # SCO elects a second review on 9506 (Tier-1 pep) -> pending request...
+    r = _patch_alert(base_url, sco, 9506, {
+        "action": "save_decision", "outcome": "false_positive",
+        "note": "please double-check", "evidence_ref": "note",
+        "send_for_second_review": True,
     })
-    assert resp.status_code == 200, resp.text
-    assert _alert_status(db_module, 9506) == "dismissed"
-
-
-def test_blocked_audit_event_carries_path_and_role(guard_server):
-    # Self-contained: triggers BOTH blocked paths itself on a dedicated alert
-    # (9507), so it passes standalone, under -k filtering, or reordering.
-    base_url, db_module = guard_server
-    co = _token("co_g", "co", "CO Guard")
-
-    path_a = _patch_alert(base_url, co, 9507, {
-        "action": "dismiss",
-        "dismissal_reason": "false_positive",
-        "reason": "Name-only match, attempting via dismiss action",
-    })
-    assert path_a.status_code == 403
-    path_b = _patch_alert(base_url, co, 9507, {
-        "action": "save_decision",
-        "outcome": "false_positive",
-        "note": "Trying again via decision panel",
-    })
-    assert path_b.status_code == 403
-    assert _alert_status(db_module, 9507) == "open"
-
-    conn = db_module.get_db()
-    try:
-        rows = conn.execute(
-            "SELECT detail FROM audit_log WHERE action = 'monitoring.alert.high_risk_dismissal_blocked' AND target = ? ORDER BY id ASC",
-            ("monitoring_alert:9507",),
-        ).fetchall()
-    finally:
-        conn.close()
-    assert len(rows) == 2
-    details = [json.loads(row["detail"]) for row in rows]
-    assert details[0]["path"] == "action.dismiss"
-    assert details[1]["path"] == "save_decision.false_positive"
-    assert all(d["actor_role"] == "co" for d in details)
+    assert r.json()["status"] == "review_requested"
+    req_id = r.json()["result"]["review_request_id"]
+    # ...and cannot approve their own request.
+    import requests as _rq
+    ap = _rq.post(
+        f"{base_url}/api/monitoring/review-requests/{req_id}/approve",
+        headers={"Authorization": f"Bearer {sco}", "Content-Type": "application/json"},
+        json={"approval_note": "self"}, timeout=10,
+    )
+    assert ap.status_code == 403
+    assert _alert_status(db_module, 9506) == "open"
+    assert _action_count(db_module, 9506, "monitoring.alert.dismissal_blocked") == 1
