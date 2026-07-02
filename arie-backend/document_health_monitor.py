@@ -507,6 +507,82 @@ def sync_document_health_alerts_for_application(
     }
 
 
+def compute_document_health_plan(
+    db,
+    application_id,
+    *,
+    today: Optional[date] = None,
+    expiring_soon_days: int = DOCUMENT_EXPIRING_SOON_DAYS,
+    stale_after_days: int = DOCUMENT_STALE_AFTER_DAYS,
+) -> Dict[str, Any]:
+    """Pure READ-ONLY plan of what a sync for this application would do.
+
+    Mirrors sync_document_health_alerts_for_application's desired/existing
+    matching (dedupe key = (document_id, alert_type)) and its changed-field
+    comparison, but performs no INSERT/UPDATE and writes no audit rows. Used
+    by the staged-rollout scheduler for dry-run reports and strict cap
+    pre-checks (M3.1).
+    """
+    today = today or datetime.now(timezone.utc).date()
+    if not application_id:
+        return {
+            "application_id": application_id,
+            "would_create": [], "would_update": 0,
+            "would_resolve": 0, "unchanged": 0,
+        }
+
+    desired = {}
+    for doc in _active_documents_for_application(db, application_id):
+        for issue in _document_issues(
+            doc,
+            today=today,
+            expiring_soon_days=expiring_soon_days,
+            stale_after_days=stale_after_days,
+        ):
+            desired[(issue["document_id"], issue["alert_type"])] = issue
+
+    open_existing = {}
+    for row in _fetch_existing_document_alerts(db, application_id):
+        source_reference = str(_row_get(row, "source_reference") or "")
+        document_id = None
+        if source_reference.startswith("document:"):
+            parts = source_reference.split(":", 1)
+            document_id = parts[1] if len(parts) == 2 and parts[1] else None
+        key = (document_id, _row_get(row, "alert_type"))
+        if mr.is_alert_unresolved(row):
+            open_existing[key] = row
+
+    would_create = []
+    would_update = unchanged = 0
+    for key, issue in desired.items():
+        existing = open_existing.pop(key, None)
+        if existing is None:
+            would_create.append({
+                "document_id": issue["document_id"],
+                "doc_type": issue["doc_type"],
+                "alert_type": issue["alert_type"],
+                "severity": issue["severity"],
+            })
+            continue
+        if (
+            _row_get(existing, "severity") == issue["severity"]
+            and _row_get(existing, "summary") == issue["summary"]
+            and _row_get(existing, "ai_recommendation") == issue["ai_recommendation"]
+            and _row_get(existing, "discovered_via") == DOCUMENT_HEALTH_DISCOVERED_VIA
+        ):
+            unchanged += 1
+        else:
+            would_update += 1
+
+    return {
+        "application_id": application_id,
+        "would_create": would_create,
+        "would_update": would_update,
+        "would_resolve": len(open_existing),
+        "unchanged": unchanged,
+    }
+
+
 def sync_document_health_alerts(
     db,
     *,
@@ -547,6 +623,7 @@ __all__ = [
     "DOCUMENT_STALE_AFTER_DAYS",
     "DOCUMENT_HEALTH_DETECTED_BY",
     "DOCUMENT_HEALTH_DISCOVERED_VIA",
+    "compute_document_health_plan",
     "sync_document_health_alerts_for_application",
     "sync_document_health_alerts",
 ]

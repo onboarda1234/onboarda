@@ -32536,6 +32536,90 @@ class MonitoringAutomationStatusHandler(BaseHandler):
             db.close()
 
 
+class MonitoringDocumentHealthSweepHandler(BaseHandler):
+    """GET/POST /api/monitoring/document-health/sweep — staged-rollout sweep (M3.1).
+
+    GET returns scheduler status/config. POST runs a sweep: DRY-RUN by
+    default — a live (writing) sweep requires an explicit ``dry_run: false``.
+    Admin/SCO only. The sweep never calls providers, never sends emails or
+    client notifications, never runs Agent 1, and never mutates documents.
+    """
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        import document_health_scheduler as dhs
+
+        db = get_db()
+        try:
+            self.success(dhs.scheduler_status(db))
+        finally:
+            db.close()
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        import document_health_scheduler as dhs
+
+        data = self.get_json() or {}
+        # Safety default: omitted/invalid dry_run means DRY-RUN. A live sweep
+        # requires the caller to send dry_run=false explicitly.
+        dry_run = data.get("dry_run")
+        dry_run = True if dry_run is None else bool(dry_run) if isinstance(dry_run, bool) else str(dry_run).strip().lower() not in {"false", "0", "no"}
+        fixtures_only = bool(data.get("fixtures_only"))
+        segment = data.get("segment")
+        if segment is not None:
+            if not isinstance(segment, list) or not all(isinstance(s, (str, int)) for s in segment):
+                return self.error("segment must be a list of application ids", 400)
+            segment = [str(s) for s in segment]
+        max_alerts = data.get("max_alerts")
+        if max_alerts is not None:
+            try:
+                max_alerts = int(max_alerts)
+            except (TypeError, ValueError):
+                return self.error("max_alerts must be an integer", 400)
+            if max_alerts < 1:
+                return self.error("max_alerts must be >= 1", 400)
+
+        db = get_db()
+        try:
+            summary = dhs.run_document_health_sweep(
+                db,
+                dry_run=dry_run,
+                segment=segment,
+                fixtures_only=fixtures_only,
+                max_alerts=max_alerts,
+                trigger=f"manual:{user.get('sub', '')}",
+            )
+            if not dry_run:
+                self.log_audit(
+                    user,
+                    "monitoring.document_health.manual_sweep",
+                    "document_health_scheduler",
+                    json.dumps({
+                        "run_id": summary.get("run_id"),
+                        "created": summary.get("created"),
+                        "capped": summary.get("capped"),
+                        "fixtures_only": fixtures_only,
+                        "segment_size": summary.get("segment_size"),
+                    }, sort_keys=True),
+                    db=db,
+                )
+                db.commit()
+            self.success(summary)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Document health sweep failed")
+            self.error("Document health sweep failed.", 500)
+        finally:
+            db.close()
+
+
 class PeriodicReviewsListHandler(BaseHandler):
     """GET /api/monitoring/reviews — List periodic reviews"""
     def get(self):
@@ -37914,6 +37998,7 @@ def make_app():
         (r"/api/monitoring/agents/([^/]+)/run", MonitoringAgentRunHandler),
         (r"/api/monitoring/agents", MonitoringAgentsHandler),
         (r"/api/monitoring/automation/status", MonitoringAutomationStatusHandler),
+        (r"/api/monitoring/document-health/sweep", MonitoringDocumentHealthSweepHandler),
         # Periodic Reviews (more specific routes first)
         (r"/api/monitoring/reviews/notifications/run", PeriodicReviewNotificationsRunHandler),
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
@@ -38268,6 +38353,65 @@ if __name__ == "__main__":
             logger.info("monitoring-automation: scheduled runner disabled for environment=%s", ENVIRONMENT)
     except Exception:
         logger.exception("monitoring-automation: startup registration failed")
+
+    # M3.1 document health scheduler — staged rollout, explicit opt-in ONLY.
+    # Unlike monitoring_automation there is NO staging/production auto-enable:
+    # the first full-book sweep is a backlog event that must be operator-gated
+    # (dry-run -> fixtures -> segment -> enable). The sweep never calls
+    # providers, never emails, never runs Agent 1, never mutates documents.
+    try:
+        import document_health_scheduler as _document_health_scheduler
+
+        if _document_health_scheduler.scheduler_enabled():
+            _dhs_interval_ms = _document_health_scheduler.scheduler_interval_seconds() * 1000
+
+            def _document_health_tick():
+                db = None
+                try:
+                    db = get_db()
+                    summary = _document_health_scheduler.run_document_health_sweep(
+                        db,
+                        dry_run=False,
+                        segment=_document_health_scheduler.configured_segment(),
+                        trigger="scheduler",
+                    )
+                    logger.info(
+                        "document-health-scheduler: run complete created=%s updated=%s resolved=%s failed=%s capped=%s",
+                        summary.get("created"),
+                        summary.get("updated"),
+                        summary.get("resolved"),
+                        summary.get("failed"),
+                        summary.get("capped"),
+                    )
+                except Exception:
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    logger.exception("document-health-scheduler: scheduled run failed")
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+
+            _document_health_cb = tornado.ioloop.PeriodicCallback(
+                _document_health_tick,
+                _dhs_interval_ms,
+            )
+            _document_health_cb.start()
+            logger.info(
+                "document-health-scheduler: registered (interval=%ss cap=%s segment=%s)",
+                _document_health_scheduler.scheduler_interval_seconds(),
+                _document_health_scheduler.max_alerts_per_run(),
+                _document_health_scheduler.configured_segment(),
+            )
+        else:
+            logger.info("document-health-scheduler: disabled (explicit opt-in required)")
+    except Exception:
+        logger.exception("document-health-scheduler: startup registration failed")
         if ENVIRONMENT in ("production", "staging"):
             raise
 
