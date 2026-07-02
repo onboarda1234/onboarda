@@ -15439,6 +15439,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (companyHits.sanctions_hits > 0) badges.push(screeningTagBadge('Sanctions', 'high'));
   if (companyHits.adverse_media_hits > 0) badges.push(screeningTagBadge('Adverse Media', 'pending'));
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryEntityLabel || '') }));
+  badges.push(screeningReportDownloadButtonHtml());
 
   var body = '';
   body += screeningDecisionSummaryPanel({
@@ -32669,6 +32670,45 @@ async function downloadMemoPDF() {
   if (btn) {
     btn.innerHTML = originalLabel || '📥 Download Memo (PDF)';
     btn.disabled = false;
+  }
+}
+
+function screeningReportDownloadButtonHtml() {
+  return '<button class="badge" style="cursor:pointer;border:1px solid var(--border1);background:var(--surface2);color:var(--text2);font-weight:700;" ' +
+    'onclick="downloadScreeningReportPDF()" title="Generate a PDF of the stored screening results for officer review">' +
+    '📄 Screening report (PDF)</button>';
+}
+
+async function downloadScreeningReportPDF() {
+  var app = window._currentDetailApp;
+  if (!app) { alert('No application selected.'); return; }
+  var ref = app.ref || app.id;
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + ref + '/screening/pdf', {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    if (!res.ok) {
+      var errorText = 'Screening report download failed.';
+      try {
+        var errorData = await res.json();
+        errorText = errorData.message || errorData.error || errorText;
+      } catch (parseError) {}
+      throw new Error(errorText);
+    }
+    var blob = await res.blob();
+    var url = window.URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    var disposition = res.headers.get('Content-Disposition') || '';
+    var match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    link.href = url;
+    link.download = match && match[1] ? match[1] : ('screening_report_' + String(ref || 'application').replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    showToast('Screening report PDF downloaded from server.');
+  } catch (e) {
+    alert('Failed to download screening report PDF: ' + e.message);
   }
 }
 
