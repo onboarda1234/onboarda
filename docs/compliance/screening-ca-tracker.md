@@ -15,13 +15,14 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 | CA-2 | Write **TP-marking SOP** — reframed to **entity-level** | ☑ | P1 | — | Drafted: `docs/compliance/sop-screening-true-positive-marking.md`. Officers confirm whether the matched **record (entity)** is genuinely the customer; risk categories come from CA, not picked per-type. Pending MLRO sign-off. |
 | CA-3 | ~~Rescale scores if PEP over-grades~~ — **DROPPED** | ☑ | — | Confirmed unnecessary. CA-1 subtest A now proves a PEP-only entity scores 75 → High correctly. No rescale needed. |
 | CA-4 | ~~Delete the two `webhook.site` webhooks~~ — **MITIGATED (inactive; UI delete unavailable)** | ☑ | P1 | — | Leak closed: inactive webhooks receive nothing. CA UI has no delete control; deletion would need `DELETE /v2/webhooks/{id}` with an Admin key. Parked inactive — **must never be copied to production.** |
-| CA-5 | Confirm `COMPLYADVANTAGE_WEBHOOK_SECRET` set in staging (AWS Secrets Manager) | ☐ | P1 | — | Our handler is fail-**closed** in prod, fail-**open** in sandbox. Unset staging secret = unsigned webhooks accepted silently. |
+| CA-5 | Confirm CA staging config wired (AWS) — **VERIFIED** | ☑ | P1 | — | Codex audit (task-def `regmind-staging:728`): webhook secret is a dedicated HMAC secret wired via ECS secrets ref (signature verification active — not fail-open). All 9 required CA vars present & correct, incl. `COMPLYADVANTAGE_SCREENING_CONFIG_ID` (plain env, matches `019e0308-…a6fe` = regmind-default-screening-v1). Workspace mode = **sandbox** (expected). |
 | CA-6 | Add a **second CA Admin** user | ☐ | P2 | — | From audit: single human admin (Aisha) = key-person risk on the account gating all screening. |
 | CA-7 | Verify API-user role needs **"Rescreen on demand"** | ☐ | P2 | — | From audit: not granted. If RegMind triggers programmatic rescreen (periodic review / monitoring refresh) it will 403. Confirm or grant. |
 | CA-8 | Review collection source coverage (`regmind-default-sources-v1` uses **1/4**) | ☐ | P2 | — | Confirm enabled sources actually span the sanctions/PEP/adverse breadth claimed to clients. |
 | CA-9 | Consider raising match threshold **70 → 75** after observing real alert volume | ☐ | P3 | — | Empirical tune; document rationale (FSC expects justified threshold). |
 | CA-10 | Consider a **custom allowlist** to suppress known false positives | ☐ | P3 | — | From audit: no custom lists configured. Optional noise reducer. |
 | CA-11 | Confirmatory PEP-grading check on production data | ☐ | P3 | prod CA live | Downgraded — sandbox already validated it (Mick Davis, PEP-only → 75 → High). Optional confirmation on real prod data. |
+| CA-12 | Remove dead SM keys `COMPLYADVANTAGE_DEFAULT_WORKFLOW_ID` + `COMPLYADVANTAGE_WEBHOOK_SITE_TOKEN` | ☐ | P3 | — | Confirmed unused by any backend code (Codex + grep). Harmless but tidy; the webhook_site token relates to the deprecated leak endpoint. Optional cleanup. |
 
 ---
 
@@ -29,7 +30,7 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| PROD-1 | Replicate both risk models + screening config to production | ☐ | P1 | — | **Unblocked** — sandbox grading validated (CA-1 passed). Ready to replicate. |
+| PROD-1 | Replicate both risk models + screening config to production | ☐ | P1 | — | **Unblocked** — sandbox grading validated (CA-1 passed). Ready to replicate. Prod env must flip workspace flags off sandbox: `COMPLYADVANTAGE_WORKSPACE_MODE`, `COMPLYADVANTAGE_SCREENING_CONFIG_ID`/`_LABEL` → the **production** screening-config id, plus prod CA creds. |
 | PROD-2 | Create prod webhooks → `app.regmind.co/api/webhooks/complyadvantage` | ⛔ | P1 | PROD DNS live | `app.regmind.co` is planned, DNS not yet provisioned. Set signing secret at creation. |
 | PROD-3 | Set `COMPLYADVANTAGE_WEBHOOK_SECRET` in prod secrets (match webhook secret) | ⛔ | P1 | PROD-2 | Prod handler rejects all webhooks if secret missing/mismatched. |
 | PROD-4 | **Governance note:** never score Country/Channel/Basic-info/Product without re-reviewing overall thresholds | ☑ | P1 | — | Recorded (replaces unavailable zero-weighting; CA enforces min weight 1). |
@@ -79,6 +80,7 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 - ☑ Trace: CA Mesh has no numeric match score; adverse-media URL pipeline intact
 - ☑ CA-1 single-risk-type re-test **passed** — both subtests: Mick Davis (PEP-only) → 75 → High; DGUP Granitny (Sanctions-only) → 100 → Prohibited. Models validated; Boris 450 was a poisoned fixture.
 - ☑ CA-2 entity-level TP-marking SOP drafted (`sop-screening-true-positive-marking.md`, pending MLRO sign-off)
+- ☑ CA-5 staging CA config verified via AWS audit (webhook secret wired + signature verification active; all 9 required vars correct; SCREENING_CONFIG_ID matches; workspace=sandbox)
 
 ---
 
