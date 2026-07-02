@@ -31259,27 +31259,40 @@ def _monitoring_list_refresh_status_map(db, rows):
     map lets the projection compute the effective (Awaiting Client/Officer)
     status key so filters and labels keep their historical behaviour.
     """
-    alert_ids = [r["id"] for r in rows if r.get("id") is not None] if rows and hasattr(rows[0], "get") else [r["id"] for r in rows]
+    alert_ids = [r["id"] for r in rows if r["id"] is not None]
     if not alert_ids:
         return {}
-    placeholders = ",".join("?" for _ in alert_ids)
-    try:
-        req_rows = db.execute(
-            f"""
-            SELECT monitoring_alert_id, status
-              FROM application_enhanced_requirements
-             WHERE monitoring_alert_id IN ({placeholders})
-               AND LOWER(COALESCE(status, '')) IN ('requested','uploaded','under_review','rejected')
-             ORDER BY id ASC
-            """,
-            alert_ids,
-        ).fetchall()
-    except Exception:
-        return {}
     result = {}
-    for req in req_rows:
-        # Later rows win (highest id = most recent request state).
-        result[req["monitoring_alert_id"]] = req["status"]
+    # Chunked lookups keep the IN (...) parameter count well under driver
+    # limits (SQLite historically 999) no matter how large the alert list is.
+    chunk_size = 400
+    for start in range(0, len(alert_ids), chunk_size):
+        chunk = alert_ids[start:start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        try:
+            req_rows = db.execute(
+                f"""
+                SELECT monitoring_alert_id, status
+                  FROM application_enhanced_requirements
+                 WHERE monitoring_alert_id IN ({placeholders})
+                   AND LOWER(COALESCE(status, '')) IN ('requested','uploaded','under_review','rejected')
+                 ORDER BY id ASC
+                """,
+                chunk,
+            ).fetchall()
+        except Exception:
+            # Legacy DBs may predate migration 032 (monitoring_alert_id column).
+            # Log loudly instead of silently dropping derived statuses.
+            logger.warning(
+                "monitoring list refresh-status lookup failed for %d alerts; "
+                "derived Awaiting statuses unavailable for this chunk",
+                len(chunk),
+                exc_info=True,
+            )
+            continue
+        for req in req_rows:
+            # Later rows win (highest id = most recent request state).
+            result[req["monitoring_alert_id"]] = req["status"]
     return result
 
 
@@ -31309,7 +31322,9 @@ def _monitoring_list_project_row(row, refresh_status_map=None):
         # never stored on monitoring_alerts.status.
         "status_label": _monitoring_status.label(status_key),
         "status_group": _monitoring_status.group(status_key),
-        "lifecycle_status": _monitoring_status.lifecycle_status(status_key),
+        # Lifecycle reflects the STORED alert status, not the refresh-derived
+        # display key — matches the detail handler's contract.
+        "lifecycle_status": _monitoring_status.lifecycle_status(item.get("status")),
         "client_display_name": client_display or None,
         "mapping_status": mapping_status,
         "is_terminal": is_terminal,

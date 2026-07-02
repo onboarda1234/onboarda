@@ -901,17 +901,16 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
         "actor": (user or {}).get("sub", ""),
         "timestamp": _now_iso(),
     }
-    resolved_clause = ", resolved_at = CURRENT_TIMESTAMP" if alert_status in {"resolved", "waived"} else ", resolved_at = NULL"
     if alert_status is None:
-        # Reject: officer bookkeeping only — alert.status stays canonical.
+        # Reject: officer bookkeeping only — alert.status AND resolved_at stay
+        # untouched (the alert lifecycle neither advances nor re-opens here).
         db.execute(
-            f"""
+            """
             UPDATE monitoring_alerts
                SET officer_action = ?,
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
                    reviewed_by = ?
-                   {resolved_clause}
              WHERE id = ?
             """,
             (
@@ -922,15 +921,16 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
             ),
         )
     else:
+        # Accept/waive: terminal outcome — status and resolved_at always set.
         db.execute(
-            f"""
+            """
             UPDATE monitoring_alerts
                SET status = ?,
                    officer_action = ?,
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
-                   reviewed_by = ?
-                   {resolved_clause}
+                   reviewed_by = ?,
+                   resolved_at = CURRENT_TIMESTAMP
              WHERE id = ?
             """,
             (
@@ -1053,16 +1053,15 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
         "timestamp": _now_iso(),
         "source_surface": "application_enhanced_requirement_review",
     }
-    resolved_clause = ", resolved_at = CURRENT_TIMESTAMP" if alert_status in {"resolved", "waived"} else ", resolved_at = NULL"
     if alert_status is None:
+        # Rejected: bookkeeping only — status and resolved_at untouched.
         db.execute(
-            f"""
+            """
             UPDATE monitoring_alerts
                SET officer_action = ?,
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
                    reviewed_by = ?
-                   {resolved_clause}
              WHERE id = ?
             """,
             (
@@ -1073,15 +1072,16 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
             ),
         )
     else:
+        # Accepted/waived: terminal outcome — status and resolved_at always set.
         db.execute(
-            f"""
+            """
             UPDATE monitoring_alerts
                SET status = ?,
                    officer_action = ?,
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
-                   reviewed_by = ?
-                   {resolved_clause}
+                   reviewed_by = ?,
+                   resolved_at = CURRENT_TIMESTAMP
              WHERE id = ?
             """,
             (

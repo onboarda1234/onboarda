@@ -8,6 +8,7 @@
 """
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -79,12 +80,14 @@ def test_high_risk_screening_alert_detection():
 
 def test_refresh_flow_no_longer_writes_overloaded_alert_statuses():
     refresh_src = open(os.path.join(BACKEND_DIR, "monitoring_document_refresh.py")).read()
-    for banned in (
-        "SET status = 'document_requested'",
-        "SET status = 'client_uploaded'",
-        "SET status = 'under_review'",
-    ):
-        assert banned not in refresh_src, banned
+    for banned_status in ("document_requested", "client_uploaded", "under_review"):
+        # Whitespace-tolerant, case-insensitive, quote-agnostic: survives SQL
+        # reformatting that a literal string match would silently miss.
+        pattern = re.compile(
+            r"SET\s+status\s*=\s*['\"]" + re.escape(banned_status) + r"['\"]",
+            re.IGNORECASE,
+        )
+        assert not pattern.search(refresh_src), banned_status
 
 
 def test_decision_outcome_request_updated_document_no_longer_stores_status():
@@ -171,6 +174,7 @@ def _reset_alerts(conn):
         (9504, "media", "medium", "New adverse media coverage"),
         (9505, "Sanctions Match", "critical", "Second sanctions alert"),
         (9506, "pep", "medium", "Declared PEP re-screen"),
+        (9507, "Sanctions Match", "critical", "Dedicated audit-contents sanctions alert"),
     ]
     for alert_id, alert_type, severity, summary in rows:
         conn.execute(
@@ -401,22 +405,30 @@ def test_sco_false_positive_outcome_pep_alert_succeeds_with_note(guard_server):
 
 
 def test_blocked_audit_event_carries_path_and_role(guard_server):
+    # Self-contained: triggers BOTH blocked paths itself on a dedicated alert
+    # (9507), so it passes standalone, under -k filtering, or reordering.
     base_url, db_module = guard_server
     co = _token("co_g", "co", "CO Guard")
 
-    # 9501 already has one blocked event from the path-A test; add a path-B block.
-    resp = _patch_alert(base_url, co, 9501, {
+    path_a = _patch_alert(base_url, co, 9507, {
+        "action": "dismiss",
+        "dismissal_reason": "false_positive",
+        "reason": "Name-only match, attempting via dismiss action",
+    })
+    assert path_a.status_code == 403
+    path_b = _patch_alert(base_url, co, 9507, {
         "action": "save_decision",
         "outcome": "false_positive",
         "note": "Trying again via decision panel",
     })
-    assert resp.status_code == 403
+    assert path_b.status_code == 403
+    assert _alert_status(db_module, 9507) == "open"
 
     conn = db_module.get_db()
     try:
         rows = conn.execute(
             "SELECT detail FROM audit_log WHERE action = 'monitoring.alert.high_risk_dismissal_blocked' AND target = ? ORDER BY id ASC",
-            ("monitoring_alert:9501",),
+            ("monitoring_alert:9507",),
         ).fetchall()
     finally:
         conn.close()
