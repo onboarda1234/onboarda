@@ -15322,6 +15322,12 @@ function screeningReviewCard(title, badgesHtml, bodyHtml, isFocused) {
 	  '</div>';
 }
 
+function screeningReportDownloadButtonHtml() {
+  return '<button class="badge" style="cursor:pointer;border:1px solid var(--border1);background:var(--surface2);color:var(--text2);font-weight:700;" ' +
+    'onclick="downloadScreeningReportPDF()" title="Generate a PDF of the stored screening results for officer review">' +
+    '📄 Screening report (PDF)</button>';
+}
+
 function screeningDecisionSummaryPanel(config) {
   config = config || {};
   var indicators = (config.indicators || []).filter(Boolean);
@@ -32671,12 +32677,6 @@ async function downloadMemoPDF() {
     btn.innerHTML = originalLabel || '📥 Download Memo (PDF)';
     btn.disabled = false;
   }
-}
-
-function screeningReportDownloadButtonHtml() {
-  return '<button class="badge" style="cursor:pointer;border:1px solid var(--border1);background:var(--surface2);color:var(--text2);font-weight:700;" ' +
-    'onclick="downloadScreeningReportPDF()" title="Generate a PDF of the stored screening results for officer review">' +
-    '📄 Screening report (PDF)</button>';
 }
 
 async function downloadScreeningReportPDF() {
