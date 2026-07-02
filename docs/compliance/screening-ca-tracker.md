@@ -49,7 +49,7 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
 | BE-1 | ~~Surface CA's match_score into the panel~~ → **REFRAMED** (see BE-2) | ☑ | — | **Trace disproved this.** CA Mesh returns **no numeric match score** (model has only `surfaced_by_pass` strict/relaxed/both). Nothing to "un-drop". |
-| BE-2 | Replace panel "score" with **CA risk level** (+ optional strict/relaxed confidence chip) | ☐ | P2 | CA-1 | Honest to what Mesh provides. Small UI change, no backend. Uses risk model from Section A + free `surfaced_by_pass` signal. |
+| BE-2 | Replace panel "score" with **strict/relaxed confidence** (risk level deferred) | ☐ | P2 | — | **Data finding:** no risk level/score in the stored screening_report — the CA risk model runs at *case-close* (console), its Medium/High/Prohibited output is a case decision, not in the create-and-screen report we persist. So show `surfaced_by_pass` (strict/relaxed/both) confidence, not a fake score. A real CA risk level would need pulling CA *case* data (webhook/case fetch) — larger, separate. (Confidence rendering already implemented in the RPT-1 PDF.) |
 | BE-3 | Root-fix `matched_name`-is-UUID | ☐ | P2 | — | Currently only cosmetic "Unnamed provider match" fallback (shipped in #640). Real cause: `_profile_name(profile) or profile_identifier` (normalizer.py:385) falls back to UUID when CA profile has no name records (sandbox sparse data). Likely resolves on prod data — validate first. |
 | BE-4 | Adverse-media source URL — **validate on prod data (no code)** | ☐ | P3 | prod CA data | Pipeline fully intact (`_canonicalize_article` → `canonical_url` → UI "source" link). Missing URLs = CA payload omits `article.url` (sandbox). Displays automatically when CA supplies it. |
 
@@ -70,8 +70,8 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| RPT-1 | Backend endpoint `GET /api/applications/:id/screening-report.pdf` | ☐ | P2 | — | Reuses `pdf_generator.py` "Section 5: Screening Results". Renders stored `screening_report`: subjects, hits, categories, evidence (+URLs where present), refs, risk level, disposition history. |
-| RPT-2 | Frontend **"Generate screening report"** button on RegMind screening page | ☐ | P2 | RPT-1 | Calls endpoint → downloads PDF. |
+| RPT-1 | Backend endpoint `GET /api/applications/:id/screening/pdf` | ☑ | P2 | — | **Done** (`6adcc79`). `pdf_generator.build_screening_report_html` / `generate_screening_report_pdf` + `ScreeningReportPDFDownloadHandler`. Renders stored screening_report: subjects, matches, categories, list/source, strict/relaxed confidence, adverse-media evidence links; UUID→"Unnamed provider match". Read-only + audit-logged. 5 unit tests; real PDF renders (weasyprint). |
+| RPT-2 | Frontend **"Screening report (PDF)"** button on entity screening card | ☑ | P2 | RPT-1 | **Done** (`6adcc79`). `downloadScreeningReportPDF()` + button. JS syntax-checked. |
 | RPT-3 | Validate report content quality on prod data | ☐ | P3 | prod CA data, BE-3 | Sandbox report = UUIDs + missing URLs; real names/URLs only once CA prod flows. |
 
 ---
