@@ -12,7 +12,7 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
 | CA-1 | Single-risk-type re-test — **PASSED, model validated** | ☑ | P1 | — | Both subtests pass with clean fixtures: **A** Mick Davis (PEP-only) → 75 → High; **B** DGUP Granitny (Sanctions-only) → 100 → Prohibited. The earlier Boris 450 was a poisoned fixture (his CA record carries 6 risk types), not a misconfig. Status is set at **entity level** (not per-risk-type). Models correctly calibrated. |
-| CA-2 | Write **TP-marking SOP** — reframed to **entity-level** | ☑ | P1 | — | Drafted: `docs/compliance/sop-screening-true-positive-marking.md`. Officers confirm whether the matched **record (entity)** is genuinely the customer; risk categories come from CA, not picked per-type. Pending MLRO sign-off. |
+| CA-2 | Write **TP-marking SOP** — reframed to **entity-level** | ☑ | P1 | — | `docs/compliance/sop-screening-true-positive-marking.md`. **MLRO signed off (2026-07-02).** Officers confirm whether the matched **record (entity)** is genuinely the customer; risk categories come from CA, not picked per-type. |
 | CA-3 | ~~Rescale scores if PEP over-grades~~ — **DROPPED** | ☑ | — | Confirmed unnecessary. CA-1 subtest A now proves a PEP-only entity scores 75 → High correctly. No rescale needed. |
 | CA-4 | ~~Delete the two `webhook.site` webhooks~~ — **MITIGATED (inactive; UI delete unavailable)** | ☑ | P1 | — | Leak closed: inactive webhooks receive nothing. CA UI has no delete control; deletion would need `DELETE /v2/webhooks/{id}` with an Admin key. Parked inactive — **must never be copied to production.** |
 | CA-5 | Confirm CA staging config wired (AWS) — **VERIFIED** | ☑ | P1 | — | Codex audit (task-def `regmind-staging:728`): webhook secret is a dedicated HMAC secret wired via ECS secrets ref (signature verification active — not fail-open). All 9 required CA vars present & correct, incl. `COMPLYADVANTAGE_SCREENING_CONFIG_ID` (plain env, matches `019e0308-…a6fe` = regmind-default-screening-v1). Workspace mode = **sandbox** (expected). |
@@ -26,13 +26,20 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 ---
 
-## B. CA Production — replication (sandbox validated ✅; webhooks gated on prod DNS)
+## B. CA Production — replication (⛔ blocked: no production environment exists yet)
+
+> **AWS discovery (Codex, read-only, 2026-07-02):** no `regmind/production` secret, no
+> `regmind-production` ECS cluster/service — only `regmind-staging` exists. Production is a
+> **provisioning project**, not a config task. Config is validated & ready; nothing can be
+> wired until the prod environment is stood up.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| PROD-1 | Replicate both risk models + screening config to production | ☐ | P1 | — | **Unblocked** — sandbox grading validated (CA-1 passed). Ready to replicate. Prod env must flip workspace flags off sandbox: `COMPLYADVANTAGE_WORKSPACE_MODE`, `COMPLYADVANTAGE_SCREENING_CONFIG_ID`/`_LABEL` → the **production** screening-config id, plus prod CA creds. |
-| PROD-2 | Create prod webhooks → `app.regmind.co/api/webhooks/complyadvantage` | ⛔ | P1 | PROD DNS live | `app.regmind.co` is planned, DNS not yet provisioned. Set signing secret at creation. |
-| PROD-3 | Set `COMPLYADVANTAGE_WEBHOOK_SECRET` in prod secrets (match webhook secret) | ⛔ | P1 | PROD-2 | Prod handler rejects all webhooks if secret missing/mismatched. |
+| PROD-0 | **Provision the production environment** (ECS cluster + RDS + Secrets Manager + `app.regmind.co` DNS) | ⛔ | P1 | infra/DevOps | Gating prerequisite for everything below. Owned by infra, not this workstream. Confirmed absent by AWS discovery. |
+| PROD-0b | Confirm/create a **production CA workspace + API credential** (live equiv of `ca-staging-api`) | ☐ | P1 | — | CA-console prerequisite; the prod screening config + risk models are created here. Can be prepped independently of AWS. |
+| PROD-1 | Replicate both risk models + screening config to the **production CA workspace** | ☐ | P1 | PROD-0b | Config validated & ready (CA-1 passed). Chrome prompt drafted. Produces the prod screening-config id + model ids for AWS wiring. |
+| PROD-2 | Wire prod CA config into prod backend (secrets + env; `WORKSPACE_MODE=production`, prod `SCREENING_CONFIG_ID`, prod CA creds) | ⛔ | P1 | PROD-0, PROD-1 | Codex plan-table ready; apply once prod infra + values exist. |
+| PROD-3 | Create prod webhooks → `app.regmind.co/api/webhooks/complyadvantage` + set matching `COMPLYADVANTAGE_WEBHOOK_SECRET` | ⛔ | P1 | PROD-0 (DNS live) | Do the CA-webhook + AWS-secret pair together so the signing secret matches. Deferred until DNS live. |
 | PROD-4 | **Governance note:** never score Country/Channel/Basic-info/Product without re-reviewing overall thresholds | ☑ | P1 | — | Recorded (replaces unavailable zero-weighting; CA enforces min weight 1). |
 
 ---

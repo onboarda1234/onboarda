@@ -1,6 +1,7 @@
 # SOP — Marking Screening Matches (True Positive / False Positive)
 
 _RegMind compliance operating procedure · ComplyAdvantage Mesh screening · v1 (2026-07-02)_
+_Status: **Adopted** — MLRO signed off 2026-07-02._
 
 ## 1. Purpose
 
