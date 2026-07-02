@@ -375,6 +375,24 @@ def derive_company_screening_from_matches(matches: list[MergedMatch], screened_a
     }
 
 
+def _match_score_percentage(match: MergedMatch):
+    """CA's per-match name-match strength as a 0–100 percentage, or None.
+
+    ComplyAdvantage returns ``match_details.match_score`` as a 0–1 fraction; the
+    stored screening_report convention (and the Agent 3 thresholds) use a 0–100
+    scale, so scale up. Defensive: pass through values that already look like a
+    percentage (>1). Returns None when the provider gave no score.
+    """
+    profile = match.profile
+    if profile is None:
+        return None
+    details = getattr(profile, "match_details", None)
+    raw = getattr(details, "match_score", None) if details is not None else None
+    if not isinstance(raw, (int, float)):
+        return None
+    return round(float(raw) * 100, 1) if raw <= 1 else round(float(raw), 1)
+
+
 def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> dict:
     """Compatibility result shape used by existing Back Office review widgets."""
     indicators = [_indicator_payload(indicator) for indicator in _all_indicators(match.risk)]
@@ -383,6 +401,11 @@ def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> di
     provider_references = _match_provider_references(match)
     return {
         "name": _profile_name(match.profile) or match.profile_identifier,
+        # CA name-match strength (0–100), None when the provider gave no score.
+        # surfaced_by_pass (strict/relaxed/both) is the confidence fallback the
+        # panel/PDF show when match_score is absent.
+        "match_score": _match_score_percentage(match),
+        "surfaced_by_pass": match.surfaced_by_pass,
         "profile_identifier": match.profile_identifier,
         "provider_profile_identifier": match.profile_identifier,
         "alert_identifier": match.alert_id,
