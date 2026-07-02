@@ -15905,6 +15905,97 @@ function toggleAgent3ScreeningInterpretation(event) {
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
 }
 
+// PR-AGENT3-HIT-LEVEL-UI-1: render structured hit_rows / hit_row_status_counts
+// from the Agent 3 output (backend PR-AGENT3-HIT-LEVEL-OUTPUT-1). Display only —
+// advisory, no provider calls, no officer-decision mutation.
+var AGENT3_HIT_STATUS_META = {
+  needs_review:          { label: 'Needs review',          bg: '#fffbeb', border: '#fde68a', text: '#92400e' },
+  likely_false_positive: { label: 'Likely false positive', bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' },
+  high_confidence_match: { label: 'High-confidence match', bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' },
+  unavailable:           { label: 'Unavailable',           bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' }
+};
+
+function agent3HitStatusMeta(status) {
+  return AGENT3_HIT_STATUS_META[String(status || '').toLowerCase()] ||
+    { label: (status ? String(status).replace(/_/g, ' ') : 'Unknown'), bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' };
+}
+
+function agent3HitStatusBadge(status) {
+  var m = agent3HitStatusMeta(status);
+  return '<span style="display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;white-space:nowrap;background:' + m.bg + ';border:1px solid ' + m.border + ';color:' + m.text + ';">' + escapeHtml(m.label) + '</span>';
+}
+
+function agent3ScoreCellHtml(score) {
+  if (score === null || score === undefined || score === '') return '<span style="color:var(--text3);">n/a</span>';
+  var n = Number(score);
+  if (isNaN(n)) return escapeHtml(String(score));
+  var pct = Math.max(0, Math.min(100, n));
+  var color = pct >= 70 ? '#b45309' : '#059669';
+  return '<span style="display:inline-block;height:5px;width:44px;border-radius:3px;background:#e2e8f0;overflow:hidden;vertical-align:middle;margin-right:6px;"><span style="display:block;height:100%;width:' + pct + '%;background:' + color + ';"></span></span>' + escapeHtml(String(n)) + '%';
+}
+
+function agent3HitStatusCountsHtml(counts) {
+  counts = counts && typeof counts === 'object' ? counts : {};
+  var chips = [];
+  ['needs_review', 'high_confidence_match', 'likely_false_positive', 'unavailable'].forEach(function(k) {
+    if (counts[k]) {
+      var m = agent3HitStatusMeta(k);
+      chips.push('<span class="explain-data-source" style="background:' + m.bg + ';border-color:' + m.border + ';color:' + m.text + ';">' + escapeHtml(m.label) + ': ' + escapeHtml(String(counts[k])) + '</span>');
+    }
+  });
+  return chips.join('');
+}
+
+function agent3HitRowsTableHtml(rows) {
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) return '<div style="font-size:12px;color:var(--text3);">No provider hit rows in the stored screening results.</div>';
+  var th = 'text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;padding:0 8px 6px;border-bottom:1px solid var(--border1);white-space:nowrap;';
+  var td = 'padding:8px;border-bottom:1px solid var(--border1);vertical-align:top;';
+  var html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">';
+  html += '<thead><tr>' +
+    '<th style="' + th + '">Subject</th>' +
+    '<th style="' + th + '">Matched entity</th>' +
+    '<th style="' + th + '">List / provider</th>' +
+    '<th style="' + th + '">Type</th>' +
+    '<th style="' + th + '">Match</th>' +
+    '<th style="' + th + '">Status &amp; reason</th>' +
+    '</tr></thead><tbody>';
+  rows.forEach(function(r) {
+    r = r || {};
+    var subject = escapeHtml(r.subject_name || 'Unknown subject') + (r.subject_type ? ' <span style="color:var(--text3);">(' + escapeHtml(String(r.subject_type)) + ')</span>' : '');
+    var listProv = escapeHtml([r.list, r.provider].filter(Boolean).join(' · ') || 'n/a');
+    var type = escapeHtml(r.type ? String(r.type).replace(/_/g, ' ') : 'n/a');
+    var evRef = r.evidence_ref ? ' <span style="color:var(--text3);font-size:11px;">[' + escapeHtml(String(r.evidence_ref)) + ']</span>' : '';
+    html += '<tr>' +
+      '<td style="' + td + '">' + subject + '</td>' +
+      '<td style="' + td + '">' + escapeHtml(r.matched_entity || 'n/a') + '</td>' +
+      '<td style="' + td + '">' + listProv + '</td>' +
+      '<td style="' + td + '">' + type + '</td>' +
+      '<td style="' + td + 'white-space:nowrap;">' + agent3ScoreCellHtml(r.match_score) + '</td>' +
+      '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function copyAgent3AuditNote(event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  // Resolve the note relative to the clicked button's panel first (robust even
+  // if more than one Agent 3 panel were ever rendered), then fall back to id.
+  var btn = event && (event.currentTarget || event.target);
+  var scope = btn && btn.closest ? btn.closest('#agent3-screening-interpretation-panel') : null;
+  var el = (scope && scope.querySelector) ? scope.querySelector('#agent3-audit-note-text') : null;
+  if (!el) el = document.getElementById('agent3-audit-note-text');
+  if (!el) return;
+  var text = el.innerText || el.textContent || '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() { showToast('Audit note copied.'); }, function() { showToast('Copy failed — select and copy manually.', 'warn'); });
+  } else {
+    showToast('Clipboard unavailable — select and copy manually.', 'warn');
+  }
+}
+
 function renderAgent3ScreeningInterpretationPanel(app) {
   var output = getAgent3ScreeningInterpretation(app);
   var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
@@ -15942,7 +16033,7 @@ function renderAgent3ScreeningInterpretationPanel(app) {
     html += agent3SeverityBadge(output.severity);
     if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
     html += '</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">' + agent3ProviderHitsHtml(output) + '</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">' + agent3ProviderHitsHtml(output) + agent3HitStatusCountsHtml(output.hit_row_status_counts) + '</div>';
     html += '</div>';
     html += '</div>';
     return html;
@@ -15959,21 +16050,42 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
   html += '</div>';
   // Provider-hit clarity (declared PEP kept distinct from provider hits)
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + agent3ProviderHitsHtml(output) + '</div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">' + agent3ProviderHitsHtml(output) + '</div>';
+  // Per-hit suggested-status tally (from hit_row_status_counts) — advisory only
+  var statusCountsHtml = agent3HitStatusCountsHtml(output.hit_row_status_counts);
+  if (statusCountsHtml) html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + statusCountsHtml + '</div>';
   // Primary view: summary + key concerns visible by default
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">';
   html += agent3ScreeningFieldHtml('Plain-English summary', output.summary);
   html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
   html += '</div>';
+  // Hit-by-hit review (structured hit_rows) behind an expander
+  var hitRows = Array.isArray(output.hit_rows) ? output.hit_rows : [];
+  var hitCounts = output.hit_row_status_counts && typeof output.hit_row_status_counts === 'object' ? output.hit_row_status_counts : {};
+  var needReview = hitCounts.needs_review || 0;
+  var hitCountLabel = hitRows.length + ' hit' + (hitRows.length === 1 ? '' : 's') + (needReview ? ' · ' + needReview + ' need review' : '');
+  html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
+  html += '<summary style="cursor:pointer;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text2);">Hit-by-hit review — ' + escapeHtml(hitCountLabel) + '</summary>';
+  html += '<div style="padding:12px;">' + agent3HitRowsTableHtml(hitRows) + '</div>';
+  html += '</details>';
   // Detailed assessment, audit note and evidence behind an expander
   html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
   html += '<summary style="cursor:pointer;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text2);">Detailed assessment, audit note and evidence</summary>';
-  html += '<div style="padding:0 12px 12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
+  html += '<div style="padding:0 12px 12px;">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
   html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
   html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
   html += agent3ScreeningFieldHtml('Recommended disposition', output.recommended_disposition);
-  html += agent3ScreeningFieldHtml('Draft audit note', output.draft_audit_note);
   html += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);"><div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;margin-bottom:6px;">Evidence used</div>' + agent3EvidenceHtml(output.evidence_used) + '</div>';
+  html += '</div>';
+  // Copyable draft audit note (clipboard only — no mutation, no server call)
+  html += '<div style="margin-top:12px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">';
+  html += '<div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;">Draft audit note</div>';
+  html += '<button class="btn btn-secondary btn-sm" id="agent3-copy-audit-note-btn" onclick="copyAgent3AuditNote(event)">Copy</button>';
+  html += '</div>';
+  html += '<pre id="agent3-audit-note-text" style="white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.draft_audit_note || 'Not available') + '</pre>';
+  html += '</div>';
   html += '</div>';
   html += '</details>';
   html += '</div>';
