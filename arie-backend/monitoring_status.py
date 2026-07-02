@@ -47,6 +47,13 @@ CANONICAL_ALERT_STATUSES = (
     "waived",
 )
 
+# Alert-lifecycle statuses that are also written today by decision outcomes
+# (escalate_to_sco/escalate_overdue_item -> 'escalated';
+#  update_risk_profile/request_further_information -> 'in_review').
+# They are genuine ALERT lifecycle states (not refresh states) and are the
+# candidates to widen the canonical set from 9 -> 11 in the DB-hardening PR.
+EXTENDED_ALERT_STATUSES = CANONICAL_ALERT_STATUSES + ("in_review", "escalated")
+
 # Terminal statuses (an alert here should no longer be treated as actionable).
 # Mirrors server._MONITORING_LIST_TERMINAL_STATUSES exactly so guards agree.
 TERMINAL_STATUSES = frozenset(
@@ -235,6 +242,68 @@ def label(value: Any) -> str:
 
 def group(value: Any) -> str:
     return _STATUS_GROUPS.get(canonical_filter_status(value), "active")
+
+
+# Refresh-request status -> effective alert display/filter status key.
+# Used so list filters and detail views keep their historical behaviour after
+# the refresh flow stopped overloading monitoring_alerts.status (M1.1).
+REFRESH_REQUEST_TO_EFFECTIVE_STATUS: Dict[str, str] = {
+    "requested": "document_requested",
+    "uploaded": "client_uploaded",
+    "under_review": "under_review",
+    # A rejected replacement re-opens the request from the client's viewpoint.
+    "rejected": "document_requested",
+}
+
+
+def effective_status(alert_status: Any, refresh_request_status: Optional[Any] = None,
+                     resolved_at: Any = None) -> str:
+    """Effective display/filter status key for an alert.
+
+    When the alert is non-terminal and a linked refresh request is active,
+    the request's state drives the effective key (Awaiting Client/Officer
+    semantics). Otherwise the alert's own canonical filter status is used.
+    Stored legacy overloads (document_requested etc.) fall through unchanged
+    via canonical_filter_status, so pre-M1.1 rows keep working.
+    """
+    base = canonical_filter_status(alert_status)
+    if is_terminal(base, resolved_at=resolved_at):
+        return base
+    if refresh_request_status is not None:
+        mapped = REFRESH_REQUEST_TO_EFFECTIVE_STATUS.get(token(refresh_request_status))
+        if mapped:
+            return mapped
+    return base
+
+
+_HIGH_RISK_SANCTIONS_TOKENS = ("sanction", "watchlist")
+_HIGH_RISK_PEP_TOKENS = ("pep",)
+
+
+def is_high_risk_screening_alert(alert: Any) -> bool:
+    """True when the alert is a sanctions/watchlist or PEP screening alert.
+
+    Mirrors the sanctions/pep branches of the server's canonical-type rules
+    (alert_type first, summary as fallback) so the interim high-risk dismissal
+    guard fires on the same alerts the UI labels sanctions_change/pep_change.
+    """
+    if alert is None:
+        return False
+    get = alert.get if hasattr(alert, "get") else lambda k, d=None: d
+    raw_type = token(get("alert_type") or get("type") or "")
+    if raw_type and raw_type != "fixture":
+        # Explicit type wins; 'media' alert types are adverse-media, not in
+        # guard scope even if the summary mentions a PEP.
+        if "media" in raw_type:
+            return False
+        return any(
+            needle in raw_type
+            for needle in _HIGH_RISK_SANCTIONS_TOKENS + _HIGH_RISK_PEP_TOKENS
+        )
+    summary = str(get("summary") or "").lower()
+    if "adverse media" in summary:
+        return False
+    return "sanction" in summary or "watchlist" in summary or "pep" in summary
 
 
 def derive_display_state(
