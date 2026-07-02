@@ -105,3 +105,26 @@ def test_uuid_detector():
     assert pdf_generator._looks_like_uuid("019f185a-2a5d-7bfb-a85b-c1cfad8e5c5d")
     assert not pdf_generator._looks_like_uuid("Report Holdings")
     assert not pdf_generator._looks_like_uuid("")
+
+
+def test_generate_screening_report_pdf_uses_weasyprint(monkeypatch):
+    # The render entrypoint must build the HTML and hand it to WeasyPrint's
+    # HTML(...).write_pdf(), returning the produced bytes. Mock WeasyPrint so
+    # the test does not require the native library.
+    captured = {}
+
+    class _FakeHTML:
+        def __init__(self, string=None):
+            captured["string"] = string
+
+        def write_pdf(self):
+            return b"%PDF-fake"
+
+    monkeypatch.setattr(
+        pdf_generator, "_get_weasyprint",
+        lambda: type("W", (), {"HTML": _FakeHTML})(),
+    )
+    pdf_bytes = pdf_generator.generate_screening_report_pdf(_app(), _report())
+    assert pdf_bytes == b"%PDF-fake"
+    # confirms the HTML builder ran and its output was passed through
+    assert "Provider Matches (3)" in captured["string"]
