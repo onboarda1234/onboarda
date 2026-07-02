@@ -15946,6 +15946,12 @@ function agent3HitStatusCountsHtml(counts) {
   return chips.join('');
 }
 
+function agent3LooksLikeUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+}
+
+// Compact 4-column layout matching the approved mock: Match | Matched entity
+// (subject folded beneath) | List | Status & reason. Display only — advisory.
 function agent3HitRowsTableHtml(rows) {
   rows = Array.isArray(rows) ? rows : [];
   if (!rows.length) return '<div style="font-size:12px;color:var(--text3);">No provider hit rows in the stored screening results.</div>';
@@ -15953,25 +15959,30 @@ function agent3HitRowsTableHtml(rows) {
   var td = 'padding:8px;border-bottom:1px solid var(--border1);vertical-align:top;';
   var html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">';
   html += '<thead><tr>' +
-    '<th style="' + th + '">Subject</th>' +
-    '<th style="' + th + '">Matched entity</th>' +
-    '<th style="' + th + '">List / provider</th>' +
-    '<th style="' + th + '">Type</th>' +
-    '<th style="' + th + '">Match</th>' +
+    '<th style="' + th + 'width:11%;">Match</th>' +
+    '<th style="' + th + 'width:24%;">Matched entity</th>' +
+    '<th style="' + th + 'width:18%;">List</th>' +
     '<th style="' + th + '">Status &amp; reason</th>' +
     '</tr></thead><tbody>';
   rows.forEach(function(r) {
     r = r || {};
-    var subject = escapeHtml(r.subject_name || 'Unknown subject') + (r.subject_type ? ' <span style="color:var(--text3);">(' + escapeHtml(String(r.subject_type)) + ')</span>' : '');
-    var listProv = escapeHtml([r.list, r.provider].filter(Boolean).join(' · ') || 'n/a');
-    var type = escapeHtml(r.type ? String(r.type).replace(/_/g, ' ') : 'n/a');
-    var evRef = r.evidence_ref ? ' <span style="color:var(--text3);font-size:11px;">[' + escapeHtml(String(r.evidence_ref)) + ']</span>' : '';
+    // Readable fallback when the stored provider result only carries an id.
+    var matched;
+    if (agent3LooksLikeUuid(r.matched_entity)) {
+      matched = '<span>Unnamed provider match</span>' +
+        '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text3);word-break:break-all;" title="' + escapeHtml(String(r.matched_entity)) + '">' + escapeHtml(String(r.matched_entity)) + '</div>';
+    } else {
+      matched = '<span style="font-weight:600;">' + escapeHtml(r.matched_entity || 'n/a') + '</span>';
+    }
+    var subjectBits = [r.subject_name, r.subject_type ? '(' + String(r.subject_type) + ')' : ''].filter(Boolean).join(' ');
+    if (subjectBits) matched += '<div style="font-size:11px;color:var(--text3);margin-top:2px;">for ' + escapeHtml(subjectBits) + '</div>';
+    var listCell = escapeHtml(r.list || (r.type ? String(r.type).replace(/_/g, ' ') : '') || 'n/a');
+    if (r.provider) listCell += '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(String(r.provider)) + '</div>';
+    var evRef = r.evidence_ref ? ' <span style="color:var(--text3);font-size:10.5px;">[' + escapeHtml(String(r.evidence_ref)) + ']</span>' : '';
     html += '<tr>' +
-      '<td style="' + td + '">' + subject + '</td>' +
-      '<td style="' + td + '">' + escapeHtml(r.matched_entity || 'n/a') + '</td>' +
-      '<td style="' + td + '">' + listProv + '</td>' +
-      '<td style="' + td + '">' + type + '</td>' +
       '<td style="' + td + 'white-space:nowrap;">' + agent3ScoreCellHtml(r.match_score) + '</td>' +
+      '<td style="' + td + '">' + matched + '</td>' +
+      '<td style="' + td + '">' + listCell + '</td>' +
       '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + '</td>' +
       '</tr>';
   });
@@ -16013,7 +16024,7 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += '<button class="btn btn-primary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button>';
   html += '</div>';
   html += '</div>';
-  html += '<div style="padding:0 18px 12px;font-size:12px;color:#92400e;font-weight:700;">Officer decision required. Agent 3 provides an advisory interpretation only.</div>';
+  html += '<div style="margin:0 18px 12px;padding:9px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;font-weight:600;color:#92400e;">Officer decision required. Agent 3 provides an advisory interpretation only.</div>';
 
   if (!output) {
     if (collapsed) {
@@ -16039,54 +16050,68 @@ function renderAgent3ScreeningInterpretationPanel(app) {
     return html;
   }
 
-  if (output.ai_notice) {
-    html += '<div style="margin:0 18px 12px;padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;color:#92400e;">' + escapeHtml(output.ai_notice) + '</div>';
-  }
   html += '<div style="padding:0 18px 18px;">';
   // Recommendation / severity / timestamp hierarchy
-  html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;">';
+  html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;">';
   html += agent3RecommendationBadge(output.recommended_disposition);
   html += agent3SeverityBadge(output.severity);
-  if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
+  if (generatedAt) html += '<span style="font-size:11px;color:var(--text3);">Generated ' + escapeHtml(generatedAt) + '</span>';
   html += '</div>';
-  // Provider-hit clarity (declared PEP kept distinct from provider hits)
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">' + agent3ProviderHitsHtml(output) + '</div>';
-  // Per-hit suggested-status tally (from hit_row_status_counts) — advisory only
-  var statusCountsHtml = agent3HitStatusCountsHtml(output.hit_row_status_counts);
-  if (statusCountsHtml) html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + statusCountsHtml + '</div>';
+  if (output.ai_notice) {
+    html += '<div style="font-size:11.5px;color:var(--text3);margin-bottom:10px;">' + escapeHtml(output.ai_notice) + '</div>';
+  }
+  // One chip row: provider hits, declared PEP, per-hit status tally — advisory only
+  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">' + agent3ProviderHitsHtml(output) + agent3HitStatusCountsHtml(output.hit_row_status_counts) + '</div>';
   // Primary view: summary + key concerns visible by default
-  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">';
-  html += agent3ScreeningFieldHtml('Plain-English summary', output.summary);
+  html += '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">';
+  html += '<div style="padding:12px 14px;border-radius:8px;background:#eef2ff;">';
+  html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4338ca;margin-bottom:5px;">Plain-English summary</div>';
+  html += '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.summary || 'Not available') + '</div>';
+  html += '</div>';
   html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
   html += '</div>';
-  // Hit-by-hit review (structured hit_rows) behind an expander
+
+  var expSummary = 'cursor:pointer;padding:10px 14px;font-size:11.5px;font-weight:700;letter-spacing:.03em;color:var(--text2);background:var(--surface1);display:flex;align-items:center;justify-content:space-between;gap:8px;';
+  var expCnt = 'font-weight:600;color:var(--text3);font-size:11px;';
   var hitRows = Array.isArray(output.hit_rows) ? output.hit_rows : [];
   var hitCounts = output.hit_row_status_counts && typeof output.hit_row_status_counts === 'object' ? output.hit_row_status_counts : {};
+  var totalHits = output.hit_counts && output.hit_counts.total ? output.hit_counts.total : 0;
   var needReview = hitCounts.needs_review || 0;
   var hitCountLabel = hitRows.length + ' hit' + (hitRows.length === 1 ? '' : 's') + (needReview ? ' · ' + needReview + ' need review' : '');
-  html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
-  html += '<summary style="cursor:pointer;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text2);">Hit-by-hit review — ' + escapeHtml(hitCountLabel) + '</summary>';
-  html += '<div style="padding:12px;">' + agent3HitRowsTableHtml(hitRows) + '</div>';
+  // Hit-by-hit review — open by default when rows exist (this is the answer)
+  html += '<details' + (hitRows.length ? ' open' : '') + ' style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+  html += '<summary style="' + expSummary + '"><span>Hit-by-hit review</span><span style="' + expCnt + '">' + escapeHtml(hitCountLabel) + '</span></summary>';
+  if (!Array.isArray(output.hit_rows) && totalHits > 0) {
+    // Interpretation predates hit-level output — do not present it as "0 hits".
+    html += '<div style="padding:12px 14px;font-size:12px;color:#92400e;background:#fffbeb;">Hit details are not available for this interpretation. Click <b>Refresh interpretation</b> to regenerate them from the stored screening results.</div>';
+  } else {
+    html += '<div style="padding:12px 14px;">' + agent3HitRowsTableHtml(hitRows) + '</div>';
+  }
   html += '</details>';
-  // Detailed assessment, audit note and evidence behind an expander
-  html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
-  html += '<summary style="cursor:pointer;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text2);">Detailed assessment, audit note and evidence</summary>';
-  html += '<div style="padding:0 12px 12px;">';
-  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
+  // False-positive assessment & context
+  html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+  html += '<summary style="' + expSummary + '"><span>False-positive assessment &amp; context</span><span style="' + expCnt + '">sanctions · PEP · adverse media</span></summary>';
+  html += '<div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
   html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
   html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
   html += agent3ScreeningFieldHtml('Recommended disposition', output.recommended_disposition);
-  html += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);"><div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;margin-bottom:6px;">Evidence used</div>' + agent3EvidenceHtml(output.evidence_used) + '</div>';
   html += '</div>';
-  // Copyable draft audit note (clipboard only — no mutation, no server call)
-  html += '<div style="margin-top:12px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">';
-  html += '<div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;">Draft audit note</div>';
-  html += '<button class="btn btn-secondary btn-sm" id="agent3-copy-audit-note-btn" onclick="copyAgent3AuditNote(event)">Copy</button>';
+  html += '</details>';
+  // Draft audit note — dark, paste-ready, clipboard only (no mutation, no server call)
+  html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+  html += '<summary style="' + expSummary + '"><span>Draft audit note</span><span style="' + expCnt + '">paste-ready</span></summary>';
+  html += '<div style="padding:12px 14px;">';
+  html += '<div style="position:relative;background:#0f172a;border-radius:8px;padding:13px 15px;">';
+  html += '<button class="btn btn-sm" id="agent3-copy-audit-note-btn" onclick="copyAgent3AuditNote(event)" style="position:absolute;top:8px;right:8px;background:#334155;color:#e2e8f0;border:none;">Copy</button>';
+  html += '<pre id="agent3-audit-note-text" style="white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#e2e8f0;line-height:1.55;">' + escapeHtml(output.draft_audit_note || 'Not available') + '</pre>';
   html += '</div>';
-  html += '<pre id="agent3-audit-note-text" style="white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.draft_audit_note || 'Not available') + '</pre>';
   html += '</div>';
-  html += '</div>';
+  html += '</details>';
+  // Evidence used
+  var evidenceCount = Array.isArray(output.evidence_used) ? output.evidence_used.length : 0;
+  html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+  html += '<summary style="' + expSummary + '"><span>Evidence used</span><span style="' + expCnt + '">' + escapeHtml(evidenceCount + ' source' + (evidenceCount === 1 ? '' : 's')) + '</span></summary>';
+  html += '<div style="padding:12px 14px;">' + agent3EvidenceHtml(output.evidence_used) + '</div>';
   html += '</details>';
   html += '</div>';
   html += '</div>';
