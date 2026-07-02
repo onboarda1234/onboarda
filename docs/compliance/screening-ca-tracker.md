@@ -11,9 +11,9 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| CA-1 | Single-risk-type re-test — **RESOLVED (answered)** | ☑ | P1 | — | Finding: CA sets status at **entity level**, not per-risk-type. Subtest B proved single-type entities score correctly (Sanctions-only → 100 → Prohibited). Subtest A unexecutable — sandbox has no PEP-only entity (fake "Boris" carries 6 types → 450). Model is **not** mis-scoring PEPs; a real PEP-only entity would score 75 → High. Over-grade = sandbox-data artifact. |
+| CA-1 | Single-risk-type re-test — **PASSED, model validated** | ☑ | P1 | — | Both subtests pass with clean fixtures: **A** Mick Davis (PEP-only) → 75 → High; **B** DGUP Granitny (Sanctions-only) → 100 → Prohibited. The earlier Boris 450 was a poisoned fixture (his CA record carries 6 risk types), not a misconfig. Status is set at **entity level** (not per-risk-type). Models correctly calibrated. |
 | CA-2 | Write **TP-marking SOP** — reframed to **entity-level** | ☑ | P1 | — | Drafted: `docs/compliance/sop-screening-true-positive-marking.md`. Officers confirm whether the matched **record (entity)** is genuinely the customer; risk categories come from CA, not picked per-type. Pending MLRO sign-off. |
-| CA-3 | ~~Rescale scores if PEP over-grades~~ — **LIKELY DROPPED** | ☑ | P3 | — | Not needed: model scores correctly per B; the 450 is fake sandbox data, not a misconfig. SUM escalation-on-combination is correct, fail-safe AML behaviour. Keep only as contingency if PROD-PEP validation (CA-11) shows real over-grading. |
+| CA-3 | ~~Rescale scores if PEP over-grades~~ — **DROPPED** | ☑ | — | Confirmed unnecessary. CA-1 subtest A now proves a PEP-only entity scores 75 → High correctly. No rescale needed. |
 | CA-4 | Delete the two `webhook.site` webhooks via CA REST API | ☐ | P1 | — | Currently only **Inactive**, not deleted. `DELETE /v2/webhooks/{id}`. API-user role lacks Developers perms — may need Admin key. |
 | CA-5 | Confirm `COMPLYADVANTAGE_WEBHOOK_SECRET` set in staging (AWS Secrets Manager) | ☐ | P1 | — | Our handler is fail-**closed** in prod, fail-**open** in sandbox. Unset staging secret = unsigned webhooks accepted silently. |
 | CA-6 | Add a **second CA Admin** user | ☐ | P2 | — | From audit: single human admin (Aisha) = key-person risk on the account gating all screening. |
@@ -21,15 +21,15 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 | CA-8 | Review collection source coverage (`regmind-default-sources-v1` uses **1/4**) | ☐ | P2 | — | Confirm enabled sources actually span the sanctions/PEP/adverse breadth claimed to clients. |
 | CA-9 | Consider raising match threshold **70 → 75** after observing real alert volume | ☐ | P3 | — | Empirical tune; document rationale (FSC expects justified threshold). |
 | CA-10 | Consider a **custom allowlist** to suppress known false positives | ☐ | P3 | — | From audit: no custom lists configured. Optional noise reducer. |
-| CA-11 | **Validate PEP grading on production data** (new) | ☐ | P2 | prod CA live | The only test that can settle the PEP question — sandbox can't (no PEP-only entity). Screen one real, known PEP; confirm it grades **High** (or High + adverse), not Prohibited. If it over-grades, revisit CA-3. |
+| CA-11 | Confirmatory PEP-grading check on production data | ☐ | P3 | prod CA live | Downgraded — sandbox already validated it (Mick Davis, PEP-only → 75 → High). Optional confirmation on real prod data. |
 
 ---
 
-## B. CA Production — replication (⛔ blocked until Section A validated)
+## B. CA Production — replication (sandbox validated ✅; webhooks gated on prod DNS)
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| PROD-1 | Replicate both risk models + screening config to production | ⛔ | P1 | CA-1/CA-2 (or CA-3) | Do not replicate until sandbox grading is validated. |
+| PROD-1 | Replicate both risk models + screening config to production | ☐ | P1 | — | **Unblocked** — sandbox grading validated (CA-1 passed). Ready to replicate. |
 | PROD-2 | Create prod webhooks → `app.regmind.co/api/webhooks/complyadvantage` | ⛔ | P1 | PROD DNS live | `app.regmind.co` is planned, DNS not yet provisioned. Set signing secret at creation. |
 | PROD-3 | Set `COMPLYADVANTAGE_WEBHOOK_SECRET` in prod secrets (match webhook secret) | ⛔ | P1 | PROD-2 | Prod handler rejects all webhooks if secret missing/mismatched. |
 | PROD-4 | **Governance note:** never score Country/Channel/Basic-info/Product without re-reviewing overall thresholds | ☑ | P1 | — | Recorded (replaces unavailable zero-weighting; CA enforces min weight 1). |
@@ -77,16 +77,17 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 - ☑ `webhook.site` webhooks set Inactive (deletion still pending — CA-4)
 - ☑ Trace: confirmed CA=screening / Sumsub=IDV responsibility split (screening_config.py)
 - ☑ Trace: CA Mesh has no numeric match score; adverse-media URL pipeline intact
-- ☑ CA-1 single-risk-type re-test resolved: entity-level status only; single-type entities score correctly; PEP over-grade is a sandbox-data artifact
+- ☑ CA-1 single-risk-type re-test **passed** — both subtests: Mick Davis (PEP-only) → 75 → High; DGUP Granitny (Sanctions-only) → 100 → Prohibited. Models validated; Boris 450 was a poisoned fixture.
+- ☑ CA-2 entity-level TP-marking SOP drafted (`sop-screening-true-positive-marking.md`, pending MLRO sign-off)
 
 ---
 
 ## Recommended next order
 
-1. **CA-2** (entity-level TP SOP) → then **PROD-1..4** replication (models are as-validated as sandbox allows).
+1. **PROD-1** replication (unblocked — sandbox validated); **PROD-2/3** webhooks once prod DNS is live. MLRO sign-off on the SOP (CA-2).
 2. **CA-4, CA-5** (webhook deletion + secret) — quick P1 hygiene, independent.
 3. **BE-2** (risk-level plumbing) → **UI-2** → **UI-1** (de-dup PR).
 4. **RPT-1/RPT-2** (screening-report PDF) — independent, anytime.
-5. **CA-11 / BE-3 / BE-4 / RPT-3** — validate on prod CA data (incl. the real-PEP grading check).
+5. **CA-11 / BE-3 / BE-4 / RPT-3** — confirm on prod CA data.
 
 _Strategic note: treat CA's risk level as a provider-side **triage** signal, not RegMind's authoritative risk grade — `rule_engine.py` owns LOW/MEDIUM/HIGH/VERY_HIGH. Don't over-fit CA's SUM scoring._
