@@ -9830,6 +9830,14 @@ function documentVerificationCheckMethodMeta(check) {
   return null;
 }
 
+function isPassedRoutineAgent1GateCheck(check) {
+  if (!check || documentVerificationCheckResultBucket(check) !== 'pass') return false;
+  var id = String(firstMeaningfulDetailValue(check.id, check.check_id, check.key) || '').trim().toUpperCase();
+  if (['GATE-01', 'GATE-02', 'GATE-03'].indexOf(id) >= 0) return true;
+  var label = String(firstMeaningfulDetailValue(check.label, check.name) || '').trim().toLowerCase();
+  return ['file format', 'file size', 'duplicate detection'].indexOf(label) >= 0;
+}
+
 function renderDocumentVerificationCheckRow(check, idx) {
   check = check || {};
   var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
@@ -9903,8 +9911,11 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
   var passedCheckRows = [];
   var unavailableCheckRows = [];
   var checks = Array.isArray(results.checks) ? results.checks : [];
+  var visibleChecks = [];
   checks.forEach(function(check, idx) {
     if (!check || typeof check !== 'object') return;
+    if (isPassedRoutineAgent1GateCheck(check)) return;
+    visibleChecks.push(check);
     var rendered = renderDocumentVerificationCheckRow(check, idx);
     if (rendered.bucket === 'pass') {
       passedCheckRows.push(rendered.html);
@@ -9915,13 +9926,13 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
     }
   });
 
-  var hasClassifiedChecks = checks.some(function(check) { return !!documentVerificationCheckMethodMeta(check); });
+  var hasClassifiedChecks = visibleChecks.some(function(check) { return !!documentVerificationCheckMethodMeta(check); });
   if (hasClassifiedChecks) {
     classificationLegend = '<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>';
   }
   var stateLabel = String((auditContext && auditContext.stateLabel) || '').toLowerCase();
   var overall = String(firstMeaningfulDetailValue(results.overall, results.overall_result, results.status) || '').toLowerCase();
-  var verifiedWithoutPassDetail = !passedCheckRows.length && !attentionCheckRows.length && (
+  var verifiedWithoutPassDetail = !checks.length && !passedCheckRows.length && !attentionCheckRows.length && (
     stateLabel === 'verified' ||
     results.verification_success === true ||
     ['verified', 'passed', 'success', 'pass'].indexOf(overall) >= 0

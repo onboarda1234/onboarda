@@ -72,6 +72,19 @@ function assert(condition, message) {
 """
 
 
+def _verification_render_functions(html: str) -> str:
+    return "\n\n".join(
+        _extract_function(html, name)
+        for name in [
+            "documentVerificationCheckResultBucket",
+            "documentVerificationCheckMethodMeta",
+            "isPassedRoutineAgent1GateCheck",
+            "renderDocumentVerificationCheckRow",
+            "buildVerificationResultsHtml",
+        ]
+    )
+
+
 def test_expected_checks_missing_is_not_rendered_in_technical_audit_details():
     html = _backoffice_html()
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
@@ -83,15 +96,7 @@ def test_expected_checks_missing_is_not_rendered_in_technical_audit_details():
 
 def test_verified_document_with_stored_passed_checks_shows_completed_checks_and_method_dots():
     html = _backoffice_html()
-    functions = "\n\n".join(
-        _extract_function(html, name)
-        for name in [
-            "documentVerificationCheckResultBucket",
-            "documentVerificationCheckMethodMeta",
-            "renderDocumentVerificationCheckRow",
-            "buildVerificationResultsHtml",
-        ]
-    )
+    functions = _verification_render_functions(html)
     script = f"""
 {_js_prelude()}
 {functions}
@@ -122,17 +127,124 @@ assert(rendered.indexOf('Detailed passed-check evidence is not available') < 0, 
     _run_node(script)
 
 
+def test_passed_agent1_system_gate_checks_are_hidden_without_mutating_results():
+    html = _backoffice_html()
+    functions = _verification_render_functions(html)
+    script = f"""
+{_js_prelude()}
+{functions}
+var results = {{
+  ai_source: 'live',
+  verified_at: '2026-07-03T08:00:00Z',
+  overall: 'verified',
+  checks: [
+    {{ id: 'GATE-01', label: 'File Format', result: 'pass', method: 'Rule-Based', message: 'PDF accepted.' }},
+    {{ id: 'GATE-02', label: 'File Size', result: 'passed', method: 'Rule-Based', message: 'Within limit.' }},
+    {{ id: 'GATE-03', label: 'Duplicate Detection', result: 'success', method: 'Rule-Based', message: 'No duplicate found.' }},
+    {{ id: 'DOC-01', label: 'Document integrity', result: 'pass', method: 'Hybrid', message: 'Integrity checks passed.' }}
+  ]
+}};
+var originalCheckCount = results.checks.length;
+var rendered = buildVerificationResultsHtml(results, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Verified' }});
+assert(rendered.indexOf('File Format') < 0, 'passed File Format / GATE-01 should be hidden');
+assert(rendered.indexOf('GATE-01') < 0, 'passed GATE-01 id should be hidden');
+assert(rendered.indexOf('File Size') < 0, 'passed File Size / GATE-02 should be hidden');
+assert(rendered.indexOf('GATE-02') < 0, 'passed GATE-02 id should be hidden');
+assert(rendered.indexOf('Duplicate Detection') < 0, 'passed Duplicate Detection / GATE-03 should be hidden');
+assert(rendered.indexOf('GATE-03') < 0, 'passed GATE-03 id should be hidden');
+assert(rendered.indexOf('Document integrity') >= 0, 'non-gate passed check should remain visible');
+assert(rendered.indexOf('DOC-01') >= 0, 'non-gate check id should remain visible');
+assert(rendered.indexOf('3 system checks passed') < 0, 'system-check summary should not render');
+assert(results.checks.length === originalCheckCount, 'underlying checks array should remain present');
+assert(results.checks[0].label === 'File Format', 'underlying GATE-01 check should not be mutated');
+assert(results.checks[1].label === 'File Size', 'underlying GATE-02 check should not be mutated');
+assert(results.checks[2].label === 'Duplicate Detection', 'underlying GATE-03 check should not be mutated');
+"""
+    _run_node(script)
+
+
+def test_only_passed_agent1_system_gate_checks_leave_no_floating_legend_or_summary():
+    html = _backoffice_html()
+    functions = _verification_render_functions(html)
+    script = f"""
+{_js_prelude()}
+{functions}
+var rendered = buildVerificationResultsHtml({{
+  ai_source: 'live',
+  verified_at: '2026-07-03T08:00:00Z',
+  overall: 'verified',
+  checks: [
+    {{ id: 'GATE-01', label: 'File Format', result: 'pass', method: 'Rule-Based' }},
+    {{ id: 'GATE-02', label: 'File Size', result: 'pass', method: 'Rule-Based' }},
+    {{ id: 'GATE-03', label: 'Duplicate Detection', result: 'pass', method: 'Rule-Based' }}
+  ]
+}}, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Verified' }});
+assert(rendered.indexOf('File Format') < 0, 'passed GATE-01 should be hidden');
+assert(rendered.indexOf('File Size') < 0, 'passed GATE-02 should be hidden');
+assert(rendered.indexOf('Duplicate Detection') < 0, 'passed GATE-03 should be hidden');
+assert(rendered.indexOf('Completed checks') < 0, 'completed-checks section should be omitted when only hidden gates exist');
+assert(rendered.indexOf('check-type-legend') < 0, 'legend should not render when all classified checks are hidden');
+assert(rendered.indexOf('3 system checks passed') < 0, 'hidden checks should not be summarized');
+assert(rendered.indexOf('Detailed passed-check evidence is not available') < 0, 'hidden stored checks should not trigger missing-evidence fallback');
+"""
+    _run_node(script)
+
+
+def test_failed_agent1_system_gate_checks_remain_visible():
+    html = _backoffice_html()
+    functions = _verification_render_functions(html)
+    script = f"""
+{_js_prelude()}
+{functions}
+var rendered = buildVerificationResultsHtml({{
+  ai_source: 'live',
+  verified_at: '2026-07-03T08:00:00Z',
+  overall: 'flagged',
+  checks: [
+    {{ id: 'GATE-01', label: 'File Format', result: 'fail', method: 'Rule-Based', message: 'Unsupported file type.' }},
+    {{ id: 'GATE-02', label: 'File Size', result: 'failed', method: 'Rule-Based', message: 'File exceeds upload limit.' }},
+    {{ id: 'GATE-03', label: 'Duplicate Detection', result: 'blocked', method: 'Rule-Based', message: 'Duplicate file hash found.' }}
+  ]
+}}, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Failed' }});
+assert(rendered.indexOf('File Format') >= 0, 'failed File Format / GATE-01 should render');
+assert(rendered.indexOf('Unsupported file type.') >= 0, 'failed GATE-01 detail should render');
+assert(rendered.indexOf('File Size') >= 0, 'failed File Size / GATE-02 should render');
+assert(rendered.indexOf('File exceeds upload limit.') >= 0, 'failed GATE-02 detail should render');
+assert(rendered.indexOf('Duplicate Detection') >= 0, 'failed Duplicate Detection / GATE-03 should render');
+assert(rendered.indexOf('Duplicate file hash found.') >= 0, 'failed GATE-03 detail should render');
+assert(rendered.indexOf('Checks requiring attention') >= 0, 'failed gate checks should stay prominent');
+"""
+    _run_node(script)
+
+
+def test_warning_and_unavailable_agent1_system_gate_checks_remain_visible():
+    html = _backoffice_html()
+    functions = _verification_render_functions(html)
+    script = f"""
+{_js_prelude()}
+{functions}
+var rendered = buildVerificationResultsHtml({{
+  ai_source: 'live',
+  verified_at: '2026-07-03T08:00:00Z',
+  overall: 'manual_review',
+  checks: [
+    {{ id: 'GATE-01', label: 'File Format', result: 'warn', method: 'Rule-Based', message: 'Format requires officer review.' }},
+    {{ id: 'GATE-02', label: 'File Size', result: 'skipped', method: 'Rule-Based', message: 'Size check unavailable.' }},
+    {{ id: 'GATE-03', label: 'Duplicate Detection', status: 'pending', method: 'Rule-Based', message: 'Duplicate check not complete.' }}
+  ]
+}}, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Review required' }});
+assert(rendered.indexOf('Format requires officer review.') >= 0, 'warning GATE-01 should render');
+assert(rendered.indexOf('Size check unavailable.') >= 0, 'skipped GATE-02 should render');
+assert(rendered.indexOf('Duplicate check not complete.') >= 0, 'pending GATE-03 should render');
+assert(rendered.indexOf('Checks requiring attention') >= 0, 'warning gate should stay in attention section');
+assert(rendered.indexOf('Checks unavailable / not run') >= 0, 'unavailable gates should stay in unavailable section');
+"""
+    _run_node(script)
+
+
 def test_verified_document_without_stored_pass_detail_shows_conservative_fallback():
     html = _backoffice_html()
-    functions = "\n\n".join(
-        _extract_function(html, name)
-        for name in [
-            "documentVerificationCheckResultBucket",
-            "documentVerificationCheckMethodMeta",
-            "renderDocumentVerificationCheckRow",
-            "buildVerificationResultsHtml",
-        ]
-    )
+    functions = _verification_render_functions(html)
     script = f"""
 {_js_prelude()}
 {functions}
