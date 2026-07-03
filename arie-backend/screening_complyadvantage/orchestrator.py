@@ -68,6 +68,7 @@ class _WorkflowPollResult:
     workflow: CAWorkflowResponse
     raw: dict
     timed_out: bool = False
+    errored: bool = False
 
 
 @dataclass
@@ -79,6 +80,7 @@ class _PassResult:
     customer_response: CACustomerResponse
     monitoring_enabled: bool
     timed_out: bool = False
+    errored: bool = False
 
 
 class ComplyAdvantageScreeningOrchestrator:
@@ -143,6 +145,8 @@ class ComplyAdvantageScreeningOrchestrator:
         )
         if strict.timed_out or relaxed.timed_out:
             _mark_report_pending_after_timeout(report, strict=strict, relaxed=relaxed)
+        if strict.errored or relaxed.errored:
+            _mark_report_errored(report, strict=strict, relaxed=relaxed)
         self._seed_subscription_if_needed(strict, application_context, db)
         return report
 
@@ -202,9 +206,10 @@ class ComplyAdvantageScreeningOrchestrator:
         )
         polled = self.poll_workflow_until_complete(initial.workflow_instance_identifier)
         workflow = polled.workflow
-        customer_identifier = _extract_customer_identifier(polled.raw)
+        degraded = polled.timed_out or polled.errored or self._case_creation_skipped(workflow)
+        customer_identifier = _extract_customer_identifier(polled.raw, required=not degraded)
         customer_response = CACustomerResponse.model_validate({"identifier": customer_identifier})
-        if polled.timed_out or self._case_creation_skipped(workflow):
+        if degraded:
             return _PassResult(
                 workflow,
                 [],
@@ -213,6 +218,7 @@ class ComplyAdvantageScreeningOrchestrator:
                 customer_response,
                 initial.monitoring_enabled,
                 timed_out=polled.timed_out,
+                errored=polled.errored,
             )
         alerts, deep_risks = _fetch_alerts_and_deep_risks(self.client, polled.raw)
         return _PassResult(workflow, alerts, deep_risks, initial.customer_input, customer_response, initial.monitoring_enabled)
@@ -318,6 +324,8 @@ def _poll_workflow_until_complete(
             step="workflow_poll",
         )
         workflow = CAWorkflowResponse.model_validate(raw)
+        if _workflow_errored(workflow):
+            return _WorkflowPollResult(workflow=workflow, raw=raw, errored=True)
         if _workflow_complete(workflow):
             return _WorkflowPollResult(workflow=workflow, raw=raw)
         if clock() >= deadline:
@@ -360,10 +368,51 @@ def _pending_timeout_poll_result(
 
 
 def _mark_report_pending_after_timeout(report, *, strict, relaxed):
+    _mark_report_degraded(
+        report,
+        strict=strict,
+        relaxed=relaxed,
+        provider_flag_key="pending_timeout",
+        provider_ids_key="pending_timeout_workflow_ids",
+        degraded_source="complyadvantage_workflow_pending",
+        overall_flag="ComplyAdvantage screening is still processing; live terminal screening is required before approval.",
+        pending_reason="workflow_poll_timeout",
+    )
+
+
+def _mark_report_errored(report, *, strict, relaxed):
+    _mark_report_degraded(
+        report,
+        strict=strict,
+        relaxed=relaxed,
+        provider_flag_key="workflow_errored",
+        provider_ids_key="errored_workflow_ids",
+        degraded_source="complyadvantage_workflow_errored",
+        overall_flag="ComplyAdvantage screening workflow errored; a live terminal screening is required before approval.",
+        pending_reason="workflow_errored",
+    )
+
+
+def _mark_report_degraded(
+    report,
+    *,
+    strict,
+    relaxed,
+    provider_flag_key,
+    provider_ids_key,
+    degraded_source,
+    overall_flag,
+    pending_reason,
+):
+    """Mark a screening report as non-terminal/degraded (blocks approval, needs
+    re-screen). Shared by the poll-timeout and workflow-errored paths — both
+    leave screening in the recognised ``pending_provider`` state so downstream
+    approval gates treat them identically; only the reason/flag/markers differ.
+    """
     provider = (report.get("provider_specific") or {}).get("complyadvantage")
     if isinstance(provider, dict):
-        provider["pending_timeout"] = True
-        provider["pending_timeout_workflow_ids"] = [
+        provider[provider_flag_key] = True
+        provider[provider_ids_key] = [
             workflow_id
             for workflow_id in (
                 getattr(strict.workflow, "workflow_instance_identifier", None),
@@ -373,12 +422,11 @@ def _mark_report_pending_after_timeout(report, *, strict, relaxed):
         ]
     report["any_non_terminal_subject"] = True
     report["degraded_sources"] = list(dict.fromkeys(
-        list(report.get("degraded_sources") or []) + ["complyadvantage_workflow_pending"]
+        list(report.get("degraded_sources") or []) + [degraded_source]
     ))
     flags = list(report.get("overall_flags") or [])
-    pending_flag = "ComplyAdvantage screening is still processing; live terminal screening is required before approval."
-    if pending_flag not in flags:
-        flags.append(pending_flag)
+    if overall_flag not in flags:
+        flags.append(overall_flag)
     report["overall_flags"] = flags
     report["company_screening_state"] = "pending_provider"
     company = report.get("company_screening")
@@ -388,7 +436,7 @@ def _mark_report_pending_after_timeout(report, *, strict, relaxed):
         if "matched" not in company:
             company["matched"] = False
         company.setdefault("results", [])
-        company["pending_reason"] = "workflow_poll_timeout"
+        company["pending_reason"] = pending_reason
     for group_name in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
         for subject in report.get(group_name) or []:
             if not isinstance(subject, dict):
@@ -402,7 +450,7 @@ def _mark_report_pending_after_timeout(report, *, strict, relaxed):
             screening["api_status"] = "pending"
             screening["source"] = "complyadvantage"
             screening["provider"] = "complyadvantage"
-            screening["pending_reason"] = "workflow_poll_timeout"
+            screening["pending_reason"] = pending_reason
 
 
 def _fetch_risks_paginated_for_alert(client, alert_id):
@@ -449,6 +497,22 @@ def _normalise_next_link(client, next_link):
         raise CAUnexpectedResponse("ComplyAdvantage pagination next host unexpected")
     path = parsed.path or "/"
     return f"{path}?{parsed.query}" if parsed.query else path
+
+
+def _workflow_errored(workflow):
+    """True when CA reports the workflow (or any step) as a terminal ERRORED state.
+
+    ERRORED includes any status CA returns that we don't otherwise model — the
+    ScreeningStatus enum maps unknown values to ERRORED — so a provider error or
+    a novel status is handled as a terminal failure rather than crashing or
+    polling forever.
+    """
+    if _status_value(workflow.status) == "ERRORED":
+        return True
+    for detail in (workflow.step_details or {}).values():
+        if detail is not None and _status_value(detail.status) == "ERRORED":
+            return True
+    return False
 
 
 def _workflow_complete(workflow):
@@ -498,7 +562,7 @@ def _extract_identifier(value):
     return None
 
 
-def _extract_customer_identifier(workflow_raw):
+def _extract_customer_identifier(workflow_raw, *, required=True):
     step_details = workflow_raw.get("step_details") or {}
     customer_creation = step_details.get("customer-creation") or {}
     output = customer_creation.get("step_output") or customer_creation.get("output") or {}
@@ -506,6 +570,10 @@ def _extract_customer_identifier(workflow_raw):
     if not customer_identifier:
         customer_identifier = workflow_raw.get("customer_identifier")
     if not customer_identifier:
+        if not required:
+            # Degraded passes (timed-out / errored) never completed customer
+            # creation, so there is no identifier — that is not an error.
+            return ""
         raise CAUnexpectedResponse("ComplyAdvantage workflow customer identifier missing")
     return customer_identifier
 

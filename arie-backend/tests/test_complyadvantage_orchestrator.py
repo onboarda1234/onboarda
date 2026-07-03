@@ -694,3 +694,72 @@ def test_monitoring_disabled_does_not_seed_even_with_db():
         )
 
     seed.assert_not_called()
+
+
+# ── CA workflow ERRORED handling (regression: ERRORED status used to 500 the
+#    screening run via a CAWorkflowResponse enum ValidationError) ──
+
+def test_poll_returns_errored_result_for_errored_workflow_status():
+    errored = {
+        "workflow_instance_identifier": "wf-err",
+        "workflow_type": "screening",
+        "status": "ERRORED",
+        "step_details": {"case-creation": {"status": "ERRORED"}},
+    }
+    client = PathStrictFakeCAClient({}, {"/v2/workflows/wf-err": errored})
+    result = ComplyAdvantageScreeningOrchestrator(
+        client, clock=lambda: 0, sleep_fn=lambda _: None
+    ).poll_workflow_until_complete("wf-err")
+    assert result.errored is True
+    assert result.timed_out is False
+
+
+def test_unknown_workflow_status_degrades_to_errored_without_crashing():
+    # A CA status we don't model must not raise — it degrades to ERRORED.
+    unknown = {
+        "workflow_instance_identifier": "wf-unknown",
+        "workflow_type": "screening",
+        "status": "SOME-BRAND-NEW-CA-STATUS",
+        "step_details": {},
+    }
+    client = PathStrictFakeCAClient({}, {"/v2/workflows/wf-unknown": unknown})
+    result = ComplyAdvantageScreeningOrchestrator(
+        client, clock=lambda: 0, sleep_fn=lambda _: None
+    ).poll_workflow_until_complete("wf-unknown")
+    assert result.errored is True
+
+
+def test_errored_workflow_marks_report_degraded_and_does_not_raise():
+    errored_workflow = {
+        "workflow_type": "screening",
+        "status": "ERRORED",
+        "steps": ["initial_screening"],
+        "step_details": {"case-creation": {"status": "ERRORED"}},
+    }
+    data = {
+        "strict_workflow": {**errored_workflow, "workflow_instance_identifier": "wf-err-strict"},
+        "relaxed_workflow": {**errored_workflow, "workflow_instance_identifier": "wf-err-relaxed"},
+        "strict_alerts_risks": {},
+        "relaxed_alerts_risks": {},
+        "strict_deep_risks": {},
+        "relaxed_deep_risks": {},
+    }
+    client = _client_for_two_pass(data)
+
+    # Previously this raised a CAWorkflowResponse ValidationError -> 500. It must
+    # now return a degraded, non-approvable report instead.
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("relaxed"),
+        application_context=_context(),
+        monitoring_enabled=False,
+    )
+
+    assert report["any_non_terminal_subject"] is True
+    assert report["company_screening_state"] == "pending_provider"
+    assert "complyadvantage_workflow_errored" in report["degraded_sources"]
+    assert report["provider_specific"]["complyadvantage"]["workflow_errored"] is True
+    assert any("errored" in str(flag).lower() for flag in report["overall_flags"])
+    director = report["director_screenings"][0]
+    assert director["screening_state"] == "pending_provider"
+    assert director["screening"]["pending_reason"] == "workflow_errored"
