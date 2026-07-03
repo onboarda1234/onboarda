@@ -518,10 +518,18 @@ class AuditLogger:
         and correct on PostgreSQL, where equal-timestamp rows are otherwise
         returned in an arbitrary order and yield false tamper reports (H12).
 
-        By default the ENTIRE chain is verified so recent tampering is always
-        detected (H3). When ``limit`` is given and the chain is longer, only the
-        most recent ``limit`` entries are verified, anchored on the stored
-        previous_hash of the first in-window entry.
+        By default the ENTIRE chain is verified so that tampering to any
+        retained entry — including recent ones — is detected, which the previous
+        oldest-N window missed (H3). When ``limit`` is given and the chain is
+        longer, only the most recent ``limit`` entries are verified, anchored on
+        the stored previous_hash of the first in-window entry.
+
+        LIMITATION: like any hash chain, this cannot by itself detect *suffix
+        truncation* — deleting the most recent N entries leaves a shorter but
+        internally-consistent chain that still verifies. Detecting that requires
+        an external anchor (a persisted head-hash + entry count sealed
+        out-of-band); that anchor is a follow-up and is not yet wired, so a
+        ``verified: True`` result does not by itself prove no tail was dropped.
         """
 
         def _recompute(row, prev):

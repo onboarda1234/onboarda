@@ -228,8 +228,12 @@ def run_scheduled_purge(db, purged_by: str = "system") -> List[Dict]:
     Called by cron or periodic task scheduler.
     Returns list of purge results.
     """
+    # auto_purge is BOOLEAN on PostgreSQL and INTEGER(0/1) on SQLite. `= TRUE` is
+    # valid on both; the previous `auto_purge = 1 OR auto_purge = true` raised
+    # "operator does not exist: boolean = integer" on PostgreSQL, so the daily
+    # purge crashed on Postgres before reaching the audit-table guard below.
     policies = db.execute(
-        "SELECT * FROM data_retention_policies WHERE auto_purge = 1 OR auto_purge = true"
+        "SELECT * FROM data_retention_policies WHERE auto_purge = TRUE"
     ).fetchall()
 
     results = []

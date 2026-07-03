@@ -10,12 +10,17 @@
 -- The code fix (gdpr.py) removes the session_tokens -> audit_log mapping and
 -- makes the automatic purge refuse the audit tables outright. This migration
 -- additionally repairs already-deployed databases whose seeded policy row still
--- carries auto_purge=1 (INSERT OR IGNORE seeding never updates existing rows).
+-- carries auto_purge enabled (conflict-ignoring seed upserts never update an
+-- existing row, so a code/seed change alone does not fix deployed data).
 --
 -- SCOPE: data-only, idempotent. No schema change. Re-running is a no-op.
+-- NOTE: auto_purge is BOOLEAN on PostgreSQL and INTEGER(0/1) on SQLite. The
+-- FALSE literal and IS DISTINCT FROM comparison are valid on both engines, so
+-- this statement is portable (a literal `= 0` / `<> 0` would raise
+-- "operator does not exist: boolean <> integer" on PostgreSQL).
 
 UPDATE data_retention_policies
-   SET auto_purge = 0,
+   SET auto_purge = FALSE,
        description = 'Expired authentication tokens and session data. 24-hour retention (documentation only; not auto-purged).'
  WHERE data_category = 'session_tokens'
-   AND auto_purge <> 0;
+   AND auto_purge IS DISTINCT FROM FALSE;

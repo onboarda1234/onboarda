@@ -38,6 +38,11 @@ FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     # Migration 020 is a data backfill. It is not represented by init_db's
     # schema DDL, so long-lived databases must let the file runner execute it.
     "020",
+    # Migration 038 is a data fix (audit finding B1): it flips the seeded
+    # session_tokens retention policy to auto_purge=FALSE on already-deployed
+    # databases. Like 020 it is not represented by init_db DDL, so it must run
+    # through the file runner rather than being pre-marked "covered by init_db".
+    "038",
 })
 
 _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY = "pr_cr1r_manual_defaults"
@@ -4122,6 +4127,14 @@ def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
                 "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC"
             ).fetchall()
         ]
+        if not legacy_rows:
+            # Empty legacy table — nothing to preserve or seal. Replace it in
+            # place with the modern schema rather than creating an empty archive.
+            db.execute("DROP TABLE supervisor_audit_log")
+            _create_supervisor_audit_log_table(db)
+            _create_supervisor_audit_log_indexes(db)
+            logger.info("Supervisor audit schema replaced (empty legacy table)")
+            return
         db.execute("DROP TABLE IF EXISTS supervisor_audit_log_repair")
         _create_supervisor_audit_log_table(db, "supervisor_audit_log_repair")
         previous_hash = None

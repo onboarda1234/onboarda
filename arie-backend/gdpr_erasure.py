@@ -46,7 +46,12 @@ _ERASURE_COLUMN_MAP: Dict[str, List[str]] = {
              "date_of_birth", "country_of_residence", "residential_address",
              "pep_declaration"],
     "intermediaries": ["entity_name", "registered_address", "registration_number"],
-    "documents": ["doc_name", "file_path", "s3_key"],
+    # NOTE: `documents` is intentionally omitted. The PII lives in the physical
+    # file on disk / in S3, referenced by file_path / s3_key. Nulling those
+    # pointers would ORPHAN the file (the real PII survives, now unlocatable),
+    # which is the opposite of erasure. Document erasure must first delete the
+    # physical object via the pointer and only then redact the row — a follow-up
+    # that must land before this draft is wired live.
 }
 
 _REDACTION_TOKEN = "[ERASED]"
