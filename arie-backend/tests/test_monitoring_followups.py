@@ -28,6 +28,13 @@ def fu_db(tmp_path, monkeypatch):
     monkeypatch.setattr("db.DB_PATH", str(tmp_path / "test.db"))
     import db as db_module
 
+    # Full-CI isolation: `db` may have been imported earlier with Postgres env
+    # set. Force this fixture onto the temp SQLite file regardless of import
+    # order (patch the already-bound module globals, not just os.environ).
+    monkeypatch.setattr(db_module, "DATABASE_URL", "", raising=False)
+    monkeypatch.setattr(db_module, "USE_POSTGRESQL", False, raising=False)
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "test.db"), raising=False)
+
     db_module.init_db()
     conn = db_module.get_db()
     conn.execute(

@@ -53,18 +53,18 @@ def add_followup(db, *, alert_id, action, note, due_at, user, audit_writer) -> D
         raise FollowupError("A follow-up needs a note or a due date.", 400)
 
     created_by = (user or {}).get("sub", "")
-    db.execute(
+    # RETURNING binds the response/audit to the EXACT row this call inserted —
+    # a concurrent insert on the same alert cannot be mis-selected (a plain
+    # "ORDER BY id DESC" by alert_id could pick up another officer's row).
+    row = db.execute(
         """
         INSERT INTO monitoring_alert_followups (alert_id, action, note, due_at, created_by)
         VALUES (?,?,?,?,?)
+        RETURNING *
         """,
         (alert_id, act, note, due_at, created_by),
-    )
-    db.commit()
-    row = db.execute(
-        "SELECT * FROM monitoring_alert_followups WHERE alert_id = ? ORDER BY id DESC LIMIT 1",
-        (alert_id,),
     ).fetchone()
+    db.commit()
     followup = _row(row)
     audit_writer(
         dict(user or {}),
