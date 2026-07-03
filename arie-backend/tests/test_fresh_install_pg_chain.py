@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Helpers
 # ---------------------------------------------------------------------------
 
-_FRESH_INIT_PENDING_DATA_MIGRATIONS = 1
+_FRESH_INIT_PENDING_DATA_MIGRATIONS = 2  # 020 + 038 (audit finding B1)
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations" / "scripts"
 
 
