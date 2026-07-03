@@ -51,6 +51,15 @@ function extractFunction(functionName) {
   throw new Error(`Could not extract ${functionName}`);
 }
 
+function extractVar(varName) {
+  const marker = `var ${varName} = `;
+  const start = html.indexOf(marker);
+  if (start < 0) throw new Error(`Missing var ${varName}`);
+  const end = html.indexOf('};', start);
+  if (end < 0) throw new Error(`Could not extract var ${varName}`);
+  return html.slice(start, end + 2);
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -67,46 +76,69 @@ const sandbox = {
 };
 
 vm.createContext(sandbox);
+vm.runInContext(extractVar('CH_REGISTRY_FIELD_ALIASES'), sandbox);
 [
   'formatNestedObject',
   'normalizeDetailValue',
-  'registryComparableValue',
+  'registryPrescreeningData',
+  'registryProviderIsCompaniesHouse',
+  'registryValueForKey',
+  'registryFieldCandidateKeys',
+  'registrySourcedValueForField',
+  'registryCompanyStatus',
+  'registryCompanyStatusHasMaterialIssue',
   'registrySourceDisplayValue',
-  'registryValueIsStructured',
-  'getFieldProvenanceConflictState',
-  'renderFieldProvenanceConflictBadge',
-  'renderFieldProvenanceSourceNote',
+  'registryComparableValue',
+  'registryPad2',
+  'registryDateComparableValue',
+  'registryNumberComparableValue',
+  'registryFieldComparableValue',
+  'renderCompaniesHouseRegistryBadge',
+  'isCompaniesHouseRegistryApp',
+  'renderCompaniesHouseFieldBadges',
 ].forEach((fn) => vm.runInContext(extractFunction(fn), sandbox));
 
-assert(sandbox.getFieldProvenanceConflictState('Current', undefined) === null, 'no source data should not create an indicator');
-assert(sandbox.getFieldProvenanceConflictState('Company Ltd', 'company ltd') === null, 'case-insensitive match should not create mismatch');
-assert(sandbox.getFieldProvenanceConflictState('  Company   Ltd  ', 'company ltd') === null, 'space-normalized match should not create mismatch');
+const app = {
+  prescreeningData: {
+    registry_provenance: { provider: 'companies_house' },
+    registry_sourced_values: {
+      registered_entity_name: 'Registry Company Ltd',
+      registered_office_address: { full_address: '1 Registry Street, London' },
+      incorporation_date: '2024-01-02',
+    },
+  },
+};
 
-const missing = sandbox.getFieldProvenanceConflictState('', 'Registry Company Ltd');
-assert(missing && missing.state === 'missing', 'blank current value with source should be missing');
-assert(sandbox.renderFieldProvenanceConflictBadge(missing).includes('>Missing<'), 'missing badge should render');
-assert(sandbox.renderFieldProvenanceSourceNote(missing).includes('Source: Registry Company Ltd'), 'source note should render for missing source conflict');
-
-const mismatch = sandbox.getFieldProvenanceConflictState('Current Company Ltd', 'Registry Company Ltd');
-assert(mismatch && mismatch.state === 'mismatch', 'plain text source difference should be mismatch');
-assert(sandbox.renderFieldProvenanceConflictBadge(mismatch).includes('>Mismatch<'), 'mismatch badge should render');
-
-const needsReview = sandbox.getFieldProvenanceConflictState(
-  '1 Current Street',
-  { full_address: '1 Registry Street, London' }
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'registered_entity_name', label: 'Registered Entity Name' }, '  registry   company ltd  ').includes('>✓<'),
+  'case-insensitive whitespace-normalized match should show tick'
 );
-assert(needsReview && needsReview.state === 'needs_review', 'structured source comparison should be needs review');
-assert(sandbox.renderFieldProvenanceConflictBadge(needsReview).includes('>Needs review<'), 'needs review badge should render');
-assert(sandbox.renderFieldProvenanceSourceNote(needsReview).includes('Source: 1 Registry Street, London'), 'source note should prefer full_address');
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'registered_entity_name', label: 'Registered Entity Name' }, 'Current Company Ltd').includes('>Edited<'),
+  'source/current difference should show neutral Edited'
+);
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'registered_address', label: 'Registered Address' }, '1 Registry Street, London').includes('>✓<'),
+  'structured address with a safe display value should compare'
+);
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'incorporation_date', label: 'Incorporation Date' }, '2024-1-2').includes('>✓<'),
+  'safe date normalization should compare dates'
+);
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'registered_entity_name', label: 'Registered Entity Name' }, '') === '',
+  'missing current values should remain unbadged'
+);
+assert(
+  sandbox.renderCompaniesHouseFieldBadges({}, { key: 'registered_entity_name', label: 'Registered Entity Name' }, 'Registry Company Ltd') === '',
+  'non-registry applications should remain unbadged'
+);
 
-const override = sandbox.getFieldProvenanceConflictState('Current', 'Registry', { hasOverride: true });
-assert(override && override.state === 'needs_review', 'overridden source/current difference should be needs review, not green');
-
-console.log('field provenance helper behaviour ok');
+console.log('field provenance neutral indicator behaviour ok');
 """
 
 
-def test_field_provenance_conflict_helper_states_are_conservative():
+def test_registry_field_indicator_helper_states_are_neutral():
     assert shutil.which("node"), "Node.js is required for helper behaviour validation"
 
     result = subprocess.run(
@@ -120,51 +152,51 @@ def test_field_provenance_conflict_helper_states_are_conservative():
     assert result.returncode == 0, result.stderr or result.stdout
 
 
-def test_prescreen_summary_renders_conflict_badge_and_source_note_locally():
+def test_prescreen_summary_renders_registry_field_badges_without_warning_notes():
     html = _html()
     summary_body = _extract_js_function(html, "renderPrescreenSummary")
 
-    assert "companiesHouseFieldProvenanceConflictState(app, field, currentRaw)" in summary_body
-    assert "renderFieldProvenanceConflictBadge(registryConflict)" in summary_body
-    assert "renderFieldProvenanceSourceNote(registryConflict)" in summary_body
-    assert "registryBadges + registryConflictBadge" in summary_body
-    assert "registrySourceNote" in summary_body
+    assert "renderCompaniesHouseFieldBadges(app, field, currentRaw)" in summary_body
+    assert "companiesHouseFieldProvenanceConflictState" not in summary_body
+    assert "renderFieldProvenanceConflictBadge" not in summary_body
+    assert "renderFieldProvenanceSourceNote" not in summary_body
+    assert "registryBadges +" in summary_body
 
 
-def test_conflict_indicators_do_not_expand_green_verified_coverage():
+def test_conflict_warning_indicators_removed_from_registry_badge_surface():
     html = _html()
     green_body = _extract_js_function(html, "renderCompaniesHouseFieldBadges")
-    conflict_badge_body = _extract_js_function(html, "renderFieldProvenanceConflictBadge")
-    conflict_state_body = _extract_js_function(html, "getFieldProvenanceConflictState")
+    badge_body = _extract_js_function(html, "renderCompaniesHouseRegistryBadge")
 
     assert "renderCompaniesHouseRegistryBadge('verified'" in green_body
+    assert "renderCompaniesHouseRegistryBadge('edited'" in green_body
     assert "renderFieldProvenanceConflictBadge" not in green_body
-    assert "✓ Verified" not in conflict_badge_body
-    assert "ch-registry-badge" not in conflict_badge_body
-    assert "field-provenance-conflict-badge" in conflict_badge_body
-    assert "currentComparable === sourceComparable) return null" in conflict_state_body
+    assert "✓ Verified" not in badge_body
+    assert "field-provenance-conflict-badge" not in html
+    assert "getFieldProvenanceConflictState" not in html
+    assert "Mismatch" not in badge_body
+    assert "Needs review" not in badge_body
 
 
 def test_no_provenance_data_remains_implicit_without_client_declared_badge():
     html = _html()
-    conflict_state_body = _extract_js_function(html, "getFieldProvenanceConflictState")
-    conflict_app_body = _extract_js_function(html, "companiesHouseFieldProvenanceConflictState")
-    conflict_badge_body = _extract_js_function(html, "renderFieldProvenanceConflictBadge")
+    field_body = _extract_js_function(html, "renderCompaniesHouseFieldBadges")
+    party_badge_body = _extract_js_function(html, "renderPartyRegistryFieldBadge")
 
-    assert "sourceValue === undefined" in conflict_state_body
-    assert "return null" in conflict_state_body
-    assert "if (!isCompaniesHouseRegistryApp(app)) return null" in conflict_app_body
-    assert "Client declared" not in conflict_badge_body
-    assert "client-declared" not in conflict_badge_body
-    assert "Client declared" not in _extract_js_function(html, "renderPrescreenSummary")
+    assert "registryValue === undefined" in field_body
+    assert "return ''" in field_body
+    assert "originalValue === undefined" in party_badge_body
+    assert "Client declared" not in field_body
+    assert "client-declared" not in field_body
+    assert "Client declared" not in party_badge_body
 
 
 def test_supported_registry_fields_only_reuse_existing_source_mapping():
     html = _html()
-    app_conflict_body = _extract_js_function(html, "companiesHouseFieldProvenanceConflictState")
+    field_body = _extract_js_function(html, "renderCompaniesHouseFieldBadges")
     candidate_body = _extract_js_function(html, "registryFieldCandidateKeys")
 
-    assert "registrySourcedValueForField(app, field)" in app_conflict_body
+    assert "registrySourcedValueForField(app, field)" in field_body
     assert "registered_entity_name" in candidate_body
     assert "entity_type" in candidate_body
     assert "registered_address" in candidate_body
@@ -175,11 +207,13 @@ def test_supported_registry_fields_only_reuse_existing_source_mapping():
     assert "brn" in candidate_body
 
 
-def test_conflict_indicators_are_backoffice_only_and_do_not_touch_kyc_reverify_strings():
+def test_registry_indicators_are_backoffice_only_and_do_not_touch_kyc_reverify_strings():
     backoffice = _html(BACKOFFICE_HTML)
     portal = _html(PORTAL_HTML)
 
-    assert "field-provenance-conflict-badge" in backoffice
+    assert "ch-registry-badge" in backoffice
+    assert "field-provenance-conflict-badge" not in backoffice
+    assert "ch-registry-badge" not in portal
     assert "field-provenance-conflict-badge" not in portal
     assert "field-provenance-source-note" not in portal
     assert "Re-verify" in backoffice
