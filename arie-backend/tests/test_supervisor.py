@@ -475,6 +475,79 @@ class TestAuditChainEntry:
         assert result["entries_checked"] == 4
         assert result.get("broken_links", []) == []
 
+    def test_recent_tamper_detected_within_limit_window(self, temp_db):
+        """H3: verifying with a small limit must check the MOST RECENT entries.
+
+        The previous implementation verified the OLDEST N rows (ORDER BY
+        timestamp ASC LIMIT N), so tampering a recent entry in a chain longer
+        than N went undetected. The window must anchor on the recent end.
+        """
+        import sqlite3
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry, AuditLogger
+        for i in range(6):
+            db = get_db()
+            append_verdict_chain_entry(
+                db=db, application_id="app-recent", verdict="CONSISTENT",
+                contradiction_count=0, supervisor_confidence=1.0, memo_id=f"m{i}",
+            )
+            db.commit()
+            db.close()
+
+        # Tamper the MOST RECENT entry (the chain tail).
+        conn = sqlite3.connect(temp_db)
+        tail = conn.execute(
+            "SELECT s.id FROM supervisor_audit_log s WHERE NOT EXISTS "
+            "(SELECT 1 FROM supervisor_audit_log t WHERE t.previous_hash = s.entry_hash) "
+            "ORDER BY s.timestamp DESC, s.id DESC LIMIT 1"
+        ).fetchone()
+        conn.execute(
+            "UPDATE supervisor_audit_log SET detail = 'TAMPERED' WHERE id = ?", (tail[0],)
+        )
+        conn.commit()
+        conn.close()
+
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_chain_integrity(limit=2)
+        assert result["verified"] is False
+        assert result["entries_checked"] == 2
+
+    def test_same_timestamp_chain_verifies_deterministically(self, temp_db, monkeypatch):
+        """H12: entries created within the same second must not be flagged tampered.
+
+        Chain order is reconstructed by following hash links, so equal
+        second-granularity timestamps (which sort arbitrarily on PostgreSQL) do
+        not fork the chain or produce false tamper reports. The timestamps are
+        fixed at CREATION time (they are part of the hash payload), reproducing a
+        genuine same-second burst rather than an out-of-band edit.
+        """
+        from datetime import datetime as _dt, timezone as _tz
+        self._clear_chain(temp_db)
+        import supervisor.audit as audit_mod
+        from supervisor.audit import AuditLogger
+        from supervisor.schemas import AuditEventType
+
+        class _FixedClock:
+            @staticmethod
+            def now(tz=None):
+                return _dt(2026, 1, 1, 0, 0, 0, tzinfo=_tz.utc)
+
+        monkeypatch.setattr(audit_mod, "datetime", _FixedClock)
+
+        al = AuditLogger(db_path=temp_db)
+        for i in range(5):
+            al.log(
+                event_type=AuditEventType.AGENT_RUN_COMPLETED,
+                action=f"a{i}",
+                application_id="app-samets",
+                data={"i": i},
+            )
+
+        result = al.verify_chain_integrity()
+        assert result["verified"] is True, result.get("broken_links")
+        assert result["entries_checked"] == 5
+
     def test_deliberate_hash_tampering_detected(self, temp_db):
         """verify_chain_integrity() detects a tampered entry_hash."""
         import sqlite3

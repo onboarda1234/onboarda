@@ -72,9 +72,23 @@ def append_verdict_chain_entry(
     from datetime import datetime, timezone
     from uuid import uuid4
 
-    # Retrieve the most recent entry_hash to link the chain.
+    # Retrieve the current chain tail to link the new entry (audit finding H12).
+    # The tail is the entry whose hash is not referenced as any other entry's
+    # previous_hash — this is insertion-order-correct and, unlike an
+    # ``ORDER BY timestamp`` scan, is unambiguous when several entries share the
+    # same second-granularity timestamp (which on PostgreSQL would otherwise
+    # return an arbitrary predecessor and fork the chain).
     row = db.execute(
-        "SELECT entry_hash FROM supervisor_audit_log ORDER BY timestamp DESC LIMIT 1"
+        """
+        SELECT s.entry_hash
+          FROM supervisor_audit_log s
+         WHERE NOT EXISTS (
+               SELECT 1 FROM supervisor_audit_log t
+                WHERE t.previous_hash = s.entry_hash
+           )
+         ORDER BY s.timestamp DESC, s.id DESC
+         LIMIT 1
+        """
     ).fetchone()
     previous_hash: Optional[str] = row["entry_hash"] if row else None
 
@@ -207,8 +221,19 @@ class AuditLogger:
             db = _get_db()
             if db is None:
                 return
+            # Recover the true chain tail (unlinked entry), not merely the newest
+            # timestamp — see append_verdict_chain_entry (audit finding H12).
             row = db.execute(
-                "SELECT entry_hash FROM supervisor_audit_log ORDER BY timestamp DESC LIMIT 1"
+                """
+                SELECT s.entry_hash
+                  FROM supervisor_audit_log s
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM supervisor_audit_log t
+                        WHERE t.previous_hash = s.entry_hash
+                   )
+                 ORDER BY s.timestamp DESC, s.id DESC
+                 LIMIT 1
+                """
             ).fetchone()
             if row:
                 self._last_hash = row["entry_hash"] if isinstance(row, dict) else row[0]
@@ -483,11 +508,45 @@ class AuditLogger:
 
     # ─── Query / Verification ─────────────────────────────
 
-    def verify_chain_integrity(self, limit: int = 1000) -> Dict[str, Any]:
+    def verify_chain_integrity(self, limit: Optional[int] = None) -> Dict[str, Any]:
         """
-        Verify the hash chain integrity of the last N entries.
-        Detects tampered or deleted entries.
+        Verify the hash chain integrity of the supervisor audit log.
+
+        Order is reconstructed by *following the hash links* (each entry's
+        previous_hash points at its predecessor's entry_hash), NOT by sorting on
+        the second-granularity timestamp. This makes verification deterministic
+        and correct on PostgreSQL, where equal-timestamp rows are otherwise
+        returned in an arbitrary order and yield false tamper reports (H12).
+
+        By default the ENTIRE chain is verified so recent tampering is always
+        detected (H3). When ``limit`` is given and the chain is longer, only the
+        most recent ``limit`` entries are verified, anchored on the stored
+        previous_hash of the first in-window entry.
         """
+
+        def _recompute(row, prev):
+            entry_data = {
+                "audit_id": row["id"],
+                "timestamp": _timestamp_for_hash(row["timestamp"]),
+                "event_type": row["event_type"],
+                "severity": row["severity"] or "info",
+                "pipeline_id": row["pipeline_id"] or "",
+                "application_id": row["application_id"] or "",
+                "run_id": row["run_id"] or "",
+                "agent_type": row["agent_type"] or "",
+                "actor_type": row["actor_type"] or "system",
+                "actor_id": row["actor_id"] or "",
+                "actor_name": row["actor_name"] or "",
+                "actor_role": row["actor_role"] or "",
+                "action": row["action"],
+                "detail": row["detail"] or "",
+                "data": json.loads(row["data_json"] or "{}"),
+                "previous_hash": prev or "",
+                "hash_version": 2,
+            }
+            return hashlib.sha256(
+                json.dumps(entry_data, sort_keys=True).encode()
+            ).hexdigest()
 
         db = None
         try:
@@ -495,10 +554,9 @@ class AuditLogger:
             if db is None:
                 return {"verified": False, "reason": "DB connection not available"}
 
-            rows = db.execute(
-                "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC LIMIT ?",
-                (limit,)
-            ).fetchall()
+            rows = [dict(r) for r in db.execute(
+                "SELECT * FROM supervisor_audit_log"
+            ).fetchall()]
 
             if not rows:
                 return {
@@ -509,54 +567,90 @@ class AuditLogger:
                 }
 
             broken_links = []
-            prev_hash = None
 
-            for row in rows:
-                # v2 hash covers all material fields
-                entry_data = {
-                    "audit_id": row["id"],
-                    "timestamp": _timestamp_for_hash(row["timestamp"]),
-                    "event_type": row["event_type"],
-                    "severity": row["severity"] or "info",
-                    "pipeline_id": row["pipeline_id"] or "",
-                    "application_id": row["application_id"] or "",
-                    "run_id": row["run_id"] or "",
-                    "agent_type": row["agent_type"] or "",
-                    "actor_type": row["actor_type"] or "system",
-                    "actor_id": row["actor_id"] or "",
-                    "actor_name": row["actor_name"] or "",
-                    "actor_role": row["actor_role"] or "",
-                    "action": row["action"],
-                    "detail": row["detail"] or "",
-                    "data": json.loads(row["data_json"] or "{}"),
-                    "previous_hash": prev_hash or "",
-                    "hash_version": 2,
-                }
-                expected_hash = hashlib.sha256(
-                    json.dumps(entry_data, sort_keys=True).encode()
-                ).hexdigest()
+            # Duplicate entry hashes are impossible in a valid chain.
+            by_hash = {}
+            for r in rows:
+                h = r.get("entry_hash")
+                if h in by_hash:
+                    broken_links.append({"entry_id": r.get("id"), "issue": "duplicate_entry_hash"})
+                by_hash[h] = r
 
-                if row["entry_hash"] != expected_hash:
+            # Reconstruct order by following the hash links; index successors by
+            # the predecessor hash so forks (two entries sharing a predecessor)
+            # and orphans (unreachable rows) are detectable.
+            successors = {}
+            genesis = []
+            for r in rows:
+                ph = r.get("previous_hash") or None
+                if ph is None:
+                    genesis.append(r)
+                else:
+                    successors.setdefault(ph, []).append(r)
+
+            ordered = []
+            if len(genesis) != 1:
+                broken_links.append({
+                    "issue": "genesis_count",
+                    "detail": f"expected exactly one genesis entry, found {len(genesis)}",
+                })
+
+            if len(genesis) == 1:
+                seen = set()
+                current = genesis[0]
+                while current is not None:
+                    ch = current.get("entry_hash")
+                    if ch in seen:
+                        broken_links.append({"entry_id": current.get("id"), "issue": "cycle_detected"})
+                        break
+                    seen.add(ch)
+                    ordered.append(current)
+                    nxts = successors.get(ch, [])
+                    if len(nxts) > 1:
+                        broken_links.append({
+                            "issue": "chain_fork",
+                            "after_entry_id": current.get("id"),
+                            "successor_count": len(nxts),
+                        })
+                    current = nxts[0] if nxts else None
+                for r in rows:
+                    if r.get("entry_hash") not in seen:
+                        broken_links.append({"entry_id": r.get("id"), "issue": "orphan_entry"})
+            else:
+                # Cannot reconstruct order; still report per-row content tampering
+                # using a stable fallback ordering.
+                ordered = sorted(rows, key=lambda r: (str(r.get("timestamp")), str(r.get("id"))))
+
+            # Optional recency window (H3): verify the most recent `limit` entries,
+            # anchored on the stored previous_hash of the first in-window entry.
+            window = ordered
+            anchor_prev = None
+            if isinstance(limit, int) and limit > 0 and len(ordered) > limit:
+                window = ordered[-limit:]
+                anchor_prev = window[0].get("previous_hash") or None
+
+            prev_hash = anchor_prev
+            for row in window:
+                expected_hash = _recompute(row, prev_hash)
+                if row.get("entry_hash") != expected_hash:
                     broken_links.append({
-                        "entry_id": row["id"],
+                        "entry_id": row.get("id"),
                         "expected_hash": expected_hash,
-                        "actual_hash": row["entry_hash"],
+                        "actual_hash": row.get("entry_hash"),
                     })
-
-                # Also check chain linkage
-                if prev_hash and row["previous_hash"] != prev_hash:
+                if (row.get("previous_hash") or None) != (prev_hash or None):
                     broken_links.append({
-                        "entry_id": row["id"],
+                        "entry_id": row.get("id"),
                         "issue": "previous_hash mismatch",
                         "expected_previous": prev_hash,
-                        "actual_previous": row["previous_hash"],
+                        "actual_previous": row.get("previous_hash"),
                     })
-
-                prev_hash = row["entry_hash"]
+                prev_hash = row.get("entry_hash")
 
             return {
                 "verified": len(broken_links) == 0,
-                "entries_checked": len(rows),
+                "entries_checked": len(window),
+                "total_entries": len(rows),
                 "broken_links": broken_links,
                 "chain_intact": len(broken_links) == 0,
             }
