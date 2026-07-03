@@ -163,11 +163,14 @@ const director = {
   residential_address: '',
   date_of_appointment: '2020-01-02',
   source_metadata_json: JSON.stringify({
-    name: 'Jane Director',
-    nationality: 'British',
-    date_of_birth: '1980-05-01',
-    country_of_residence: 'United Kingdom',
-    appointed_on: '2020-01-02',
+    registry_originals: {
+      full_name: 'Jane Director',
+      name: 'Jane Director',
+      nationality: 'British',
+      date_of_birth: '1980-05-01',
+      country_of_residence: 'United Kingdom',
+      appointed_on: '2020-01-02',
+    },
   }),
 };
 assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'name').includes('>✓<'), 'unchanged imported director name should tick');
@@ -186,11 +189,14 @@ const ubo = {
   country_of_residence: 'Mauritius',
   pct: 25,
   source_metadata_json: JSON.stringify({
-    name: 'Alex PSC',
-    nationality: 'Mauritian',
-    date_of_birth: { year: 1975, month: 3 },
-    country_of_residence: 'Mauritius',
-    ownership_pct: 25,
+    registry_originals: {
+      full_name: 'Alex PSC',
+      name: 'Alex PSC',
+      nationality: 'Mauritian',
+      date_of_birth: { year: 1975, month: 3 },
+      country_of_residence: 'Mauritius',
+      ownership_pct: 25,
+    },
   }),
 };
 assert(sandbox.renderPartyRegistryFieldBadge(ubo, 'ubo', 'name').includes('>✓<'), 'unchanged imported UBO name should tick');
@@ -206,11 +212,13 @@ const intermediary = {
   pct: 40,
   owned_or_controlled_by: 'Client statement',
   source_metadata_json: JSON.stringify({
-    company_name: 'Registry Holdco Ltd',
-    country_of_incorporation: 'United Kingdom',
-    registration_number: 'SC123456',
-    registered_address: '1 Registry Street',
-    ownership_pct: 40,
+    registry_originals: {
+      company_name: 'Registry Holdco Ltd',
+      country_of_incorporation: 'United Kingdom',
+      registration_number: 'SC123456',
+      registered_address: '1 Registry Street',
+      ownership_pct: 40,
+    },
   }),
 };
 assert(sandbox.renderPartyRegistryFieldBadge(intermediary, 'intermediary', 'entity_name').includes('>✓<'), 'unchanged corporate PSC entity name should tick');

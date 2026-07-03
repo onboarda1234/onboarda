@@ -85,6 +85,10 @@ def intake_api(monkeypatch, tmp_path):
         "INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?,?,?,?,?)",
         ("client-intake-2", "client2@example.test", "hash", "Client Two", "active"),
     )
+    conn.execute(
+        "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?,?,?,?,?,?)",
+        ("bo-admin", "bo-admin@example.test", "hash", "Back Office Admin", "admin", "active"),
+    )
     conn.commit()
     conn.close()
 
@@ -130,6 +134,7 @@ def intake_api(monkeypatch, tmp_path):
         "base_url": f"http://127.0.0.1:{port_ref['port']}",
         "client1": create_token("client-intake-1", "client", "Client One", "client"),
         "client2": create_token("client-intake-2", "client", "Client Two", "client"),
+        "admin": create_token("bo-admin", "admin", "Back Office Admin", "officer"),
         "calls": calls,
         "db_path": db_path,
     }
@@ -308,6 +313,9 @@ def test_start_intake_refetches_profile_creates_draft_session_and_persists_evide
     assert prescreening["registry_provenance"]["jurisdiction"] == "GB"
     assert prescreening["registry_provenance"]["company_number"] == "12345678"
     assert prescreening["registry_provenance"]["response_hash"] == "hash-12345678"
+    assert prescreening["registry_sourced_values"]["registered_entity_name"] == "Registry Verified Ltd"
+    assert prescreening["registry_sourced_values"]["registration_number"] == "12345678"
+    assert "server-only" not in json.dumps(prescreening)
 
     lookup = _db_one("SELECT * FROM company_registry_lookups WHERE id = ?", (body["registry_lookup"]["id"],))
     assert lookup["provider"] == "companies_house"
@@ -411,6 +419,34 @@ def test_confirm_profile_writes_company_fields_and_tracks_override(intake_api):
     assert override["overridden_by"] == "client-intake-1"
 
 
+def test_save_resume_preserves_company_registry_sourced_values_for_badge_comparison(intake_api):
+    started = _start_intake(intake_api)
+    app_id = started["application"]["id"]
+
+    _save_resume(
+        intake_api,
+        {
+            "prescreening": {
+                "f-reg-name": "Client Edited Registry Ltd",
+                "f-inc-country": "United Kingdom",
+                "f-brn": "12345678",
+            },
+        },
+        application_id=app_id,
+    )
+
+    app = _db_one("SELECT company_name, prescreening_data, status FROM applications WHERE id = ?", (app_id,))
+    prescreening = json.loads(app["prescreening_data"])
+    assert app["status"] == "draft"
+    assert app["company_name"] == "Client Edited Registry Ltd"
+    assert prescreening["registered_entity_name"] == "Client Edited Registry Ltd"
+    assert prescreening["registry_sourced_values"]["registered_entity_name"] == "Registry Verified Ltd"
+    assert prescreening["registry_sourced_values"]["registration_number"] == "12345678"
+    assert prescreening["registry_profile"]["company_name"] == "Registry Verified Ltd"
+    assert prescreening["registry_provenance"]["provider"] == "companies_house"
+    assert prescreening["registry_provenance"]["response_hash"] == "hash-12345678"
+
+
 def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_api):
     started = _start_intake(intake_api)
     session_id = started["session"]["id"]
@@ -426,6 +462,7 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
             "status": "active",
             "appointed_on": "2020-01-01",
             "date_of_birth": {"month": 9, "year": 1949},
+            "nationality": "British",
             "country_of_residence": "United Kingdom",
             "source_metadata": {"endpoint": "/company/12345678/officers", "response_hash": "officer-hash"},
         },
@@ -469,6 +506,18 @@ def test_confirm_officers_imports_directors_with_provenance_and_dedupes(intake_a
     assert individual["date_of_appointment"] == "2020-01-01"
     assert individual["date_of_birth"] in ("", None)
     assert bool(individual["requires_individual_kyc"]) is True
+    individual_metadata = json.loads(individual["source_metadata_json"])
+    individual_originals = individual_metadata["registry_originals"]
+    assert individual_originals["full_name"] == "Active Director"
+    assert individual_originals["name"] == "Active Director"
+    assert individual_originals["nationality"] == "British"
+    assert individual_originals["country_of_residence"] == "United Kingdom"
+    assert individual_originals["date_of_birth"] == {"month": 9, "year": 1949}
+    assert individual_originals["date_of_appointment"] == "2020-01-01"
+    assert individual_originals["officer_role"] == "director"
+    assert individual_originals["officer_entity_type"] == "individual"
+    assert "residential_address" not in individual_originals
+    assert "raw_response_json" not in json.dumps(individual_metadata)
     hydrated_directors, _hydrated_ubos, _hydrated_intermediaries = _hydrated_parties(started["application"]["id"])
     hydrated_individual = next(row for row in hydrated_directors if row["full_name"] == "Active Director")
     assert hydrated_individual["country_of_residence"] == "United Kingdom"
@@ -549,6 +598,11 @@ def test_confirm_officers_imports_llp_members_with_legal_role_and_review_flags(i
     assert individual["officer_role"] == "llp-designated-member"
     assert individual["officer_entity_type"] == "individual"
     assert bool(individual["requires_individual_kyc"]) is True
+    individual_originals = json.loads(individual["source_metadata_json"])["registry_originals"]
+    assert individual_originals["full_name"] == "MARGOLIS, Stephen Howard"
+    assert individual_originals["first_name"] == "Stephen Howard"
+    assert individual_originals["last_name"] == "MARGOLIS"
+    assert individual_originals["officer_role"] == "llp-designated-member"
     hydrated_directors, _hydrated_ubos, _hydrated_intermediaries = _hydrated_parties(started["application"]["id"])
     hydrated_individual = next(row for row in hydrated_directors if row["full_name"] == "MARGOLIS, Stephen Howard")
     assert hydrated_individual["country_of_residence"] == "United Kingdom"
@@ -577,6 +631,7 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
                 "nationality": "British",
                 "country_of_residence": "United Kingdom",
                 "date_of_birth": "1980-05-15",
+                "ownership_pct": 75,
                 "natures_of_control": ["ownership-of-shares-75-to-100-percent"],
                 "is_candidate_beneficial_owner": True,
                 "candidate_type": "beneficial_owner_candidate",
@@ -601,7 +656,17 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
     assert ubos[0]["psc_state"] == "psc_found"
     assert ubos[0]["registry_statement_type"] == "active_individual_psc"
     assert bool(ubos[0]["is_candidate_ubo"]) is True
+    assert ubos[0]["ownership_pct"] == 75
     assert ubos[0]["response_hash"] == "psc-hash"
+    ubo_originals = json.loads(ubos[0]["source_metadata_json"])["registry_originals"]
+    assert ubo_originals["full_name"] == "Beneficial Owner"
+    assert ubo_originals["nationality"] == "British"
+    assert ubo_originals["country_of_residence"] == "United Kingdom"
+    assert ubo_originals["date_of_birth"] == "1980-05-15"
+    assert ubo_originals["ownership_pct"] == 75
+    assert ubo_originals["psc_state"] == "psc_found"
+    assert ubo_originals["psc_kind"] == "individual"
+    assert "residential_address" not in ubo_originals
     assert body["ubos"][0]["country_of_residence"] == "United Kingdom"
     assert body["ubos"][0]["date_of_birth"] == "1980-05-15"
     assert body["intermediaries"] == []
@@ -616,7 +681,21 @@ def test_save_resume_syncs_imported_director_edit_to_party_table_and_detail(inta
     started = _start_intake(intake_api)
     app_id = started["application"]["id"]
     imported_at = "2026-06-22T12:00:00+00:00"
-    metadata = {"provider": "companies_house", "endpoint": "/company/12345678/officers"}
+    metadata = {
+        "provider": "companies_house",
+        "endpoint": "/company/12345678/officers",
+        "registry_originals": {
+            "first_name": "James Benjamin",
+            "last_name": "HEATH",
+            "full_name": "James Benjamin HEATH",
+            "name": "James Benjamin HEATH",
+            "nationality": "United Kingdom",
+            "country_of_residence": "United Kingdom",
+            "date_of_appointment": "2020-01-01",
+            "officer_role": "director",
+            "officer_entity_type": "individual",
+        },
+    }
     _store_parties(
         app_id,
         directors=[{
@@ -684,14 +763,19 @@ def test_save_resume_syncs_imported_director_edit_to_party_table_and_detail(inta
     assert bool(row["requires_corporate_structure_review"]) is False
     assert row["registry_lookup_id"] == "lookup-director-1"
     assert row["response_hash"] == "director-hash"
-    assert json.loads(row["source_metadata_json"]) == metadata
+    saved_metadata = json.loads(row["source_metadata_json"])
+    assert saved_metadata == metadata
+    assert saved_metadata["registry_originals"]["full_name"] == "James Benjamin HEATH"
     assert row["imported_at"] == imported_at
     assert row["imported_by"] == "client-intake-1"
 
     directors, _ubos, _intermediaries = _hydrated_parties(app_id)
     assert directors[0]["residential_address"] == "1 Edited Road"
-    detail = _application_detail(intake_api, app_id)
+    client_detail = _application_detail(intake_api, app_id)
+    assert "registry_originals" not in client_detail["directors"][0]
+    detail = _application_detail(intake_api, app_id, token=intake_api["admin"])
     assert detail["directors"][0]["full_name"] == "test HEATH Test"
+    assert detail["directors"][0]["registry_originals"]["full_name"] == "James Benjamin HEATH"
     assert detail["prescreening_data"]["directors"][0]["first_name"] == "test"
     assert _db_one("SELECT status FROM applications WHERE id = ?", (app_id,))["status"] == "draft"
 
@@ -716,7 +800,17 @@ def test_save_resume_syncs_imported_llp_member_edit_and_preserves_role(intake_ap
             "requires_corporate_structure_review": False,
             "registry_lookup_id": "lookup-llp-1",
             "response_hash": "llp-hash",
-            "source_metadata_json": {"provider": "companies_house", "endpoint": "/company/OC381818/officers"},
+            "source_metadata_json": {
+                "provider": "companies_house",
+                "endpoint": "/company/OC381818/officers",
+                "registry_originals": {
+                    "first_name": "Stephen Howard",
+                    "last_name": "MARGOLIS",
+                    "full_name": "Stephen Howard MARGOLIS",
+                    "name": "Stephen Howard MARGOLIS",
+                    "officer_role": "llp-designated-member",
+                },
+            },
             "imported_at": imported_at,
             "imported_by": "client-intake-1",
         }],
@@ -739,7 +833,7 @@ def test_save_resume_syncs_imported_llp_member_edit_and_preserves_role(intake_ap
     )
 
     row = _db_one(
-        "SELECT first_name, last_name, full_name, source, officer_role, registry_lookup_id, response_hash, imported_at FROM directors WHERE application_id=? AND person_key=?",
+        "SELECT first_name, last_name, full_name, source, officer_role, registry_lookup_id, response_hash, source_metadata_json, imported_at FROM directors WHERE application_id=? AND person_key=?",
         (app_id, "llp-member-1"),
     )
     assert row["first_name"] == "Edited Stephen"
@@ -749,8 +843,9 @@ def test_save_resume_syncs_imported_llp_member_edit_and_preserves_role(intake_ap
     assert row["officer_role"] == "llp-designated-member"
     assert row["registry_lookup_id"] == "lookup-llp-1"
     assert row["response_hash"] == "llp-hash"
+    assert json.loads(row["source_metadata_json"])["registry_originals"]["full_name"] == "Stephen Howard MARGOLIS"
     assert row["imported_at"] == imported_at
-    assert _application_detail(intake_api, app_id)["directors"][0]["full_name"] == "Edited Stephen MARGOLIS Test"
+    assert _application_detail(intake_api, app_id, token=intake_api["admin"])["directors"][0]["full_name"] == "Edited Stephen MARGOLIS Test"
 
 
 def test_save_resume_syncs_imported_ubo_edit_and_preserves_psc_provenance(intake_api):
@@ -773,7 +868,21 @@ def test_save_resume_syncs_imported_ubo_edit_and_preserves_psc_provenance(intake
             "is_candidate_ubo": True,
             "registry_lookup_id": "lookup-psc-1",
             "response_hash": "psc-hash",
-            "source_metadata_json": {"provider": "companies_house", "endpoint": "/psc"},
+            "source_metadata_json": {
+                "provider": "companies_house",
+                "endpoint": "/psc",
+                "registry_originals": {
+                    "first_name": "Beneficial",
+                    "last_name": "Owner",
+                    "full_name": "Beneficial Owner",
+                    "name": "Beneficial Owner",
+                    "nationality": "British",
+                    "country_of_residence": "United Kingdom",
+                    "ownership_pct": 75,
+                    "psc_state": "psc_found",
+                    "psc_kind": "individual-person-with-significant-control",
+                },
+            },
             "imported_at": imported_at,
             "imported_by": "client-intake-1",
         }],
@@ -801,7 +910,7 @@ def test_save_resume_syncs_imported_ubo_edit_and_preserves_psc_provenance(intake
         """
         SELECT first_name, last_name, full_name, ownership_pct, is_pep, source,
                psc_state, psc_kind, is_candidate_ubo, registry_lookup_id,
-               response_hash, imported_at
+               response_hash, source_metadata_json, imported_at
         FROM ubos WHERE application_id=? AND person_key=?
         """,
         (app_id, "psc-1"),
@@ -817,12 +926,19 @@ def test_save_resume_syncs_imported_ubo_edit_and_preserves_psc_provenance(intake
     assert bool(row["is_candidate_ubo"]) is True
     assert row["registry_lookup_id"] == "lookup-psc-1"
     assert row["response_hash"] == "psc-hash"
+    ubo_metadata = json.loads(row["source_metadata_json"])
+    assert ubo_metadata["registry_originals"]["full_name"] == "Beneficial Owner"
+    assert ubo_metadata["registry_originals"]["ownership_pct"] == 75
     assert row["imported_at"] == imported_at
 
     _directors, ubos, _intermediaries = _hydrated_parties(app_id)
     assert ubos[0]["country_of_residence"] == "France"
     assert ubos[0]["residential_address"] == "2 Owner Road"
-    assert _application_detail(intake_api, app_id)["ubos"][0]["full_name"] == "Edited Owner Test"
+    client_detail = _application_detail(intake_api, app_id)
+    assert "registry_originals" not in client_detail["ubos"][0]
+    detail = _application_detail(intake_api, app_id, token=intake_api["admin"])
+    assert detail["ubos"][0]["full_name"] == "Edited Owner Test"
+    assert detail["ubos"][0]["registry_originals"]["full_name"] == "Beneficial Owner"
 
 
 def test_save_resume_syncs_imported_intermediary_edit_and_preserves_provenance(intake_api):
@@ -1035,6 +1151,15 @@ def test_psc_state_metadata_branches(intake_api, psc_state, statement_key, expec
         assert intermediaries[0]["source"] == "companies_house"
         assert intermediaries[0]["response_hash"] == f"hash-{psc_state}"
         assert intermediaries[0]["owned_or_controlled_by"] != "Dana Owner"
+        intermediary_originals = json.loads(intermediaries[0]["source_metadata_json"])["registry_originals"]
+        assert intermediary_originals["entity_name"] == "Corporate PSC Ltd"
+        assert intermediary_originals["company_name"] == "Corporate PSC Ltd"
+        assert intermediary_originals["country_of_incorporation"] == "United Kingdom"
+        assert intermediary_originals["jurisdiction"] == "United Kingdom"
+        assert intermediary_originals["registration_number"] == "99999999"
+        assert intermediary_originals["registered_address"] == "1 Holdco Street, London"
+        assert "ownership_pct" not in intermediary_originals
+        assert "owned_or_controlled_by" not in intermediary_originals
         from db import get_db
         from party_utils import extract_fernet_token, get_application_parties
 
