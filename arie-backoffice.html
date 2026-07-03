@@ -229,13 +229,9 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .prescreen-collapsible-card #detail-prescreen-summary { max-height:min(68vh,960px); overflow:auto; padding-right:4px; }
 .ch-indicator-legend { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 8px; padding:6px 8px; border:1px solid var(--border1); border-radius:8px; background:var(--surface2); font-size:10px; line-height:1.2; color:var(--text2); }
 .ch-indicator-legend-title { font-weight:800; color:var(--text1); margin-right:1px; }
-.ch-registry-badge { display:inline-flex; align-items:center; gap:3px; width:max-content; max-width:100%; min-height:16px; padding:1px 5px; border-radius:999px; border:1px solid transparent; font-size:9px; line-height:1.15; font-weight:800; white-space:nowrap; vertical-align:middle; }
-.ch-registry-badge.verified { background:rgba(22,163,74,0.1); color:#166534; border-color:rgba(22,163,74,0.24); }
-.field-provenance-conflict-badge { display:inline-flex; align-items:center; gap:3px; width:max-content; max-width:100%; min-height:16px; padding:1px 5px; border-radius:999px; border:1px solid transparent; font-size:9px; line-height:1.15; font-weight:800; white-space:nowrap; vertical-align:middle; }
-.field-provenance-conflict-badge.missing { background:rgba(217,119,6,0.1); color:#92400e; border-color:rgba(217,119,6,0.28); }
-.field-provenance-conflict-badge.mismatch { background:rgba(220,38,38,0.09); color:#991b1b; border-color:rgba(220,38,38,0.24); }
-.field-provenance-conflict-badge.needs_review { background:rgba(37,99,235,0.08); color:#1d4ed8; border-color:rgba(37,99,235,0.24); }
-.field-provenance-source-note { font-size:11px; color:#92400e; margin-top:6px; line-height:1.35; word-break:break-word; }
+.ch-registry-badge { display:inline-flex; align-items:center; justify-content:center; gap:3px; width:max-content; max-width:100%; min-height:16px; padding:1px 5px; border-radius:999px; border:1px solid transparent; font-size:9px; line-height:1.15; font-weight:800; white-space:nowrap; vertical-align:middle; }
+.ch-registry-badge.verified { width:14px; min-width:14px; height:14px; min-height:14px; padding:0; border-radius:999px; background:rgba(22,163,74,0.1); color:#166534; border-color:rgba(22,163,74,0.24); font-size:10px; line-height:1; }
+.ch-registry-badge.edited { background:#f1f5f9; color:#475569; border-color:#cbd5e1; }
 .detail-collapsible-card { margin:0 0 16px; border:1px solid var(--border1); border-radius:14px; background:var(--surface); overflow:hidden; }
 .detail-collapsible-card details { background:inherit; }
 .detail-collapsible-card summary { list-style:none; cursor:pointer; display:flex; justify-content:space-between; align-items:flex-start; gap:14px; padding:14px 16px; }
@@ -8373,14 +8369,58 @@ function registryFieldCandidateKeys(field) {
 }
 
 function registryComparableValue(value) {
-  var normalized = normalizeDetailValue(value);
+  var normalized = registrySourceDisplayValue(value);
   if (!normalized || normalized === '—') return '';
   return String(normalized)
     .trim()
     .toLowerCase()
-    .replace(/[\s,|:;._\-—]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function registryPad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function registryDateComparableValue(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    var year = value.year || value.yyyy;
+    var month = value.month || value.mm;
+    var day = value.day || value.date || value.dd;
+    if (year && month && day) return String(year) + '-' + registryPad2(month) + '-' + registryPad2(day);
+    if (year && month) return String(year) + '-' + registryPad2(month);
+    if (value.value != null) return registryDateComparableValue(value.value);
+  }
+  var raw = normalizeDetailValue(value);
+  if (!raw || raw === '—') return '';
+  raw = String(raw).trim();
+  var iso = raw.match(/^(\d{4})[-\/](\d{1,2})(?:[-\/](\d{1,2}))?$/);
+  if (iso) {
+    return iso[3]
+      ? iso[1] + '-' + registryPad2(iso[2]) + '-' + registryPad2(iso[3])
+      : iso[1] + '-' + registryPad2(iso[2]);
+  }
+  var compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) return compact[1] + '-' + compact[2] + '-' + compact[3];
+  return '';
+}
+
+function registryNumberComparableValue(value) {
+  var raw = normalizeDetailValue(value);
+  if (!raw || raw === '—') return '';
+  var number = Number(String(raw).replace(/%/g, '').trim());
+  if (!Number.isFinite(number)) return '';
+  return String(number);
+}
+
+function registryFieldComparableValue(value, fieldKey) {
+  if (fieldKey === 'date_of_birth' || fieldKey === 'date_of_appointment' || fieldKey === 'incorporation_date') {
+    return registryDateComparableValue(value);
+  }
+  if (fieldKey === 'ownership_pct') {
+    return registryNumberComparableValue(value);
+  }
+  return registryComparableValue(value);
 }
 
 function registryFieldOverride(app, field) {
@@ -8429,11 +8469,13 @@ function registryCompanyStatusHasMaterialIssue(app) {
 
 function renderCompaniesHouseRegistryBadge(type, title) {
   var badges = {
-    verified: { label: '✓ Verified', cls: 'verified', title: 'Supported by registry data.' }
+    verified: { label: '✓', cls: 'verified', title: 'Verified from registry' },
+    edited: { label: 'Edited', cls: 'edited', title: 'Client edited registry-imported value' }
   };
   var badge = badges[type];
   if (!badge) return '';
-  return '<span class="ch-registry-badge ' + badge.cls + '" title="' + escapeHtml(title || badge.title) + '">' + badge.label + '</span>';
+  var badgeTitle = title || badge.title;
+  return '<span class="ch-registry-badge ' + badge.cls + '" title="' + escapeHtml(badgeTitle) + '" aria-label="' + escapeHtml(badgeTitle) + '">' + escapeHtml(badge.label) + '</span>';
 }
 
 function isCompaniesHouseRegistryApp(app) {
@@ -8450,23 +8492,141 @@ function partySourceIsCompaniesHouse(party) {
   return registryProviderIsCompaniesHouse(party.source || party.imported_source || party.provider || party.registry_provider);
 }
 
-function partyHasVerifiedRegistryBadge(party, partyType) {
+var PARTY_REGISTRY_FIELD_KEYS = {
+  director: ['name', 'nationality', 'date_of_birth', 'country_of_residence', 'date_of_appointment'],
+  ubo: ['name', 'nationality', 'date_of_birth', 'country_of_residence', 'ownership_pct'],
+  intermediary: ['entity_name', 'jurisdiction', 'registration_number', 'registered_address', 'ownership_pct']
+};
+
+var PARTY_REGISTRY_TOP_LEVEL_ORIGINAL_FIELDS = {
+  name: ['registry_full_name', 'registry_name', 'imported_full_name', 'source_full_name', 'original_full_name', 'original_name'],
+  entity_name: ['registry_entity_name', 'registry_company_name', 'registry_name', 'imported_entity_name', 'imported_company_name', 'source_entity_name', 'source_company_name', 'original_entity_name', 'original_company_name'],
+  nationality: ['registry_nationality', 'imported_nationality', 'source_nationality', 'original_nationality'],
+  date_of_birth: ['registry_date_of_birth', 'imported_date_of_birth', 'source_date_of_birth', 'original_date_of_birth'],
+  country_of_residence: ['registry_country_of_residence', 'imported_country_of_residence', 'source_country_of_residence', 'original_country_of_residence'],
+  date_of_appointment: ['registry_date_of_appointment', 'registry_appointed_on', 'imported_date_of_appointment', 'imported_appointed_on', 'source_date_of_appointment', 'source_appointed_on', 'original_date_of_appointment', 'original_appointed_on'],
+  jurisdiction: ['registry_jurisdiction', 'registry_country_of_incorporation', 'imported_jurisdiction', 'imported_country_of_incorporation', 'source_jurisdiction', 'source_country_of_incorporation', 'original_jurisdiction', 'original_country_of_incorporation'],
+  registration_number: ['registry_registration_number', 'imported_registration_number', 'source_registration_number', 'original_registration_number'],
+  registered_address: ['registry_registered_address', 'registry_registered_office_address', 'imported_registered_address', 'source_registered_address', 'original_registered_address'],
+  ownership_pct: ['registry_ownership_pct', 'imported_ownership_pct', 'source_ownership_pct', 'original_ownership_pct']
+};
+
+var PARTY_REGISTRY_SOURCE_ORIGINAL_FIELDS = {
+  name: ['full_name', 'name', 'officer_name', 'psc_name'],
+  entity_name: ['entity_name', 'company_name', 'full_name', 'name'],
+  nationality: ['nationality'],
+  date_of_birth: ['date_of_birth', 'dob'],
+  country_of_residence: ['country_of_residence', 'residence_country'],
+  date_of_appointment: ['date_of_appointment', 'appointed_on'],
+  jurisdiction: ['jurisdiction', 'country_of_incorporation', 'country_registered', 'place_registered'],
+  registration_number: ['registration_number', 'company_number'],
+  registered_address: ['registered_address', 'registered_office_address', 'principal_office_address', 'address'],
+  ownership_pct: ['ownership_pct', 'ownership_percentage']
+};
+
+function partySourceMetadata(party) {
   party = party || {};
-  if (!partySourceIsCompaniesHouse(party)) return false;
-  if (partyType === 'director') {
-    var entityType = String(party.officer_entity_type || '').trim().toLowerCase();
-    var role = String(party.officer_role || '').trim().toLowerCase();
-    var importedIndividualRole = role.indexOf('secretary') < 0 &&
-      (role.indexOf('director') >= 0 || role.indexOf('member') >= 0 || role.indexOf('officer') >= 0);
-    if (entityType === 'corporate' || registryTruthy(party.requires_corporate_structure_review)) return false;
-    return entityType === 'individual' || registryTruthy(party.requires_individual_kyc) || importedIndividualRole;
+  var raw = party.source_metadata || party.sourceMetadata || party.source_metadata_json;
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    var parsed = JSON.parse(String(raw));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    return {};
   }
-  if (partyType === 'ubo') {
-    var state = String(party.psc_state || '').trim().toLowerCase();
-    if (state === 'corporate_psc') return false;
-    return state === 'psc_found' || registryTruthy(party.is_candidate_ubo);
+}
+
+function partyFirstValueFromKeys(source, keys) {
+  if (!source || typeof source !== 'object') return undefined;
+  for (var i = 0; i < keys.length; i++) {
+    var value = source[keys[i]];
+    if (value != null && normalizeDetailValue(value) !== '—') return value;
   }
-  return false;
+  return undefined;
+}
+
+function partyRegistrySourceContainers(party) {
+  party = party || {};
+  var metadata = partySourceMetadata(party);
+  var candidates = [
+    party.registry_originals,
+    party.registry_sourced_values,
+    party.registry_values,
+    party.imported_values,
+    party.original_values,
+    party.source_values,
+    metadata.registry_originals,
+    metadata.registry_sourced_values,
+    metadata.registry_values,
+    metadata.imported_values,
+    metadata.original_values,
+    metadata.source_values,
+    metadata.imported_record,
+    metadata.officer,
+    metadata.psc,
+    metadata.owner,
+    metadata
+  ];
+  return candidates.filter(function(item) {
+    return item && typeof item === 'object' && !Array.isArray(item);
+  });
+}
+
+function partyOriginalRegistryValue(party, partyType, fieldKey) {
+  party = party || {};
+  var topLevelValue = partyFirstValueFromKeys(party, PARTY_REGISTRY_TOP_LEVEL_ORIGINAL_FIELDS[fieldKey] || []);
+  if (topLevelValue !== undefined) return topLevelValue;
+  var sourceKeys = PARTY_REGISTRY_SOURCE_ORIGINAL_FIELDS[fieldKey] || [];
+  var containers = partyRegistrySourceContainers(party);
+  for (var i = 0; i < containers.length; i++) {
+    var sourceValue = partyFirstValueFromKeys(containers[i], sourceKeys);
+    if (sourceValue !== undefined) return sourceValue;
+  }
+  return undefined;
+}
+
+function partyCurrentRegistryValue(party, partyType, fieldKey) {
+  party = party || {};
+  if (fieldKey === 'name') {
+    return firstMeaningfulDetailValue(
+      party.full_name,
+      party.name,
+      [party.first_name || '', party.last_name || ''].join(' ').trim(),
+      ''
+    );
+  }
+  if (fieldKey === 'entity_name') return firstMeaningfulDetailValue(party.entity_name, party.company_name, party.name, party.full_name, '');
+  if (fieldKey === 'nationality') return firstMeaningfulDetailValue(party.nat, party.nationality, '');
+  if (fieldKey === 'date_of_birth') return firstMeaningfulDetailValue(party.dob, party.date_of_birth, '');
+  if (fieldKey === 'country_of_residence') return firstMeaningfulDetailValue(party.country_of_residence, '');
+  if (fieldKey === 'date_of_appointment') return firstMeaningfulDetailValue(party.date_of_appointment, party.appointed_on, '');
+  if (fieldKey === 'jurisdiction') return firstMeaningfulDetailValue(party.jurisdiction, party.country_of_incorporation, '');
+  if (fieldKey === 'registration_number') return firstMeaningfulDetailValue(party.registration_number, '');
+  if (fieldKey === 'registered_address') return firstMeaningfulDetailValue(party.registered_address, party.registered_office_address, '');
+  if (fieldKey === 'ownership_pct') return party.pct == null || party.pct === '' ? party.ownership_pct : party.pct;
+  return '';
+}
+
+function renderPartyRegistryFieldBadge(party, partyType, fieldKey) {
+  if (!partySourceIsCompaniesHouse(party)) return '';
+  if ((PARTY_REGISTRY_FIELD_KEYS[partyType] || []).indexOf(fieldKey) < 0) return '';
+  var originalValue = partyOriginalRegistryValue(party, partyType, fieldKey);
+  if (originalValue === undefined) return '';
+  var currentValue = partyCurrentRegistryValue(party, partyType, fieldKey);
+  var originalComparable = registryFieldComparableValue(originalValue, fieldKey);
+  var currentComparable = registryFieldComparableValue(currentValue, fieldKey);
+  if (!originalComparable || !currentComparable) return '';
+  if (currentComparable === originalComparable) {
+    return renderCompaniesHouseRegistryBadge('verified', 'Verified from registry');
+  }
+  return renderCompaniesHouseRegistryBadge('edited', 'Client edited registry-imported value');
+}
+
+function partyHasRegistryFieldIndicator(party, partyType) {
+  return (PARTY_REGISTRY_FIELD_KEYS[partyType] || []).some(function(fieldKey) {
+    return !!renderPartyRegistryFieldBadge(party, partyType, fieldKey);
+  });
 }
 
 function hasCompaniesHouseIndicators(app) {
@@ -8474,16 +8634,18 @@ function hasCompaniesHouseIndicators(app) {
   var psData = registryPrescreeningData(app);
   var sourced = psData.registry_sourced_values || {};
   if (isCompaniesHouseRegistryApp(app) && sourced && Object.keys(sourced).length > 0) return true;
-  if ((app.directors || []).some(function(party) { return partyHasVerifiedRegistryBadge(party, 'director'); })) return true;
-  if ((app.ubos || []).some(function(party) { return partyHasVerifiedRegistryBadge(party, 'ubo'); })) return true;
+  if ((app.directors || []).some(function(party) { return partyHasRegistryFieldIndicator(party, 'director'); })) return true;
+  if ((app.ubos || []).some(function(party) { return partyHasRegistryFieldIndicator(party, 'ubo'); })) return true;
+  if ((app.intermediaries || []).some(function(party) { return partyHasRegistryFieldIndicator(party, 'intermediary'); })) return true;
   return false;
 }
 
 function renderCompaniesHouseIndicatorLegend(app) {
   if (!hasCompaniesHouseIndicators(app)) return '';
   return '<div class="ch-indicator-legend" aria-label="Registry indicators">' +
-    '<span class="ch-indicator-legend-title">Registry indicator:</span>' +
-    renderCompaniesHouseRegistryBadge('verified', 'Supported by registry data.') +
+    '<span class="ch-indicator-legend-title">Registry field indicators:</span>' +
+    renderCompaniesHouseRegistryBadge('verified', 'Verified from registry') +
+    renderCompaniesHouseRegistryBadge('edited', 'Client edited registry-imported value') +
   '</div>';
 }
 
@@ -8493,15 +8655,16 @@ function renderCompaniesHouseFieldBadges(app, field, currentRaw) {
   if (candidates.indexOf('registered_entity_name') >= 0 && registryCompanyStatusHasMaterialIssue(app)) {
     return '';
   }
-  if (registryFieldOverride(app, field)) {
-    return '';
-  }
   var registryValue = registrySourcedValueForField(app, field);
   if (registryValue === undefined) return '';
-  if (registryComparableValue(currentRaw) && registryComparableValue(currentRaw) === registryComparableValue(registryValue)) {
-    return renderCompaniesHouseRegistryBadge('verified', 'Field matches or was imported from registry data.');
+  var fieldKey = candidates[0] || '';
+  var currentComparable = registryFieldComparableValue(currentRaw, fieldKey);
+  var registryComparable = registryFieldComparableValue(registryValue, fieldKey);
+  if (!currentComparable || !registryComparable) return '';
+  if (currentComparable === registryComparable) {
+    return renderCompaniesHouseRegistryBadge('verified', 'Verified from registry');
   }
-  return '';
+  return renderCompaniesHouseRegistryBadge('edited', 'Client edited registry-imported value');
 }
 
 function registrySourceDisplayValue(value) {
@@ -8509,79 +8672,6 @@ function registrySourceDisplayValue(value) {
     return normalizeDetailValue(value.full_address || value.company_name || value.name || value.value || value);
   }
   return normalizeDetailValue(value);
-}
-
-function registryValueIsStructured(value) {
-  return !!(value && typeof value === 'object');
-}
-
-function getFieldProvenanceConflictState(currentValue, sourceValue, options) {
-  options = options || {};
-  if (sourceValue === undefined || sourceValue === null || normalizeDetailValue(sourceValue) === '—') return null;
-  var currentComparable = registryComparableValue(currentValue);
-  var sourceComparable = registryComparableValue(sourceValue);
-  if (!sourceComparable) return null;
-  if (!currentComparable) {
-    return {
-      state: 'missing',
-      label: 'Missing',
-      title: 'Source data exists for this field, but the current displayed value is missing.',
-      sourceValue: sourceValue
-    };
-  }
-  if (currentComparable === sourceComparable) return null;
-  if (options.hasOverride || registryValueIsStructured(currentValue) || registryValueIsStructured(sourceValue)) {
-    return {
-      state: 'needs_review',
-      label: 'Needs review',
-      title: 'Source data exists for this field and should be compared with the current displayed value.',
-      sourceValue: sourceValue
-    };
-  }
-  return {
-    state: 'mismatch',
-    label: 'Mismatch',
-    title: 'Source data differs from the current displayed value.',
-    sourceValue: sourceValue
-  };
-}
-
-function companiesHouseFieldProvenanceConflictState(app, field, currentRaw) {
-  if (!isCompaniesHouseRegistryApp(app)) return null;
-  var registryValue = registrySourcedValueForField(app, field);
-  return getFieldProvenanceConflictState(currentRaw, registryValue, {
-    hasOverride: !!registryFieldOverride(app, field)
-  });
-}
-
-function renderFieldProvenanceConflictBadge(conflict) {
-  if (!conflict) return '';
-  return '<span class="field-provenance-conflict-badge ' + escapeHtml(conflict.state) + '" title="' + escapeHtml(conflict.title || conflict.label) + '">' + escapeHtml(conflict.label) + '</span>';
-}
-
-function renderFieldProvenanceSourceNote(conflict) {
-  if (!conflict) return '';
-  var source = registrySourceDisplayValue(conflict.sourceValue);
-  if (!source || source === '—') return '';
-  return '<div class="field-provenance-source-note">Source: ' + escapeHtml(source) + '</div>';
-}
-
-function renderCompaniesHousePartyBadge(party, partyType) {
-  if (!partyHasVerifiedRegistryBadge(party, partyType)) return '';
-  var state = String((party && party.psc_state) || '').trim().toLowerCase();
-  if (partyType === 'director') {
-    return renderCompaniesHouseRegistryBadge('verified', 'Director, officer, or member imported from registry data.');
-  }
-  if (partyType === 'ubo') {
-    if (state === 'psc_found' || registryTruthy(party && party.is_candidate_ubo)) {
-      return renderCompaniesHouseRegistryBadge('verified', 'PSC or beneficial-owner candidate imported from registry data.');
-    }
-  }
-  return '';
-}
-
-function renderCompaniesHousePscSectionBadge(app, sectionType) {
-  return '';
 }
 
 function formatNestedObject(obj) {
@@ -10608,6 +10698,9 @@ async function fetchApplicationDetail(ref) {
       officer_verified_pep_display: d.officer_verified_pep_display || 'Not verified yet',
       pep_status_display: d.pep_status_display || 'Not verified yet',
       source: d.source || '',
+      source_metadata_json: d.source_metadata_json || '',
+      source_metadata: d.source_metadata || null,
+      registry_originals: d.registry_originals || d.registry_sourced_values || d.original_values || d.imported_values || d.source_values || null,
       officer_role: d.officer_role || '',
       officer_entity_type: d.officer_entity_type || '',
       requires_individual_kyc: d.requires_individual_kyc,
@@ -10643,6 +10736,9 @@ async function fetchApplicationDetail(ref) {
       officer_verified_pep_display: u.officer_verified_pep_display || 'Not verified yet',
       pep_status_display: u.pep_status_display || 'Not verified yet',
       source: u.source || '',
+      source_metadata_json: u.source_metadata_json || '',
+      source_metadata: u.source_metadata || null,
+      registry_originals: u.registry_originals || u.registry_sourced_values || u.original_values || u.imported_values || u.source_values || null,
       psc_state: u.psc_state || '',
       registry_statement_type: u.registry_statement_type || '',
       psc_status_reason: u.psc_status_reason || '',
@@ -10667,6 +10763,9 @@ async function fetchApplicationDetail(ref) {
       owned_or_controlled_by: i.owned_or_controlled_by || '',
       pct: i.ownership_pct == null || i.ownership_pct === '' ? '' : i.ownership_pct,
       source: i.source || '',
+      source_metadata_json: i.source_metadata_json || '',
+      source_metadata: i.source_metadata || null,
+      registry_originals: i.registry_originals || i.registry_sourced_values || i.original_values || i.imported_values || i.source_values || null,
       psc_state: i.psc_state || '',
       registry_statement_type: i.registry_statement_type || '',
       psc_status_reason: i.psc_status_reason || '',
@@ -10934,30 +11033,24 @@ function renderPrescreenSummary(app, prescreenFields) {
       var isLong = current.length > 60;
       var baseStyle = (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid ' + (isCorrected ? '#f59e0b' : 'var(--border1)') + ';';
       var registryBadges = renderCompaniesHouseFieldBadges(app, field, currentRaw);
-      var registryConflict = companiesHouseFieldProvenanceConflictState(app, field, currentRaw);
-      var registryConflictBadge = renderFieldProvenanceConflictBadge(registryConflict);
-      var registrySourceNote = renderFieldProvenanceSourceNote(registryConflict);
       var label = '<div style="display:flex;align-items:center;gap:6px;justify-content:space-between;flex-wrap:wrap;margin-bottom:2px;">' +
         '<span style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">' + escapeHtml(field.label) + '</span>' +
-        registryBadges + registryConflictBadge +
+        registryBadges +
       '</div>';
       if (mode && isAllowed) {
         return '<div style="' + baseStyle + '">' + label +
           renderPrescreenCorrectionControl(field, currentRaw) +
-          registrySourceNote +
           '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Original client value: ' + escapeHtml(original) + '</div>' +
         '</div>';
       }
       if (mode && field.riskRelevant) {
         return '<div title="This correction type is deferred to a later controlled release." style="' + baseStyle + 'opacity:0.72;">' + label +
           '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(current) + '</div>' +
-          registrySourceNote +
           '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Locked: this risk-relevant correction type is deferred to a later controlled release.</div>' +
         '</div>';
       }
       return '<div style="' + baseStyle + '">' + label +
         '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(current) + '</div>' +
-        registrySourceNote +
         (isCorrected ? '<div style="font-size:11px;color:#92400e;margin-top:6px;">Officer-corrected. Original client value: ' + escapeHtml(original) + '</div>' : '') +
       '</div>';
     }).join('') +
@@ -11050,9 +11143,10 @@ function clientDeclaredPepQuestionValue(app, psData) {
   return sawNo ? 'No' : 'Not captured';
 }
 
-function renderPartyFact(label, value, missingLabel) {
+function renderPartyFact(label, value, missingLabel, badgeHtml) {
+  badgeHtml = badgeHtml || '';
   return '<div style="padding:8px 10px;border:1px solid var(--border1);border-radius:6px;background:var(--surface1);">' +
-    '<div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px;">' + escapeHtml(label) + '</div>' +
+    '<div style="display:flex;align-items:center;gap:5px;justify-content:space-between;flex-wrap:wrap;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px;"><span>' + escapeHtml(label) + '</span>' + badgeHtml + '</div>' +
     '<div style="font-size:12px;color:var(--text1);font-weight:600;word-break:break-word;">' + partyDisplayValue(value, missingLabel) + '</div>' +
   '</div>';
 }
@@ -11062,39 +11156,40 @@ function renderPartyCard(party, partyType, app) {
   var displayName = buildPartyDisplayName(party);
   var roleLabel = partyType === 'ubo' ? 'UBO' : partyType === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
   var correctionStatus = partyCorrectionStatus(app, party);
-  var registryBadge = renderCompaniesHousePartyBadge(party, partyType);
+  var nameBadge = renderPartyRegistryFieldBadge(party, partyType, partyType === 'intermediary' ? 'entity_name' : 'name');
   var ownershipValue = partyType === 'director' ? 'N/A' : party.pct;
   var nationalityLabel = partyType === 'intermediary' ? 'Jurisdiction' : 'Nationality';
   var nationalityValue = partyType === 'intermediary' ? party.jurisdiction : party.nat;
+  var nationalityFieldKey = partyType === 'intermediary' ? 'jurisdiction' : 'nationality';
+  var ownershipBadge = partyType === 'director' ? '' : renderPartyRegistryFieldBadge(party, partyType, 'ownership_pct');
   var ownershipDisplay = ownershipValue === 'N/A'
     ? 'N/A'
     : (ownershipValue === null || ownershipValue === undefined || ownershipValue === '' ? '' : normalizeDetailValue(ownershipValue) + '%');
   var facts =
     renderPartyFact('Role', roleLabel, 'Missing') +
-    renderPartyFact(nationalityLabel, nationalityValue, 'Missing') +
-    renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing') +
-    renderPartyFact('Ownership', ownershipDisplay, partyType === 'director' ? 'N/A' : 'Missing') +
+    renderPartyFact(nationalityLabel, nationalityValue, 'Missing', renderPartyRegistryFieldBadge(party, partyType, nationalityFieldKey)) +
+    renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing', partyType === 'intermediary' ? '' : renderPartyRegistryFieldBadge(party, partyType, 'date_of_birth')) +
+    renderPartyFact('Ownership', ownershipDisplay, partyType === 'director' ? 'N/A' : 'Missing', ownershipBadge) +
     renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured');
   if (partyType === 'director') {
-    facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing') +
+    facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing', renderPartyRegistryFieldBadge(party, partyType, 'country_of_residence')) +
       renderPartyFact('Residential Address', party.residential_address, 'Missing') +
-      renderPartyFact('Date of Appointment', party.date_of_appointment, 'Missing');
+      renderPartyFact('Date of Appointment', party.date_of_appointment, 'Missing', renderPartyRegistryFieldBadge(party, partyType, 'date_of_appointment'));
   } else if (partyType === 'ubo') {
-    facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing') +
+    facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing', renderPartyRegistryFieldBadge(party, partyType, 'country_of_residence')) +
       renderPartyFact('Residential Address', party.residential_address, 'Missing');
   } else if (partyType === 'intermediary') {
-    facts += renderPartyFact('Registration Number', party.registration_number, 'Missing') +
-      renderPartyFact('Registered Address', party.registered_address, 'Missing') +
+    facts += renderPartyFact('Registration Number', party.registration_number, 'Missing', renderPartyRegistryFieldBadge(party, partyType, 'registration_number')) +
+      renderPartyFact('Registered Address', party.registered_address, 'Missing', renderPartyRegistryFieldBadge(party, partyType, 'registered_address')) +
       renderPartyFact('Owned / Controlled By', party.owned_or_controlled_by, 'Missing');
   }
   return '<div class="party-review-card" style="padding:12px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
     '<div style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
       '<div>' +
-        '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;font-weight:700;color:var(--text1);"><span>' + escapeHtml(displayName) + '</span>' + nameBadge + '</div>' +
         '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(roleLabel) + '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
-        registryBadge +
         '<span class="badge ' + (correctionStatus.label === 'Corrected' ? 'pending' : 'draft') + '" title="' + escapeHtml(correctionStatus.detail || correctionStatus.label) + '">' + escapeHtml(correctionStatus.label === 'Corrected' ? 'Corrected' : 'No correction') + '</span>' +
         '<button class="btn btn-outline btn-sm" onclick="openPartyCorrectionModal(\'' + escapeHtml(partyType) + '\',\'' + escapeHtml(partyRecordId(party)) + '\')">Correct party details</button>' +
         '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'screening\')">Review screening</button>' +
@@ -11108,19 +11203,17 @@ function renderPartySection(app) {
   var directors = (app && app.directors) || [];
   var ubos = (app && app.ubos) || [];
   var intermediaries = (app && app.intermediaries) || [];
-  function renderPartySubsection(title, items, partyType, emptyText, sectionBadge) {
-    sectionBadge = sectionBadge || '';
+  function renderPartySubsection(title, items, partyType, emptyText) {
     return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:700;margin:12px 0 8px;">' +
         '<span>' + escapeHtml(title) + '</span>' +
-        sectionBadge +
       '</div>' +
       (items.length ? items.map(function(item) {
         return renderPartyCard(item, partyType, app);
       }).join('') : '<div style="font-size:12px;color:var(--text3);padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' + escapeHtml(emptyText) + '</div>');
   }
   var html = renderPartySubsection('Directors', directors, 'director', 'No directors persisted.');
-  html += renderPartySubsection('Ultimate Beneficial Owners', ubos, 'ubo', 'No UBOs persisted.', renderCompaniesHousePscSectionBadge(app, 'ubo'));
-  html += renderPartySubsection('Intermediary Shareholders', intermediaries, 'intermediary', 'No intermediary shareholders persisted.', renderCompaniesHousePscSectionBadge(app, 'intermediary'));
+  html += renderPartySubsection('Ultimate Beneficial Owners', ubos, 'ubo', 'No UBOs persisted.');
+  html += renderPartySubsection('Intermediary Shareholders', intermediaries, 'intermediary', 'No intermediary shareholders persisted.');
   return '<div class="prescreen-collapsible-card party-review-accordion" id="party-review-accordion-card">' +
     '<details id="party-review-accordion" open>' +
       '<summary>' +
