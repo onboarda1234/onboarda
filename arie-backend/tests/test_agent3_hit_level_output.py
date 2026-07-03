@@ -193,6 +193,9 @@ def test_clean_report_has_empty_hit_rows():
     assert out["hit_row_status_counts"] == {}
     assert out["recommended_disposition"] == server.AGENT3_NO_REPORTABLE_HIT_RECOMMENDATION
     assert out["hit_counts"]["total"] == 0
+    assert out["screening_result_terminal"] is True
+    assert "Agent recommendation:" not in out["summary"]
+    assert "This is an advisory screening interpretation, not an approval decision." not in out["summary"]
 
 
 def test_existing_hit_counts_regression():

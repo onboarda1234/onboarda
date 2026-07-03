@@ -23672,6 +23672,47 @@ def _agent3_screening_report_available(screening_report):
     return any(key in screening_report for key in screening_keys)
 
 
+def _agent3_screening_report_state(screening_report):
+    screening_report = screening_report if isinstance(screening_report, dict) else {}
+    state = _agent3_text(_agent3_first_non_empty(
+        screening_report.get("status"),
+        screening_report.get("provider_status"),
+        screening_report.get("screening_status"),
+        screening_report.get("screening_state"),
+        screening_report.get("state"),
+        screening_report.get("truth_state"),
+        screening_report.get("workflow_status"),
+    ))
+    pending_degraded_reason = _agent3_text(_agent3_first_non_empty(
+        screening_report.get("pending_degraded_reason"),
+        screening_report.get("degraded_reason"),
+        screening_report.get("pending_provider_reason"),
+        screening_report.get("provider_status_reason"),
+        screening_report.get("error_message"),
+    ))
+    degraded_sources = _agent3_list(screening_report.get("degraded_sources"))
+    non_terminal_states = {
+        "pending",
+        "in_progress",
+        "retrying",
+        "pending_provider",
+        "partial_result",
+        "degraded",
+        "errored",
+        "error",
+        "failed",
+        "provider_error",
+        "timeout",
+    }
+    state_norm = state.strip().lower()
+    terminal = not pending_degraded_reason and not degraded_sources and state_norm not in non_terminal_states
+    return {
+        "state": state,
+        "terminal": terminal,
+        "pending_degraded_reason": pending_degraded_reason,
+    }
+
+
 def _agent3_collect_hits(screening_report, app):
     hits = []
     screening_mode = _agent3_text(screening_report.get("screening_mode"))
@@ -23937,6 +23978,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     if not _agent3_screening_report_available(screening_report):
         return None
 
+    screening_state_info = _agent3_screening_report_state(screening_report)
     hits = _agent3_collect_hits(screening_report, app)
     declared_pep_subjects = list(declared_pep_subjects or [])
     for subject in _agent3_collect_declared_pep_from_prescreening(prescreening, screening_report):
@@ -24060,8 +24102,6 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         summary_parts.append(AGENT3_DECLARED_PEP_NOTICE)
     if unresolved_review_count:
         summary_parts.append(f"{unresolved_review_count} screening review item(s) remain unresolved in stored review records.")
-    summary_parts.append(f"Agent recommendation: {recommendation}. Officer decision remains required.")
-    summary_parts.append("This is an advisory screening interpretation, not an approval decision.")
     summary = " ".join(summary_parts)
     draft_audit_note = (
         "Agent 3 generated an advisory screening interpretation from stored "
@@ -24074,6 +24114,9 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         "provider": provider,
         "screened_at": screening_report.get("screened_at") or "",
         "screening_mode": screening_report.get("screening_mode") or "",
+        "screening_result_state": screening_state_info.get("state") or "",
+        "screening_result_terminal": screening_state_info.get("terminal"),
+        "pending_degraded_reason": screening_state_info.get("pending_degraded_reason") or "",
         "total_hits": total_hits,
         "overall_flags": overall_flags[:10],
     }]
@@ -24121,6 +24164,9 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
         "provider_call_made": False,
         "risk_or_decision_mutation": False,
+        "screening_result_state": screening_state_info.get("state") or "",
+        "screening_result_terminal": screening_state_info.get("terminal"),
+        "pending_degraded_reason": screening_state_info.get("pending_degraded_reason") or "",
         "ai_mode": "deterministic_fallback",
         "ai_notice": AGENT3_DETERMINISTIC_NOTICE,
         "officer_notice": AGENT3_OFFICER_NOTICE,
