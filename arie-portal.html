@@ -1642,10 +1642,20 @@
   .consent-check input[type="checkbox"] { margin-top:3px; flex-shrink:0; width:16px; height:16px; accent-color:var(--brand); }
   .consent-check p { font-size:12px; color:var(--text2); margin:0; line-height:1.5; }
   .consent-check p strong { color:var(--text1); }
+  .consent-check-copy { display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .consent-check-copy label { font-size:12px; color:var(--text2); line-height:1.55; cursor:pointer; }
   .legal-link { color:var(--brand); text-decoration:underline; cursor:pointer; }
+  .legal-terms-link { align-self:flex-start; font-size:12px; font-weight:700; line-height:1.4; }
+  .final-confirmation-copy { font-size:13px; color:var(--text2); margin:0 0 12px; line-height:1.55; }
+  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .tc-accept-row { display:flex; align-items:center; gap:10px; margin-top:14px; padding:12px 16px; background:var(--surface3); border-radius:var(--radius-sm); }
   .tc-accept-row input { flex-shrink:0; width:18px; height:18px; accent-color:var(--brand); }
   .tc-accept-row label { font-size:12px; font-weight:600; color:var(--text1); cursor:pointer; }
+  @media (max-width: 640px) {
+    .consent-section { padding:14px 14px; }
+    .consent-check { gap:8px; }
+    .legal-terms-link { max-width:100%; }
+  }
 
   /* Save & Resume */
   .save-draft-bar { display:flex; align-items:center; justify-content:space-between; padding:10px 16px; background:rgba(37,99,235,0.06); border:1px solid rgba(37,99,235,0.15); border-radius:var(--radius-sm); margin-bottom:16px; }
@@ -3263,42 +3273,23 @@
             </div>
           </div>
 
-          <!-- 14. Consent & Data Protection -->
-          <div class="section-title">Consent, Data Protection & Declaration</div>
-
-          <div class="consent-section">
-            <div class="consent-section-title">🔒 Data Protection Notice</div>
+          <!-- 14. Final Confirmation -->
+          <div class="consent-section" aria-labelledby="final-confirmation-title">
+            <div class="consent-section-title" id="final-confirmation-title">Final confirmation</div>
+            <p class="final-confirmation-copy">Please review the legal terms before submitting your application.</p>
             <div class="consent-check">
-              <input type="checkbox" id="f-consent-dpa" required />
-              <p><strong>Data Processing Consent <span class="req">*</span></strong><br/>I consent to Onboarda Ltd collecting, processing, and storing the personal and corporate data provided in this application for the purposes of client onboarding, due diligence, application review, and ongoing compliance obligations, in accordance with the <span class="legal-link" onclick="showToast('info','Data Protection Act','The Mauritius Data Protection Act 2017 governs the processing of personal data. Full policy available upon request.')">Mauritius Data Protection Act 2017</span> and applicable regulations.</p>
+              <input type="checkbox" id="f-consent-legal-confirmation" required aria-describedby="legal-confirmation-help" />
+              <div class="consent-check-copy">
+                <label for="f-consent-legal-confirmation">I confirm that I have read and agree to the Data Protection Notice, Information Sharing, Data Retention, Ongoing Monitoring, and Declaration terms. <span class="req">*</span></label>
+                <a id="legal-terms-link" class="legal-link legal-terms-link" href="/legal/data-protection-declaration-terms" target="_blank" rel="noopener noreferrer">View Data Protection &amp; Declaration Terms</a>
+                <span id="legal-confirmation-help" class="sr-only">Required before submitting your application.</span>
+              </div>
             </div>
-            <div class="consent-check">
-              <input type="checkbox" id="f-consent-sharing" required />
-              <p><strong>Information Sharing <span class="req">*</span></strong><br/>I acknowledge that Onboarda Ltd may share information provided in this application with regulatory authorities (including the Financial Services Commission and the Financial Intelligence Unit), correspondent banks, and third-party compliance screening providers as required by law or as necessary for the provision of Payment Intermediary Services.</p>
-            </div>
-            <div class="consent-check">
-              <input type="checkbox" id="f-consent-retention" required />
-              <p><strong>Data Retention <span class="req">*</span></strong><br/>I understand that my data will be retained for a minimum of 7 years from the date of account closure or last transaction, in compliance with the Financial Intelligence and Anti-Money Laundering Act 2002 and FIAML Regulations 2018. I may request access to, correction of, or (where legally permissible) erasure of my personal data by contacting the Data Protection Officer.</p>
-            </div>
-            <div class="consent-check">
-              <input type="checkbox" id="f-consent-monitoring" required />
-              <p><strong>Ongoing Monitoring <span class="req">*</span></strong><br/>I acknowledge that Onboarda Ltd will conduct ongoing due diligence and transaction monitoring on all accounts as required under AML/CFT regulations. This includes periodic re-verification of client information, screening against sanctions and PEP lists, and automated monitoring of transaction patterns.</p>
-            </div>
-          </div>
-
-          <div class="consent-section">
-            <div class="consent-section-title">📋 Marketing & Communication</div>
             <div class="consent-check">
               <input type="checkbox" id="f-consent-marketing" />
-              <p>I agree that my personal information may be used for marketing purposes. I agree to receive emails from Onboarda Ltd and understand that I may opt out at any time. <em>(Optional)</em></p>
-            </div>
-          </div>
-
-          <div class="consent-section">
-            <div class="consent-section-title">✍️ Declaration</div>
-            <div class="consent-check">
-              <input type="checkbox" id="f-consent-declaration" required />
-              <p><strong>I, the undersigned duly authorised representative of the entity, hereby declare that: <span class="req">*</span></strong><br/>(a) The information provided in this application is true, correct, and complete to the best of my knowledge.<br/>(b) I undertake to promptly inform Onboarda Ltd in writing of any material change to the information provided.<br/>(c) I understand that providing false or misleading information is an offence under the FIAMLA 2002 and may result in rejection of this application and referral to the relevant authorities.<br/>(d) I confirm that the source of funds and source of wealth declared are legitimate and not derived from criminal activity.</p>
+              <div class="consent-check-copy">
+                <label for="f-consent-marketing">I agree to receive marketing communications and understand I may opt out at any time. (Optional)</label>
+              </div>
             </div>
           </div>
 
@@ -4917,6 +4908,7 @@ function escapeHtml(str) {
 
 // ─── API Configuration ──────────────────────────────────
 const API_BASE = '/api';
+const LEGAL_TERMS_URL = window.PORTAL_LEGAL_TERMS_URL || '/legal/data-protection-declaration-terms';
 let AUTH_TOKEN = '';
 let AUTH_USER = null;
 let currentApplicationId = '';
@@ -5484,6 +5476,26 @@ function clearAuth() {
   } catch(e) { /* storage may be unavailable in some environments */ }
 }
 
+function configureLegalTermsLink() {
+  var link = document.getElementById('legal-terms-link');
+  if (link) link.href = LEGAL_TERMS_URL;
+}
+
+function legalConsentFromStoredFields(fields) {
+  if (!fields || typeof fields !== 'object') return false;
+  if (fields['f-consent-legal-confirmation'] != null) {
+    return !!fields['f-consent-legal-confirmation'];
+  }
+  var legacyRequired = [
+    'f-consent-dpa',
+    'f-consent-sharing',
+    'f-consent-retention',
+    'f-consent-monitoring',
+    'f-consent-declaration'
+  ];
+  return legacyRequired.every(function(id) { return fields[id] === true; });
+}
+
 // ─── State ───────────────────────────────────────────────
 let appRef = '';
 let uploadedDocs = new Set();
@@ -5853,6 +5865,15 @@ function buildDraftDataFromApplication(app) {
       data.prescreening[id] = ps[key] == null ? '' : ps[key];
     }
   });
+  var storedConsents = (ps.submission && ps.submission.consents) || ps.consents || ps;
+  data.prescreening['f-consent-legal-confirmation'] = [
+    'consent_data_processing',
+    'consent_information_sharing',
+    'consent_data_retention',
+    'consent_ongoing_monitoring',
+    'consent_declaration'
+  ].every(function(key) { return storedConsents && storedConsents[key] === true; });
+  data.prescreening['f-consent-marketing'] = !!(storedConsents && storedConsents.consent_marketing);
   return data;
 }
 
@@ -7703,6 +7724,7 @@ async function submitPrescreening(e) {
     getFieldValue('f-source-ongoing-type') ? 'Ongoing: ' + getFieldValue('f-source-ongoing-type') : '',
     getFieldValue('f-source-ongoing')
   ].filter(Boolean).join('; ');
+  var legalConsentConfirmed = isChecked('f-consent-legal-confirmation');
 
   var payload = {
     company_name: getFieldValue('f-reg-name'),
@@ -7786,12 +7808,12 @@ async function submitPrescreening(e) {
       management_overview: getFieldValue('f-mgmt'),
       introduction_method: getFieldValue('f-intro-method'),
       referrer_name: getFieldValue('f-referrer-name'),
-      consent_data_processing: isChecked('f-consent-dpa'),
-      consent_information_sharing: isChecked('f-consent-sharing'),
-      consent_data_retention: isChecked('f-consent-retention'),
-      consent_ongoing_monitoring: isChecked('f-consent-monitoring'),
+      consent_data_processing: legalConsentConfirmed,
+      consent_information_sharing: legalConsentConfirmed,
+      consent_data_retention: legalConsentConfirmed,
+      consent_ongoing_monitoring: legalConsentConfirmed,
       consent_marketing: isChecked('f-consent-marketing'),
-      consent_declaration: isChecked('f-consent-declaration')
+      consent_declaration: legalConsentConfirmed
     },
     directors: directors,
     ubos: ubos,
@@ -8882,13 +8904,13 @@ submitPrescreening = function(e) {
     blockNonDraftPrescreeningSubmit();
     return;
   }
-  var required = ['f-consent-dpa','f-consent-sharing','f-consent-retention','f-consent-monitoring','f-consent-declaration'];
+  var required = ['f-consent-legal-confirmation'];
   var allChecked = required.every(function(id) {
     var cb = document.getElementById(id);
     return cb && cb.checked;
   });
   if (!allChecked) {
-    showToast('error', 'Consent Required', 'Please accept all mandatory consent and declaration checkboxes before submitting.');
+    showToast('error', 'Legal Confirmation Required', 'Please confirm that you have read and agree to the legal terms before submitting.');
     return;
   }
   origSubmitPrescreening(e);
@@ -9907,6 +9929,9 @@ function restoreDraftFromData(data, options) {
         if (data.prescreening_data[normalizedKey] != null) projected[id] = data.prescreening_data[normalizedKey];
       });
       prescreeningData = projected;
+    }
+    if (prescreeningData && typeof prescreeningData === 'object' && prescreeningData['f-consent-legal-confirmation'] == null) {
+      prescreeningData['f-consent-legal-confirmation'] = legalConsentFromStoredFields(prescreeningData);
     }
     if (prescreeningData && typeof prescreeningData === 'object') {
       Object.keys(prescreeningData).forEach(function(id) {
@@ -11595,6 +11620,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   initMultiSelect('ms-op-countries', ALL_COUNTRIES);
   initMultiSelect('ms-target-markets', ALL_COUNTRIES);
+  configureLegalTermsLink();
   populateNationalitySelects();
   setDobMaxToday();
   populateLookupCountry();
