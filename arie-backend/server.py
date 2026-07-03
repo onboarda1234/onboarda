@@ -24651,10 +24651,16 @@ class ScreeningHandler(BaseHandler):
 
 
 class SanctionsCheckHandler(BaseHandler):
-    """POST /api/screening/sanctions — ad-hoc sanctions/PEP check"""
+    """POST /api/screening/sanctions — ad-hoc sanctions/PEP check (officer-only)."""
     def post(self):
-        user = self.require_auth()
+        # audit finding B4/M1: officer-only + rate-limited. This ad-hoc tool was
+        # previously reachable by any authenticated client with no rate limit,
+        # letting an untrusted applicant burn paid screening quota and receive
+        # third-party sanctions data. The client portal no longer calls it.
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
+            return
+        if not self.check_rate_limit("adhoc_screening", max_attempts=30, window_seconds=60):
             return
 
         data = self.get_json()
@@ -24673,10 +24679,13 @@ class SanctionsCheckHandler(BaseHandler):
 
 
 class CompanyLookupHandler(BaseHandler):
-    """POST /api/screening/company — ad-hoc company registry lookup"""
+    """POST /api/screening/company — ad-hoc company registry lookup (officer-only)."""
     def post(self):
-        user = self.require_auth()
+        # audit finding B4/M1: officer-only + rate-limited (was any authenticated user).
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
+            return
+        if not self.check_rate_limit("adhoc_screening", max_attempts=30, window_seconds=60):
             return
 
         data = self.get_json()
@@ -26344,10 +26353,13 @@ class CompanyIntakeSessionHandler(BaseHandler):
 
 
 class IPCheckHandler(BaseHandler):
-    """GET /api/screening/ip — check IP geolocation"""
+    """GET /api/screening/ip — check IP geolocation (officer-only)."""
     def get(self):
-        user = self.require_auth()
+        # audit finding B4/M1: officer-only + rate-limited (was any authenticated user).
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
+            return
+        if not self.check_rate_limit("adhoc_screening", max_attempts=30, window_seconds=60):
             return
 
         ip = self.get_argument("ip", self.get_client_ip())

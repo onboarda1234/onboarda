@@ -6902,15 +6902,15 @@ function addDirectorRowWithValidation() {
   const tbody = document.getElementById('directors-body');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="first_name" placeholder="First name"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name"/></td>
     <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
     <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
     <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
     <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
     <td><input type="date" data-field="date_of_appointment" /></td>
     <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
@@ -6921,56 +6921,30 @@ function addUBORowWithValidation() {
   const tbody = document.getElementById('ubos-body');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="first_name" placeholder="First name"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name"/></td>
     <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
     <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
     <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
     <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
     <td><input type="number" data-field="ownership_pct" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
     <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
   syncDirectorsUBOsToKYC();
 }
 
-// ─── D. Background Screening on Name Entry ────────────────────
-async function runRealtimeBackgroundScreening(inputEl) {
-  const name = inputEl.value.trim();
-  if (name.length < 3) return;
-
-  const indicator = inputEl.closest('tr').querySelector('.screening-indicator');
-  if (!indicator) return;
-
-  debounce('bg-screening-' + name, async () => {
-    indicator.style.display = 'inline-block';
-    indicator.style.background = '#f59e0b'; // Amber = checking
-    indicator.title = 'Screening...';
-
-    try {
-      const result = await apiCall('POST', '/screening/sanctions', {
-        name: name,
-        entity_type: 'Person'
-      });
-
-      if (result.matched) {
-        indicator.style.background = '#ef4444'; // Red = flag
-        indicator.innerHTML = '🚩';
-        indicator.title = 'Background screening flag - review required';
-      } else {
-        indicator.style.background = '#10b981'; // Green = clear
-        indicator.innerHTML = '✓';
-        indicator.title = 'Background screening passed';
-      }
-    } catch (error) {
-      indicator.style.background = '#f59e0b'; // Amber = error
-      indicator.title = 'Screening error - unable to complete check';
-      console.error('Background screening error:', error);
-    }
-  }, 600);
-}
+// ─── D. Background Screening on Name Entry — REMOVED (audit finding B4) ──────
+// The client portal previously ran an ad-hoc AML "background screening" as the
+// applicant typed director/UBO names and painted a green "Background screening
+// passed" tick on any non-match. Under the default configuration no real
+// sanctions/PEP screening runs (the provider is IDV-only), so an unscreened
+// name (api_status "not_configured") was rendered identical to a genuine clear
+// — a fail-open misrepresentation shown to the applicant. Real AML screening is
+// performed and adjudicated by compliance officers in the back office. The
+// endpoint is now officer-only; no client-side screening call remains.
 
 // ─── E. Real-time UBO Mapping Analysis ────────────────────
 function runRealtimeUBOMappingAnalysis(inputEl) {
@@ -7161,15 +7135,15 @@ function addDirectorRow() {
   const tr = document.createElement('tr');
   tr.dataset.personKey = nextOwnershipPersonKey('dir', '#directors-body tr');
   tr.innerHTML = `
-    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="first_name" placeholder="First name"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name"/></td>
     <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
     <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
     <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
     <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
     <td><input type="date" data-field="date_of_appointment" /></td>
     <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
@@ -7185,15 +7159,15 @@ function addUBORow() {
   const tr = document.createElement('tr');
   tr.dataset.personKey = nextOwnershipPersonKey('ubo', '#ubos-body tr');
   tr.innerHTML = `
-    <td><input type="text" data-field="first_name" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
-    <td><input type="text" data-field="last_name" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" data-field="first_name" placeholder="First name"/></td>
+    <td><input type="text" data-field="last_name" placeholder="Last name"/></td>
     <td><select class="nat-select" data-field="nationality"><option value="">Nationality</option></select></td>
     <td><div class="date-with-helper"><input type="date" class="dob-input" data-field="date_of_birth" /><div class="dob-helper"></div></div></td>
     <td><select class="nat-select" data-field="country_of_residence"><option value="">Country</option></select></td>
     <td><input type="text" data-field="residential_address" placeholder="Residential address" /></td>
     <td><input type="number" data-field="ownership_pct" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
     <td><select class="pep-select" data-field="is_pep" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
