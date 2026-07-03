@@ -379,6 +379,104 @@ def test_country_of_residence_restore_aliases_cover_uk_constituent_countries():
         assert 'class="nat-select" data-field="country_of_residence"' in table_html
 
 
+def test_portal_contact_prefill_uses_session_data_and_blank_only_setter():
+    html = _portal_html()
+
+    helper_body = _extract_js_function(html, "prefillPortalContactDetailsFromSession")
+    setter_body = _extract_js_function(html, "portalContactSetIfBlank")
+
+    assert "AUTH_USER || {}" in helper_body
+    assert "portalContactSessionEmail(user)" in helper_body
+    assert "portalContactNameFromProfile(user)" in helper_body
+    assert "portalContactNameFromEmail(email)" in helper_body
+    assert "portalContactSetIfBlank('f-email', email)" in helper_body
+    assert "portalContactSetIfBlank('f-contact-first', profileName.first || emailName.first)" in helper_body
+    assert "portalContactSetIfBlank('f-contact-last', profileName.last || emailName.last)" in helper_body
+    assert "'f-mobile'" not in helper_body
+
+    assert "if (String(el.value || '').trim()) return false;" in setter_body
+    assert "_restoreSelectValue(el, value, id)" in setter_body
+    assert "else el.value = value" in setter_body
+
+
+def test_portal_contact_prefill_name_parsing_is_conservative():
+    html = _portal_html()
+
+    profile_body = _extract_js_function(html, "portalContactNameFromProfile")
+    email_body = _extract_js_function(html, "portalContactNameFromEmail")
+    email_part_body = _extract_js_function(html, "portalContactEmailNamePart")
+
+    assert "'first_name', 'firstName', 'given_name', 'givenName'" in profile_body
+    assert "'last_name', 'lastName', 'family_name', 'familyName', 'surname'" in profile_body
+    assert "'full_name', 'fullName', 'display_name', 'displayName', 'contact_name', 'contactName'" in profile_body
+    assert "company_name" not in profile_body
+    assert "company" not in profile_body
+
+    assert "!/[._-]/.test(local)" in email_body
+    assert "tokens.length < 2" in email_body
+    assert "parts.length !== tokens.length || parts.length < 2" in email_body
+    assert "portalContactEmailNamePart" in email_body
+    assert "portalContactEmailNameBlocklist[cleaned.toLowerCase()]" in email_part_body
+    assert "demo: true" in html
+    assert "test: true" in html
+
+
+def test_portal_contact_prefill_runs_after_restore_and_preserves_save_submit_contracts():
+    html = _portal_html()
+
+    resume_body = _extract_js_function(html, "resumeApplication")
+    assert resume_body.index("restoreDraftFromData(buildDraftDataFromApplication(app)") < resume_body.index("prefillPortalContactDetailsFromSession()")
+    assert resume_body.index("restoreDraftFromData(savedSession.form_data") < resume_body.index("prefillPortalContactDetailsFromSession()")
+    assert "if (projection.allowsDraftRestore) {\n        prefillPortalContactDetailsFromSession();" in resume_body
+
+    manual_body = _extract_js_function(html, "proceedManually")
+    continue_body = _extract_js_function(html, "continueCompanyIntakeToApplicationForm")
+    register_body = html[html.index("function submitRegister"):html.index("// ─── Login", html.index("function submitRegister"))]
+    assert "showView('prescreening');\n  prefillPortalContactDetailsFromSession();" in manual_body
+    assert "applyCompanyIntakePrefillToForm();\n  prefillPortalContactDetailsFromSession();" in continue_body
+    assert "prefillApplicationForm();" in register_body
+
+    collect_body = _extract_js_function(html, "collectFormData")
+    submit_body = _extract_js_function(html, "submitPrescreening")
+    for field_id in ("f-contact-first", "f-contact-last", "f-email", "f-phone-code", "f-mobile"):
+        assert f'id="{field_id}"' in html
+    assert "var inputs = form.querySelectorAll('input, select, textarea');" in collect_body
+    assert "data.prescreening[el.id] = el.value" in collect_body
+    for payload_field in (
+        "entity_contact_first: getFieldValue('f-contact-first')",
+        "entity_contact_last: getFieldValue('f-contact-last')",
+        "entity_contact_email: getFieldValue('f-email')",
+        "entity_contact_phone_code: getFieldValue('f-phone-code')",
+        "entity_contact_mobile: getFieldValue('f-mobile')",
+    ):
+        assert payload_field in submit_body
+
+
+def test_portal_contact_prefill_defaults_mauritius_phone_code_only_when_applicable():
+    html = _portal_html()
+
+    helper_body = _extract_js_function(html, "prefillPortalContactDetailsFromSession")
+    should_body = _extract_js_function(html, "portalContactShouldDefaultMauritius")
+
+    assert "var PORTAL_CONTACT_PREFILL_MU_PHONE_CODE = '+230';" in html
+    assert "portalContactSetIfBlank('f-phone-code', PORTAL_CONTACT_PREFILL_MU_PHONE_CODE)" in helper_body
+    assert "portalContactTextSuggestsMauritius(country)" in should_body
+    assert "portalContactTextSuggestsMauritius(_gfv('f-inc-country'))" in should_body
+    assert "portalContactEmailSuggestsMauritius(email)" in should_body
+    assert 'value="+230" data-country-code="MU" data-country-name="Mauritius" selected' in html
+
+
+def test_portal_contact_prefill_does_not_add_backoffice_surface():
+    portal_html = _portal_html()
+    backoffice_html = _backoffice_html()
+
+    assert "prefillPortalContactDetailsFromSession" in portal_html
+    assert "portalContactSetIfBlank" in portal_html
+    assert "prefillPortalContactDetailsFromSession" not in backoffice_html
+    assert "portalContactSetIfBlank" not in backoffice_html
+    assert "Contact details were pre-filled from your portal profile" not in backoffice_html
+
+
 def test_phone_country_code_selector_is_searchable_and_preserves_existing_field():
     html = _portal_html()
 
@@ -405,6 +503,14 @@ def test_phone_country_code_selector_is_searchable_and_preserves_existing_field(
     match_body = _extract_js_function(html, "phoneCodeOptionMatches")
     assert "_normalizeSelectToken(query).replace(/^\\+/, '')" in match_body
     assert "phoneCodeSearchTokensForOption(option)" in match_body
+
+    score_body = _extract_js_function(html, "phoneCodeOptionMatchScore")
+    assert "token === needle" in score_body
+    assert "token.indexOf(needle) === 0" in score_body
+
+    render_body = _extract_js_function(html, "renderPhoneCodeOptions")
+    assert "matches.sort(function(a, b)" in render_body
+    assert "phoneCodeOptionMatchScore(a, query) - phoneCodeOptionMatchScore(b, query)" in render_body
 
     init_body = _extract_js_function(html, "initPhoneCodeSelectors")
     assert "document.querySelectorAll('select.phone-code').forEach(enhancePhoneCodeSelect)" in init_body

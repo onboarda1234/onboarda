@@ -5548,6 +5548,137 @@ var PRESCREENING_FIELD_BINDINGS = {
   'f-authorised-share-capital': 'authorised_share_capital'
 };
 
+var PORTAL_CONTACT_PREFILL_MU_PHONE_CODE = '+230';
+var portalContactEmailNameBlocklist = {
+  admin: true,
+  contact: true,
+  demo: true,
+  hello: true,
+  info: true,
+  mail: true,
+  noreply: true,
+  support: true,
+  team: true,
+  test: true,
+  user: true
+};
+
+function portalContactProfileSources(user) {
+  var sources = [];
+  if (user && typeof user === 'object') {
+    sources.push(user);
+    ['profile', 'client', 'account'].forEach(function(key) {
+      if (user[key] && typeof user[key] === 'object') sources.push(user[key]);
+    });
+  }
+  return sources;
+}
+
+function portalContactFirstString(user, keys) {
+  var sources = portalContactProfileSources(user);
+  for (var s = 0; s < sources.length; s++) {
+    for (var k = 0; k < keys.length; k++) {
+      var value = sources[s][keys[k]];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  }
+  return '';
+}
+
+function portalContactSessionEmail(user) {
+  var email = portalContactFirstString(user, ['email', 'email_address', 'emailAddress', 'login_email', 'client_email']);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
+function portalContactNameFromProfile(user) {
+  var first = portalContactFirstString(user, ['first_name', 'firstName', 'given_name', 'givenName']);
+  var last = portalContactFirstString(user, ['last_name', 'lastName', 'family_name', 'familyName', 'surname']);
+  var full = portalContactFirstString(user, ['full_name', 'fullName', 'display_name', 'displayName', 'contact_name', 'contactName']);
+  if (full && full.indexOf('@') === -1) {
+    var parts = full.split(/\s+/).filter(Boolean);
+    if (!first && parts.length >= 2) first = parts[0];
+    if (!last && parts.length >= 2) last = parts.slice(1).join(' ');
+  }
+  return { first: first, last: last };
+}
+
+function portalContactEmailNamePart(token) {
+  var cleaned = String(token || '').trim();
+  if (!/^[a-z]{2,}$/i.test(cleaned)) return '';
+  if (portalContactEmailNameBlocklist[cleaned.toLowerCase()]) return '';
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
+}
+
+function portalContactNameFromEmail(email) {
+  var local = String(email || '').split('@')[0].split('+')[0];
+  if (!local || !/[._-]/.test(local)) return { first: '', last: '' };
+  var tokens = local.split(/[._-]+/).filter(Boolean);
+  if (tokens.length < 2) return { first: '', last: '' };
+  var parts = tokens.map(portalContactEmailNamePart).filter(Boolean);
+  if (parts.length !== tokens.length || parts.length < 2) return { first: '', last: '' };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
+function portalContactTextSuggestsMauritius(value) {
+  var normalized = _normalizeSelectToken(value);
+  return normalized === 'mu' || normalized === 'mus' || normalized.indexOf('mauritius') !== -1;
+}
+
+function portalContactEmailSuggestsMauritius(email) {
+  var domain = String(email || '').split('@')[1] || '';
+  return /\.mu$/i.test(domain);
+}
+
+function portalContactShouldDefaultMauritius(user, email) {
+  var country = portalContactFirstString(user, [
+    'country',
+    'country_code',
+    'countryCode',
+    'country_name',
+    'countryName',
+    'country_of_residence',
+    'countryOfResidence',
+    'residence_country',
+    'residenceCountry',
+    'account_country',
+    'accountCountry',
+    'jurisdiction'
+  ]);
+  return (
+    portalContactTextSuggestsMauritius(country) ||
+    portalContactTextSuggestsMauritius(_gfv('f-inc-country')) ||
+    portalContactEmailSuggestsMauritius(email)
+  );
+}
+
+function portalContactSetIfBlank(id, value) {
+  var el = document.getElementById(id);
+  if (!el || value === null || value === undefined || value === '') return false;
+  if (String(el.value || '').trim()) return false;
+  if (el.tagName === 'SELECT') _restoreSelectValue(el, value, id);
+  else el.value = value;
+  return String(el.value || '').trim() !== '';
+}
+
+function prefillPortalContactDetailsFromSession() {
+  var user = AUTH_USER || {};
+  var email = portalContactSessionEmail(user);
+  var profileName = portalContactNameFromProfile(user);
+  var emailName = (!profileName.first || !profileName.last) ? portalContactNameFromEmail(email) : { first: '', last: '' };
+  var changed = false;
+
+  changed = portalContactSetIfBlank('f-email', email) || changed;
+  changed = portalContactSetIfBlank('f-contact-first', profileName.first || emailName.first) || changed;
+  changed = portalContactSetIfBlank('f-contact-last', profileName.last || emailName.last) || changed;
+
+  if (portalContactShouldDefaultMauritius(user, email)) {
+    changed = portalContactSetIfBlank('f-phone-code', PORTAL_CONTACT_PREFILL_MU_PHONE_CODE) || changed;
+  }
+
+  if (changed && typeof updateProgress === 'function') updateProgress();
+  return changed;
+}
+
 function isCompanyLicensed() {
   return ((document.getElementById('f-is-licensed') || {}).value || '') === 'Yes';
 }
@@ -9675,6 +9806,17 @@ function phoneCodeOptionMatches(option, query) {
   });
 }
 
+function phoneCodeOptionMatchScore(option, query) {
+  var needle = _normalizeSelectToken(query).replace(/^\+/, '');
+  if (!needle) return 0;
+  var tokens = phoneCodeSearchTokensForOption(option).map(function(token) {
+    return _normalizeSelectToken(token).replace(/^\+/, '');
+  }).filter(Boolean);
+  if (tokens.some(function(token) { return token === needle; })) return 0;
+  if (tokens.some(function(token) { return token.indexOf(needle) === 0; })) return 1;
+  return 2;
+}
+
 function phoneCodeOptionLabel(option) {
   phoneCodePrepareOption(option);
   return String((option && option.textContent) || '').trim();
@@ -9714,6 +9856,12 @@ function renderPhoneCodeOptions(select, query) {
   var matches = Array.from(select.options || []).filter(function(option) {
     return option.value && phoneCodeOptionMatches(option, query);
   });
+  if (_normalizeSelectToken(query)) {
+    matches.sort(function(a, b) {
+      var scoreDiff = phoneCodeOptionMatchScore(a, query) - phoneCodeOptionMatchScore(b, query);
+      return scoreDiff || (a.index - b.index);
+    });
+  }
   if (!matches.length) {
     var empty = document.createElement('div');
     empty.className = 'phone-code-empty';
@@ -13262,6 +13410,7 @@ function continueCompanyIntakeToApplicationForm() {
   if (companyIntakeState.application_ref) appRef = companyIntakeState.application_ref;
   showView('prescreening');
   applyCompanyIntakePrefillToForm();
+  prefillPortalContactDetailsFromSession();
   _draftDirty = false;
   _setSaveStatus('Registry prefill ready to review', 'var(--green)');
   showToast('success', 'Application Pre-filled', 'Review the registry-sourced fields and complete the remaining required information.');
@@ -13277,6 +13426,7 @@ function proceedToPreScreening() {
 
 function prefillApplicationForm() {
   if (companyIntakeState && companyIntakeState.company) applyCompanyIntakePrefillToForm();
+  prefillPortalContactDetailsFromSession();
   updateKYCPersonNames();
 }
 
@@ -13288,6 +13438,7 @@ function proceedManually() {
   if (existingApplicationId) currentApplicationId = existingApplicationId;
   if (existingRef) appRef = existingRef;
   showView('prescreening');
+  prefillPortalContactDetailsFromSession();
   showToast('info', 'Manual Entry Mode', 'Please fill in the company details manually.');
 }
 
@@ -14089,6 +14240,10 @@ async function resumeApplication(ref, stage) {
           }), 'intermediary');
           if (projection.allowsDraftRestore) restoredFields = true;
         }
+      }
+
+      if (projection.allowsDraftRestore) {
+        prefillPortalContactDetailsFromSession();
       }
 
       // Sync KYC cards now that party rows are populated
