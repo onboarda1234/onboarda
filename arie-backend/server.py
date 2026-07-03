@@ -211,6 +211,7 @@ from enhanced_requirements import (
 )
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
+import monitoring_sla as _monitoring_sla
 from monitoring_enrollment import (
     backfill_approved_applications as _backfill_monitoring_enrollment,
     enroll_approved_application as _enroll_approved_application_for_monitoring,
@@ -31426,6 +31427,8 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
         # M2.2 four-eyes: derived pending-second-review flag (no stored status).
         "pending_second_review": bool(pending_review_ids and item.get("id") in pending_review_ids),
     })
+    # M2.1 PR-1: derived SLA/aging (read-only; never stored on the alert row).
+    item["sla"] = _monitoring_sla.derive(item)
     return item
 
 
@@ -31711,6 +31714,8 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["review_request"] = open_request
         result["pending_second_review"] = bool(open_request)
         result["dismissal_tier"] = _mdc.classify_alert_tier(result)
+        # M2.1 PR-1: derived SLA/aging (read-only; never stored on the alert row).
+        result["sla"] = _monitoring_sla.derive(result)
         db.close()
         self.success(result)
 
