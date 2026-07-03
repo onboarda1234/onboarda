@@ -78,6 +78,110 @@ def _prescreening_with_hits():
     }
 
 
+def _row(name, *, category=None, source_ref=None, **extra):
+    row = {
+        "name": name,
+        "match_score": None,
+        "surfaced_by_pass": "strict",
+    }
+    if category is not None:
+        row["category"] = category
+    if source_ref:
+        row["id"] = source_ref
+    row.update(extra)
+    return row
+
+
+def _rows(prefix, count, *, category=None):
+    return [
+        _row(f"{prefix} {idx + 1}", category=category, source_ref=f"{prefix.lower().replace(' ', '-')}-{idx + 1}")
+        for idx in range(count)
+    ]
+
+
+def _arf_920615_like_prescreening(*, total_hits=88):
+    """Multi-subject fixture mirroring the count shape from ARF-2026-920615."""
+    return {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": _ts(),
+            "total_hits": total_hits,
+            "overall_flags": ["pep"],
+            "company_screening": {
+                "company_name": "ALLICA BANK LIMITED",
+                "matched": True,
+                "results": _rows("Company other", 6, category="other"),
+            },
+            "director_screenings": [
+                {
+                    "person_name": "Richard DAVIES",
+                    "screening": {
+                        "matched": True,
+                        "results": _rows("Richard PEP", 10, category="pep")
+                        + _rows("Richard other", 42, category="other"),
+                    },
+                },
+                {
+                    "person_name": "Nivedita KRISHNAMURTHY",
+                    "screening": {
+                        "matched": True,
+                        "results": _rows("Nivedita PEP", 2, category="pep")
+                        + _rows("Nivedita other", 8, category="other"),
+                    },
+                },
+                {
+                    "person_name": "Amy OTHER",
+                    "screening": {"matched": True, "results": _rows("Amy other", 8, category="other")},
+                },
+                {
+                    "person_name": "John OTHER",
+                    "screening": {"matched": True, "results": _rows("John other", 2, category="other")},
+                },
+                {
+                    "person_name": "Patrice OTHER",
+                    "screening": {"matched": True, "results": _rows("Patrice other", 2, category="other")},
+                },
+                {
+                    "person_name": "Tracy OTHER",
+                    "screening": {"matched": True, "results": _rows("Tracy other", 2, category="other")},
+                },
+            ],
+            "ubo_screenings": [
+                {
+                    "person_name": "UBO OTHER",
+                    "screening": {"matched": True, "results": _rows("UBO other", 4, category="other")},
+                }
+            ],
+            "intermediary_screenings": [
+                {
+                    "company_name": "Warwick Capital Partners LLP",
+                    "screening": {
+                        "matched": True,
+                        "results": [
+                            _row(
+                                "Warwick intermediary 1",
+                                category="other",
+                                match_category="other",
+                                is_adverse_media=False,
+                                risk_type_labels=["Provider risk match - review context"],
+                            ),
+                            _row(
+                                "Warwick intermediary 2",
+                                category="other",
+                                match_category="other",
+                                is_adverse_media=False,
+                                risk_labels=["Unclassified provider risk"],
+                            ),
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
 def _build(app=None, prescreening=None, reviews=None):
     return server._agent3_build_screening_interpretation(
         app or _app(),
@@ -206,6 +310,74 @@ def test_existing_hit_counts_regression():
     assert counts["sanctions"] == 1
     assert counts["pep"] == 1
     assert counts["adverse_media"] == 1
+    assert counts["other"] == 1
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+
+
+def test_multisubject_counts_reconcile_and_intermediary_rows_are_not_adverse_media():
+    out = _build(app={"id": "arf-920615", "ref": "ARF-2026-920615"}, prescreening=_arf_920615_like_prescreening())
+    counts = out["hit_counts"]
+
+    assert counts["total"] == 88
+    assert counts["sanctions"] == 0
+    assert counts["pep"] == 12
+    assert counts["adverse_media"] == 0
+    assert counts["other"] == 76
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+
+    intermediary_rows = [row for row in out["hit_rows"] if row["matched_entity"].startswith("Warwick intermediary")]
+    assert len(intermediary_rows) == 2
+    assert all("adverse_media" not in row["categories"] for row in intermediary_rows)
+    assert all(row["type"] == "watchlist" for row in intermediary_rows)
+
+    assert "88 provider result row(s)" in out["summary"]
+    assert "0 sanctions, 12 PEP, 0 provider screening adverse-media row(s), and 76 other/uncategorized row(s)" in out["summary"]
+    assert "76 other/uncategorized provider result row(s) need identity disambiguation." in out["key_concerns"]
+    assert not any("adverse media hit" in concern.lower() for concern in out["key_concerns"])
+    assert out["adverse_media_relevance"] == "No provider screening adverse-media rows found in stored screening results."
+
+
+def test_total_hits_slack_is_absorbed_by_other_bucket_without_negative_counts():
+    out = _build(app={"id": "arf-920615-slack", "ref": "ARF-2026-920615"}, prescreening=_arf_920615_like_prescreening(total_hits=90))
+    counts = out["hit_counts"]
+
+    assert len(out["hit_rows"]) == 88
+    assert counts["total"] == 90
+    assert counts["pep"] == 12
+    assert counts["adverse_media"] == 0
+    assert counts["other"] == 78
+    assert counts["other"] >= 0
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert "78 other/uncategorized provider result row(s) need identity disambiguation." in out["key_concerns"]
+
+
+def test_explicit_adverse_media_fields_still_classify_as_provider_screening_adverse_media():
+    prescreening = {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": _ts(),
+            "total_hits": 3,
+            "company_screening": {
+                "company_name": "Adverse Co",
+                "matched": True,
+                "results": [
+                    _row("Explicit adverse bool", is_adverse_media=True),
+                    _row("Negative news label", risk_type_labels=["negative_news"]),
+                    _row("Adverse media tokens", match_categories=["adverse media"]),
+                ],
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+    }
+    out = _build(prescreening=prescreening)
+    counts = out["hit_counts"]
+
+    assert counts["adverse_media"] == 3
+    assert counts["other"] == 0
+    assert all("adverse_media" in row["categories"] for row in out["hit_rows"])
 
 
 def test_builder_is_pure_no_provider_clients(monkeypatch):

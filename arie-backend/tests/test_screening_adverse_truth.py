@@ -15,6 +15,7 @@ from screening_adverse_truth import (
     STATE_ADVERSE_MEDIA_FALSE_POSITIVE,
     STATE_PROVIDER_FAILED,
     build_screening_adverse_truth_summary,
+    screening_adverse_truth_blocker_message,
 )
 
 
@@ -48,6 +49,28 @@ def test_deterministic_screening_adverse_sot_fixture_matrix(name):
     assert summary["state"] == expected["stored_backend_state"]
     assert summary["approval_effect"] == expected["approval_effect"]
     assert bool(summary["blocking_reasons"]) is bool(expected["case_command_centre_item"])
+
+
+def test_blocker_message_dedupes_repeated_monitoring_reasons_without_changing_raw_reasons():
+    summary = {
+        "approval_effect": EFFECT_COMPLIANCE,
+        "blocking_reasons": [
+            "provider_detected_pep",
+            "monitoring_adverse_media_hit",
+            "monitoring_adverse_media_hit",
+            "monitoring_adverse_media_hit",
+            "monitoring_pep_hit",
+        ],
+        "approval_blocked_reasons": [],
+    }
+
+    message = screening_adverse_truth_blocker_message(summary)
+
+    assert message.count("monitoring_adverse_media_hit") == 1
+    assert "monitoring_adverse_media_hit (3)" in message
+    assert "provider_detected_pep" in message
+    assert "monitoring_pep_hit" in message
+    assert summary["blocking_reasons"].count("monitoring_adverse_media_hit") == 3
 
 
 @pytest.mark.parametrize(

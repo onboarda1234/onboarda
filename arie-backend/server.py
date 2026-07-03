@@ -23465,31 +23465,116 @@ def _agent3_evidence_details(hit):
     }
 
 
+def _agent3_category_tokens(value):
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return set(), ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", raw).strip()
+    return set(normalized.split()), raw
+
+
+def _agent3_category_texts(value):
+    texts = []
+    if isinstance(value, dict):
+        for item in value.values():
+            texts.extend(_agent3_category_texts(item))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            texts.extend(_agent3_category_texts(item))
+    elif value is not None:
+        text = str(value).strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _agent3_adverse_media_text(text):
+    tokens, raw = _agent3_category_tokens(text)
+    if not raw:
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", " ", raw).strip()
+    joined = "_".join(normalized.split())
+    explicit_values = {
+        "adverse_media",
+        "adverse news",
+        "adverse_news",
+        "negative_news",
+        "negative news",
+        "media adverse media",
+    }
+    return (
+        raw in explicit_values
+        or normalized in explicit_values
+        or joined in explicit_values
+        or "adverse_media" in raw
+        or "negative_news" in raw
+        or "negative news" in normalized
+        or ("adverse" in tokens and "media" in tokens)
+    )
+
+
 def _agent3_categories(hit, source_hint=""):
     categories = set()
-    source_text = source_hint.lower()
-    if "sanction" in source_text:
+    source_tokens, source_raw = _agent3_category_tokens(source_hint)
+    if "sanction" in source_tokens or "sanctions" in source_tokens:
         categories.add("sanctions")
-    if "pep" in source_text:
+    if "pep" in source_tokens:
         categories.add("pep")
-    if "adverse" in source_text or "media" in source_text:
+    if _agent3_adverse_media_text(source_raw):
         categories.add("adverse_media")
 
     if not isinstance(hit, dict):
         return sorted(categories)
 
-    for key in ("category", "type", "hit_type", "list_type", "match_type"):
+    for key in (
+        "match_category",
+        "match_categories",
+        "category",
+        "categories",
+        "risk_type",
+        "risk_types",
+        "risk_type_keys",
+        "risk_type_labels",
+        "risk_labels",
+        "type",
+        "hit_type",
+        "list_type",
+        "match_type",
+    ):
         value = hit.get(key)
-        if isinstance(value, str):
-            value = [value]
-        for item in _agent3_list(value):
-            text = str(item or "").lower()
-            if "sanction" in text:
+        for item in _agent3_category_texts(value):
+            tokens, raw = _agent3_category_tokens(item)
+            if "sanction" in tokens or "sanctions" in tokens or "sanctioned" in tokens:
                 categories.add("sanctions")
-            if "pep" in text or "politically exposed" in text:
+            if "pep" in tokens or "politically exposed" in raw:
                 categories.add("pep")
-            if "adverse" in text or "media" in text:
+            if _agent3_adverse_media_text(raw):
                 categories.add("adverse_media")
+
+    for indicator in _agent3_list(hit.get("indicators")):
+        if not isinstance(indicator, dict):
+            continue
+        for key in ("type", "name", "label", "taxonomy_key", "taxonomy_label", "risk_type", "risk_label"):
+            value = indicator.get(key)
+            for item in _agent3_category_texts(value):
+                tokens, raw = _agent3_category_tokens(item)
+                if "sanction" in tokens or "sanctions" in tokens:
+                    categories.add("sanctions")
+                if "pep" in tokens or "politically exposed" in raw:
+                    categories.add("pep")
+                if _agent3_adverse_media_text(raw):
+                    categories.add("adverse_media")
+        value = indicator.get("value")
+        if isinstance(value, dict):
+            for key in ("taxonomy_key", "taxonomy_label", "risk_type", "risk_label", "type", "label"):
+                for item in _agent3_category_texts(value.get(key)):
+                    tokens, raw = _agent3_category_tokens(item)
+                    if "sanction" in tokens or "sanctions" in tokens:
+                        categories.add("sanctions")
+                    if "pep" in tokens or "politically exposed" in raw:
+                        categories.add("pep")
+                    if _agent3_adverse_media_text(raw):
+                        categories.add("adverse_media")
 
     for key, category in (
         ("is_sanctioned", "sanctions"),
@@ -23499,6 +23584,7 @@ def _agent3_categories(hit, source_hint=""):
         ("pep", "pep"),
         ("politically_exposed", "pep"),
         ("is_adverse_media", "adverse_media"),
+        ("has_adverse_media_hit", "adverse_media"),
         ("adverse_media", "adverse_media"),
         ("adverse", "adverse_media"),
     ):
@@ -24045,6 +24131,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
     pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
     adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    other_count = max(0, total_hits - sanctions_count - pep_count - adverse_media_count)
     declared_pep_count = len(declared_pep_subjects)
     unresolved_review_count = _agent3_unresolved_screening_review_count(screening_reviews)
     overall_flags = [str(flag) for flag in _agent3_list(screening_report.get("overall_flags")) if str(flag or "").strip()]
@@ -24084,10 +24171,9 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     if declared_pep_count:
         key_concerns.append(AGENT3_DECLARED_PEP_NOTICE)
     if adverse_media_count:
-        key_concerns.append(f"{adverse_media_count} stored adverse media hit(s) require relevance and materiality review.")
-    unknown_count = max(0, total_hits - sanctions_count - pep_count - adverse_media_count)
-    if unknown_count:
-        key_concerns.append(f"{unknown_count} stored screening hit(s) need identity disambiguation.")
+        key_concerns.append(f"{adverse_media_count} stored provider screening adverse-media row(s) require relevance and materiality review.")
+    if other_count:
+        key_concerns.append(f"{other_count} other/uncategorized provider result row(s) need identity disambiguation.")
     if unresolved_review_count:
         key_concerns.append(f"{unresolved_review_count} existing screening review item(s) are not fully resolved in stored review records.")
     if not key_concerns:
@@ -24122,11 +24208,11 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
 
     if adverse_media_count:
         adverse_media_relevance = (
-            "Stored adverse media hit(s) are relevant enough for officer review because they are linked "
+            "Stored provider screening adverse-media row(s) are relevant enough for officer review because they are linked "
             "to screened subject names. Assess source reliability, recency, conduct seriousness, and name match quality."
         )
     else:
-        adverse_media_relevance = "No provider adverse media hits found in stored screening results."
+        adverse_media_relevance = "No provider screening adverse-media rows found in stored screening results."
 
     app_ref = _agent3_row_get(app, "ref") or _agent3_row_get(app, "id") or "application"
     provider = (
@@ -24136,11 +24222,12 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     )
     if total_hits:
         hit_summary = (
-            f"show {total_hits} provider hit(s): {sanctions_count} sanctions, "
-            f"{pep_count} PEP, and {adverse_media_count} adverse media"
+            f"show {total_hits} provider result row(s): {sanctions_count} sanctions, "
+            f"{pep_count} PEP, {adverse_media_count} provider screening adverse-media row(s), "
+            f"and {other_count} other/uncategorized row(s) requiring identity disambiguation"
         )
     else:
-        hit_summary = "show no provider hits found"
+        hit_summary = "show no provider result rows found"
     summary_parts = [
         f"Stored screening results for {app_ref} {hit_summary}.",
     ]
@@ -24232,6 +24319,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "pep": pep_count,
             "declared_pep": declared_pep_count,
             "adverse_media": adverse_media_count,
+            "other": other_count,
             "low_confidence": low_confidence_hit_count,
             "unresolved_screening_reviews": unresolved_review_count,
         },

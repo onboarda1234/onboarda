@@ -350,7 +350,7 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
             False,
             "Officer review required",
             "Medium",
-            "stored adverse media hit(s) require relevance and materiality review",
+            "stored provider screening adverse-media row(s) require relevance and materiality review",
         ),
     ],
 )
@@ -685,6 +685,9 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "Provider did not supply numeric score or pass evidence." in html
     assert "No article URL supplied by provider payload." in html
     assert "Provider reference" in html
+    assert "Provider result rows:" in html
+    assert "provider screening adverse media" in html
+    assert "other/uncategorized" in html
     assert "Audit trace" in html
     assert "No reportable provider hit recorded" in html
     assert "This is an advisory screening interpretation, not an approval decision." in html
@@ -737,6 +740,75 @@ def test_backoffice_agent3_screening_panel_static_contract():
     comparison_body = _extract_function(html, "buildScreeningComparisonPanel")
     assert "Declared vs Provider Match" in comparison_body
     assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in comparison_body
+
+
+def test_backoffice_agent3_provider_count_chip_reconciles_all_buckets():
+    if not shutil.which("node"):
+        pytest.skip("node is not available for provider count chip check")
+    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
+    script = "\n".join([
+        textwrap.dedent(
+            """
+            function escapeHtml(value) {
+              return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+            const failures = [];
+            function assertIncludes(name, haystack, needle) {
+              if (!haystack.includes(needle)) failures.push(name + ' missing ' + needle);
+            }
+            function assertEquals(name, actual, expected) {
+              if (actual !== expected) failures.push(name + ' expected ' + expected + ' got ' + actual);
+            }
+            function count(haystack, needle) {
+              return (haystack.match(new RegExp(needle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'g')) || []).length;
+            }
+            """
+        ),
+        _extract_function(html, "agent3IsDeclaredPepYes"),
+        _extract_function(html, "agent3ProviderHitsHtml"),
+        textwrap.dedent(
+            """
+            const rendered = agent3ProviderHitsHtml({
+              hit_counts: {
+                total: 88,
+                sanctions: 0,
+                pep: 12,
+                adverse_media: 0,
+                other: 76,
+                declared_pep: 0
+              }
+            });
+            assertIncludes('total rows', rendered, 'Provider result rows: 88 total');
+            assertIncludes('sanctions count', rendered, '0 sanctions');
+            assertIncludes('pep count', rendered, '12 PEP');
+            assertIncludes('provider adverse media label', rendered, '0 provider screening adverse media');
+            assertIncludes('other count', rendered, '76 other/uncategorized');
+            assertEquals('provider adverse media appears once', count(rendered, 'provider screening adverse media'), 1);
+
+            const legacyRendered = agent3ProviderHitsHtml({
+              hit_counts: {
+                total: 10,
+                sanctions: 1,
+                pep: 2,
+                adverse_media: 3,
+                declared_pep: 0
+              }
+            });
+            assertIncludes('legacy other derived', legacyRendered, '4 other/uncategorized');
+
+            if (failures.length) {
+              console.error(failures.join('\\n'));
+              process.exit(1);
+            }
+            """
+        ),
+    ])
+    subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True)
 
 
 def test_backoffice_agent3_provider_evidence_helpers_render_expected_copy():
@@ -815,7 +887,7 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
             function getAgent3ScreeningInterpretation(app) { return app.output; }
             function isAgent3ScreeningInterpretationCollapsed(app) { return !!app.collapsed; }
             function agent3SeverityBadge(value) { return '<span>Severity: ' + escapeHtml(value) + '</span>'; }
-            function agent3ProviderHitsHtml(output) { return '<span>Provider hits: ' + escapeHtml(output.hit_counts.total) + ' total</span>'; }
+            function agent3ProviderHitsHtml(output) { return '<span>Provider result rows: ' + escapeHtml(output.hit_counts.total) + ' total</span>'; }
             function agent3HitStatusCountsHtml(counts) { return counts && counts.needs_review ? '<span>Needs review: ' + counts.needs_review + '</span>' : ''; }
             function agent3ScreeningFieldHtml(label, value) { return '<section><h4>' + escapeHtml(label) + '</h4><p>' + escapeHtml(Array.isArray(value) ? value.join('; ') : value) + '</p></section>'; }
             function agent3EvidenceHtml(_evidence) { return '<div>Evidence used body</div>'; }
@@ -859,7 +931,7 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
             const hitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-hit', output: hitOutput});
             assertEquals('hit recommendation once', count(hitHtml, 'Officer review required'), 1);
             assertEquals('hit advisory once', count(hitHtml, advisory), 1);
-            assertEquals('hit provider counts once', count(hitHtml, 'Provider hits: 1 total'), 1);
+            assertEquals('hit provider counts once', count(hitHtml, 'Provider result rows: 1 total'), 1);
             assertExcludes('hit lower disposition', hitHtml, 'Recommended disposition');
             assertIncludes('hit table rendered', hitHtml, 'hit rows 1');
 
@@ -881,7 +953,7 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
             const noHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-clean', output: noHitOutput});
             assertEquals('no-hit recommendation once', count(noHitHtml, 'No reportable provider hit recorded'), 1);
             assertEquals('no-hit advisory once', count(noHitHtml, advisory), 1);
-            assertEquals('no-hit provider counts once', count(noHitHtml, 'Provider hits: 0 total'), 1);
+            assertEquals('no-hit provider counts once', count(noHitHtml, 'Provider result rows: 0 total'), 1);
             assertIncludes('no-hit compact line', noHitHtml, 'Stored provider result contains zero reportable hit rows.');
             assertIncludes('no-hit full detail toggle', noHitHtml, 'Show full detail');
             assertExcludes('no-hit empty hit table omitted', noHitHtml, 'hit rows 0');
