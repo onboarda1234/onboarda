@@ -15784,7 +15784,7 @@ _REPORT_PENDING_STATUSES = (
     "draft", "pending", "submitted", "prescreening_submitted",
     "pre_approval_review", "pre_approved", "pricing_review", "pricing_accepted",
     "in_review", "under_review", "compliance_review", "kyc_submitted",
-    "kyc_documents", "rmi_sent",
+    "kyc_documents", "submitted_to_compliance", "rmi_sent",
 )
 
 _REPORT_EDD_ROUTED_STATUSES = (

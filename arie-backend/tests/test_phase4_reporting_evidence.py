@@ -2,10 +2,12 @@ import csv
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from tornado.testing import AsyncHTTPTestCase
 
@@ -31,9 +33,45 @@ def test_canonical_pending_status_contract_includes_new_workflow_states():
     assert "in_review" in _REPORT_PENDING_STATUSES
     assert "compliance_review" in _REPORT_PENDING_STATUSES
     assert "kyc_documents" in _REPORT_PENDING_STATUSES
+    assert "submitted_to_compliance" in _REPORT_PENDING_STATUSES
     assert "rmi_sent" in _REPORT_PENDING_STATUSES
     assert _REPORT_EDD_ROUTED_STATUSES == ("edd_required",)
     assert "edd_approved" not in _REPORT_EDD_ROUTED_STATUSES
+
+
+def test_report_lifecycle_buckets_cover_application_status_check_once():
+    from server import _REPORT_EDD_ROUTED_STATUSES, _REPORT_PENDING_STATUSES
+
+    db_source = Path(__file__).resolve().parents[1] / "db.py"
+    source = db_source.read_text()
+    match = re.search(
+        r"CREATE TABLE IF NOT EXISTS applications\s*\(.*?"
+        r"status TEXT DEFAULT 'draft' CHECK\(status IN \((.*?)\)\),\s*assigned_to",
+        source,
+        flags=re.S,
+    )
+    assert match, "Could not locate canonical applications.status CHECK constraint"
+    allowed_statuses = set(re.findall(r"'([^']+)'", match.group(1)))
+    assert "submitted_to_compliance" in allowed_statuses
+
+    buckets = {
+        "pending": set(_REPORT_PENDING_STATUSES),
+        "edd_required": set(_REPORT_EDD_ROUTED_STATUSES),
+        "approved": {"approved"},
+        "rejected": {"rejected"},
+        "withdrawn": {"withdrawn"},
+    }
+    duplicate_memberships = {}
+    unmapped = []
+    for status in sorted(allowed_statuses):
+        memberships = [name for name, values in buckets.items() if status in values]
+        if len(memberships) == 0:
+            unmapped.append(status)
+        elif len(memberships) > 1:
+            duplicate_memberships[status] = memberships
+
+    assert unmapped == []
+    assert duplicate_memberships == {}
 
 
 def test_canonical_export_field_contract_includes_risk_score():
@@ -106,15 +144,46 @@ def test_pdf_download_handler_records_pdf_hash_metadata():
 
 
 class _Phase4ReportingHTTPBase(AsyncHTTPTestCase):
+    def _patch_attr(self, module, name, value):
+        if hasattr(module, name):
+            self._module_restore.append((module, name, getattr(module, name)))
+            setattr(module, name, value)
+
     def setUp(self):
         self.db_path = os.path.join(
             tempfile.gettempdir(),
             f"onboarda_phase4_reporting_{os.getpid()}_{uuid.uuid4().hex[:8]}.db",
         )
+        self._env_restore = {
+            "DB_PATH": os.environ.get("DB_PATH"),
+            "DATABASE_URL": os.environ.get("DATABASE_URL"),
+        }
+        self._module_restore = []
         os.environ["DB_PATH"] = self.db_path
-        from db import init_db, seed_initial_data, get_db
-        init_db()
-        db = get_db()
+        os.environ["DATABASE_URL"] = ""
+
+        import config as config_module
+        import db as db_module
+
+        self._patch_attr(config_module, "DATABASE_URL", "")
+        self._patch_attr(config_module, "DB_PATH", self.db_path)
+        self._patch_attr(db_module, "DATABASE_URL", "")
+        self._patch_attr(db_module, "DB_PATH", self.db_path)
+        self._patch_attr(db_module, "USE_POSTGRESQL", False)
+
+        server_module = sys.modules.get("server")
+        if server_module is not None:
+            self._patch_attr(server_module, "DATABASE_URL", "")
+            self._patch_attr(server_module, "DB_PATH", self.db_path)
+            self._patch_attr(server_module, "_CFG_DB_PATH", self.db_path)
+            self._patch_attr(server_module, "USE_POSTGRES", False)
+            self._patch_attr(server_module, "USE_POSTGRESQL", False)
+            self._patch_attr(server_module, "db_get_db", db_module.get_db)
+            self._patch_attr(server_module, "db_init_db", db_module.init_db)
+
+        db_module.init_db()
+        db = db_module.get_db()
+        seed_initial_data = db_module.seed_initial_data
         seed_initial_data(db)
         self._seed_apps(db)
         db.commit()
@@ -123,6 +192,13 @@ class _Phase4ReportingHTTPBase(AsyncHTTPTestCase):
 
     def tearDown(self):
         super().tearDown()
+        for module, name, value in reversed(getattr(self, "_module_restore", [])):
+            setattr(module, name, value)
+        for key, value in getattr(self, "_env_restore", {}).items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         try:
             os.unlink(self.db_path)
         except OSError:
@@ -321,6 +397,7 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
             ("pricing", "pricing_review"),
             ("review", "in_review"),
             ("rmi", "rmi_sent"),
+            ("submitted_to_compliance", "submitted_to_compliance"),
             ("edd", "edd_required"),
             ("approved", "approved"),
             ("rejected", "rejected"),
@@ -364,8 +441,9 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
             + summary["rejected"]
             + summary["withdrawn"]
         )
-        assert summary["total"] == len(rows)
-        assert summary["pending"] == 4
+        assert summary["total"] == len(rows), body
+        assert summary["pending"] == 5
+        assert "submitted_to_compliance" in body["report"]["pending_statuses"]
         assert classified_total == summary["total"]
 
     def test_dashboard_in_progress_count_matches_report_pending_bucket(self):
